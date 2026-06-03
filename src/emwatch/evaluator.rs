@@ -1,39 +1,150 @@
 use super::compiler::OpCode;
 use super::expr::Operand;
-use super::machine::Machine;
 
+/// A context for evaluating a watch expression.
+///
+/// This trait is implemented by the emulator to provide safe access to the current state of
+/// the machine's registers and flags, as well as idempotent access to system memory and mapped
+/// I/O devices.
+///
+/// The mapping of register names and flag names to the [`super::expr::Operand`] type used to
+/// identify registers and flags in the compiler's byte code is handled by a
+/// [`super::parser::Mapper`] that is passed to the expression parser. These mappings are
+/// architecture-specific.
+///
+/// Addresses specified as arguments to the memory functions that are larger than the address space
+/// of the machine architecture will "wrap around"; i.e. the address argument will be evaluated
+/// modulo the size of the address space.
+///
+pub trait EvalContext {
 
+    /// Fetches the contents of a machine register, returning an unsigned value, extended to the
+    /// width of [super::expr::Operand].
+    ///
+    /// # Arguments
+    /// `register_id` - ID of the register to fetch
+    ///
+    fn fetch_register(&self, register_id: Operand) -> Operand;
+
+    /// Fetches the contents of a machine register, returning a signed value, sign extended to the
+    /// width of [super::expr::Operand].
+    ///
+    /// # Arguments
+    /// `register_id` - ID of the register to fetch
+    ///
+    fn fetch_register_signed(&self, register_id: Operand) -> Operand;
+
+    /// Fetches the state of a machine flag. Returns 1 if the flag is set, else 0.
+    ///
+    /// # Arguments
+    /// `flag_id` - ID of the flag to fetch
+    ///
+    fn fetch_flag(&self, flag_id: Operand) -> Operand;
+
+    /// Performs an idempotent fetch at the given memory address, returning an unsigned byte
+    /// extended to the width of [super::expr::Operand].
+    ///
+    /// # Arguments
+    /// `address` - the subject address
+    ///
+    fn fetch_byte(&self, address: Operand) -> Operand;
+
+    /// Performs an idempotent fetch at the given memory address, returning a signed byte,
+    /// sign-extended to the width of [super::expr::Operand].
+    ///
+    /// # Arguments
+    /// `address` - the subject address
+    ///
+    fn fetch_byte_signed(&self, address: Operand) -> Operand;
+
+    /// Performs an idempotent fetch at the given memory address, returning an unsigned word
+    /// (two consecutive bytes in the architecture's byte order) extended to the width of
+    /// [super::expr::Operand].
+    ///
+    /// # Arguments
+    /// `address` - the subject address
+    ///
+    fn fetch_word(&self, address: Operand) -> Operand;
+
+    /// Performs an idempotent fetch at the given memory address, returning a signed word
+    /// (two consecutive bytes in the architecture's byte order) sign-extended to the width of
+    /// [super::expr::Operand].
+    ///
+    /// # Arguments
+    /// `address` - the subject address
+    ///
+    fn fetch_word_signed(&self, address: Operand) -> Operand;
+
+    /// Performs an idempotent fetch at the given memory address, returning an unsigned double word
+    /// (four consecutive bytes in the architecture's byte order) extended to the width of
+    /// [super::expr::Operand].
+    ///
+    /// # Arguments
+    /// `address` - the subject address
+    ///
+    fn fetch_dword(&self, address: Operand) -> Operand;
+
+    /// Performs an idempotent fetch at the given memory address, returning a signed double word
+    /// (four consecutive bytes in the architecture's byte order) sign-extended to the width of
+    /// [super::expr::Operand].
+    ///
+    /// # Arguments
+    /// `address` - the subject address
+    ///
+    fn fetch_dword_signed(&self, address: Operand) -> Operand;
+
+}
+
+/// A stack used to evaluate a watch expression.
+///
 struct Stack {
+    /// A vector that serves as the backing storage for stack.
     delegate: Vec<Operand>,
 }
 
 impl Stack {
 
+    /// Creates a new empty stack instance with initial capacity sufficient to handle
+    /// most expressions without the need for reallocation.
     fn new() -> Self {
        Self {
-           delegate: Vec::new(),
+           delegate: Vec::with_capacity(16),    // capacity adequate for most expressions
        }
     }
 
+    /// Pushes an operand onto the stack.
+    ///
+    /// # Arguments
+    /// `v` - the operand value to push
+    ///
     fn push(&mut self, v: Operand) {
         self.delegate.push(v);
     }
 
+    /// Pops an operand from the stack returning the operand value, panicking with a stack
+    /// underflow message if the stack is empty.
+    ///
     fn pop(&mut self) -> Operand {
         self.delegate.pop().expect("stack underflow")
     }
 
 }
 
-
-pub fn eval(code: &[OpCode], machine: &dyn Machine, vars: &mut [Operand]) -> Operand {
+/// Evaluates a byte code expression and returns the result as an [`super::expr::Operand`].
+///
+/// # Arguments
+/// `code` - the subject byte code expression
+/// `context` - machine context for registers, flags, and addresses referenced in the expression
+/// `vars` - bindings for variables referenced within the expression
+///
+pub fn eval(code: &[OpCode], context: &dyn EvalContext, vars: &mut [Operand]) -> Operand {
     let mut stack = Stack::new();
     for opcode in code {
         match opcode {
             OpCode::PushImmediate(n) => stack.push(*n),
-            OpCode::PushRegister(n) => stack.push(machine.fetch_register(*n)),
-            OpCode::PushRegisterSigned(n) => stack.push(machine.fetch_register_signed(*n)),
-            OpCode::PushFlag(n) => stack.push(machine.fetch_flag(*n)),
+            OpCode::PushRegister(n) => stack.push(context.fetch_register(*n)),
+            OpCode::PushRegisterSigned(n) => stack.push(context.fetch_register_signed(*n)),
+            OpCode::PushFlag(n) => stack.push(context.fetch_flag(*n)),
             OpCode::PushVariable(id) => stack.push(vars[*id as usize]),
             OpCode::AssignAndPushVariable(id) => {
                 let v = stack.pop();
@@ -42,27 +153,27 @@ pub fn eval(code: &[OpCode], machine: &dyn Machine, vars: &mut [Operand]) -> Ope
             }
             OpCode::FetchByte => {
                 let x = stack.pop();
-                stack.push(machine.fetch_byte(x));
+                stack.push(context.fetch_byte(x));
             }
             OpCode::FetchByteSigned => {
                 let x = stack.pop();
-                stack.push(machine.fetch_byte_signed(x));
+                stack.push(context.fetch_byte_signed(x));
             },
             OpCode::FetchWord => {
                 let x = stack.pop();
-                stack.push(machine.fetch_word(x));
+                stack.push(context.fetch_word(x));
             },
             OpCode::FetchWordSigned => {
                 let x = stack.pop();
-                stack.push(machine.fetch_word_signed(x));
+                stack.push(context.fetch_word_signed(x));
             },
             OpCode::FetchDWord => {
                 let x = stack.pop();
-                stack.push(machine.fetch_dword(x));
+                stack.push(context.fetch_dword(x));
             },
             OpCode::FetchDWordSigned => {
                 let x = stack.pop();
-                stack.push(machine.fetch_dword_signed(x));
+                stack.push(context.fetch_dword_signed(x));
             },
             OpCode::Add => {
                 let x = stack.pop();
@@ -206,7 +317,6 @@ pub fn eval(code: &[OpCode], machine: &dyn Machine, vars: &mut [Operand]) -> Ope
     stack.pop()
 }
 
-
 #[cfg(test)]
 
 mod tests {
@@ -233,7 +343,7 @@ mod tests {
         }
     }
 
-    impl Machine for MockMachine {
+    impl EvalContext for MockMachine {
 
         fn fetch_register(&self, _register_id: Operand) -> Operand {
             self.register

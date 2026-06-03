@@ -1,5 +1,6 @@
 use std::ops::BitAnd;
-use emma65::emwatch::{Machine, Operand};
+use emma65::emwatch::Operand;
+use emma65::emwatch::EvalContext;
 
 const REG_A: Operand = 0;
 const REG_X: Operand = 1;
@@ -127,7 +128,7 @@ impl Wdc6502Machine {
     }
 
 }
-impl Machine for Wdc6502Machine {
+impl EvalContext for Wdc6502Machine {
 
     fn fetch_register(&self, register_id: Operand) -> Operand {
         match register_id {
