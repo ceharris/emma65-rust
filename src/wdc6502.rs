@@ -1,6 +1,6 @@
 use std::ops::BitAnd;
-use emma65::emwatch::Operand;
-use emma65::emwatch::EvalContext;
+use emma65::watch::Operand;
+use emma65::watch::EvalContext;
 
 const REG_A: Operand = 0;
 const REG_X: Operand = 1;
