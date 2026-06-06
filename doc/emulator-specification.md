@@ -227,7 +227,7 @@ impl Via6522 {
 **Console** — Simple polling console device. 2 addresses, 3 logical registers:
 - Offset 0 read (Data Input): returns non-zero if an input byte is available, zero if none
 - Offset 0 write (Data Output): sends a byte to the console
-- Offset 1 read (Data Latch): reads and latches an input byte if available; subsequent Data Input reads return the latched value
+- Offset 1 read (Data Latch): reads and latches an input byte if available; subsequent Data Input reads and returns the latched value, resets the latch to zero
 - Offset 1 write (Data Latch): write zero to clear latch, non-zero to simulate input
 
 No IRQ — purely poll-based. Designed for use with `PipeTransport` connecting to a VT-220 terminal emulator in the Tauri UI.

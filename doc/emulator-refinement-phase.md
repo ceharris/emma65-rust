@@ -195,7 +195,7 @@ Compilation is decoupled — `compile_watch(source)` can be called any time.
 **Device registers:**
 - Address 0 (read): Data Input — non-zero if input byte available, zero if none
 - Address 0 (write): Data Output — sends a byte to the console
-- Address 1 (read): Data Latch — reads and latches an input byte; subsequent reads of Data Input return latched value if non-zero
+- Address 1 (read): Data Latch — reads and latches an input byte; subsequent read of Data Input returns latched value and resets latch to zero
 - Address 1 (write): Data Latch — write zero to clear, non-zero to simulate input
 
 **Transport**: Two pipes (one per direction), no protocol overhead.

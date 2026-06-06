@@ -220,7 +220,8 @@ Implement the simple polling console device — the first concrete `IoDevice` im
 
 **Scope:**
 - `emulator/device/console.rs` — `Console` implementing `IoDevice`
-  - Offset 0 read (Data Input): non-zero if byte available, zero if none
+  - Offset 0 read (Data Input): when Data Latch zero, returns non-zero if byte available, zero if none
+  - Offset 0 read (Data Input)) when Data Latch non-zero, returns latched value, and resets Data Latch to zero
   - Offset 0 write (Data Output): sends byte to transport
   - Offset 1 read (Data Latch): reads and latches input byte
   - Offset 1 write (Data Latch): zero clears latch, non-zero simulates input
@@ -231,6 +232,7 @@ Implement the simple polling console device — the first concrete `IoDevice` im
 **Tests:**
 - Write to offset 0 → byte appears on transport
 - Transport sends byte → offset 1 read latches it, offset 0 reads non-zero
+- Latch non-zero → offset 0 reads latched value resets latch register to zero
 - Clear latch → offset 0 reads zero
 - Simulate input via offset 1 write
 - No transport attached → reads return 0, writes are silent

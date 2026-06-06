@@ -189,7 +189,7 @@ User:      There are some topics that our discussion hasn't covered, and I'd lik
            questions first.
 Assistant: Where would you like to start?
 User:      Let's start with error handling. For example, watch expression evaulation can result in a error (e.g. divide
-           by zero). Such errors will need to be reported via the UI, how do you propose to support this requirement?
+           by zero). Such errors will need to be reported via the UI. How do you propose to support this requirement?
 ```
 
 - The assistant can do a lot for you, but your **human judgment** and **domain expertise** are still _critically_ important.
@@ -235,12 +235,12 @@ Assistant: Got it. I'll write the transcript, and create a draft plan for your r
 ---
 
 <!-- _class: lead -->
-## _Review the Refinement Interaction Transcript_
+### _Review the Refinement Interaction Transcript_
 
 ---
 
 <!-- _class: lead -->
-## _Review the Design Specification/Plan_
+### _Review the Design Specification/Plan_
 
 ---
 
@@ -290,8 +290,26 @@ Assistant:     That's a clear development philosophy — bottom-up, test-as-you-
 
 ---
 
+### An Addition to the Specification
+
+It's not too late for me to introduce another aspect to the design specification.
+
+```text
+Before we continue on the implementation plan I'd like to discuss how a peripheral device might communicate with the 
+6522 VIA, and further refine that aspect of the architecture specification. 
+
+[Provided `emulator-via-protocol.md` — a protocol specification for VIA peripheral communication over sockets, with 
+binary and ASCII message formats for GPIO port state changes and control signal state changes.]
+```
+
+- This prompt led to another interactive dialogue to clear up the assistant's questions about the protocol, affecting
+  both the specification and the implementation plan
+- Pro Tip: Make sure that the assistant updates the revised specification stored in the project
+
+---
 <!-- _class: lead -->
-## _Review the Implementation Plan_
+
+### _Review the Implementation Plan_
 
 ---
 
@@ -331,7 +349,7 @@ Don't prompt by thinking about small tasks one at a time
 Don't let the assistant guess when your intent isn't clear
 - Be explicit in asking for clarifying questions and dialogue to reinforce intent
 - Require the assistant to create a plan and defend it, before starting on any implementation
-- Look carefully for gaps in the plan and amend before accepting the plan
+- Look carefully for gaps in the plan and amend before accepting it
 
 ---
 
@@ -351,7 +369,7 @@ Tell the assistant to make transcripts of planning dialogues
 
 ---
 
-# Closing Tip #5
+### Closing Tip #5
 
 Tell the assistant to save each plan it creates as a document within your project
 - Allows you to cold start a fresh session with all the relevant details and decisions
@@ -364,3 +382,8 @@ Tell the assistant to save each plan it creates as a document within your projec
 
 Frontier models in mid-2026 are more than capable of collaborating with you at very high level. The challenge for you is to learn to transition from doing the work to specifying the work to be done in ways that draw out your intent and lead to the outcomes you would have produced yourself.
   
+---
+
+<!-- _class: lead -->
+### _END_
+
