@@ -12,9 +12,9 @@ use super::expr::Operand;
 /// [`super::parser::Mapper`] that is passed to the expression parser. These mappings are
 /// architecture-specific.
 ///
-/// Addresses specified as arguments to the memory functions that are larger than the address space
-/// of the machine architecture will "wrap around"; i.e. the address argument will be evaluated
-/// modulo the size of the address space.
+/// Addresses specified as arguments to memory fetch functions that are larger than the address
+/// space of the machine architecture will "wrap around"; i.e. the address argument will be
+/// evaluated modulo the size of the address space.
 ///
 pub trait EvalContext {
 
@@ -26,7 +26,7 @@ pub trait EvalContext {
     ///
     fn fetch_register(&self, register_id: Operand) -> Operand;
 
-    /// Fetches the contents of a machine register, returning a signed value, sign extended to the
+    /// Fetches the contents of a machine register, returning a signed value, sign-extended to the
     /// width of [super::expr::Operand].
     ///
     /// # Arguments
@@ -115,7 +115,7 @@ impl Stack {
     /// Pushes an operand onto the stack.
     ///
     /// # Arguments
-    /// `v` - the operand value to push
+    /// * `v` - the operand value to push
     ///
     fn push(&mut self, v: Operand) {
         self.delegate.push(v);
@@ -133,18 +133,18 @@ impl Stack {
 /// Evaluates a byte code expression and returns the result as an [`super::expr::Operand`].
 ///
 /// # Arguments
-/// `code` - the subject byte code expression
-/// `context` - machine context for registers, flags, and addresses referenced in the expression
-/// `vars` - bindings for variables referenced within the expression
+/// * `code` - the subject byte code expression
+/// * `context` - machine context for registers, flags, and addresses referenced in the expression
+/// * `vars` - bindings for variables referenced within the expression
 ///
 pub fn eval(code: &[OpCode], context: &dyn EvalContext, vars: &mut [Operand]) -> Operand {
     let mut stack = Stack::new();
     for opcode in code {
         match opcode {
             OpCode::PushImmediate(n) => stack.push(*n),
-            OpCode::PushRegister(n) => stack.push(context.fetch_register(*n)),
-            OpCode::PushRegisterSigned(n) => stack.push(context.fetch_register_signed(*n)),
-            OpCode::PushFlag(n) => stack.push(context.fetch_flag(*n)),
+            OpCode::FetchRegister(n) => stack.push(context.fetch_register(*n)),
+            OpCode::FetchRegisterSigned(n) => stack.push(context.fetch_register_signed(*n)),
+            OpCode::FetchFlag(n) => stack.push(context.fetch_flag(*n)),
             OpCode::PushVariable(id) => stack.push(vars[*id as usize]),
             OpCode::AssignAndPushVariable(id) => {
                 let v = stack.pop();
@@ -395,7 +395,7 @@ mod tests {
     fn push_register() {
         let mut machine = MockMachine::new();
         machine.register = 42;
-        let result = eval(&vec![OpCode::PushRegister(0)], &machine, &mut no_vars());
+        let result = eval(&vec![OpCode::FetchRegister(0)], &machine, &mut no_vars());
         assert_eq!(result, 42);
     }
 
@@ -403,7 +403,7 @@ mod tests {
     fn push_register_signed() {
         let mut machine = MockMachine::new();
         machine.register = -1i32 as Operand;
-        let result = eval(&vec![OpCode::PushRegisterSigned(0)], &machine, &mut no_vars());
+        let result = eval(&vec![OpCode::FetchRegisterSigned(0)], &machine, &mut no_vars());
         assert_eq!(result, -1i32 as Operand);
     }
 
@@ -411,7 +411,7 @@ mod tests {
     fn push_flag() {
         let mut machine = MockMachine::new();
         machine.flag = 42;
-        let result = eval(&vec![OpCode::PushFlag(0)], &machine, &mut no_vars());
+        let result = eval(&vec![OpCode::FetchFlag(0)], &machine, &mut no_vars());
         assert_eq!(result, 42);
     }
 

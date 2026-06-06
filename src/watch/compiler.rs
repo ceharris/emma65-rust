@@ -1,50 +1,104 @@
-use super::expr::{BinaryOperatorType, Expr, ExprType, Operand, OperandWidth, UnaryOperatorType};
+use super::expr::{BinaryOperatorType, Expr, ExprType, Operand, FetchWidth, UnaryOperatorType};
 
 
+/// An opcode produced by the "byte code" compiler.
+///
+/// An expression consisting of these byte codes can be executed by [`super::evaluator::eval`].
+///
+/// For the various operators described below, `X` refers to the operand at the top of the stack,
+/// while `Y` refers to the next operand ("behind" or "under" the top-of-stack element).
+///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OpCode {
+    /// Pushes the given operand onto the stack
     PushImmediate(Operand),
-    PushRegister(Operand),
-    PushRegisterSigned(Operand),
-    PushFlag(Operand),
-    FetchByte,
-    FetchByteSigned,
-    FetchWord,
-    FetchWordSigned,
-    FetchDWord,
-    FetchDWordSigned,
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    DivideSigned,
-    Remainder,
-    RemainderSigned,
-    Negate,
-    Equal,
-    NotEqual,
-    GreaterThan,
-    GreaterThanSigned,
-    GreaterOrEqual,
-    GreaterOrEqualSigned,
-    LessThan,
-    LessThanSigned,
-    LessOrEqual,
-    LessOrEqualSigned,
-    LeftShift,
-    RightShift,
-    RightShiftSigned,
-    LogicalAnd,
-    LogicalOr,
-    LogicalNot,
-    BitwiseAnd,
-    BitwiseOr,
-    BitwiseXor,
-    BitwiseNot,
+    /// Pushes the value of a variable identified by the operand onto the stack
     PushVariable(Operand),
+    /// Assigns a value to a variable identified by the operand and pushes the new value onto the stack
     AssignAndPushVariable(Operand),
+    /// Fetches the register identified by the operand as an unsigned value and pushes it onto the stack
+    FetchRegister(Operand),
+    /// Fetches the register identified by the operand as a signed value and pushes it onto the stack
+    FetchRegisterSigned(Operand),
+    /// Fetches the flag identified by the operand as a boolean and pushes it onto the stack
+    FetchFlag(Operand),
+    /// Fetches an unsigned byte from memory and pushes it onto the stack
+    FetchByte,
+    /// Fetches a signed byte from memory and pushes it onto the stack
+    FetchByteSigned,
+    /// Fetches an unsigned word from memory and pushes it onto the stack
+    FetchWord,
+    /// Fetches a signed word from memory and pushes it onto the stack
+    FetchWordSigned,
+    /// Fetches an unsigned double word from memory and pushes it onto the stack
+    FetchDWord,
+    /// Fetches a signed double word from memory and pushes it onto the stack
+    FetchDWordSigned,
+    /// Replaces X and Y with Y + X
+    Add,
+    /// Replaces X and Y with Y - X
+    Subtract,
+    /// Replaces X and Y with Y * X
+    Multiply,
+    /// Replaces X and Y with Y / X (unsigned)
+    Divide,
+    /// Replaces X and Y with Y / X (signed)
+    DivideSigned,
+    /// Replaces X and Y with Y % X
+    Remainder,
+    /// Replaces X and Y with Y % X (signed)
+    RemainderSigned,
+    /// Replaces X with -X
+    Negate,
+    /// Replaces X and Y with Y == X (boolean)
+    Equal,
+    /// Replaces X and Y with Y != X (boolean)
+    NotEqual,
+    /// Replaces X and Y with Y > X (unsigned comparison, boolean)
+    GreaterThan,
+    /// Replaces X and Y with Y > X (signed comparison, boolean result)
+    GreaterThanSigned,
+    /// Replaces X and Y with Y >= X (unsigned comparison, boolean result)
+    GreaterOrEqual,
+    /// Replaces X and Y with Y >= X (signed comparison, boolean result)
+    GreaterOrEqualSigned,
+    /// Replaces X and Y with Y < X (unsigned comparison, boolean result)
+    LessThan,
+    /// Replaces X and Y with Y < X (signed comparison, boolean result)
+    LessThanSigned,
+    /// Replaces X and Y with Y <= X (unsigned comparison, boolean result)
+    LessOrEqual,
+    /// Replaces X and Y with Y <= X (signed comparison, boolean result)
+    LessOrEqualSigned,
+    /// Replaces X and Y with Y << X (logical left shift)
+    LeftShift,
+    /// Replaces X and Y with Y >> X (logical right shift)
+    RightShift,
+    /// Replaces X and Y with Y >> X (arithmetic right shift)
+    RightShiftSigned,
+    /// Replaces X and Y with Y && X (boolean)
+    LogicalAnd,
+    /// Replaces X and Y with Y || X (boolean)
+    LogicalOr,
+    /// Replaces X with !X (boolean)
+    LogicalNot,
+    /// Replaces X and Y with Y & X
+    BitwiseAnd,
+    /// Replaces X and Y with Y | X
+    BitwiseOr,
+    /// Replaces X and Y with Y ^ X
+    BitwiseXor,
+    /// Replaces X with ~X
+    BitwiseNot,
 }
 
+/// Compiles an abstract syntax tree (AST) produced by [`super::parser::Parser`] into
+/// the "byte code" format for execution by [`super::evaluator::eval`]. Returns a vector
+/// containing executable code for the evaluator.
+///
+/// # Arguments
+/// * `root` - the root expression of an AST produced by the parser
+///
 pub fn compile(root: Expr) -> Vec<OpCode> {
     let mut code: Vec<OpCode> = Vec::new();
     traverse(&root, false, &mut code);
@@ -54,8 +108,8 @@ pub fn compile(root: Expr) -> Vec<OpCode> {
 fn traverse(expr: &Expr, signed: bool, code: &mut Vec<OpCode>) {
     match expr.expr_type() {
         ExprType::Number(n) => code.push(OpCode::PushImmediate(*n)),
-        ExprType::Flag(n) => code.push(OpCode::PushFlag(*n)),
-        ExprType::Register(n) => code.push(if signed { OpCode::PushRegisterSigned(*n) } else { OpCode::PushRegister(*n) }),
+        ExprType::Flag(n) => code.push(OpCode::FetchFlag(*n)),
+        ExprType::Register(n) => code.push(if signed { OpCode::FetchRegisterSigned(*n) } else { OpCode::FetchRegister(*n) }),
         ExprType::Variable(id) => code.push(OpCode::PushVariable(*id)),
         ExprType::Assign(id, rhs) => {
             traverse(rhs, expr.is_signed(), code);
@@ -71,15 +125,15 @@ fn traverse(expr: &Expr, signed: bool, code: &mut Vec<OpCode>) {
                 UnaryOperatorType::BitwiseNot => code.push(OpCode::BitwiseNot),
                 UnaryOperatorType::Fetch(width) => if signed {
                     match width {
-                        OperandWidth::Byte => code.push(OpCode::FetchByteSigned),
-                        OperandWidth::Word => code.push(OpCode::FetchWordSigned),
-                        OperandWidth::DWord => code.push(OpCode::FetchDWordSigned),
+                        FetchWidth::Byte => code.push(OpCode::FetchByteSigned),
+                        FetchWidth::Word => code.push(OpCode::FetchWordSigned),
+                        FetchWidth::DWord => code.push(OpCode::FetchDWordSigned),
                     }
                 } else {
                     match width {
-                        OperandWidth::Byte => code.push(OpCode::FetchByte),
-                        OperandWidth::Word => code.push(OpCode::FetchWord),
-                        OperandWidth::DWord => code.push(OpCode::FetchDWord),
+                        FetchWidth::Byte => code.push(OpCode::FetchByte),
+                        FetchWidth::Word => code.push(OpCode::FetchWord),
+                        FetchWidth::DWord => code.push(OpCode::FetchDWord),
                     }
                 }
             }
@@ -160,7 +214,7 @@ mod tests {
         let expr = expr_for_source("A");
         let code = compile(expr);
         assert_eq!(code.len(), 1);
-        assert_eq!(code[0], OpCode::PushRegister(0));
+        assert_eq!(code[0], OpCode::FetchRegister(0));
     }
 
     #[test]
@@ -168,7 +222,7 @@ mod tests {
         let expr = expr_for_source("+A");
         let code = compile(expr);
         assert_eq!(code.len(), 1);
-        assert_eq!(code[0], OpCode::PushRegisterSigned(0));
+        assert_eq!(code[0], OpCode::FetchRegisterSigned(0));
     }
 
     #[test]
@@ -176,7 +230,7 @@ mod tests {
         let expr = expr_for_source("`C");
         let code = compile(expr);
         assert_eq!(code.len(), 1);
-        assert_eq!(code[0], OpCode::PushFlag(0));
+        assert_eq!(code[0], OpCode::FetchFlag(0));
     }
 
     #[test]
@@ -531,18 +585,18 @@ mod tests {
         let expr = expr_for_source("PC == $04c2 && (A == foo || A == bar) && `C");
         let code = compile(expr);
         assert_eq!(code.len(), 13);
-        assert_eq!(code[0], OpCode::PushRegister(1));
+        assert_eq!(code[0], OpCode::FetchRegister(1));
         assert_eq!(code[1], OpCode::PushImmediate(0x04c2));
         assert_eq!(code[2], OpCode::Equal);
-        assert_eq!(code[3], OpCode::PushRegister(0));
+        assert_eq!(code[3], OpCode::FetchRegister(0));
         assert_eq!(code[4], OpCode::PushImmediate(0x55));
         assert_eq!(code[5], OpCode::Equal);
-        assert_eq!(code[6], OpCode::PushRegister(0));
+        assert_eq!(code[6], OpCode::FetchRegister(0));
         assert_eq!(code[7], OpCode::PushImmediate(0xaa));
         assert_eq!(code[8], OpCode::Equal);
         assert_eq!(code[9], OpCode::LogicalOr);
         assert_eq!(code[10], OpCode::LogicalAnd);
-        assert_eq!(code[11], OpCode::PushFlag(0));
+        assert_eq!(code[11], OpCode::FetchFlag(0));
         assert_eq!(code[12], OpCode::LogicalAnd);
     }
 
@@ -579,7 +633,7 @@ mod tests {
         let id = vars.get("x").unwrap();
         let code = compile(expr);
         assert_eq!(code.len(), 2);
-        assert_eq!(code[0], OpCode::PushRegister(0));
+        assert_eq!(code[0], OpCode::FetchRegister(0));
         assert_eq!(code[1], OpCode::AssignAndPushVariable(id));
     }
 

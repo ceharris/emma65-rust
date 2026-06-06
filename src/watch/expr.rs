@@ -1,15 +1,27 @@
 use std::fmt;
 use super::token::Token;
 
+/// The data type used for all watch expressions. 
+/// 
+/// * All operands are coerced to this type. 
+/// * All operators have this as the result type.
+/// 
 pub type Operand = u32;
 
+/// The width of a return value for a memory fetch operator.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum OperandWidth {
+pub enum FetchWidth {
+    /// A single byte
     Byte,
+    /// A word; two consecutive bytes in the architecture's byte order
     Word,
+    /// A double word; four consecutive bytes in the architecture's byte order
     DWord,
 }
 
+/// Type identifiers used to represent the operation implied by a token representing
+/// a binary operator.
+/// 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BinaryOperatorType {
     Add,
@@ -32,6 +44,9 @@ pub enum BinaryOperatorType {
     NotEqual,
 }
 
+/// Type identifiers used to represent the operation implied by a token representing
+/// a unary operator.
+///
 #[derive(Clone, Debug, PartialEq)]
 pub enum UnaryOperatorType {
     Identity,
@@ -39,18 +54,27 @@ pub enum UnaryOperatorType {
     LogicalNot,
     BitwiseNot,
     Grouping,
-    Fetch(OperandWidth),
+    Fetch(FetchWidth),
 }
 
-
+/// An expression type parsed from a token subsequence.
 #[derive(Clone)]
 pub enum ExprType<'a> {
+    /// A number whose value is given by the operand
     Number(Operand),
+    /// A register whose identity is given by the operand 
     Register(Operand),
+    /// A flag whose identity is given by the operand
     Flag(Operand),
+    /// A variable whose identity is given by the operand
     Variable(Operand),
+    /// A variable assignment, whose left-hand side is the variable whose identity is given by the
+    /// operand and whose value is represented by the given expression.
     Assign(Operand, Box<Expr<'a>>),
+    /// A unary operator of the specified type, whose operand is represented by the given expression.
     UnaryOperator(UnaryOperatorType, Box<Expr<'a>>),
+    /// A binary operator of the specified type, whose left and right operands are given by the 
+    /// given expressions, respectively.
     BinaryOperator(BinaryOperatorType, Box<Expr<'a>>, Box<Expr<'a>>),
 }
 

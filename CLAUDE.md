@@ -13,7 +13,7 @@ cargo clippy         # lint
 
 ## Architecture
 
-`emma65` is a Rust crate with a library and a binary. The library currently contains one internal module, `emwatch`, which implements a complete pipeline for evaluating **watchpoint expressions** — conditions used to break or watch memory/registers in the emma65 6502-family emulator.
+`emma65` is a Rust crate with a library and a binary. The library currently contains one public module, `watch`, which implements a complete pipeline for evaluating **watchpoint expressions** — conditions used to break or watch memory/registers in the emma65 6502-family emulator.
 
 The full pipeline is:
 
@@ -25,19 +25,18 @@ No external dependencies; zero-copy design throughout.
 
 ### Crate structure
 
-- **`src/lib.rs`** — crate root; exposes `pub mod emwatch`
-- **`src/main.rs`** — binary entry point; declares `mod wdc6502` and exercises the `emwatch` pipeline against a WDC 6502 machine
-- **`src/wdc6502.rs`** — private module of the binary; concrete `Machine` implementation for the WDC 6502 (see below)
-- **`src/emwatch/`** — watchpoint expression pipeline (see below)
+- **`src/lib.rs`** — crate root; exposes `pub mod watch`
+- **`src/main.rs`** — binary entry point; declares `mod wdc6502` and exercises the `watch` pipeline against a WDC 6502 machine
+- **`src/wdc6502.rs`** — private module of the binary; concrete `EvalContext` implementation for the WDC 6502 (see below)
+- **`src/watch/`** — watchpoint expression pipeline (see below)
 
-### `emwatch` module (`src/emwatch/`)
+### `watch` module (`src/watch/`)
 
-All items are internal submodules of `emma65::emwatch`. The module re-exports its public API from `mod.rs`:
+All items are internal submodules of `emma65::watch`. The module re-exports its public API from `mod.rs`:
 
 ```rust
 pub use self::compiler::OpCode;
-pub use self::machine::Machine;
-pub use self::evaluator::eval;
+pub use self::evaluator::{EvalContext, eval};
 pub use self::expr::{Expr, Operand};
 pub use self::parser::{Mapper, Parser};
 pub use self::variables::Variables;
@@ -72,15 +71,13 @@ pub mod variables;
 
 - **`compiler`** — depth-first traversal of `Expr` tree, emitting a flat `Vec<OpCode>`. Signedness from the AST determines which opcode variant is emitted (e.g. `Divide` vs `DivideSigned`). Entry point: `compile(root: Expr) -> Vec<OpCode>`.
 
-- **`evaluator`** — stack-based VM executing `&[OpCode]` against a `&dyn Machine` and a `&mut [Operand]` variable storage slice. Entry point: `eval(code: &[OpCode], machine: &dyn Machine, vars: &mut [Operand]) -> Operand`.
-
-- **`machine`** — `Machine` trait abstracting emulator state access: `fetch_register`, `fetch_flag`, `fetch_byte`/`_signed`, `fetch_word`/`_signed`, `fetch_dword`/`_signed`.
+- **`evaluator`** — stack-based VM executing `&[OpCode]` against a `&dyn EvalContext` and a `&mut [Operand]` variable storage slice. Also defines the `EvalContext` trait, which abstracts emulator state access: `fetch_register`, `fetch_flag`, `fetch_byte`/`_signed`, `fetch_word`/`_signed`, `fetch_dword`/`_signed`. Entry point: `eval(code: &[OpCode], context: &dyn EvalContext, vars: &mut [Operand]) -> Operand`.
 
 - **`error`** / **`location`** — `Error` and `Location` structs carrying line/column for error reporting.
 
 ### `wdc6502` module (`src/wdc6502.rs`)
 
-Concrete `Machine` implementation for the WDC 6502. Holds registers (`A`, `X`, `Y`, `P`, `S`, `PC`) and 64KB memory. Provides `map_register_name()` and `map_flag_name()` functions for use as `emwatch::Mapper`s.
+Concrete `EvalContext` implementation for the WDC 6502. Holds registers (`A`, `X`, `Y`, `P`, `S`, `PC`) and 64KB memory. Provides `map_register_name()` and `map_flag_name()` functions for use as `watch::Mapper`s.
 
 ### Domain-specific operators
 

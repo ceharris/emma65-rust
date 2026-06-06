@@ -1,5 +1,5 @@
 use super::error::{Error};
-use super::expr::{BinaryOperatorType, Expr, Operand, OperandWidth, UnaryOperatorType};
+use super::expr::{BinaryOperatorType, Expr, Operand, FetchWidth, UnaryOperatorType};
 use super::scanner::Scanner;
 use super::token::{Token, TokenType};
 use super::variables::Variables;
@@ -295,11 +295,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn memory_operand_width(token_type: &TokenType) -> OperandWidth {
+    fn memory_operand_width(token_type: &TokenType) -> FetchWidth {
         match token_type {
-            TokenType::LeftBBracket => OperandWidth::Byte,
-            TokenType::LeftWBracket => OperandWidth::Word,
-            TokenType::LeftDBracket => OperandWidth::DWord,
+            TokenType::LeftBBracket => FetchWidth::Byte,
+            TokenType::LeftWBracket => FetchWidth::Word,
+            TokenType::LeftDBracket => FetchWidth::DWord,
             _ => panic!("{token_type:?} is not a memory operator"),
         }
     }
@@ -468,7 +468,7 @@ mod tests {
 
     }
 
-    fn validate_memory_operator(operator_width: &str, expected_operand_width: &OperandWidth) {
+    fn validate_memory_operator(operator_width: &str, expected_operand_width: &FetchWidth) {
         let source = format!("{operator_width}[0]");
         let result = parser().parse(&source, &mut no_vars()).unwrap();
         let expr = result.unwrap();
@@ -506,12 +506,12 @@ mod tests {
 
     #[test]
     fn parse_memory_operator() {
-        validate_memory_operator("B", &OperandWidth::Byte);
-        validate_memory_operator("W", &OperandWidth::Word);
-        validate_memory_operator("D", &OperandWidth::DWord);
-        validate_memory_operator("b", &OperandWidth::Byte);
-        validate_memory_operator("w", &OperandWidth::Word);
-        validate_memory_operator("d", &OperandWidth::DWord);
+        validate_memory_operator("B", &FetchWidth::Byte);
+        validate_memory_operator("W", &FetchWidth::Word);
+        validate_memory_operator("D", &FetchWidth::DWord);
+        validate_memory_operator("b", &FetchWidth::Byte);
+        validate_memory_operator("w", &FetchWidth::Word);
+        validate_memory_operator("d", &FetchWidth::DWord);
     }
 
     #[test]
