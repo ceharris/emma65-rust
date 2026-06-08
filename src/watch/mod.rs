@@ -8,11 +8,14 @@ mod parser;
 pub mod compiler;
 mod evaluator;
 pub mod variables;
+mod session;
 
 pub use self::compiler::OpCode;
+pub use self::error::Error;
 pub use evaluator::EvalContext;
 pub use self::evaluator::eval;
 pub use self::expr::Expr;
 pub use self::expr::Operand;
 pub use self::parser::{Mapper, Parser};
+pub use self::session::{WatchSession, Watchpoint};
 pub use self::variables::Variables;

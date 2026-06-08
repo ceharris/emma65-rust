@@ -36,13 +36,17 @@ All items are internal submodules of `emma65::watch`. The module re-exports its 
 
 ```rust
 pub use self::compiler::OpCode;
+pub use self::error::Error;
 pub use self::evaluator::{EvalContext, eval};
 pub use self::expr::{Expr, Operand};
 pub use self::parser::{Mapper, Parser};
+pub use self::session::{WatchSession, Watchpoint};
 pub use self::variables::Variables;
 pub mod compiler;
 pub mod variables;
 ```
+
+The primary public entry point for emulator/debugger code is `WatchSession` — `Parser`, `compiler::compile`, and `eval` are also accessible for callers that need pipeline-level control.
 
 #### Submodules
 
@@ -61,7 +65,7 @@ pub mod variables;
 
 - **`variables`** — `Variables` maps variable names to stable `Operand` IDs. `get_or_create` allocates a new ID on first use and is idempotent thereafter. The caller owns a `Vec<Operand>` indexed by these IDs as the runtime storage.
 
-- **`parser`** — recursive descent. Precedence (lowest to highest): assignment (`:=`) → logical-or → logical-and → bitwise-or → bitwise-xor → bitwise-and → equality → relational → shift → term → factor → unary → primary. Public API:
+- **`parser`** — recursive descent. Precedence (lowest to highest): assignment (`:=`) → logical-or → logical-and → bitwise-or → bitwise-xor → bitwise-and → equality → relational → shift → term → factor → unary → primary. `Parser` has no lifetime parameter; parse state is held in a private `ParseState<'a, 'p>` created for each call. Public API:
   ```rust
   pub type Mapper = Box<dyn Fn(&str) -> Option<Operand>>;
   Parser::from(map_register, map_flag, map_symbol)  // accepts any Fn, boxed internally
@@ -72,6 +76,14 @@ pub mod variables;
 - **`compiler`** — depth-first traversal of `Expr` tree, emitting a flat `Vec<OpCode>`. Signedness from the AST determines which opcode variant is emitted (e.g. `Divide` vs `DivideSigned`). Entry point: `compile(root: Expr) -> Vec<OpCode>`.
 
 - **`evaluator`** — stack-based VM executing `&[OpCode]` against a `&dyn EvalContext` and a `&mut [Operand]` variable storage slice. Also defines the `EvalContext` trait, which abstracts emulator state access: `fetch_register`, `fetch_flag`, `fetch_byte`/`_signed`, `fetch_word`/`_signed`, `fetch_dword`/`_signed`. Entry point: `eval(code: &[OpCode], context: &dyn EvalContext, vars: &mut [Operand]) -> Operand`.
+
+- **`session`** — high-level API over the full pipeline. `WatchSession` owns a `Parser`, shared `Variables`, and shared variable storage; `Watchpoint` owns a source string and compiled `Vec<OpCode>`. Public API:
+  ```rust
+  WatchSession::new(map_register, map_flag, map_symbol) -> WatchSession
+  session.compile(source: &str) -> Result<Watchpoint, Error>  // parse + compile; grows shared variable storage
+  session.eval(&watchpoint, &dyn EvalContext) -> Operand      // eval against shared variable storage
+  watchpoint.source() -> &str
+  ```
 
 - **`error`** / **`location`** — `Error` and `Location` structs carrying line/column for error reporting.
 
@@ -92,4 +104,4 @@ The `signed` field on `Expr` nodes tracks whether results are signed. Unary `-`/
 
 ### Lifetime threading
 
-`Token<'a>` borrows its text from the source `&'a str`. `Expr<'a>` carries `Token<'a>` values, so the source string must outlive both the parser and the returned expression tree. The `Parser` is reusable — call `parse()` multiple times with sources of different lifetimes.
+`Token<'a>` borrows its text from the source `&'a str`. `Expr<'a>` carries `Token<'a>` values, so the source string must outlive the expression tree. `Parser` itself has no lifetime parameter — per-call parse state lives in a local `ParseState<'a, 'p>` that is dropped when `parse()` returns. After `compiler::compile` consumes the `Expr<'a>` tree, the resulting `Vec<OpCode>` has no lifetime parameters and can be stored freely (as `Watchpoint` does).

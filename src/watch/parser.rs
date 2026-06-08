@@ -6,15 +6,13 @@ use super::variables::Variables;
 
 pub type Mapper = Box<dyn Fn(&str) -> Option<Operand>>;
 
-pub struct Parser<'a> {
-    tokens: Vec<Token<'a>>,
-    current: usize,
+pub struct Parser {
     map_register: Mapper,
     map_flag: Mapper,
     map_symbol: Mapper,
 }
 
-impl<'a> Parser<'a> {
+impl Parser {
 
     pub fn from(
         map_register: impl Fn(&str) -> Option<Operand> + 'static,
@@ -22,31 +20,35 @@ impl<'a> Parser<'a> {
         map_symbol: impl Fn(&str) -> Option<Operand> + 'static,
     ) -> Self {
         Self {
-            tokens: vec![],
-            current: 0,
             map_register: Box::new(map_register),
             map_flag: Box::new(map_flag),
             map_symbol: Box::new(map_symbol),
         }
     }
 
-    pub fn parse(&mut self, source: &'a str, vars: &mut Variables) -> Result<Option<Expr<'a>>, Error> {
-        self.tokens = Scanner::new(source).scan()?;
-        self.current = 0;
-        if self.tokens.len() == 0 {
-            Ok(None)
+    pub fn parse<'a>(&self, source: &'a str, vars: &mut Variables) -> Result<Option<Expr<'a>>, Error> {
+        let tokens = Scanner::new(source).scan()?;
+        if tokens.is_empty() {
+            return Ok(None);
         }
-        else {
-            let expr = self.parse_statement(vars)?;
-            if !self.is_at_end() {
-                let token = self.peek().unwrap();
-                Err(Error::from(token.location.line, token.location.column, "unexpected token"))
-            }
-            else {
-                Ok(Some(expr))
-            }
+        let mut state = ParseState { tokens, current: 0, parser: self };
+        let expr = state.parse_statement(vars)?;
+        if !state.is_at_end() {
+            let token = state.peek().unwrap();
+            Err(Error::from(token.location.line, token.location.column, "unexpected token"))
+        } else {
+            Ok(Some(expr))
         }
     }
+}
+
+struct ParseState<'a, 'p> {
+    tokens: Vec<Token<'a>>,
+    current: usize,
+    parser: &'p Parser,
+}
+
+impl<'a, 'p> ParseState<'a, 'p> {
 
     fn parse_statement(&mut self, vars: &mut Variables) -> Result<Expr<'a>, Error> {
         let expr = self.parse_assignment(vars)?;
@@ -248,9 +250,9 @@ impl<'a> Parser<'a> {
     }
 
     fn resolve_symbol(&self, name: &str, token: &Token<'a>, vars: &Variables) -> Result<Expr<'a>, Error> {
-        match (self.map_register)(name) {
+        match (self.parser.map_register)(name) {
             Some(operand) => Ok(Expr::register(token, operand)),
-            None => match (self.map_symbol)(name) {
+            None => match (self.parser.map_symbol)(name) {
                 Some(operand) => Ok(Expr::number(token, operand)),
                 None => match vars.get(name) {
                     Some(id) => Ok(Expr::variable(token, id)),
@@ -309,7 +311,7 @@ impl<'a> Parser<'a> {
         match self.advance() {
             Some(token) => match token.token_type() {
                 TokenType::Symbol(name) =>
-                    match (self.map_flag)(name) {
+                    match (self.parser.map_flag)(name) {
                         Some(flag) => Ok(Expr::flag(&token, flag)),
                         None => Err(Error::from(token.location.line, token.location.column,
                                                 &format!("unrecognized flag '{}'", name)))
@@ -399,7 +401,7 @@ mod tests {
         }
     }
 
-    pub fn parser<'a>() -> Parser<'a> {
+    pub fn parser() -> Parser {
         Parser::from(register_mapper, flag_mapper, symbol_mapper)
     }
 
