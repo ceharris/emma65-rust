@@ -17,5 +17,5 @@ pub use self::evaluator::eval;
 pub use self::expr::Expr;
 pub use self::expr::Operand;
 pub use self::parser::{Mapper, Parser};
-pub use self::session::{WatchSession, Watchpoint};
+pub use self::session::{WatchCompiler, WatchEvaluator, Watchpoint};
 pub use self::variables::Variables;
