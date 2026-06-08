@@ -35,18 +35,15 @@ No external dependencies; zero-copy design throughout.
 All items are internal submodules of `emma65::watch`. The module re-exports its public API from `mod.rs`:
 
 ```rust
-pub use self::compiler::OpCode;
+pub use self::context::WatchContext;
 pub use self::error::Error;
-pub use self::evaluator::{EvalContext, eval};
-pub use self::expr::{Expr, Operand};
-pub use self::parser::{Mapper, Parser};
-pub use self::session::{WatchSession, Watchpoint};
+pub use self::expr::Operand;
+pub use self::parser::Mapper;
+pub use self::session::{WatchCompiler, WatchEvaluator, Watchpoint};
 pub use self::variables::Variables;
-pub mod compiler;
-pub mod variables;
 ```
 
-The primary public entry point for emulator/debugger code is `WatchSession` — `Parser`, `compiler::compile`, and `eval` are also accessible for callers that need pipeline-level control.
+The primary public entry points for emulator/debugger code are `WatchCompiler` and `WatchEvaluator`. The caller owns a `Vec<Operand>` for variable storage and passes it to both.
 
 #### Submodules
 
@@ -75,21 +72,29 @@ The primary public entry point for emulator/debugger code is `WatchSession` — 
 
 - **`compiler`** — depth-first traversal of `Expr` tree, emitting a flat `Vec<OpCode>`. Signedness from the AST determines which opcode variant is emitted (e.g. `Divide` vs `DivideSigned`). Entry point: `compile(root: Expr) -> Vec<OpCode>`.
 
-- **`evaluator`** — stack-based VM executing `&[OpCode]` against a `&dyn EvalContext` and a `&mut [Operand]` variable storage slice. Also defines the `EvalContext` trait, which abstracts emulator state access: `fetch_register`, `fetch_flag`, `fetch_byte`/`_signed`, `fetch_word`/`_signed`, `fetch_dword`/`_signed`. Entry point: `eval(code: &[OpCode], context: &dyn EvalContext, vars: &mut [Operand]) -> Operand`.
+- **`evaluator`** — stack-based VM executing `&[OpCode]` against a `&dyn WatchContext` and a `&mut [Operand]` variable storage slice. Entry point: `eval(code: &[OpCode], context: &dyn WatchContext, vars: &mut [Operand]) -> Operand`.
 
-- **`session`** — high-level API over the full pipeline. `WatchSession` owns a `Parser`, shared `Variables`, and shared variable storage; `Watchpoint` owns a source string and compiled `Vec<OpCode>`. Public API:
+- **`context`** — defines the `WatchContext` trait, which the emulator implements to give the evaluator access to machine state: `fetch_register`, `fetch_flag`, `fetch_byte`/`_signed`, `fetch_word`/`_signed`, `fetch_dword`/`_signed`.
+
+- **`session`** — high-level API over the full pipeline. `WatchCompiler` owns a `Parser` and `Variables`; `WatchEvaluator` owns an ordered list of `Watchpoint` values; the caller owns `var_storage`. Public API:
   ```rust
-  WatchSession::new(map_register, map_flag, map_symbol) -> WatchSession
-  session.compile(source: &str) -> Result<Watchpoint, Error>  // parse + compile; grows shared variable storage
-  session.eval(&watchpoint, &dyn EvalContext) -> Operand      // eval against shared variable storage
+  WatchCompiler::new(map_register, map_flag, map_symbol) -> WatchCompiler
+  compiler.compile(source: &str, var_storage: &mut Vec<Operand>) -> Result<Watchpoint, Error>
+  compiler.compile_all(source: &str, var_storage: &mut Vec<Operand>) -> (Vec<Watchpoint>, Vec<Error>)
+  WatchEvaluator::new() -> WatchEvaluator
+  evaluator.add(watchpoint: Watchpoint)
+  evaluator.remove(index: usize) -> Watchpoint
+  evaluator.watchpoints() -> &[Watchpoint]
+  evaluator.eval_all(context: &dyn WatchContext, var_storage: &mut Vec<Operand>) -> bool
   watchpoint.source() -> &str
   ```
+  `eval_all` evaluates watchpoints in order and short-circuits on the first non-zero result.
 
 - **`error`** / **`location`** — `Error` and `Location` structs carrying line/column for error reporting.
 
 ### `wdc6502` module (`src/wdc6502.rs`)
 
-Concrete `EvalContext` implementation for the WDC 6502. Holds registers (`A`, `X`, `Y`, `P`, `S`, `PC`) and 64KB memory. Provides `map_register_name()` and `map_flag_name()` functions for use as `watch::Mapper`s.
+Concrete `WatchContext` implementation for the WDC 6502. Holds registers (`A`, `X`, `Y`, `P`, `S`, `PC`) and 64KB memory. Provides `map_register_name()` and `map_flag_name()` functions for use as `watch::Mapper`s.
 
 ### Domain-specific operators
 
