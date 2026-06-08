@@ -31,8 +31,8 @@ impl Parser {
         if tokens.is_empty() {
             return Ok(None);
         }
-        let mut state = ParseState { tokens, current: 0, parser: self };
-        let expr = state.parse_statement(vars)?;
+        let mut state = ParseState { source, tokens, current: 0, parser: self };
+        let (_, expr) = state.parse_statement(vars)?;
         if !state.is_at_end() {
             let token = state.peek().unwrap();
             Err(Error::from(token.location.line, token.location.column, "unexpected token"))
@@ -40,9 +40,32 @@ impl Parser {
             Ok(Some(expr))
         }
     }
+
+    pub fn parse_all<'a>(&self, source: &'a str, vars: &mut Variables) -> Vec<Result<(&'a str, Expr<'a>), Error>> {
+        let tokens = match Scanner::new(source).scan() {
+            Ok(t) => t,
+            Err(e) => return vec![Err(e)],
+        };
+        if tokens.is_empty() {
+            return vec![];
+        }
+        let mut state = ParseState { source, tokens, current: 0, parser: self };
+        let mut results = Vec::new();
+        while !state.is_at_end() {
+            match state.parse_statement(vars) {
+                Ok((expr_source, expr)) => results.push(Ok((expr_source, expr))),
+                Err(e) => {
+                    results.push(Err(e));
+                    state.synchronize();
+                }
+            }
+        }
+        results
+    }
 }
 
 struct ParseState<'a, 'p> {
+    source: &'a str,
     tokens: Vec<Token<'a>>,
     current: usize,
     parser: &'p Parser,
@@ -50,10 +73,12 @@ struct ParseState<'a, 'p> {
 
 impl<'a, 'p> ParseState<'a, 'p> {
 
-    fn parse_statement(&mut self, vars: &mut Variables) -> Result<Expr<'a>, Error> {
+    fn parse_statement(&mut self, vars: &mut Variables) -> Result<(&'a str, Expr<'a>), Error> {
+        let start = self.current;
         let expr = self.parse_assignment(vars)?;
+        let expr_source = self.expr_source_from(start);
         self.match_token(&[TokenType::Semicolon]);
-        Ok(expr)
+        Ok((expr_source, expr))
     }
 
     fn parse_assignment(&mut self, vars: &mut Variables) -> Result<Expr<'a>, Error> {
@@ -365,6 +390,26 @@ impl<'a, 'p> ParseState<'a, 'p> {
 
     fn is_at_end(&self) -> bool {
         self.current == self.tokens.len()
+    }
+
+    fn expr_source_from(&self, start_token: usize) -> &'a str {
+        let end_token = self.current.saturating_sub(1);
+        if start_token >= self.tokens.len() || end_token >= self.tokens.len() {
+            return "";
+        }
+        let first = self.tokens[start_token].text();
+        let last = self.tokens[end_token].text();
+        let start_offset = first.as_ptr() as usize - self.source.as_ptr() as usize;
+        let end_offset = last.as_ptr() as usize - self.source.as_ptr() as usize + last.len();
+        &self.source[start_offset..end_offset]
+    }
+
+    fn synchronize(&mut self) {
+        while !self.is_at_end() {
+            if self.advance().map_or(false, |t| t.token_type() == &TokenType::Semicolon) {
+                return;
+            }
+        }
     }
 }
 
