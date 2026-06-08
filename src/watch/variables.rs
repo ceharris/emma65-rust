@@ -1,25 +1,31 @@
 use std::collections::HashMap;
 use super::expr::Operand;
 
+/// A collection of name-to-operand mappings for Watchpoint variables.
 pub struct Variables {
     map: HashMap<String, Operand>,
 }
 
 impl Variables {
 
+    /// Creates a new variables collection.
     pub fn new() -> Self {
         Self { map: HashMap::new() }
     }
 
+    /// Gets the mapping for `name` to the corresponding [`Operand`], if any.
     pub fn get(&self, name: &str) -> Option<Operand> {
         self.map.get(name).copied()
     }
 
+    /// Gets the mapping for `name` to the corresponding [`Operand`], creating the mapping if
+    /// it does not exist.
     pub fn get_or_create(&mut self, name: &str) -> Operand {
         let next_id = self.map.len() as Operand;
         *self.map.entry(name.to_string()).or_insert(next_id)
     }
-    
+
+    /// Gets the length (size) of the mapping table.
     pub fn len(&self) -> usize {
         self.map.len()
     }

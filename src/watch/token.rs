@@ -73,9 +73,6 @@ impl<'a> Token<'a> {
         &self.text
     }
 
-    pub fn location(&self) -> &Location {
-        &self.location
-    }
 
 }
 

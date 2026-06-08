@@ -173,16 +173,19 @@ impl<'a> Expr<'a> {
         }
     }
 
-    pub fn token(&self) -> &Token<'a> {
-        &self.token
-    }
-
     pub fn expr_type(&self) -> &ExprType<'a> {
         &self.expr_type
     }
 
     pub fn is_signed(&self) -> bool {
         self.signed
+    }
+}
+
+#[cfg(test)]
+impl<'a> Expr<'a> {
+    pub fn token(&self) -> &Token<'a> {
+        &self.token
     }
 }
 

@@ -1,7 +1,8 @@
+use crate::watch::context::WatchContext;
 use super::compiler;
 use super::compiler::OpCode;
 use super::error::Error;
-use super::evaluator::{EvalContext, eval};
+use super::evaluator::eval;
 use super::expr::Operand;
 use super::parser::Parser;
 use super::variables::Variables;
@@ -124,7 +125,7 @@ impl WatchEvaluator {
     /// Returns `true` as soon as any watchpoint yields a non-zero result; returns `false`
     /// if all watchpoints yield zero. Variable assignments in watchpoints update `var_storage`
     /// and are visible to subsequent watchpoints in the same call.
-    pub fn eval_all(&self, context: &dyn EvalContext, var_storage: &mut Vec<Operand>) -> bool {
+    pub fn eval_all(&self, context: &dyn WatchContext, var_storage: &mut Vec<Operand>) -> bool {
         self.watchpoints.iter().any(|wp| eval(&wp.code, context, var_storage) != 0)
     }
 }
@@ -149,7 +150,7 @@ mod tests {
         fn with_register(register: Operand) -> Self { Self { register } }
     }
 
-    impl EvalContext for MockMachine {
+    impl WatchContext for MockMachine {
         fn fetch_register(&self, _id: Operand) -> Operand { self.register }
         fn fetch_register_signed(&self, _id: Operand) -> Operand { self.register }
         fn fetch_flag(&self, _id: Operand) -> Operand { 0 }

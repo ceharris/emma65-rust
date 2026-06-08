@@ -3,7 +3,7 @@ use super::expr::{BinaryOperatorType, Expr, ExprType, Operand, FetchWidth, Unary
 
 /// An opcode produced by the "byte code" compiler.
 ///
-/// An expression consisting of these byte codes can be executed by [`super::evaluator::eval`].
+/// An expression consisting of these byte codes can be executed by the evaluator.
 ///
 /// For the various operators described below, `X` refers to the operand at the top of the stack,
 /// while `Y` refers to the next operand ("behind" or "under" the top-of-stack element).
@@ -92,8 +92,8 @@ pub enum OpCode {
     BitwiseNot,
 }
 
-/// Compiles an abstract syntax tree (AST) produced by [`super::parser::Parser`] into
-/// the "byte code" format for execution by [`super::evaluator::eval`]. Returns a vector
+/// Compiles an abstract syntax tree (AST) produced by the parser into
+/// the "byte code" format for execution by the expression evaluator. Returns a vector
 /// containing executable code for the evaluator.
 ///
 /// # Arguments

@@ -4,6 +4,8 @@ use super::scanner::Scanner;
 use super::token::{Token, TokenType};
 use super::variables::Variables;
 
+/// A function that maps a string to an operand value. Used to map register names, flags, and
+/// symbols to operand values that can be used by the stack-based expression evaluator.
 pub type Mapper = Box<dyn Fn(&str) -> Option<Operand>>;
 
 pub struct Parser {
