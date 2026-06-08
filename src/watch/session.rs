@@ -63,6 +63,29 @@ impl WatchSession {
         }
     }
 
+    /// Parses and compiles all semicolon-terminated expressions in `source`.
+    ///
+    /// Returns a tuple of successfully compiled watchpoints and any errors encountered.
+    /// Whitespace-only content between expressions is silently ignored. On a parse error,
+    /// parsing resumes at the next semicolon so subsequent expressions are still attempted.
+    pub fn compile_all(&mut self, source: &str) -> (Vec<Watchpoint>, Vec<Error>) {
+        let mut watchpoints = Vec::new();
+        let mut errors = Vec::new();
+        for result in self.parser.parse_all(source, &mut self.vars) {
+            match result {
+                Ok((expr_source, expr)) => {
+                    let code = compiler::compile(expr);
+                    if self.var_storage.len() < self.vars.len() {
+                        self.var_storage.resize(self.vars.len(), 0);
+                    }
+                    watchpoints.push(Watchpoint { source: expr_source.to_string(), code });
+                }
+                Err(e) => errors.push(e),
+            }
+        }
+        (watchpoints, errors)
+    }
+
     /// Evaluates a compiled watchpoint against the given machine context.
     ///
     /// Variable assignments (walrus expressions) in `watchpoint` update shared storage
@@ -145,6 +168,57 @@ mod tests {
         let machine = MockMachine::new();
         s.eval(&wp_write, &machine);
         assert_eq!(s.eval(&wp_read, &machine), 99);
+    }
+
+    #[test]
+    fn compile_all_empty_source_returns_empty() {
+        let (wps, errs) = session().compile_all("");
+        assert!(wps.is_empty());
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn compile_all_single_expression() {
+        let (wps, errs) = session().compile_all("A == 0;");
+        assert_eq!(wps.len(), 1);
+        assert!(errs.is_empty());
+        assert_eq!(wps[0].source(), "A == 0");
+    }
+
+    #[test]
+    fn compile_all_multiple_expressions() {
+        let (wps, errs) = session().compile_all("A == 0;\nA == 1;");
+        assert_eq!(wps.len(), 2);
+        assert!(errs.is_empty());
+        assert_eq!(wps[0].source(), "A == 0");
+        assert_eq!(wps[1].source(), "A == 1");
+    }
+
+    #[test]
+    fn compile_all_whitespace_between_expressions_is_ignored() {
+        let (wps, errs) = session().compile_all("A == 0;\n\n   \nA == 1;");
+        assert_eq!(wps.len(), 2);
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn compile_all_collects_errors_and_continues() {
+        let (wps, errs) = session().compile_all("A == 0;\nA ==;\nA == 2;");
+        assert_eq!(wps.len(), 2);
+        assert_eq!(errs.len(), 1);
+        assert_eq!(wps[0].source(), "A == 0");
+        assert_eq!(wps[1].source(), "A == 2");
+    }
+
+    #[test]
+    fn compile_all_variables_shared_across_expressions() {
+        let mut s = session();
+        let (wps, errs) = s.compile_all("x := A;\nx == 5;");
+        assert_eq!(wps.len(), 2);
+        assert!(errs.is_empty());
+        let machine = MockMachine::with_register(5);
+        s.eval(&wps[0], &machine);
+        assert_ne!(s.eval(&wps[1], &machine), 0);
     }
 
     #[test]
