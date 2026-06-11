@@ -158,7 +158,7 @@ Add all debugger-facing features: breakpoints, watch expression evaluation in th
   - `disassemble_one()` and `disassemble_range()` using `Bus::peek`
   - Operand formatting per addressing mode
 
-**Dependencies:** This MR depends on the `watch` module's public API. The interface boundary is the `WatchEvaluator` and `WatchExpression` types, plus `compile_watch()`. Details to be confirmed when `emma65` source is available.
+**Dependencies:** This MR depends on the `watch` module's public API. The interface boundary is `WatchCompiler`, `WatchEvaluator`, and `Watchpoint` from `emma65::watch::session`, plus the `WatchContext` trait from `emma65::watch::context`.
 
 **Tests:**
 - Breakpoint at PC → `StepResult::Breakpoint` before instruction executes
@@ -412,10 +412,3 @@ MR 14 Integration + functional tests
 ```
 
 MRs 8–12 (transport + devices) are independent of MRs 6–7 (debugger support, bus trace) and could be developed in parallel if desired. The critical path is: 1 → 2 → 3 → 4 → 5 → 13 → 14.
-
-## Open Questions (to resolve when emma65 source is available)
-
-1. **Watch module API**: What types does the `watch` module export? MR 6 needs `WatchEvaluator`, `WatchExpression`, and `compile_watch()` — or their equivalents.
-2. **Existing module layout**: Where does `emulator` fit in the current `src/` tree? Are there existing shared types or error conventions to follow?
-3. **Existing dependencies**: Which crates are already in `Cargo.toml`? Avoids introducing duplicates.
-4. **Test conventions**: Does emma65 use any test harness crates, fixture patterns, or test organization conventions?
