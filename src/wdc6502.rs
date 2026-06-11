@@ -1,4 +1,3 @@
-use std::ops::BitAnd;
 use emma65::watch::Operand;
 use emma65::watch::WatchContext;
 
@@ -116,7 +115,7 @@ impl Wdc6502Machine {
     fn fetch_u16(&self, address: Operand) -> u16 {
         let b0 = self.memory[(address & 0xffff) as usize];
         let b1 = self.memory[((address + 1) & 0xffff) as usize];
-        ((b1 as u16) << 8 | b0 as u16) as u16
+        (b1 as u16) << 8 | b0 as u16
     }
 
     fn fetch_u32(&self, address: Operand) -> u32 {
@@ -130,7 +129,7 @@ impl Wdc6502Machine {
 }
 impl WatchContext for Wdc6502Machine {
 
-    fn fetch_register(&self, register_id: Operand) -> Operand {
+    fn read_register_u32(&self, register_id: Operand) -> Operand {
         match register_id {
             REG_A => self.registers.a as Operand,
             REG_X => self.registers.x as Operand,
@@ -142,44 +141,40 @@ impl WatchContext for Wdc6502Machine {
         }
     }
 
-    fn fetch_register_signed(&self, register_id: Operand) -> Operand {
+    fn read_register_i32(&self, register_id: Operand) -> Operand {
         match register_id {
             REG_A => self.registers.a.cast_signed() as Operand,
             REG_X => self.registers.x.cast_signed() as Operand,
             REG_Y => self.registers.y.cast_signed() as Operand,
-            REG_P => self.registers.p.cast_signed()as Operand,
+            REG_P => self.registers.p.cast_signed() as Operand,
             REG_S => self.registers.s.cast_signed() as Operand,
             REG_PC => self.registers.pc.cast_signed() as Operand,
             _ => panic!("unrecognized register ID: {register_id}")
         }
     }
 
-    fn fetch_flag(&self, flag_id: Operand) -> Operand {
-        ((self.registers.p as Operand).bitand(flag_id) != 0) as Operand
+    fn read_flag(&self, flag_id: Operand) -> Operand {
+        ((self.registers.p as Operand) & flag_id != 0) as Operand
     }
 
-    fn fetch_byte(&self, address: Operand) -> Operand {
-        self.fetch_u8(address) as Operand
+    fn read_mem_u32(&self, addr: u16, width: u8) -> u32 {
+        let address = addr as Operand;
+        match width {
+            1 => self.fetch_u8(address) as u32,
+            2 => self.fetch_u16(address) as u32,
+            4 => self.fetch_u32(address),
+            _ => 0,
+        }
     }
 
-    fn fetch_byte_signed(&self, address: Operand) -> Operand {
-        self.fetch_u8(address).cast_signed() as Operand
-    }
-
-    fn fetch_word(&self, address: Operand) -> Operand {
-        self.fetch_u16(address) as Operand
-    }
-
-    fn fetch_word_signed(&self, address: Operand) -> Operand {
-        self.fetch_u16(address).cast_signed() as Operand
-    }
-
-    fn fetch_dword(&self, address: Operand) -> Operand {
-        self.fetch_u32(address) as Operand
-    }
-
-    fn fetch_dword_signed(&self, address: Operand) -> Operand {
-        self.fetch_u32(address) as Operand
+    fn read_mem_i32(&self, addr: u16, width: u8) -> u32 {
+        let address = addr as Operand;
+        match width {
+            1 => self.fetch_u8(address).cast_signed() as u32,
+            2 => self.fetch_u16(address).cast_signed() as u32,
+            4 => self.fetch_u32(address),
+            _ => 0,
+        }
     }
 
 }
@@ -190,100 +185,135 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fetch_register() {
+    fn read_register_u32() {
         let mut machine = Wdc6502Machine::new();
         machine.registers.a = 1;
-        assert_eq!(machine.fetch_register(REG_A), 1);
+        assert_eq!(machine.read_register_u32(REG_A), 1);
         machine.registers.x = 2;
-        assert_eq!(machine.fetch_register(REG_X), 2);
+        assert_eq!(machine.read_register_u32(REG_X), 2);
         machine.registers.y = 3;
-        assert_eq!(machine.fetch_register(REG_Y), 3);
+        assert_eq!(machine.read_register_u32(REG_Y), 3);
         machine.registers.p = 4;
-        assert_eq!(machine.fetch_register(REG_P), 4);
+        assert_eq!(machine.read_register_u32(REG_P), 4);
         machine.registers.s = 5;
-        assert_eq!(machine.fetch_register(REG_S), 5);
+        assert_eq!(machine.read_register_u32(REG_S), 5);
         machine.registers.pc = 6;
-        assert_eq!(machine.fetch_register(REG_PC), 6);
+        assert_eq!(machine.read_register_u32(REG_PC), 6);
     }
 
     #[test]
     #[should_panic(expected="unrecognized")]
-    fn fetch_register_unrecognized() {
+    fn read_register_u32_unrecognized() {
         let machine = Wdc6502Machine::new();
-        machine.fetch_register(0xff);
+        machine.read_register_u32(0xff);
     }
 
     #[test]
-    fn fetch_register_signed() {
+    fn read_register_i32() {
         let mut machine = Wdc6502Machine::new();
         machine.registers.a = -1i8 as u8;
-        assert_eq!(machine.fetch_register_signed(REG_A), -1i32 as Operand);
+        assert_eq!(machine.read_register_i32(REG_A), -1i32 as Operand);
         machine.registers.x = -2i8 as u8;
-        assert_eq!(machine.fetch_register_signed(REG_X), -2i32 as Operand);
+        assert_eq!(machine.read_register_i32(REG_X), -2i32 as Operand);
         machine.registers.y = -3i8 as u8;
-        assert_eq!(machine.fetch_register_signed(REG_Y), -3i32 as Operand);
+        assert_eq!(machine.read_register_i32(REG_Y), -3i32 as Operand);
         machine.registers.p = -4i8 as u8;
-        assert_eq!(machine.fetch_register_signed(REG_P), -4i32 as Operand);
+        assert_eq!(machine.read_register_i32(REG_P), -4i32 as Operand);
         machine.registers.s = -5i8 as u8;
-        assert_eq!(machine.fetch_register_signed(REG_S), -5i32 as Operand);
+        assert_eq!(machine.read_register_i32(REG_S), -5i32 as Operand);
         machine.registers.pc = -6i16 as u16;
-        assert_eq!(machine.fetch_register_signed(REG_PC), -6i32 as Operand);
+        assert_eq!(machine.read_register_i32(REG_PC), -6i32 as Operand);
     }
 
     #[test]
-    fn fetch_flag() {
+    fn read_flag() {
         let mut machine = Wdc6502Machine::new();
         machine.registers.p = 0;
-        assert_eq!(machine.fetch_flag(FLAG_C), 0);
-        assert_eq!(machine.fetch_flag(FLAG_Z), 0);
-        assert_eq!(machine.fetch_flag(FLAG_I), 0);
-        assert_eq!(machine.fetch_flag(FLAG_D), 0);
-        assert_eq!(machine.fetch_flag(FLAG_B), 0);
-        assert_eq!(machine.fetch_flag(FLAG_V), 0);
-        assert_eq!(machine.fetch_flag(FLAG_N), 0);
+        assert_eq!(machine.read_flag(FLAG_C), 0);
+        assert_eq!(machine.read_flag(FLAG_Z), 0);
+        assert_eq!(machine.read_flag(FLAG_I), 0);
+        assert_eq!(machine.read_flag(FLAG_D), 0);
+        assert_eq!(machine.read_flag(FLAG_B), 0);
+        assert_eq!(machine.read_flag(FLAG_V), 0);
+        assert_eq!(machine.read_flag(FLAG_N), 0);
         machine.registers.p = 0xff;
-        assert_eq!(machine.fetch_flag(FLAG_C), 1);
-        assert_eq!(machine.fetch_flag(FLAG_Z), 1);
-        assert_eq!(machine.fetch_flag(FLAG_I), 1);
-        assert_eq!(machine.fetch_flag(FLAG_D), 1);
-        assert_eq!(machine.fetch_flag(FLAG_B), 1);
-        assert_eq!(machine.fetch_flag(FLAG_V), 1);
-        assert_eq!(machine.fetch_flag(FLAG_N), 1);
+        assert_eq!(machine.read_flag(FLAG_C), 1);
+        assert_eq!(machine.read_flag(FLAG_Z), 1);
+        assert_eq!(machine.read_flag(FLAG_I), 1);
+        assert_eq!(machine.read_flag(FLAG_D), 1);
+        assert_eq!(machine.read_flag(FLAG_B), 1);
+        assert_eq!(machine.read_flag(FLAG_V), 1);
+        assert_eq!(machine.read_flag(FLAG_N), 1);
         machine.registers.p = 0xfe;
-        assert_eq!(machine.fetch_flag(FLAG_C), 0);
+        assert_eq!(machine.read_flag(FLAG_C), 0);
     }
 
     #[test]
-    fn fetch_byte() {
+    fn read_mem_u32_byte() {
         let mut machine = Wdc6502Machine::new();
         machine.store_u8(0, 0xaa);
-        assert_eq!(machine.fetch_byte(0), 0xaa);
-        assert_eq!(machine.fetch_byte_signed(0), 0xffffffaa);
+        assert_eq!(machine.read_mem_u32(0, 1), 0xaa);
     }
 
     #[test]
-    fn fetch_word() {
+    fn read_mem_i32_byte() {
+        let mut machine = Wdc6502Machine::new();
+        machine.store_u8(0, 0xaa);
+        assert_eq!(machine.read_mem_i32(0, 1), 0xffffffaa);
+    }
+
+    #[test]
+    fn read_mem_u32_word() {
         let mut machine = Wdc6502Machine::new();
         machine.store_u8(0, 0x55);
         machine.store_u8(1, 0xaa);
-        assert_eq!(machine.fetch_word(0), 0xaa55);
-        assert_eq!(machine.fetch_word_signed(0), 0xffffaa55);
-        machine.store_u8(0xffff, 0x55);
-        assert_eq!(machine.fetch_word(0xffff), 0x5555);
+        assert_eq!(machine.read_mem_u32(0, 2), 0xaa55);
     }
 
     #[test]
-    fn fetch_dword() {
+    fn read_mem_i32_word() {
+        let mut machine = Wdc6502Machine::new();
+        machine.store_u8(0, 0x55);
+        machine.store_u8(1, 0xaa);
+        assert_eq!(machine.read_mem_i32(0, 2), 0xffffaa55);
+    }
+
+    #[test]
+    fn read_mem_u32_word_wraps() {
+        let mut machine = Wdc6502Machine::new();
+        machine.store_u8(0xffff, 0x55);
+        machine.store_u8(0, 0x55);
+        assert_eq!(machine.read_mem_u32(0xffff, 2), 0x5555);
+    }
+
+    #[test]
+    fn read_mem_u32_dword() {
         let mut machine = Wdc6502Machine::new();
         machine.store_u8(0, 0x55);
         machine.store_u8(1, 0xaa);
         machine.store_u8(2, 0x55);
         machine.store_u8(3, 0xaa);
-        assert_eq!(machine.fetch_dword(0), 0xaa55aa55);
-        assert_eq!(machine.fetch_dword_signed(0), 0xaa55aa55);
+        assert_eq!(machine.read_mem_u32(0, 4), 0xaa55aa55);
+    }
+
+    #[test]
+    fn read_mem_i32_dword() {
+        let mut machine = Wdc6502Machine::new();
+        machine.store_u8(0, 0x55);
+        machine.store_u8(1, 0xaa);
+        machine.store_u8(2, 0x55);
+        machine.store_u8(3, 0xaa);
+        assert_eq!(machine.read_mem_i32(0, 4), 0xaa55aa55);
+    }
+
+    #[test]
+    fn read_mem_u32_dword_wraps() {
+        let mut machine = Wdc6502Machine::new();
         machine.store_u8(0xfffe, 0x55);
         machine.store_u8(0xffff, 0xaa);
-        assert_eq!(machine.fetch_dword(0xfffe), 0xaa55aa55);
+        machine.store_u8(0, 0x55);
+        machine.store_u8(1, 0xaa);
+        assert_eq!(machine.read_mem_u32(0xfffe, 4), 0xaa55aa55);
     }
 
 }

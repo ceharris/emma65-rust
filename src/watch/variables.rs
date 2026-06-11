@@ -29,8 +29,19 @@ impl Variables {
     pub fn len(&self) -> usize {
         self.map.len()
     }
+
+    /// Tests whether the mapping table is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
 }
 
+impl Default for Variables {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(test)]
 mod tests {

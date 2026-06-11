@@ -247,7 +247,7 @@ impl <'a> Scanner<'a> {
         let mut value: u32 = (d - b'0').into();
         loop {
             match self.source.peek() {
-                Some(d) if (b'0'..=b'9').contains(&d) => {
+                Some(d) if d.is_ascii_digit() => {
                     self.source.advance();
                     let digit: u32 = (d - b'0').into();
                     value = 10*value + digit;

@@ -86,15 +86,13 @@ impl<'a, 'p> ParseState<'a, 'p> {
     fn parse_assignment(&mut self, vars: &mut Variables) -> Result<Expr<'a>, Error> {
         if let (Some(name_token), true) = (
             self.peek().cloned(),
-            self.peek_next().map_or(false, |t| t.token_type() == &TokenType::Walrus),
-        ) {
-            if let TokenType::Symbol(name) = name_token.token_type().clone() {
+            self.peek_next().is_some_and(|t| t.token_type() == TokenType::Walrus),
+        ) && let TokenType::Symbol(name) = name_token.token_type().clone() {
                 self.advance(); // consume symbol
                 self.advance(); // consume :=
                 let id = vars.get_or_create(&name);
                 let rhs = self.parse_next(vars)?;
                 return Ok(Expr::assign(&name_token, id, rhs));
-            }
         }
         self.parse_logical_or(vars)
     }
@@ -294,7 +292,7 @@ impl<'a, 'p> ParseState<'a, 'p> {
         let op = self.advance().unwrap();  // consume the opening parenthesis
         let operand = self.parse_next(vars)?;
         match self.advance() {
-            Some(token) if token.token_type() == &TokenType::RightParen => {
+            Some(token) if token.token_type() == TokenType::RightParen => {
                 let signed = operand.is_signed();
                 Ok(Expr::unary(&op, UnaryOperatorType::Grouping, operand, signed))
             }
@@ -311,7 +309,7 @@ impl<'a, 'p> ParseState<'a, 'p> {
         let op = self.advance().unwrap();  // consume the bracket operator
         let operand = self.parse_next(vars)?;
         match self.advance() {
-            Some(token) if token.token_type() == &TokenType::RightBracket => {
+            Some(token) if token.token_type() == TokenType::RightBracket => {
                 let width = Self::memory_operand_width(op.token_type());
                 Ok(Expr::unary(&op, UnaryOperatorType::Fetch(width), operand, false))
             }
@@ -408,7 +406,7 @@ impl<'a, 'p> ParseState<'a, 'p> {
 
     fn synchronize(&mut self) {
         while !self.is_at_end() {
-            if self.advance().map_or(false, |t| t.token_type() == &TokenType::Semicolon) {
+            if self.advance().is_some_and(|t| t.token_type() == TokenType::Semicolon) {
                 return;
             }
         }

@@ -32,3 +32,27 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// A runtime error produced during watch expression evaluation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WatchError {
+    DivisionByZero,
+    InvalidRegister(u32),
+    InvalidFlag(u32),
+    InvalidMemoryWidth(u8),
+    StackOverflow,
+}
+
+impl std::fmt::Display for WatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WatchError::DivisionByZero => write!(f, "division by zero"),
+            WatchError::InvalidRegister(id) => write!(f, "invalid register: {id}"),
+            WatchError::InvalidFlag(id) => write!(f, "invalid flag: {id}"),
+            WatchError::InvalidMemoryWidth(w) => write!(f, "invalid memory width: {w}"),
+            WatchError::StackOverflow => write!(f, "stack overflow"),
+        }
+    }
+}
+
+impl std::error::Error for WatchError {}

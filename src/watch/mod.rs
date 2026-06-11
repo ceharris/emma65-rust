@@ -11,7 +11,7 @@ mod variables;
 mod session;
 mod context;
 
-pub use self::error::Error;
+pub use self::error::{Error, WatchError};
 pub use self::context::WatchContext;
 pub use self::expr::Operand;
 pub use self::parser::Mapper;

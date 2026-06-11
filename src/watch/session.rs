@@ -1,7 +1,7 @@
 use crate::watch::context::WatchContext;
 use super::compiler;
 use super::compiler::OpCode;
-use super::error::Error;
+use super::error::{Error, WatchError};
 use super::evaluator::eval;
 use super::expr::Operand;
 use super::parser::Parser;
@@ -122,11 +122,29 @@ impl WatchEvaluator {
 
     /// Evaluates all watchpoints in order against `context` and `var_storage`.
     ///
-    /// Returns `true` as soon as any watchpoint yields a non-zero result; returns `false`
-    /// if all watchpoints yield zero. Variable assignments in watchpoints update `var_storage`
-    /// and are visible to subsequent watchpoints in the same call.
-    pub fn eval_all(&self, context: &dyn WatchContext, var_storage: &mut Vec<Operand>) -> bool {
-        self.watchpoints.iter().any(|wp| eval(&wp.code, context, var_storage) != 0)
+    /// Returns `Ok(None)` if no watchpoint triggered, `Ok(Some(index))` if the watchpoint
+    /// at `index` yielded a non-zero result, or `Err((index, error))` if evaluation of the
+    /// watchpoint at `index` failed. Variable assignments in earlier watchpoints update
+    /// `var_storage` and are visible to subsequent watchpoints in the same call.
+    pub fn evaluate_all(
+        &self,
+        context: &dyn WatchContext,
+        var_storage: &mut [Operand],
+    ) -> Result<Option<usize>, (usize, WatchError)> {
+        for (i, wp) in self.watchpoints.iter().enumerate() {
+            match eval(&wp.code, context, var_storage) {
+                Ok(value) if value != 0 => return Ok(Some(i)),
+                Ok(_) => {}
+                Err(e) => return Err((i, e)),
+            }
+        }
+        Ok(None)
+    }
+}
+
+impl Default for WatchEvaluator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -151,15 +169,11 @@ mod tests {
     }
 
     impl WatchContext for MockMachine {
-        fn fetch_register(&self, _id: Operand) -> Operand { self.register }
-        fn fetch_register_signed(&self, _id: Operand) -> Operand { self.register }
-        fn fetch_flag(&self, _id: Operand) -> Operand { 0 }
-        fn fetch_byte(&self, _address: Operand) -> Operand { 0 }
-        fn fetch_byte_signed(&self, _address: Operand) -> Operand { 0 }
-        fn fetch_word(&self, _address: Operand) -> Operand { 0 }
-        fn fetch_word_signed(&self, _address: Operand) -> Operand { 0 }
-        fn fetch_dword(&self, _address: Operand) -> Operand { 0 }
-        fn fetch_dword_signed(&self, _address: Operand) -> Operand { 0 }
+        fn read_register_u32(&self, _id: Operand) -> Operand { self.register }
+        fn read_register_i32(&self, _id: Operand) -> Operand { self.register }
+        fn read_flag(&self, _id: Operand) -> Operand { 0 }
+        fn read_mem_u32(&self, _addr: u16, _width: u8) -> u32 { 0 }
+        fn read_mem_i32(&self, _addr: u16, _width: u8) -> u32 { 0 }
     }
 
     fn compiler() -> WatchCompiler {
@@ -238,53 +252,72 @@ mod tests {
     // --- WatchEvaluator tests ---
 
     #[test]
-    fn eval_all_returns_false_when_empty() {
+    fn evaluate_all_returns_none_when_empty() {
         let ev = WatchEvaluator::new();
-        assert!(!ev.eval_all(&MockMachine::new(), &mut Vec::new()));
+        assert_eq!(ev.evaluate_all(&MockMachine::new(), &mut Vec::new()), Ok(None));
     }
 
     #[test]
-    fn eval_all_returns_false_when_no_watchpoint_triggered() {
+    fn evaluate_all_returns_none_when_no_watchpoint_triggered() {
         let mut c = compiler();
         let mut vars = Vec::new();
         let wp = c.compile("A == 99", &mut vars).unwrap();
         let mut ev = WatchEvaluator::new();
         ev.add(wp);
-        assert!(!ev.eval_all(&MockMachine::with_register(0), &mut vars));
+        assert_eq!(ev.evaluate_all(&MockMachine::with_register(0), &mut vars), Ok(None));
     }
 
     #[test]
-    fn eval_all_returns_true_when_watchpoint_triggered() {
+    fn evaluate_all_returns_index_when_watchpoint_triggered() {
         let mut c = compiler();
         let mut vars = Vec::new();
         let wp = c.compile("A == 42", &mut vars).unwrap();
         let mut ev = WatchEvaluator::new();
         ev.add(wp);
-        assert!(ev.eval_all(&MockMachine::with_register(42), &mut vars));
+        assert_eq!(ev.evaluate_all(&MockMachine::with_register(42), &mut vars), Ok(Some(0)));
     }
 
     #[test]
-    fn eval_all_short_circuits_on_first_triggered() {
+    fn evaluate_all_returns_first_triggered_index() {
         let mut c = compiler();
         let mut vars = Vec::new();
+        let wp0 = c.compile("A == 99", &mut vars).unwrap();
         let wp1 = c.compile("A == 42", &mut vars).unwrap();
         let wp2 = c.compile("A == 42", &mut vars).unwrap();
         let mut ev = WatchEvaluator::new();
+        ev.add(wp0);
         ev.add(wp1);
         ev.add(wp2);
-        assert!(ev.eval_all(&MockMachine::with_register(42), &mut vars));
+        assert_eq!(ev.evaluate_all(&MockMachine::with_register(42), &mut vars), Ok(Some(1)));
     }
 
     #[test]
-    fn eval_all_variable_assignments_visible_to_subsequent_watchpoints() {
+    fn evaluate_all_returns_error_with_index() {
         let mut c = compiler();
         let mut vars = Vec::new();
-        let wp_write = c.compile("x := A", &mut vars).unwrap();
-        let wp_read = c.compile("x == 5", &mut vars).unwrap();
+        let wp0 = c.compile("A == 99", &mut vars).unwrap();
+        let wp1 = c.compile("A / 0", &mut vars).unwrap();
         let mut ev = WatchEvaluator::new();
-        ev.add(wp_write);
-        ev.add(wp_read);
-        assert!(ev.eval_all(&MockMachine::with_register(5), &mut vars));
+        ev.add(wp0);
+        ev.add(wp1);
+        assert_eq!(
+            ev.evaluate_all(&MockMachine::with_register(0), &mut vars),
+            Err((1, WatchError::DivisionByZero))
+        );
+    }
+
+    #[test]
+    fn evaluate_all_variable_assignments_visible_to_subsequent_watchpoints() {
+        let mut c = compiler();
+        let mut vars = Vec::new();
+        // x := A yields 0 when A is 0 (not triggered), but assigns x = 0
+        let wp_assign = c.compile("x := A", &mut vars).unwrap();
+        // x == 0 is true (1) — proves the assignment from wp_assign is visible
+        let wp_check = c.compile("x == 0", &mut vars).unwrap();
+        let mut ev = WatchEvaluator::new();
+        ev.add(wp_assign);
+        ev.add(wp_check);
+        assert_eq!(ev.evaluate_all(&MockMachine::with_register(0), &mut vars), Ok(Some(1)));
     }
 
     #[test]

@@ -23,8 +23,11 @@ fn main() {
             machine.store_u8(0x2, 4);
             let mut evaluator = WatchEvaluator::new();
             evaluator.add(watchpoint);
-            let triggered = evaluator.eval_all(&machine, &mut vars);
-            println!("triggered: {triggered}");
+            match evaluator.evaluate_all(&machine, &mut vars) {
+                Ok(Some(index)) => println!("triggered: watchpoint {index}"),
+                Ok(None) => println!("not triggered"),
+                Err((index, error)) => println!("error in watchpoint {index}: {error}"),
+            }
         }
         Err(error) => eprintln!("compile error: {error}"),
     }

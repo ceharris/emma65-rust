@@ -70,7 +70,7 @@ impl<'a> Token<'a> {
     }
 
     pub fn text(&self) -> &'a str {
-        &self.text
+        self.text
     }
 
 
