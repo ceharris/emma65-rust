@@ -1,7 +1,9 @@
 /// A contiguous range of addresses in the 16-bit address space, inclusive on both ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AddressRange {
+    /// First address in the range (inclusive).
     pub start: u16,
+    /// Last address in the range (inclusive).
     pub end: u16,
 }
 

@@ -1,6 +1,11 @@
 use bitflags::bitflags;
 
 bitflags! {
+    /// The 65C02 processor status register (P).
+    ///
+    /// Each bit is a named flag: N (negative), V (overflow), UNUSED, B (break), D (decimal),
+    /// I (interrupt disable), Z (zero), C (carry). The UNUSED bit is always set on the real
+    /// hardware when pushed to the stack; software should treat it as read-only.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct StatusRegister: u8 {
         const C      = 0x01;

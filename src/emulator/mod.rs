@@ -1,7 +1,12 @@
+/// Memory bus, address decoding, and bus tracing.
 pub mod bus;
+/// CPU variants, registers, status flags, and opcode decode table.
 pub mod cpu;
+/// IO device trait and device identification.
 pub mod device;
+/// Error types for execution, bus, configuration, and CPU construction failures.
 pub mod error;
+/// Execution model: clock speed, step results, and free-running run handle.
 pub mod exec;
 
 pub use bus::region::{AddressRange, BusOp};
