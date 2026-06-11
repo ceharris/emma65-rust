@@ -8,22 +8,27 @@ pub struct AddressRange {
 }
 
 impl AddressRange {
+    /// Creates a new address range spanning `start..=end` (both inclusive).
     pub fn new(start: u16, end: u16) -> Self {
         Self { start, end }
     }
 
+    /// Returns `true` if `addr` falls within this range.
     pub fn contains(&self, addr: u16) -> bool {
         addr >= self.start && addr <= self.end
     }
 
+    /// Returns the number of addresses in the range.
     pub fn len(&self) -> u32 {
         (self.end as u32) - (self.start as u32) + 1
     }
 
+    /// Always returns `false`; an `AddressRange` always spans at least one address.
     pub fn is_empty(&self) -> bool {
-        false // AddressRange always spans at least one address (start..=end, both inclusive)
+        false
     }
 
+    /// Returns `true` if this range shares at least one address with `other`.
     pub fn overlaps(&self, other: &AddressRange) -> bool {
         self.start <= other.end && other.start <= self.end
     }
@@ -32,7 +37,9 @@ impl AddressRange {
 /// Identifies a bus operation for error reporting and tracing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusOp {
+    /// A read from the bus.
     Read,
+    /// A write to the bus.
     Write,
 }
 

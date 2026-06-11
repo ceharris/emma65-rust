@@ -20,10 +20,12 @@ bitflags! {
 }
 
 impl StatusRegister {
+    /// Creates a `StatusRegister` from a raw byte, ignoring any undefined bits.
     pub fn from_byte(byte: u8) -> Self {
         Self::from_bits_truncate(byte)
     }
 
+    /// Returns the status register as a raw byte.
     pub fn to_byte(self) -> u8 {
         self.bits()
     }

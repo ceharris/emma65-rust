@@ -1,5 +1,6 @@
 use crate::emulator::cpu::variant::CpuVariant;
 
+/// All instruction mnemonics for the 65C02 family, including WDC-only additions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mnemonic {
     Adc, And, Asl, Bbc, Bbr0, Bbr1, Bbr2, Bbr3, Bbr4, Bbr5, Bbr6, Bbr7,
@@ -21,6 +22,7 @@ pub enum Mnemonic {
     Ill,
 }
 
+/// All addressing modes supported by the 65C02 family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddressingMode {
     Implied,
@@ -44,8 +46,11 @@ pub enum AddressingMode {
 /// A decoded instruction entry from the 256-entry table.
 #[derive(Debug, Clone, Copy)]
 pub struct DecodedOp {
+    /// The raw opcode byte (0x00–0xFF).
     pub opcode: u8,
+    /// The instruction mnemonic.
     pub mnemonic: Mnemonic,
+    /// The addressing mode used by this opcode.
     pub mode: AddressingMode,
     /// Total instruction length in bytes (1, 2, or 3).
     pub byte_len: u8,

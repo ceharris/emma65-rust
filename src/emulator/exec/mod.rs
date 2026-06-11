@@ -11,23 +11,28 @@ pub struct ClockSpeed {
 }
 
 impl ClockSpeed {
+    /// Creates a clock speed from a frequency in MHz (e.g. `1.8432` for 1.8432 MHz).
     pub fn mhz(mhz: f64) -> Self {
         Self { hz: (mhz * 1_000_000.0).round() as u64 }
     }
 
+    /// Creates a clock speed from a frequency in Hz.
     pub fn hz(hz: u64) -> Self {
         assert!(hz > 0, "hz must be non-zero; use ClockSpeed::unlimited() for no throttling");
         Self { hz }
     }
 
+    /// Creates an unlimited clock speed, disabling throttling in free-running mode.
     pub fn unlimited() -> Self {
         Self { hz: UNLIMITED_SENTINEL }
     }
 
+    /// Returns `true` if this clock speed has no throttling limit.
     pub fn is_unlimited(&self) -> bool {
         self.hz == UNLIMITED_SENTINEL
     }
 
+    /// Returns the clock frequency in Hz, or `None` if unlimited.
     pub fn hz_value(&self) -> Option<u64> {
         if self.is_unlimited() { None } else { Some(self.hz) }
     }
