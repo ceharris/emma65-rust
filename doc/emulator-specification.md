@@ -299,19 +299,27 @@ impl InterruptController {
 
 ## 7. Watch Expressions
 
+### Operand Type
+
+```rust
+pub type Operand = u32;
+```
+
+All watch-pipeline values — register IDs, flag IDs, memory contents, variable storage, and expression results — use the `Operand` type alias. This provides uniformity across the evaluator and makes the pipeline's value width explicit.
+
 ### WatchContext Trait
 
 ```rust
 pub trait WatchContext {
-    fn read_register_u32(&self, register_id: u32) -> u32;   // zero-extended
-    fn read_register_i32(&self, register_id: u32) -> u32;   // sign-extended
-    fn read_flag(&self, flag_id: u32) -> u32;                // 0 or 1
-    fn read_mem_u32(&self, addr: u16, width: u8) -> u32;    // zero-extended
-    fn read_mem_i32(&self, addr: u16, width: u8) -> u32;    // sign-extended
+    fn read_register_u32(&self, register_id: Operand) -> Operand;   // zero-extended
+    fn read_register_i32(&self, register_id: Operand) -> Operand;   // sign-extended
+    fn read_flag(&self, flag_id: Operand) -> Operand;                // 0 or 1
+    fn read_mem_u32(&self, addr: u16, width: u8) -> Operand;        // zero-extended
+    fn read_mem_i32(&self, addr: u16, width: u8) -> Operand;        // sign-extended
 }
 ```
 
-Implemented internally by a struct borrowing `&Bus` (for peek) and `&Registers`. All methods return `u32`; the bytecode evaluator handles signed/unsigned interpretation.
+Implemented internally by a struct borrowing `&Bus` (for peek) and `&Registers`. All methods return `Operand`; the bytecode evaluator handles signed/unsigned interpretation.
 
 ### Watchpoint and Compilation
 
@@ -331,9 +339,9 @@ pub struct WatchCompiler { /* parser state */ }
 
 impl WatchCompiler {
     pub fn new(
-        map_register: impl Fn(&str) -> Option<u32> + 'static,
-        map_flag: impl Fn(&str) -> Option<u32> + 'static,
-        map_symbol: impl Fn(&str) -> Option<u32> + 'static,
+        map_register: impl Fn(&str) -> Option<Operand> + 'static,
+        map_flag: impl Fn(&str) -> Option<Operand> + 'static,
+        map_symbol: impl Fn(&str) -> Option<Operand> + 'static,
     ) -> Self;
 
     pub fn compile(&mut self, source: &str, evaluator: &mut WatchEvaluator) -> Result<Watchpoint, Error>;
@@ -348,8 +356,8 @@ The evaluator is a concrete struct (not a trait) owned by the CPU. It owns the w
 ```rust
 pub struct WatchEvaluator {
     watchpoints: Vec<Watchpoint>,
-    vars: Variables,             // name → index mappings
-    var_storage: Vec<u32>,       // runtime values, indexed by variable ID
+    vars: Variables,                // name → index mappings
+    var_storage: Vec<Operand>,      // runtime values, indexed by variable ID
 }
 
 impl WatchEvaluator {
@@ -370,12 +378,12 @@ impl WatchEvaluator {
     ) -> Result<Option<usize>, (usize, WatchError)>;
 
     // Variable inspection (debugger UI, when stopped)
-    pub fn variables(&self) -> &[u32];
-    pub fn set_variable(&mut self, id: usize, value: u32);
+    pub fn variables(&self) -> &[Operand];
+    pub fn set_variable(&mut self, id: usize, value: Operand);
 }
 
 pub enum WatchError {
-    DivisionByZero, InvalidRegister(u32), InvalidFlag(u32),
+    DivisionByZero, InvalidRegister(Operand), InvalidFlag(Operand),
     InvalidMemoryWidth(u8), StackOverflow,
 }
 ```
