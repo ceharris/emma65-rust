@@ -38,8 +38,7 @@ emu65c02/
     disasm/
       mod.rs                -- Disassembler, DisassembledLine
     watch/
-      mod.rs                -- WatchContext trait, WatchEvaluator, WatchExpression, WatchError
-      compile.rs            -- compile_watch() standalone compiler
+      mod.rs                -- WatchContext trait, WatchEvaluator, WatchCompiler, Watchpoint, WatchError
     exec/
       mod.rs                -- StepResult, RunHandle, async run()
     error.rs                -- ExecError, BusError, BusConfigError, CpuBuildError
@@ -304,43 +303,63 @@ impl InterruptController {
 
 ```rust
 pub trait WatchContext {
-    fn read_mem_u32(&self, addr: u16, width: u8) -> u32;   // zero-extended
-    fn read_mem_i32(&self, addr: u16, width: u8) -> u32;   // sign-extended
-    fn read_register_u32(&self, id: u32) -> u32;            // zero-extended
-    fn read_register_i32(&self, id: u32) -> u32;            // sign-extended
-    fn read_flag(&self, id: u32) -> u32;                    // 0 or 1
+    fn read_register_u32(&self, register_id: u32) -> u32;   // zero-extended
+    fn read_register_i32(&self, register_id: u32) -> u32;   // sign-extended
+    fn read_flag(&self, flag_id: u32) -> u32;                // 0 or 1
+    fn read_mem_u32(&self, addr: u16, width: u8) -> u32;    // zero-extended
+    fn read_mem_i32(&self, addr: u16, width: u8) -> u32;    // sign-extended
 }
 ```
 
 Implemented internally by a struct borrowing `&Bus` (for peek) and `&Registers`. All methods return `u32`; the bytecode evaluator handles signed/unsigned interpretation.
 
-### WatchExpression and Evaluator
+### Watchpoint and Compilation
 
-Expressions are parsed and compiled into opaque bytecode. The evaluator is a concrete struct (not a trait) owned by the CPU.
+Expressions are parsed and compiled into opaque bytecode stored as `Watchpoint` values. Compilation is stateful — the `WatchCompiler` holds parser state and delegates variable allocation to the `WatchEvaluator`.
 
 ```rust
-pub struct WatchExpression {
+pub struct Watchpoint {
     source: String,
-    bytecode: Vec<u8>,       // pub(crate), opaque to API consumers
+    code: Vec<OpCode>,       // pub(crate), opaque to API consumers
 }
 
-/// Standalone compiler — can be called any time, no CPU needed.
-pub fn compile_watch(source: &str) -> Result<WatchExpression, CompileError>;
+impl Watchpoint {
+    pub fn source(&self) -> &str;
+}
 
+pub struct WatchCompiler { /* parser state */ }
+
+impl WatchCompiler {
+    pub fn new(
+        map_register: impl Fn(&str) -> Option<u32> + 'static,
+        map_flag: impl Fn(&str) -> Option<u32> + 'static,
+        map_symbol: impl Fn(&str) -> Option<u32> + 'static,
+    ) -> Self;
+
+    pub fn compile(&mut self, source: &str, evaluator: &mut WatchEvaluator) -> Result<Watchpoint, Error>;
+    pub fn compile_all(&mut self, source: &str, evaluator: &mut WatchEvaluator) -> (Vec<Watchpoint>, Vec<Error>);
+}
+```
+
+### WatchEvaluator
+
+The evaluator is a concrete struct (not a trait) owned by the CPU. It owns the watchpoint collection, variable name→index mappings, and variable runtime storage.
+
+```rust
 pub struct WatchEvaluator {
-    expressions: Vec<WatchExpression>,
-    variables: HashMap<u32, u32>,   // persist across evaluations
-    stack: Vec<u32>,                // reused each evaluation, avoids allocation
+    watchpoints: Vec<Watchpoint>,
+    vars: Variables,             // name → index mappings
+    var_storage: Vec<u32>,       // runtime values, indexed by variable ID
 }
 
 impl WatchEvaluator {
     pub fn new() -> Self;
 
-    // Expression management
-    pub fn add(&mut self, expr: WatchExpression) -> usize;
-    pub fn remove(&mut self, index: usize);
+    // Watchpoint management
+    pub fn add(&mut self, watchpoint: Watchpoint) -> usize;
+    pub fn remove(&mut self, index: usize) -> Watchpoint;
     pub fn clear(&mut self);
-    pub fn expressions(&self) -> &[WatchExpression];
+    pub fn watchpoints(&self) -> &[Watchpoint];
 
     // Evaluation — called by CPU before each instruction.
     // Returns Ok(None) if no watch triggered, Ok(Some(index)) if one did,
@@ -351,17 +370,17 @@ impl WatchEvaluator {
     ) -> Result<Option<usize>, (usize, WatchError)>;
 
     // Variable inspection (debugger UI, when stopped)
-    pub fn variables(&self) -> &HashMap<u32, u32>;
-    pub fn set_variable(&mut self, id: u32, value: u32);
+    pub fn variables(&self) -> &[u32];
+    pub fn set_variable(&mut self, id: usize, value: u32);
 }
 
 pub enum WatchError {
     DivisionByZero, InvalidRegister(u32), InvalidFlag(u32),
-    InvalidMemoryWidth(u8), StackOverflow, Custom(String),
+    InvalidMemoryWidth(u8), StackOverflow,
 }
 ```
 
-The CPU owns the `WatchEvaluator` directly. When the CPU moves into the free-run thread, the evaluator moves with it — Rust's ownership system statically prevents debugger access while running. When the CPU is returned via `take_cpu()`, the debugger regains access through `cpu.evaluator_mut()`.
+The CPU owns the `WatchEvaluator` directly. When the CPU moves into the free-run thread, the evaluator moves with it — Rust's ownership system statically prevents debugger access while running. When the CPU is returned via `take_cpu()`, the debugger regains access through `cpu.evaluator_mut()`. The `WatchCompiler` remains with the debugger UI and is only used when the CPU is stopped (since it requires `&mut WatchEvaluator` to allocate variables).
 
 ---
 
@@ -576,9 +595,9 @@ Cpu
  │    └── Option<Box<dyn BusTraceCallback>>
  ├── InterruptController (owned)
  ├── WatchEvaluator (owned)
- │    ├── Vec<WatchExpression> (compiled bytecode)
- │    ├── HashMap<u32, u32> (variables)
- │    └── Vec<u32> (evaluation stack)
+ │    ├── Vec<Watchpoint> (compiled bytecode)
+ │    ├── Variables (name → index mappings)
+ │    └── Vec<u32> (variable runtime storage)
  ├── ClockSpeed (owned)
  ├── u64 (cycle counter)
  └── HashSet<u16> (breakpoints)
@@ -656,7 +675,7 @@ These types should be treated as a stability boundary — changes are breaking f
 - **Cycle-based device ticking**: Passing actual instruction cycle counts to `tick` makes device timers realistic without requiring cycle-accurate bus emulation. A VIA timer latch of 18,432 at 1.8432 MHz fires at exactly 100 Hz.
 - **Batched throttling**: Sleeping once per ~1000 instructions avoids syscall overhead while maintaining sub-millisecond timing accuracy at typical clock speeds.
 - **Most-specific-wins address resolution**: Matches how hardware designers think about decode logic. PLD-style layouts (IO shadowing ROM) just work without explicit priority management.
-- **Concrete WatchEvaluator over trait**: Only one evaluator implementation exists; a trait adds vtable indirection without benefit. Ownership by the CPU means concurrency safety is enforced by the type system.
+- **Concrete WatchEvaluator over trait**: Only one evaluator implementation exists; a trait adds vtable indirection without benefit. Ownership by the CPU means concurrency safety is enforced by the type system. The evaluator internalizes variable storage so it moves with the CPU during free-run; the `WatchCompiler` stays with the debugger UI and requires `&mut WatchEvaluator` to allocate variables, which is only possible when the CPU is stopped.
 - **Compile-time device SPI**: External device crates integrate at build time via the `IoDevice` trait. Avoids the fragility of Rust's unstable ABI for dynamic plugins, and the target audience can reasonably be expected to rebuild.
 - **VIA protocol codec as standalone module**: Separates message encoding/decoding from VIA emulation logic and transport IO, enabling independent unit testing of all three layers. Exposed as a public SPI type so external peripheral crates can reuse it.
 - **Per-transition shift register signaling**: Faithful to pin-level behavior. At emulated clock speeds the message rate is negligible. Extensible to bulk messages if a future use case demands it.

@@ -30,7 +30,7 @@ impl Variables {
         self.map.len()
     }
 
-    /// Tests whether the mapping table is empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

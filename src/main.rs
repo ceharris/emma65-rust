@@ -10,8 +10,8 @@ fn main() {
         |_| None,
     );
 
-    let mut vars = Vec::new();
-    match compiler.compile("(prev_A := A) != prev_A", &mut vars) {
+    let mut evaluator = WatchEvaluator::new();
+    match compiler.compile("(prev_A := A) != prev_A", &mut evaluator) {
         Ok(watchpoint) => {
             let mut machine = Wdc6502Machine::new();
             machine.set_a(0);
@@ -21,9 +21,8 @@ fn main() {
             machine.set_pc(0x40c);
             machine.set_p(0x1);
             machine.store_u8(0x2, 4);
-            let mut evaluator = WatchEvaluator::new();
             evaluator.add(watchpoint);
-            match evaluator.evaluate_all(&machine, &mut vars) {
+            match evaluator.evaluate_all(&machine) {
                 Ok(Some(index)) => println!("triggered: watchpoint {index}"),
                 Ok(None) => println!("not triggered"),
                 Err((index, error)) => println!("error in watchpoint {index}: {error}"),

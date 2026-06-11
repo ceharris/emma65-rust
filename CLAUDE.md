@@ -36,14 +36,13 @@ All items are internal submodules of `emma65::watch`. The module re-exports its 
 
 ```rust
 pub use self::context::WatchContext;
-pub use self::error::Error;
+pub use self::error::{Error, WatchError};
 pub use self::expr::Operand;
 pub use self::parser::Mapper;
 pub use self::session::{WatchCompiler, WatchEvaluator, Watchpoint};
-pub use self::variables::Variables;
 ```
 
-The primary public entry points for emulator/debugger code are `WatchCompiler` and `WatchEvaluator`. The caller owns a `Vec<Operand>` for variable storage and passes it to both.
+The primary public entry points for emulator/debugger code are `WatchCompiler` and `WatchEvaluator`. The `WatchEvaluator` owns variable name→index mappings and runtime storage internally.
 
 #### Submodules
 
@@ -60,7 +59,7 @@ The primary public entry points for emulator/debugger code are `WatchCompiler` a
   - `BinaryOperator(BinaryOperatorType, Box<Expr>, Box<Expr>)`
   - `signed: bool` field tracks whether the result should be treated as signed
 
-- **`variables`** — `Variables` maps variable names to stable `Operand` IDs. `get_or_create` allocates a new ID on first use and is idempotent thereafter. The caller owns a `Vec<Operand>` indexed by these IDs as the runtime storage.
+- **`variables`** — `Variables` maps variable names to stable `Operand` IDs. `get_or_create` allocates a new ID on first use and is idempotent thereafter. Used internally by `WatchEvaluator`.
 
 - **`parser`** — recursive descent. Precedence (lowest to highest): assignment (`:=`) → logical-or → logical-and → bitwise-or → bitwise-xor → bitwise-and → equality → relational → shift → term → factor → unary → primary. `Parser` has no lifetime parameter; parse state is held in a private `ParseState<'a, 'p>` created for each call. Public API:
   ```rust
@@ -72,35 +71,38 @@ The primary public entry points for emulator/debugger code are `WatchCompiler` a
 
 - **`compiler`** — depth-first traversal of `Expr` tree, emitting a flat `Vec<OpCode>`. Signedness from the AST determines which opcode variant is emitted (e.g. `Divide` vs `DivideSigned`). Entry point: `compile(root: Expr) -> Vec<OpCode>`.
 
-- **`evaluator`** — stack-based VM executing `&[OpCode]` against a `&dyn WatchContext` and a `&mut [Operand]` variable storage slice. Entry point: `eval(code: &[OpCode], context: &dyn WatchContext, vars: &mut [Operand]) -> Operand`.
+- **`evaluator`** — stack-based VM executing `&[OpCode]` against a `&dyn WatchContext` and a `&mut [Operand]` variable storage slice. Entry point: `eval(code: &[OpCode], context: &dyn WatchContext, vars: &mut [Operand]) -> Result<Operand, WatchError>`. Returns errors for division by zero.
 
-- **`context`** — defines the `WatchContext` trait, which the emulator implements to give the evaluator access to machine state: `fetch_register`, `fetch_flag`, `fetch_byte`/`_signed`, `fetch_word`/`_signed`, `fetch_dword`/`_signed`.
+- **`context`** — defines the `WatchContext` trait, which the emulator implements to give the evaluator access to machine state: `read_register_u32`/`_i32`, `read_flag`, `read_mem_u32`/`_i32`.
 
-- **`session`** — high-level API over the full pipeline. `WatchCompiler` owns a `Parser` and `Variables`; `WatchEvaluator` owns an ordered list of `Watchpoint` values; the caller owns `var_storage`. Public API:
+- **`session`** — high-level API over the full pipeline. `WatchCompiler` owns a `Parser`; `WatchEvaluator` owns watchpoints, `Variables`, and variable runtime storage. Public API:
   ```rust
   WatchCompiler::new(map_register, map_flag, map_symbol) -> WatchCompiler
-  compiler.compile(source: &str, var_storage: &mut Vec<Operand>) -> Result<Watchpoint, Error>
-  compiler.compile_all(source: &str, var_storage: &mut Vec<Operand>) -> (Vec<Watchpoint>, Vec<Error>)
+  compiler.compile(source: &str, evaluator: &mut WatchEvaluator) -> Result<Watchpoint, Error>
+  compiler.compile_all(source: &str, evaluator: &mut WatchEvaluator) -> (Vec<Watchpoint>, Vec<Error>)
   WatchEvaluator::new() -> WatchEvaluator
-  evaluator.add(watchpoint: Watchpoint)
+  evaluator.add(watchpoint: Watchpoint) -> usize
   evaluator.remove(index: usize) -> Watchpoint
+  evaluator.clear()
   evaluator.watchpoints() -> &[Watchpoint]
-  evaluator.eval_all(context: &dyn WatchContext, var_storage: &mut Vec<Operand>) -> bool
+  evaluator.evaluate_all(context: &dyn WatchContext) -> Result<Option<usize>, (usize, WatchError)>
+  evaluator.variables() -> &[Operand]
+  evaluator.set_variable(id: usize, value: Operand)
   watchpoint.source() -> &str
   ```
-  `eval_all` evaluates watchpoints in order and short-circuits on the first non-zero result.
+  `evaluate_all` evaluates watchpoints in order, returning `Ok(Some(index))` on first non-zero result, `Ok(None)` if none triggered, or `Err((index, error))` on failure.
 
 - **`error`** / **`location`** — `Error` and `Location` structs carrying line/column for error reporting.
 
 ### `wdc6502` module (`src/wdc6502.rs`)
 
-Concrete `WatchContext` implementation for the WDC 6502. Holds registers (`A`, `X`, `Y`, `P`, `S`, `PC`) and 64KB memory. Provides `map_register_name()` and `map_flag_name()` functions for use as `watch::Mapper`s.
+Concrete `WatchContext` implementation for the WDC 6502. Holds registers (`A`, `X`, `Y`, `P`, `S`, `PC`) and 64KB memory. Provides `map_register_name()` and `map_flag_name()` functions for use as `watch::Mapper`s. Implements `read_register_u32`/`_i32`, `read_flag`, and `read_mem_u32`/`_i32`.
 
 ### Domain-specific operators
 
 - **Memory read**: `B[addr]`, `W[addr]`, `D[addr]`, `b[addr]`, `w[addr]`, `d[addr]` — byte/word/dword fetch. Uppercase and lowercase are equivalent; signedness is controlled by a leading unary `+` or `-` (e.g. `+b[addr]` fetches a signed byte).
 - **Flag read**: `` `flagname `` — reads a named CPU status flag.
-- **Walrus** (`:=`) — assigns the RHS expression to a named variable and yields its value. Variables persist across `eval` calls via a caller-owned `Vec<Operand>` slot. Useful for snapshotting state (e.g. `prev_a := A`) to detect changes across steps.
+- **Walrus** (`:=`) — assigns the RHS expression to a named variable and yields its value. Variables persist across `evaluate_all` calls via the evaluator's internal storage. Useful for snapshotting state (e.g. `prev_a := A`) to detect changes across steps.
 - **`$hex`** — hexadecimal literal shorthand common in 6502 assembly.
 
 ### Signedness
