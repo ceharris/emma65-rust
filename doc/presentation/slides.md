@@ -73,7 +73,7 @@ color: #f5f5f5
 - Developing and debugging code for your own hardware is a slow and often frustrating process
   - Starting from scratch
   - Creating everything from the bare metal on up
-  - 
+
 
 ---
 
