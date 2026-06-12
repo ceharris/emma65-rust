@@ -16,11 +16,30 @@ color: #f5f5f5
 
 ---
 
-### Disclaimer
+### Where To?
 
-- I'm going to describe a personal project
+- Talk about effective ways to use a coding agent to design and plan a software product
+  - Detailed architecture and design specifications
+  - Manageable implementation plans
+  - Applicable to design and planning in other spheres
+- Emphasis
+  - Changing your perspective about the AI assistant's capabilities
+  - Mimicking the way you'd work with a human team member
+
+---
+
+### Disclaimer 1
+
+- I'm going to describe a personal project in a domain that might not be familiar
+  - This is a deliberate choice to keep you focused not on the specifics of this project, but on how to get good specifications and plans from AI
+- We're not going to look at any significant code -- another deliberate choice
+
+---
+
+### Disclaimer 2
+
 - No use of university resources for this project
-  - All the AI work was done using Claude models accessed via my personal AWS account
+  - All the AI work was done using Claude models (mostly Opus) accessed via my personal AWS account
   - On my own time
   - At a cost of about $25
 
@@ -31,8 +50,8 @@ color: #f5f5f5
 - I'm a retro-computing enthusiast
 - The MOS 6502 was the basis for many early microcomputers
   - Commodore VIC-20 and C64, Apple I/II/III, Acorn, etc...
-  - One of my favorites for its simple instruction set archtitecture
-- I design and build computers using using real legacy hardware
+  - One of my favorites for its simple instruction set architecture
+- I design and build computers using real legacy hardware (much of which can still be found on the market)
   - Design idea → Schematic design → Breadboard prototype → PCB design → Finished product
 
 ---
@@ -51,12 +70,23 @@ color: #f5f5f5
 
 ### The Problem
 
-- Developing and debugging code for legacy hardware is a slow and often frustrating process
-  - And you're starting from scratch without any sort of OS
-- Solution: Use an emulator and debugger on modern hardware instead!
-- So I wrote one called Emma65 using plain old C
-  - NCurses-based; the UI runs in a terminal
-  - Virtual I/O support; VT220-compatible console, serial port using a PTY or socket, emulated 6522 VIA, etc
+- Developing and debugging code for your own hardware is a slow and often frustrating process
+  - Starting from scratch
+  - Creating everything from the bare metal on up
+  - 
+
+---
+
+### Solution!
+
+Use an emulator and debugger on modern hardware instead.
+
+So I wrote one called Emma65 using plain old C
+- NCurses-based; the UI runs in a terminal
+- Virtual I/O support
+  - VT220-compatible console; plumbed using old-school pipes
+  - Serial port; emulated UART connecting a terminal program via a PTY or a socket
+  - Emulated 6522 VIA for GPIO, timers, etc; can even interface to real hardware!
 
 ---
 
@@ -148,7 +178,7 @@ Follow-up A:  The socket/PTY plumbing should be in a separate layer. This will n
 ```
 
 - The assistant has correctly inferred the need for another layer to keep things loosely coupled. 
-- The question itself gives me confidence it is on the right track in the design
+- The question itself gives me confidence the AI assistant is on the right track in the design
 
 ---
 
@@ -313,9 +343,15 @@ binary and ASCII message formats for GPIO port state changes and control signal 
 
 ---
 
+<!-- _class: lead -->
+
+### _Quick tour of GitHub issues and pull requests_
+
+---
+
 ### Model Choices Truly Matter
 
-To work at this level of abstraction, you need a high-end frontier model with strong reasoning attributes.
+To work at this level of abstraction, you need a high-end frontier model with strong reasoning.
 - The interactions and results shown here were produced using Anthropic Opus 4.6
 - I would expect OpenAI's GPT 5.4 to perform very well for this level of work
 - I'm interested to hear experiences using other models, especially those that aren't right at the frontier
@@ -380,7 +416,7 @@ Tell the assistant to save each plan it creates as a document within your projec
 
 ### Parting Thought
 
-Frontier models in mid-2026 are more than capable of collaborating with you at very high level. The challenge for you is to learn to transition from doing the work to specifying the work to be done in ways that draw out your intent and lead to the outcomes you would have produced yourself.
+Frontier models in mid-2026 are **more than capable** of collaborating with you at very high level. The challenge for you is to learn to transition from doing the work to _specifying the work to be done_ in ways that draw out your intent and lead to the outcomes you would have produced yourself.
   
 ---
 
