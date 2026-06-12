@@ -12,3 +12,5 @@ name = "emma65"
 path = "src/lib.rs"
 
 [dependencies]
+bitflags = "2"
+thiserror = "2"
