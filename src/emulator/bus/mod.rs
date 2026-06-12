@@ -6,10 +6,13 @@ pub use region::{AddressRange, BusOp};
 use crate::emulator::device::{DeviceId, IoDevice};
 use crate::emulator::error::{BusConfigError, BusError};
 
+/// Value returned on reads from unmapped addresses when `UnmappedPolicy::DefaultValue` is active.
+const UNMAPPED_READ_VALUE: u8 = 0xFF;
+
 /// Policy for reads and writes to unmapped addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnmappedPolicy {
-    /// Return a default value (0xFF) on reads; silently ignore writes.
+    /// Return `UNMAPPED_READ_VALUE` on reads; silently ignore writes.
     DefaultValue,
     /// Return a `BusError::Unmapped` error.
     Error,
@@ -71,7 +74,7 @@ impl Bus {
             Some(RegionMatch::Rom { data, offset, .. }) => Ok(data[offset]),
             Some(RegionMatch::Device { device, offset }) => Ok(device.read(offset)),
             None => match self.unmapped_policy {
-                UnmappedPolicy::DefaultValue => Ok(0xFF),
+                UnmappedPolicy::DefaultValue => Ok(UNMAPPED_READ_VALUE),
                 UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
             },
         }
@@ -106,7 +109,7 @@ impl Bus {
             Some(PeekMatch::Rom { data, offset }) => Ok(data[offset]),
             Some(PeekMatch::Device { device, offset }) => Ok(device.peek(offset)),
             None => match self.unmapped_policy {
-                UnmappedPolicy::DefaultValue => Ok(0xFF),
+                UnmappedPolicy::DefaultValue => Ok(UNMAPPED_READ_VALUE),
                 UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
             },
         }
@@ -145,31 +148,8 @@ impl Bus {
 
     // --- private helpers ---
 
-    fn find_region(&self, addr: u16) -> Option<PeekMatch<'_>> {
-        let mut best: Option<(u32, PeekMatch<'_>)> = None;
-        for region in &self.regions {
-            let range = region.range();
-            if range.contains(addr) {
-                let offset = (addr - range.start) as usize;
-                let size = range.len();
-                let candidate = match region {
-                    Region::Ram { data, .. } => PeekMatch::Ram { data, offset },
-                    Region::Rom { data, .. } => PeekMatch::Rom { data, offset },
-                    Region::Device { device, .. } => PeekMatch::Device {
-                        device: device.as_ref(),
-                        offset: offset as u16,
-                    },
-                };
-                if best.as_ref().is_none_or(|(best_size, _)| size < *best_size) {
-                    best = Some((size, candidate));
-                }
-            }
-        }
-        best.map(|(_, m)| m)
-    }
-
-    fn find_region_mut(&mut self, addr: u16) -> Option<RegionMatch<'_>> {
-        // Find the index of the most-specific (smallest) region covering addr.
+    /// Returns the index of the most-specific (smallest) region that contains `addr`, if any.
+    fn find_region_index(&self, addr: u16) -> Option<usize> {
         let mut best_idx: Option<usize> = None;
         let mut best_size: u32 = u32::MAX;
         for (i, region) in self.regions.iter().enumerate() {
@@ -182,7 +162,25 @@ impl Bus {
                 }
             }
         }
-        let idx = best_idx?;
+        best_idx
+    }
+
+    fn find_region(&self, addr: u16) -> Option<PeekMatch<'_>> {
+        let idx = self.find_region_index(addr)?;
+        let range = self.regions[idx].range();
+        let offset = (addr - range.start) as usize;
+        match &self.regions[idx] {
+            Region::Ram { data, .. } => Some(PeekMatch::Ram { data, offset }),
+            Region::Rom { data, .. } => Some(PeekMatch::Rom { data, offset }),
+            Region::Device { device, .. } => Some(PeekMatch::Device {
+                device: device.as_ref(),
+                offset: offset as u16,
+            }),
+        }
+    }
+
+    fn find_region_mut(&mut self, addr: u16) -> Option<RegionMatch<'_>> {
+        let idx = self.find_region_index(addr)?;
         let range = self.regions[idx].range();
         let offset = (addr - range.start) as usize;
         match &mut self.regions[idx] {
@@ -391,7 +389,7 @@ mod tests {
         let mut bus = Bus::config()
             .unmapped_policy(UnmappedPolicy::DefaultValue)
             .build();
-        assert_eq!(bus.read(0x1234).unwrap(), 0xFF);
+        assert_eq!(bus.read(0x1234).unwrap(), UNMAPPED_READ_VALUE);
         bus.write(0x1234, 0x42).unwrap();
     }
 
@@ -468,7 +466,7 @@ mod tests {
         let mut buf = [0u8; 4];
         // Last 2 bytes are ROM (0xAA), next 2 are unmapped (0xFF).
         bus.peek_range(0xC0FE, &mut buf).unwrap();
-        assert_eq!(buf, [0xAA, 0xAA, 0xFF, 0xFF]);
+        assert_eq!(buf, [0xAA, 0xAA, UNMAPPED_READ_VALUE, UNMAPPED_READ_VALUE]);
     }
 
     #[test]
@@ -478,9 +476,9 @@ mod tests {
             .rom(AddressRange::new(0xC000, 0xC0FF), initial)
             .unwrap()
             .build();
-        let new_data = vec![0xFFu8; 256];
+        let new_data = vec![0xA5u8; 256];
         bus.load_rom(AddressRange::new(0xC000, 0xC0FF), &new_data).unwrap();
-        assert_eq!(bus.peek(0xC000).unwrap(), 0xFF);
+        assert_eq!(bus.peek(0xC000).unwrap(), 0xA5);
     }
 
     #[test]
