@@ -128,7 +128,7 @@ impl Bus {
     }
 
     /// Calls `tick(cycles)` on every IO device mapped on the bus.
-    pub fn tick_devices(&mut self, cycles: u8) {
+    pub fn tick_devices(&mut self, cycles: u32) {
         for region in &mut self.regions {
             if let Region::Device { device, .. } = region {
                 device.tick(cycles);

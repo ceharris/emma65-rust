@@ -11,7 +11,7 @@ use crate::emulator::bus::Bus;
 use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use crate::emulator::cpu::status::StatusRegister;
 use crate::emulator::cpu::variant::{CpuVariant, InvalidOpcodePolicy};
-use crate::emulator::error::{BusError, ExecError};
+use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::{ClockSpeed, StepResult};
 use crate::emulator::bus::region::BusOp;
 
@@ -72,9 +72,9 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    /// Returns a `CpuBuilder` for constructing a `Cpu`.
-    pub fn builder() -> CpuBuilder {
-        CpuBuilder::new()
+    /// Returns a `CpuBuilder` for constructing a `Cpu` with the given variant.
+    pub fn builder(variant: CpuVariant) -> CpuBuilder {
+        CpuBuilder::new(variant)
     }
 
     /// Returns a reference to the current register state.
@@ -148,7 +148,7 @@ impl Cpu {
                     self.regs.pc = self.regs.pc.wrapping_add(decoded.byte_len as u16);
                     let cycles = decoded.base_cycles;
                     self.cycles += cycles as u64;
-                    self.bus.tick_devices(cycles);
+                    self.bus.tick_devices(cycles as u32);
                     return StepResult::Executed(decoded);
                 }
                 InvalidOpcodePolicy::Error => {
@@ -160,7 +160,7 @@ impl Cpu {
         match self.execute(decoded) {
             Ok((result, cycles)) => {
                 self.cycles += cycles as u64;
-                self.bus.tick_devices(cycles);
+                self.bus.tick_devices(cycles as u32);
                 result
             }
             Err(e) => StepResult::Error(e),
@@ -769,20 +769,14 @@ pub struct CpuBuilder {
 }
 
 impl CpuBuilder {
-    /// Creates a new builder with sensible defaults.
-    pub fn new() -> Self {
+    /// Creates a new builder for the given CPU variant.
+    pub fn new(variant: CpuVariant) -> Self {
         Self {
-            variant: CpuVariant::Cmos65C02,
+            variant,
             invalid_opcode_policy: InvalidOpcodePolicy::Nop,
             clock_speed: ClockSpeed::unlimited(),
             bus: None,
         }
-    }
-
-    /// Sets the CPU variant.
-    pub fn variant(mut self, variant: CpuVariant) -> Self {
-        self.variant = variant;
-        self
     }
 
     /// Sets the invalid-opcode handling policy.
@@ -803,13 +797,11 @@ impl CpuBuilder {
         self
     }
 
-    /// Consumes the builder and returns a `Cpu`.
-    ///
-    /// Panics if no bus was provided.
-    pub fn build(self) -> Cpu {
-        let bus = self.bus.expect("CpuBuilder: bus is required");
+    /// Consumes the builder and returns a `Cpu`, or an error if required fields are missing.
+    pub fn build(self) -> Result<Cpu, CpuBuildError> {
+        let bus = self.bus.ok_or(CpuBuildError::NoBus)?;
         let table = decode_table(self.variant);
-        Cpu {
+        Ok(Cpu {
             regs: Registers::new(),
             bus,
             table,
@@ -819,13 +811,7 @@ impl CpuBuilder {
             cycles: 0,
             waiting: false,
             stopped: false,
-        }
-    }
-}
-
-impl Default for CpuBuilder {
-    fn default() -> Self {
-        Self::new()
+        })
     }
 }
 
@@ -843,10 +829,10 @@ mod tests {
             .build();
         bus.write(RESET_VECTOR, (start & 0xFF) as u8).unwrap();
         bus.write(RESET_VECTOR + 1, (start >> 8) as u8).unwrap();
-        let mut cpu = Cpu::builder()
-            .variant(CpuVariant::Wdc65C02)
+        let mut cpu = Cpu::builder(CpuVariant::Wdc65C02)
             .bus(bus)
-            .build();
+            .build()
+            .unwrap();
         cpu.reset().unwrap();
         cpu
     }
@@ -1321,11 +1307,11 @@ mod tests {
         bus.write(RESET_VECTOR, 0x00).unwrap();
         bus.write(RESET_VECTOR + 1, 0x02).unwrap();
         bus.write(0x0200, 0x02).unwrap(); // illegal opcode
-        let mut cpu = Cpu::builder()
-            .variant(CpuVariant::Cmos65C02)
+        let mut cpu = Cpu::builder(CpuVariant::Cmos65C02)
             .invalid_opcode_policy(InvalidOpcodePolicy::Error)
             .bus(bus)
-            .build();
+            .build()
+            .unwrap();
         cpu.reset().unwrap();
         assert!(matches!(cpu.step(), StepResult::Error(ExecError::InvalidOpcode { .. })));
     }

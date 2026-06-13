@@ -11,5 +11,9 @@ pub trait IoDevice {
     /// Reads a byte from `offset` relative to the device's base address, without side effects.
     fn peek(&self, offset: u16) -> u8;
     /// Advances device state by `cycles` clock cycles. Called after each CPU instruction.
-    fn tick(&mut self, _cycles: u8) {}
+    fn tick(&mut self, _cycles: u32) {}
+    /// Returns `true` if this device is currently asserting an IRQ.
+    fn irq_active(&self) -> bool { false }
+    /// Returns a human-readable name for this device, used in diagnostics and tracing.
+    fn name(&self) -> &str { "unknown" }
 }
