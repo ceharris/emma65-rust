@@ -7,6 +7,7 @@ pub mod status;
 /// CPU variant selection and invalid-opcode policy.
 pub mod variant;
 
+use std::collections::HashSet;
 use crate::emulator::bus::Bus;
 use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use crate::emulator::cpu::status::StatusRegister;
@@ -15,6 +16,7 @@ use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::{ClockSpeed, StepResult};
 use crate::emulator::bus::region::BusOp;
 use crate::emulator::interrupt::InterruptController;
+use crate::watch::{Operand, WatchContext, WatchEvaluator};
 
 const STACK_BASE: u16 = 0x0100;
 const RESET_VECTOR: u16 = 0xFFFC;
@@ -59,6 +61,10 @@ pub struct Cpu {
     bus: Bus,
     /// Interrupt controller; tracks IRQ sources and pending NMI.
     interrupts: InterruptController,
+    /// Watch expression evaluator; owns watchpoints and variable storage.
+    evaluator: WatchEvaluator,
+    /// PC addresses that trigger a `StepResult::Breakpoint` before execution.
+    breakpoints: HashSet<u16>,
     /// Pre-built 256-entry decode table for the active variant; indexed by opcode byte.
     table: [DecodedOp; 256],
     /// Selects the instruction set (CMOS 65C02 or WDC 65C02).
@@ -121,6 +127,36 @@ impl Cpu {
         self.stopped
     }
 
+    /// Returns a reference to the watch evaluator.
+    pub fn evaluator(&self) -> &WatchEvaluator {
+        &self.evaluator
+    }
+
+    /// Returns a mutable reference to the watch evaluator.
+    pub fn evaluator_mut(&mut self) -> &mut WatchEvaluator {
+        &mut self.evaluator
+    }
+
+    /// Adds `addr` to the breakpoint set.
+    pub fn add_breakpoint(&mut self, addr: u16) {
+        self.breakpoints.insert(addr);
+    }
+
+    /// Removes `addr` from the breakpoint set. Returns `true` if it was present.
+    pub fn remove_breakpoint(&mut self, addr: u16) -> bool {
+        self.breakpoints.remove(&addr)
+    }
+
+    /// Clears all breakpoints.
+    pub fn clear_breakpoints(&mut self) {
+        self.breakpoints.clear();
+    }
+
+    /// Returns the current breakpoint set.
+    pub fn breakpoints(&self) -> &HashSet<u16> {
+        &self.breakpoints
+    }
+
     /// Returns the CPU variant.
     pub fn variant(&self) -> CpuVariant {
         self.variant
@@ -166,6 +202,24 @@ impl Cpu {
             // Fall through to service the interrupt below.
         }
 
+        let pc = self.regs.pc;
+
+        // Step 3: breakpoint check — before instruction execution.
+        if self.breakpoints.contains(&pc) {
+            return StepResult::Breakpoint(pc);
+        }
+
+        // Step 4: watch expression evaluation — before instruction execution.
+        let watch_result = {
+            let ctx = CpuWatchContext { regs: &self.regs, bus: &self.bus };
+            self.evaluator.evaluate_all(&ctx)
+        };
+        match watch_result {
+            Ok(Some(index)) => return StepResult::WatchTriggered { watch_index: index, pc },
+            Err((index, error)) => return StepResult::WatchError { watch_index: index, pc, error },
+            Ok(None) => {}
+        }
+
         // NMI takes priority over IRQ.
         if self.interrupts.take_nmi() {
             return match self.service_interrupt(NMI_VECTOR, false) {
@@ -191,7 +245,6 @@ impl Cpu {
             };
         }
 
-        let pc = self.regs.pc;
         let opcode = match self.bus_read(pc) {
             Ok(b) => b,
             Err(e) => return StepResult::Error(e),
@@ -839,6 +892,83 @@ fn page_crossed(base: u16, addr: u16) -> bool {
     (base & 0xFF00) != (addr & 0xFF00)
 }
 
+/// Register IDs used in watch expressions — must match the mapper used with `WatchCompiler`.
+const REG_A: Operand  = 0;
+const REG_X: Operand  = 1;
+const REG_Y: Operand  = 2;
+const REG_P: Operand  = 3;
+const REG_S: Operand  = 4;
+const REG_PC: Operand = 5;
+
+/// Borrows CPU state to implement `WatchContext` with side-effect-free memory reads.
+struct CpuWatchContext<'a> {
+    regs: &'a Registers,
+    bus: &'a Bus,
+}
+
+impl WatchContext for CpuWatchContext<'_> {
+    fn read_register_u32(&self, id: Operand) -> Operand {
+        match id {
+            REG_A  => self.regs.a as Operand,
+            REG_X  => self.regs.x as Operand,
+            REG_Y  => self.regs.y as Operand,
+            REG_P  => self.regs.p.to_byte() as Operand,
+            REG_S  => self.regs.s as Operand,
+            REG_PC => self.regs.pc as Operand,
+            _      => 0,
+        }
+    }
+
+    fn read_register_i32(&self, id: Operand) -> Operand {
+        match id {
+            REG_A  => (self.regs.a as i8) as u32,
+            REG_X  => (self.regs.x as i8) as u32,
+            REG_Y  => (self.regs.y as i8) as u32,
+            REG_P  => (self.regs.p.to_byte() as i8) as u32,
+            REG_S  => (self.regs.s as i8) as u32,
+            REG_PC => (self.regs.pc as i16) as u32,
+            _      => 0,
+        }
+    }
+
+    fn read_flag(&self, flag_id: Operand) -> Operand {
+        (self.regs.p.to_byte() as Operand & flag_id != 0) as Operand
+    }
+
+    fn read_mem_u32(&self, addr: u16, width: u8) -> u32 {
+        match width {
+            1 => self.bus.peek(addr).unwrap_or(0) as u32,
+            2 => {
+                let lo = self.bus.peek(addr).unwrap_or(0) as u32;
+                let hi = self.bus.peek(addr.wrapping_add(1)).unwrap_or(0) as u32;
+                lo | (hi << 8)
+            }
+            4 => {
+                let mut val = 0u32;
+                for i in 0..4u16 {
+                    let b = self.bus.peek(addr.wrapping_add(i)).unwrap_or(0) as u32;
+                    val |= b << (i * 8);
+                }
+                val
+            }
+            _ => 0,
+        }
+    }
+
+    fn read_mem_i32(&self, addr: u16, width: u8) -> u32 {
+        match width {
+            1 => (self.bus.peek(addr).unwrap_or(0) as i8) as u32,
+            2 => {
+                let lo = self.bus.peek(addr).unwrap_or(0) as u16;
+                let hi = self.bus.peek(addr.wrapping_add(1)).unwrap_or(0) as u16;
+                ((lo | (hi << 8)) as i16) as u32
+            }
+            4 => self.read_mem_u32(addr, 4),
+            _ => 0,
+        }
+    }
+}
+
 /// Builder for `Cpu`.
 pub struct CpuBuilder {
     variant: CpuVariant,
@@ -884,6 +1014,8 @@ impl CpuBuilder {
             regs: Registers::new(),
             bus,
             interrupts: InterruptController::new(),
+            evaluator: WatchEvaluator::new(),
+            breakpoints: HashSet::new(),
             table,
             variant: self.variant,
             invalid_opcode_policy: self.invalid_opcode_policy,
@@ -1630,5 +1762,108 @@ mod tests {
         assert!(cpu.is_stopped());
         cpu.reset().unwrap();
         assert!(!cpu.is_stopped());
+    }
+
+    // --- breakpoints ---
+
+    #[test]
+    fn breakpoint_at_pc_returns_breakpoint_before_execution() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
+        cpu.add_breakpoint(0x0200);
+        let result = cpu.step();
+        assert!(matches!(result, StepResult::Breakpoint(0x0200)));
+        // Instruction must NOT have been executed — PC must not have advanced.
+        assert_eq!(cpu.regs.pc, 0x0200);
+    }
+
+    #[test]
+    fn breakpoint_removal_allows_execution() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
+        cpu.add_breakpoint(0x0200);
+        assert!(matches!(cpu.step(), StepResult::Breakpoint(0x0200)));
+        // Remove the breakpoint; next step should execute.
+        let removed = cpu.remove_breakpoint(0x0200);
+        assert!(removed);
+        assert!(matches!(cpu.step(), StepResult::Executed(_)));
+        assert_eq!(cpu.regs.pc, 0x0201);
+    }
+
+    #[test]
+    fn clear_breakpoints_allows_execution() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
+        cpu.add_breakpoint(0x0200);
+        cpu.add_breakpoint(0x0201);
+        cpu.clear_breakpoints();
+        assert!(matches!(cpu.step(), StepResult::Executed(_)));
+        assert_eq!(cpu.regs.pc, 0x0201);
+    }
+
+    // --- watch expressions ---
+
+    fn make_compiler() -> crate::watch::WatchCompiler {
+        // Maps register names to the same IDs used by CpuWatchContext.
+        crate::watch::WatchCompiler::new(
+            |name| match name {
+                "A" => Some(REG_A),
+                "X" => Some(REG_X),
+                "Y" => Some(REG_Y),
+                "P" => Some(REG_P),
+                "S" => Some(REG_S),
+                "PC" => Some(REG_PC),
+                _ => None,
+            },
+            |_| None,
+            |_| None,
+        )
+    }
+
+    #[test]
+    fn watch_triggered_returns_watch_triggered_before_execution() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
+        // Watchpoint: A == 0 (true from the start, since A is 0 after reset).
+        let mut compiler = make_compiler();
+        let wp = compiler.compile("A == 0", cpu.evaluator_mut()).unwrap();
+        cpu.evaluator_mut().add(wp);
+        let result = cpu.step();
+        assert!(matches!(result, StepResult::WatchTriggered { watch_index: 0, pc: 0x0200 }));
+        // Instruction must NOT have executed — PC unchanged.
+        assert_eq!(cpu.regs.pc, 0x0200);
+    }
+
+    #[test]
+    fn watch_not_triggered_allows_execution() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
+        // Watchpoint: A == 1 (false, since A starts at 0).
+        let mut compiler = make_compiler();
+        let wp = compiler.compile("A == 1", cpu.evaluator_mut()).unwrap();
+        cpu.evaluator_mut().add(wp);
+        assert!(matches!(cpu.step(), StepResult::Executed(_)));
+        assert_eq!(cpu.regs.pc, 0x0201);
+    }
+
+    #[test]
+    fn watch_error_returns_watch_error_before_execution() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
+        // Watchpoint: A / 0 — always produces a division-by-zero error.
+        let mut compiler = make_compiler();
+        let wp = compiler.compile("A / 0", cpu.evaluator_mut()).unwrap();
+        cpu.evaluator_mut().add(wp);
+        let result = cpu.step();
+        assert!(matches!(
+            result,
+            StepResult::WatchError {
+                watch_index: 0,
+                pc: 0x0200,
+                error: crate::watch::WatchError::DivisionByZero,
+            }
+        ));
+        // Instruction must NOT have executed.
+        assert_eq!(cpu.regs.pc, 0x0200);
     }
 }
