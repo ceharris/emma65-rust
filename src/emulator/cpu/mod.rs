@@ -892,13 +892,56 @@ fn page_crossed(base: u16, addr: u16) -> bool {
     (base & 0xFF00) != (addr & 0xFF00)
 }
 
-/// Register IDs used in watch expressions — must match the mapper used with `WatchCompiler`.
+/// Register IDs used by `CpuWatchContext` and returned by `map_register_name`.
 const REG_A: Operand  = 0;
 const REG_X: Operand  = 1;
 const REG_Y: Operand  = 2;
 const REG_P: Operand  = 3;
 const REG_S: Operand  = 4;
 const REG_PC: Operand = 5;
+
+/// Flag IDs used by `CpuWatchContext` and returned by `map_flag_name`.
+/// Each ID is the bit mask of the flag in the status register.
+const FLAG_C: Operand = 0x01;
+const FLAG_Z: Operand = 0x02;
+const FLAG_I: Operand = 0x04;
+const FLAG_D: Operand = 0x08;
+const FLAG_B: Operand = 0x10;
+const FLAG_V: Operand = 0x40;
+const FLAG_N: Operand = 0x80;
+
+/// Maps a register name to its `Operand` ID for use with `WatchCompiler`.
+///
+/// Accepts upper- and lower-case names: `A`/`a`, `X`/`x`, `Y`/`y`, `P`/`p`,
+/// `S`/`s`, and `PC`/`pc`. Returns `None` for unrecognized names.
+pub fn map_register_name(name: &str) -> Option<Operand> {
+    match name {
+        "A" | "a" => Some(REG_A),
+        "X" | "x" => Some(REG_X),
+        "Y" | "y" => Some(REG_Y),
+        "P" | "p" => Some(REG_P),
+        "S" | "s" => Some(REG_S),
+        "PC" | "pc" | "Pc" | "pC" => Some(REG_PC),
+        _ => None,
+    }
+}
+
+/// Maps a flag name to its `Operand` ID (bit mask in P) for use with `WatchCompiler`.
+///
+/// Accepts upper- and lower-case names: `C`/`c`, `Z`/`z`, `I`/`i`, `D`/`d`,
+/// `B`/`b`, `V`/`v`, `N`/`n`. Returns `None` for unrecognized names.
+pub fn map_flag_name(name: &str) -> Option<Operand> {
+    match name {
+        "C" | "c" => Some(FLAG_C),
+        "Z" | "z" => Some(FLAG_Z),
+        "I" | "i" => Some(FLAG_I),
+        "D" | "d" => Some(FLAG_D),
+        "B" | "b" => Some(FLAG_B),
+        "V" | "v" => Some(FLAG_V),
+        "N" | "n" => Some(FLAG_N),
+        _ => None,
+    }
+}
 
 /// Borrows CPU state to implement `WatchContext` with side-effect-free memory reads.
 struct CpuWatchContext<'a> {
@@ -1804,20 +1847,7 @@ mod tests {
     // --- watch expressions ---
 
     fn make_compiler() -> crate::watch::WatchCompiler {
-        // Maps register names to the same IDs used by CpuWatchContext.
-        crate::watch::WatchCompiler::new(
-            |name| match name {
-                "A" => Some(REG_A),
-                "X" => Some(REG_X),
-                "Y" => Some(REG_Y),
-                "P" => Some(REG_P),
-                "S" => Some(REG_S),
-                "PC" => Some(REG_PC),
-                _ => None,
-            },
-            |_| None,
-            |_| None,
-        )
+        crate::watch::WatchCompiler::new(map_register_name, map_flag_name, |_| None)
     }
 
     #[test]

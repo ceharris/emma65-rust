@@ -15,7 +15,7 @@ pub mod interrupt;
 
 pub use bus::region::{AddressRange, BusOp};
 pub use bus::{Bus, BusConfig, RomWritePolicy, UnmappedPolicy};
-pub use cpu::{Cpu, CpuBuilder, Registers};
+pub use cpu::{Cpu, CpuBuilder, Registers, map_register_name, map_flag_name};
 pub use cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
 pub use cpu::status::StatusRegister;
 pub use cpu::variant::{CpuVariant, InvalidOpcodePolicy};
