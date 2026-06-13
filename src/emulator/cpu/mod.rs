@@ -51,14 +51,23 @@ impl Registers {
 
 /// The 65C02 CPU: registers, bus, decode table, and execution state.
 pub struct Cpu {
+    /// General-purpose and special-purpose registers (A, X, Y, S, PC, P).
     regs: Registers,
+    /// The memory bus; owns all RAM, ROM, and IO device regions.
     bus: Bus,
+    /// Pre-built 256-entry decode table for the active variant; indexed by opcode byte.
     table: [DecodedOp; 256],
+    /// Selects the instruction set (CMOS 65C02 or WDC 65C02).
     variant: CpuVariant,
+    /// Governs how unrecognized or variant-invalid opcodes are handled.
     invalid_opcode_policy: InvalidOpcodePolicy,
+    /// Target clock frequency; used by free-running mode to throttle execution.
     clock_speed: ClockSpeed,
+    /// Cumulative clock cycles elapsed since the last `reset()`.
     cycles: u64,
+    /// True when a WAI instruction has been executed and the CPU is waiting for an interrupt.
     waiting: bool,
+    /// True when a STP instruction has been executed; only `reset()` clears this.
     stopped: bool,
 }
 
