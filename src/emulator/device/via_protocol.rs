@@ -1,23 +1,23 @@
-/// Protocol codec for the virtual 6522 VIA peripheral interface.
-///
-/// This module implements encoding and decoding of the two-message protocol used between
-/// a virtual VIA and an external peripheral over a byte-stream transport (socket, PTY, etc.).
-///
-/// The protocol defines two message types, sent in both directions:
-/// - [`ViaProtocolMessage::PortStateChange`] — communicates the state of GPIO port A or B.
-/// - [`ViaProtocolMessage::ControlSignalChange`] — sets or clears one or more control signals.
-///
-/// Two wire formats are supported:
-/// - [`ViaProtocolFormat::Binary`] — compact one- or two-byte encoding; selected by the first
-///   received byte with its high-order bit set.
-/// - [`ViaProtocolFormat::Ascii`] — human-readable three- or four-character encoding; selected
-///   by the first received byte with its high-order bit clear.
-///
-/// Format selection is automatic and permanent: the first qualifying byte locks the format for
-/// the lifetime of the connection. Until the format is locked, the encoder transmits ASCII.
-/// See [`ViaProtocolDecoder`] and [`ViaProtocolEncoder`] for details.
-pub mod codec {
-    /// Wire format used on a VIA protocol connection.
+//! Protocol codec for the virtual 6522 VIA peripheral interface.
+//!
+//! This module implements encoding and decoding of the two-message protocol used between
+//! a virtual VIA and an external peripheral over a byte-stream transport (socket, PTY, etc.).
+//!
+//! The protocol defines two message types, sent in both directions:
+//! - [`ViaProtocolMessage::PortStateChange`] — communicates the state of GPIO port A or B.
+//! - [`ViaProtocolMessage::ControlSignalChange`] — sets or clears one or more control signals.
+//!
+//! Two wire formats are supported:
+//! - [`ViaProtocolFormat::Binary`] — compact one- or two-byte encoding; selected by the first
+//!   received byte with its high-order bit set.
+//! - [`ViaProtocolFormat::Ascii`] — human-readable three- or four-character encoding; selected
+//!   by the first received byte with its high-order bit clear.
+//!
+//! Format selection is automatic and permanent: the first qualifying byte locks the format for
+//! the lifetime of the connection. Until the format is locked, the encoder transmits ASCII.
+//! See [`ViaProtocolDecoder`] and [`ViaProtocolEncoder`] for details.
+
+/// Wire format used on a VIA protocol connection.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum ViaProtocolFormat {
         /// Compact binary encoding.
@@ -315,57 +315,52 @@ pub mod codec {
         }
     }
 
-    impl Default for ViaProtocolDecoder {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    // --- helpers ---
-
-    fn hex_nibble(n: u8) -> u8 {
-        if n < 10 { b'0' + n } else { b'A' + n - 10 }
-    }
-
-    fn parse_hex_nibble(b: u8) -> Option<u8> {
-        match b {
-            b'0'..=b'9' => Some(b - b'0'),
-            b'A'..=b'F' => Some(b - b'A' + 10),
-            b'a'..=b'f' => Some(b - b'a' + 10),
-            _ => None,
-        }
-    }
-
-    /// Maps a single ASCII `C<p><n>` signal (port A|B, number 1|2) to its bit position.
-    ///
-    /// Bit layout: CB1=bit3, CB2=bit2, CA1=bit1, CA2=bit0.
-    fn ascii_signal_to_bits(port: char, signal: u8) -> u8 {
-        match (port, signal) {
-            ('A', 1) => 0x02, // CA1 = bit1
-            ('A', 2) => 0x01, // CA2 = bit0
-            ('B', 1) => 0x08, // CB1 = bit3
-            ('B', 2) => 0x04, // CB2 = bit2
-            _ => 0,
-        }
-    }
-
-    /// Maps the lowest set bit in `signals` to its ASCII port char and signal number.
-    ///
-    /// Used by the encoder when encoding a `ControlSignalChange` in ASCII mode.
-    /// Callers that need to encode multiple signals must call encode() once per signal bit.
-    fn signal_bits_to_ascii(signals: u8) -> (u8, u8) {
-        if signals & 0x08 != 0 { (b'B', b'1') } // CB1
-        else if signals & 0x04 != 0 { (b'B', b'2') } // CB2
-        else if signals & 0x02 != 0 { (b'A', b'1') } // CA1
-        else { (b'A', b'2') } // CA2
+impl Default for ViaProtocolDecoder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-pub use codec::{ViaProtocolFormat, ViaProtocolMessage, ViaProtocolEncoder, ViaProtocolDecoder};
+fn hex_nibble(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'A' + n - 10 }
+}
+
+fn parse_hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    }
+}
+
+/// Maps a single ASCII `C<p><n>` signal (port A|B, number 1|2) to its bit position.
+///
+/// Bit layout: CB1=bit3, CB2=bit2, CA1=bit1, CA2=bit0.
+fn ascii_signal_to_bits(port: char, signal: u8) -> u8 {
+    match (port, signal) {
+        ('A', 1) => 0x02, // CA1 = bit1
+        ('A', 2) => 0x01, // CA2 = bit0
+        ('B', 1) => 0x08, // CB1 = bit3
+        ('B', 2) => 0x04, // CB2 = bit2
+        _ => 0,
+    }
+}
+
+/// Maps the lowest set bit in `signals` to its ASCII port char and signal number.
+///
+/// Used by the encoder when encoding a `ControlSignalChange` in ASCII mode.
+/// Callers that need to encode multiple signals must call encode() once per signal bit.
+fn signal_bits_to_ascii(signals: u8) -> (u8, u8) {
+    if signals & 0x08 != 0 { (b'B', b'1') } // CB1
+    else if signals & 0x04 != 0 { (b'B', b'2') } // CB2
+    else if signals & 0x02 != 0 { (b'A', b'1') } // CA1
+    else { (b'A', b'2') } // CA2
+}
 
 #[cfg(test)]
 mod tests {
-    use super::codec::*;
+    use super::*;
 
     // --- Encoder: binary format ---
 
