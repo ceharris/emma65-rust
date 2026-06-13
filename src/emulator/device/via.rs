@@ -315,35 +315,24 @@ impl Via6522 {
         }
     }
 
-    /// Sends the full state dump (6 messages) on transport A after format negotiation.
+    /// Sends the full state dump (port A + CA1/CA2) on transport A after format negotiation.
     fn send_state_dump_a(&mut self) {
         self.send_a(ViaProtocolMessage::PortStateChange { port: 'A', value: self.read_port_a() });
-        let ctrl = self.control_signal_bits();
-        // Send each control signal individually.
-        for (bit, state) in [(IRQ_CA1 >> 1, self.ca1), (0x01, self.ca2)] {
-            self.send_a(ViaProtocolMessage::ControlSignalChange { signals: bit, state });
+        // Control signal bit layout: CA1=bit1, CA2=bit0.
+        for (signals, state) in [(0x02u8, self.ca1), (0x01u8, self.ca2)] {
+            self.send_a(ViaProtocolMessage::ControlSignalChange { signals, state });
         }
-        // CB signals go on transport B.
-        _ = ctrl; // used below
     }
 
     /// Sends the full state dump (port B + CB1/CB2) on transport B after format negotiation.
     fn send_state_dump_b(&mut self) {
         self.send_b(ViaProtocolMessage::PortStateChange { port: 'B', value: self.read_port_b() });
-        for (bit, state) in [(IRQ_CB1 >> 1, self.cb1), (IRQ_CB2 >> 3, self.cb2)] {
-            self.send_b(ViaProtocolMessage::ControlSignalChange { signals: bit, state });
+        // Control signal bit layout: CB1=bit3, CB2=bit2.
+        for (signals, state) in [(0x08u8, self.cb1), (0x04u8, self.cb2)] {
+            self.send_b(ViaProtocolMessage::ControlSignalChange { signals, state });
         }
     }
 
-    /// Returns the control signal nibble: CB1=bit3, CB2=bit2, CA1=bit1, CA2=bit0.
-    fn control_signal_bits(&self) -> u8 {
-        let mut b = 0u8;
-        if self.cb1 { b |= 0x08; }
-        if self.cb2 { b |= 0x04; }
-        if self.ca1 { b |= 0x02; }
-        if self.ca2 { b |= 0x01; }
-        b
-    }
 
     // --- Handshake / incoming byte processing ---
 
@@ -1090,7 +1079,7 @@ mod tests {
         assert_eq!(via.read(0x0), 0xAB);
     }
 
-    // --- CA1 interrupt on control signal message ---
+    // --- Control signal interrupts ---
 
     #[test]
     fn incoming_ca1_low_triggers_irq_when_neg_edge_configured() {
@@ -1103,12 +1092,157 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        // Send CA10 (CA1 = 0).
         for b in b"CA10".iter() { remote.send(*b).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
         assert_ne!(via.peek(0xD) & IRQ_CA1, 0);
         assert!(via.irq_active());
+    }
+
+    #[test]
+    fn incoming_ca1_high_does_not_trigger_when_neg_edge_configured() {
+        let (mut via, mut remote) = device_with_pipe_a();
+        via.write(0xE, 0x82); // enable CA1 IRQ
+        via.write(0xC, 0x00); // PCR: CA1 negative edge
+        via.ca1 = false;
+
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        for b in b"CA11".iter() { remote.send(*b).unwrap(); }
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        assert_eq!(via.peek(0xD) & IRQ_CA1, 0);
+    }
+
+    #[test]
+    fn incoming_ca2_triggers_irq_when_input_mode() {
+        let (mut via, mut remote) = device_with_pipe_a();
+        via.write(0xE, 0x81); // enable CA2 IRQ
+        // PCR bits 3:1 = 000 → CA2 input, negative edge
+        via.write(0xC, 0x00);
+        via.ca2 = true;
+
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        for b in b"CA20".iter() { remote.send(*b).unwrap(); }
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
+    }
+
+    #[test]
+    fn incoming_cb1_triggers_irq_when_neg_edge_configured() {
+        let (mut via, mut remote) = device_with_pipe_b();
+        via.write(0xE, 0x90); // enable CB1 IRQ
+        via.write(0xC, 0x00); // PCR: CB1 negative edge (bit 4 = 0)
+        via.cb1 = true;
+
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        for b in b"CB10".iter() { remote.send(*b).unwrap(); }
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        assert_ne!(via.peek(0xD) & IRQ_CB1, 0);
+        assert!(via.irq_active());
+    }
+
+    #[test]
+    fn incoming_cb2_triggers_irq_when_input_mode() {
+        let (mut via, mut remote) = device_with_pipe_b();
+        via.write(0xE, 0x88); // enable CB2 IRQ
+        // PCR bits 7:5 = 000 → CB2 input, negative edge
+        via.write(0xC, 0x00);
+        via.cb2 = true;
+
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        for b in b"CB20".iter() { remote.send(*b).unwrap(); }
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
+    }
+
+    // --- peek does not affect timer counters or send protocol messages ---
+
+    #[test]
+    fn peek_t1_does_not_clear_flag_or_alter_counter() {
+        let mut via = device();
+        via.write(0x4, 10u8);
+        via.write(0x5, 0x00);
+        via.tick(10); // underflow: sets IRQ_T1, stops timer
+        let counter_after = via.t1_counter;
+        let _ = via.peek(0x4); // must not clear T1 flag or alter counter
+        assert_eq!(via.t1_counter, counter_after);
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0);
+    }
+
+    #[test]
+    fn peek_t2_does_not_affect_counter() {
+        let mut via = device();
+        via.write(0x8, 100u8);
+        via.write(0x9, 0x00);
+        via.tick(10);
+        let after_tick = via.t2_counter;
+        let _ = via.peek(0x8);
+        assert_eq!(via.t2_counter, after_tick);
+    }
+
+    // --- State dump on handshake ---
+
+    #[test]
+    fn state_dump_a_sends_correct_ca1_signal_bit() {
+        let (mut via, mut remote) = device_with_pipe_a();
+        via.ca1 = true;
+
+        remote.send(0x20).unwrap(); // ASCII selector
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1); // handshake → state dump sent
+
+        let mut received = Vec::new();
+        std::thread::sleep(Duration::from_millis(1));
+        loop {
+            match remote.try_recv() {
+                Some(b) => received.push(b),
+                None => break,
+            }
+        }
+        let s = String::from_utf8_lossy(&received);
+        // State dump must include CA11 (CA1=bit1, state=1).
+        assert!(s.contains("CA11"), "expected CA11 in state dump, got: {s}");
+    }
+
+    #[test]
+    fn state_dump_b_sends_correct_cb2_signal_bit() {
+        let (mut via, mut remote) = device_with_pipe_b();
+        via.cb2 = true;
+
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        let mut received = Vec::new();
+        std::thread::sleep(Duration::from_millis(1));
+        loop {
+            match remote.try_recv() {
+                Some(b) => received.push(b),
+                None => break,
+            }
+        }
+        let s = String::from_utf8_lossy(&received);
+        // State dump must include CB21 (CB2=bit2, state=1).
+        assert!(s.contains("CB21"), "expected CB21 in state dump, got: {s}");
     }
 }
