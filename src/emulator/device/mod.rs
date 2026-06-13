@@ -1,11 +1,13 @@
 pub mod acia6551;
 pub mod console;
 pub mod mc6850;
+pub mod via;
 pub mod via_protocol;
 
 pub use self::acia6551::Acia6551;
 pub use self::console::Console;
 pub use self::mc6850::Mc6850;
+pub use self::via::{Via6522, ViaPortBinding};
 pub use self::via_protocol::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
 
 use tokio::sync::mpsc;
