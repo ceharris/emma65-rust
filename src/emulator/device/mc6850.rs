@@ -26,7 +26,8 @@ use crate::emulator::transport::{Transport, TransportError};
 /// - Bit 6: PE — Parity Error (always 0)
 /// - Bit 7: IRQ — Interrupt Requested
 ///
-/// TX is immediate: bytes sent on write. TDRE is always set.
+/// TX is immediate: bytes sent on write. TDRE clears on TX write and is restored on the
+/// next `tick()` call, reflecting the real hardware's transmit-busy signalling.
 /// RX is polled on every `tick()` call.
 pub struct Mc6850 {
     /// Optional transport for byte-stream IO.
@@ -41,10 +42,12 @@ pub struct Mc6850 {
     rx_data: u8,
     /// Receive Data Register Full — byte waiting to be read.
     rdrf: bool,
-    /// Transmit Data Register Empty — always true (TX is immediate).
+    /// Transmit Data Register Empty — clears on TX write; restored on the next tick.
     tdre: bool,
     /// Overrun — set when a new byte arrives while RDRF is still set.
     overrun: bool,
+    /// When true, TDRE was cleared by a TX write and will be restored on the next tick.
+    tx_pending: bool,
 }
 
 /// Control register bit masks.
@@ -66,6 +69,7 @@ impl Mc6850 {
             rdrf: false,
             tdre: true,
             overrun: false,
+            tx_pending: false,
         }
     }
 
@@ -109,6 +113,7 @@ impl Mc6850 {
         self.rdrf = false;
         self.tdre = true;
         self.overrun = false;
+        self.tx_pending = false;
     }
 }
 
@@ -152,6 +157,8 @@ impl IoDevice for Mc6850 {
                     && let Err(e) = transport.send(value) {
                     self.report_error(e);
                 }
+                self.tdre = false;
+                self.tx_pending = true;
             }
             _ => {}
         }
@@ -166,8 +173,12 @@ impl IoDevice for Mc6850 {
         }
     }
 
-    /// Polls the transport for an incoming byte.
+    /// Restores TDRE after a TX write and polls the transport for an incoming byte.
     fn tick(&mut self, _cycles: u32) {
+        if self.tx_pending {
+            self.tx_pending = false;
+            self.tdre = true;
+        }
         if let Some(byte) = self.transport.as_mut().and_then(|t| t.try_recv()) {
             if self.rdrf {
                 self.overrun = true;
@@ -258,6 +269,23 @@ mod tests {
     fn tx_no_transport_is_silent() {
         let mut device = Mc6850::new();
         device.write(1, 0xFF); // should not panic
+    }
+
+    #[test]
+    fn tdre_clears_on_tx_write() {
+        let (mut device, _remote) = device_with_pipe();
+        assert_ne!(device.peek(0) & 0x02, 0); // TDRE set before write
+        device.write(1, 0x41);
+        assert_eq!(device.peek(0) & 0x02, 0); // TDRE cleared after TX write
+    }
+
+    #[test]
+    fn tdre_restores_after_tick() {
+        let (mut device, _remote) = device_with_pipe();
+        device.write(1, 0x41);
+        assert_eq!(device.peek(0) & 0x02, 0); // TDRE cleared
+        device.tick(1);
+        assert_ne!(device.peek(0) & 0x02, 0); // TDRE restored
     }
 
     // --- RX ---
