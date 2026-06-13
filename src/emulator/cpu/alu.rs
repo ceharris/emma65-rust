@@ -1,7 +1,5 @@
-//! Pure ALU functions consumed by the CPU instruction dispatcher.
-//!
-//! Every function takes explicit inputs (operands + relevant flag bits) and returns
-//! a result value plus the updated N/Z/C/V flags. No CPU state is mutated here.
+// Every function takes explicit inputs (operands + relevant flag bits) and returns
+// a result value plus the updated N/Z/C/V flags. No CPU state is mutated here.
 
 use crate::emulator::cpu::status::StatusRegister;
 
