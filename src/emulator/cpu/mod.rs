@@ -14,9 +14,11 @@ use crate::emulator::cpu::variant::{CpuVariant, InvalidOpcodePolicy};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::{ClockSpeed, StepResult};
 use crate::emulator::bus::region::BusOp;
+use crate::emulator::interrupt::InterruptController;
 
 const STACK_BASE: u16 = 0x0100;
 const RESET_VECTOR: u16 = 0xFFFC;
+const NMI_VECTOR: u16 = 0xFFFA;
 const IRQ_VECTOR: u16 = 0xFFFE;
 
 /// The CPU's general-purpose and special-purpose registers.
@@ -55,6 +57,8 @@ pub struct Cpu {
     regs: Registers,
     /// The memory bus; owns all RAM, ROM, and IO device regions.
     bus: Bus,
+    /// Interrupt controller; tracks IRQ sources and pending NMI.
+    interrupts: InterruptController,
     /// Pre-built 256-entry decode table for the active variant; indexed by opcode byte.
     table: [DecodedOp; 256],
     /// Selects the instruction set (CMOS 65C02 or WDC 65C02).
@@ -97,6 +101,26 @@ impl Cpu {
         &mut self.bus
     }
 
+    /// Returns a reference to the interrupt controller.
+    pub fn interrupts(&self) -> &InterruptController {
+        &self.interrupts
+    }
+
+    /// Returns a mutable reference to the interrupt controller.
+    pub fn interrupts_mut(&mut self) -> &mut InterruptController {
+        &mut self.interrupts
+    }
+
+    /// Returns `true` if the CPU is in WAI state, waiting for an interrupt.
+    pub fn is_waiting(&self) -> bool {
+        self.waiting
+    }
+
+    /// Returns `true` if the CPU is in STP state.
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
     /// Returns the CPU variant.
     pub fn variant(&self) -> CpuVariant {
         self.variant
@@ -130,8 +154,41 @@ impl Cpu {
         if self.stopped {
             return StepResult::Stopped;
         }
+
         if self.waiting {
-            return StepResult::Waiting;
+            // Tick devices and poll for interrupts; stay in WAI until one arrives.
+            self.bus.tick_devices(1);
+            self.poll_interrupts();
+            if !self.interrupts.irq_active() && !self.interrupts.nmi_pending() {
+                return StepResult::Waiting;
+            }
+            self.waiting = false;
+            // Fall through to service the interrupt below.
+        }
+
+        // NMI takes priority over IRQ.
+        if self.interrupts.take_nmi() {
+            return match self.service_interrupt(NMI_VECTOR, false) {
+                Ok(cycles) => {
+                    self.cycles += cycles as u64;
+                    self.bus.tick_devices(cycles as u32);
+                    self.poll_interrupts();
+                    StepResult::Executed(self.table[0x00]) // placeholder decoded for interrupt
+                }
+                Err(e) => StepResult::Error(e),
+            };
+        }
+
+        if self.interrupts.irq_active() && !self.regs.p.contains(StatusRegister::I) {
+            return match self.service_interrupt(IRQ_VECTOR, false) {
+                Ok(cycles) => {
+                    self.cycles += cycles as u64;
+                    self.bus.tick_devices(cycles as u32);
+                    self.poll_interrupts();
+                    StepResult::Executed(self.table[0x00])
+                }
+                Err(e) => StepResult::Error(e),
+            };
         }
 
         let pc = self.regs.pc;
@@ -149,6 +206,7 @@ impl Cpu {
                     let cycles = decoded.base_cycles;
                     self.cycles += cycles as u64;
                     self.bus.tick_devices(cycles as u32);
+                    self.poll_interrupts();
                     return StepResult::Executed(decoded);
                 }
                 InvalidOpcodePolicy::Error => {
@@ -161,6 +219,7 @@ impl Cpu {
             Ok((result, cycles)) => {
                 self.cycles += cycles as u64;
                 self.bus.tick_devices(cycles as u32);
+                self.poll_interrupts();
                 result
             }
             Err(e) => StepResult::Error(e),
@@ -472,16 +531,8 @@ impl Cpu {
             // --- BRK ---
             Mnemonic::Brk => {
                 // BRK is 2 bytes; PC was already advanced to pc+2 above.
-                let ret = self.regs.pc;
-                self.push((ret >> 8) as u8)?;
-                self.push(ret as u8)?;
-                let p = (self.regs.p | StatusRegister::B | StatusRegister::UNUSED).to_byte();
-                self.push(p)?;
-                self.regs.p.insert(StatusRegister::I);
-                self.regs.p.remove(StatusRegister::D);
-                let lo = self.bus_read(IRQ_VECTOR)?;
-                let hi = self.bus_read(IRQ_VECTOR + 1)?;
-                self.regs.pc = u16::from_le_bytes([lo, hi]);
+                // service_interrupt pushes the current PC (already at pc+2) and P with B set.
+                self.service_interrupt(IRQ_VECTOR, true)?;
             }
 
             // --- NOP ---
@@ -717,6 +768,34 @@ impl Cpu {
         }
     }
 
+    // --- interrupt helpers ---
+
+    /// Pushes PC and P, reads the vector at `vector_addr`, and sets the I flag.
+    /// Returns the cycle count for the interrupt sequence (7 cycles).
+    fn service_interrupt(&mut self, vector_addr: u16, is_brk: bool) -> Result<u8, ExecError> {
+        let pc = self.regs.pc;
+        self.push((pc >> 8) as u8)?;
+        self.push(pc as u8)?;
+        let p = if is_brk {
+            (self.regs.p | StatusRegister::B | StatusRegister::UNUSED).to_byte()
+        } else {
+            (self.regs.p & !StatusRegister::B | StatusRegister::UNUSED).to_byte()
+        };
+        self.push(p)?;
+        self.regs.p.insert(StatusRegister::I);
+        self.regs.p.remove(StatusRegister::D);
+        let lo = self.bus_read(vector_addr)?;
+        let hi = self.bus_read(vector_addr + 1)?;
+        self.regs.pc = u16::from_le_bytes([lo, hi]);
+        Ok(7)
+    }
+
+    /// Polls all devices and syncs their IRQ state into the interrupt controller.
+    fn poll_interrupts(&mut self) {
+        let states: Vec<_> = self.bus.device_irq_states();
+        self.interrupts.poll_devices(states.into_iter());
+    }
+
     // --- status flag helpers ---
 
     fn set_nz(&mut self, val: u8) {
@@ -804,6 +883,7 @@ impl CpuBuilder {
         Ok(Cpu {
             regs: Registers::new(),
             bus,
+            interrupts: InterruptController::new(),
             table,
             variant: self.variant,
             invalid_opcode_policy: self.invalid_opcode_policy,
@@ -1406,5 +1486,149 @@ mod tests {
         cpu.step();
         cpu.step();
         assert_eq!(cpu.cycles(), 6);
+    }
+
+    // --- IRQ ---
+
+    #[test]
+    fn irq_with_i_clear_vectors_through_irq_vector() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(IRQ_VECTOR, 0x00).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
+        cpu.regs.p.remove(StatusRegister::I);
+        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.step();
+        assert_eq!(cpu.regs.pc, 0x0400);
+        assert!(cpu.regs.p.contains(StatusRegister::I));
+    }
+
+    #[test]
+    fn irq_with_i_set_does_not_vector() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
+        cpu.regs.p.insert(StatusRegister::I);
+        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.step();
+        // NOP executes normally; PC advances past it
+        assert_eq!(cpu.regs.pc, 0x0201);
+    }
+
+    #[test]
+    fn irq_pushes_correct_state() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(IRQ_VECTOR, 0x00).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
+        cpu.regs.p = StatusRegister::UNUSED | StatusRegister::C; // I clear, C set
+        let s_before = cpu.regs.s;
+        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.step();
+        // 3 bytes pushed: PC hi, PC lo, P
+        assert_eq!(cpu.regs.s, s_before.wrapping_sub(3));
+        // Pushed PC should be 0x0200 (PC at time of IRQ)
+        let pushed_pc_hi = cpu.bus.read(STACK_BASE | s_before as u16).unwrap();
+        let pushed_pc_lo = cpu.bus.read(STACK_BASE | s_before.wrapping_sub(1) as u16).unwrap();
+        assert_eq!(u16::from_le_bytes([pushed_pc_lo, pushed_pc_hi]), 0x0200);
+        // Pushed P should not have B set
+        let pushed_p = cpu.bus.read(STACK_BASE | s_before.wrapping_sub(2) as u16).unwrap();
+        assert_eq!(pushed_p & StatusRegister::B.bits(), 0);
+    }
+
+    #[test]
+    fn multi_source_irq_stays_active_after_partial_release() {
+        let mut cpu = make_cpu(0x0200);
+        use crate::emulator::interrupt::IrqSource;
+        cpu.interrupts_mut().assert_irq(IrqSource(1));
+        cpu.interrupts_mut().assert_irq(IrqSource(2));
+        cpu.interrupts_mut().release_irq(IrqSource(1));
+        assert!(cpu.interrupts().irq_active());
+        cpu.interrupts_mut().release_irq(IrqSource(2));
+        assert!(!cpu.interrupts().irq_active());
+    }
+
+    // --- NMI ---
+
+    #[test]
+    fn nmi_vectors_through_nmi_vector() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(NMI_VECTOR, 0x00).unwrap();
+        cpu.bus.write(NMI_VECTOR + 1, 0x03).unwrap();
+        cpu.regs.p.insert(StatusRegister::I); // I set — NMI ignores it
+        cpu.interrupts_mut().signal_nmi();
+        cpu.step();
+        assert_eq!(cpu.regs.pc, 0x0300);
+        assert!(cpu.regs.p.contains(StatusRegister::I));
+    }
+
+    #[test]
+    fn nmi_pushes_correct_state() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(NMI_VECTOR, 0x00).unwrap();
+        cpu.bus.write(NMI_VECTOR + 1, 0x03).unwrap();
+        cpu.regs.p = StatusRegister::UNUSED | StatusRegister::C;
+        let s_before = cpu.regs.s;
+        cpu.interrupts_mut().signal_nmi();
+        cpu.step();
+        assert_eq!(cpu.regs.s, s_before.wrapping_sub(3));
+        // Pushed P should not have B set
+        let pushed_p = cpu.bus.read(STACK_BASE | s_before.wrapping_sub(2) as u16).unwrap();
+        assert_eq!(pushed_p & StatusRegister::B.bits(), 0);
+    }
+
+    #[test]
+    fn nmi_has_priority_over_simultaneous_irq() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(NMI_VECTOR, 0x00).unwrap();
+        cpu.bus.write(NMI_VECTOR + 1, 0x03).unwrap();
+        cpu.bus.write(IRQ_VECTOR, 0x00).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
+        cpu.regs.p.remove(StatusRegister::I);
+        cpu.interrupts_mut().signal_nmi();
+        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.step();
+        // Should vector through NMI, not IRQ
+        assert_eq!(cpu.regs.pc, 0x0300);
+    }
+
+    // --- WAI ---
+
+    #[test]
+    fn wai_returns_waiting_until_irq() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(IRQ_VECTOR, 0x00).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
+        cpu.regs.p.remove(StatusRegister::I);
+        write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
+        cpu.step(); // execute WAI — sets waiting=true
+        assert!(matches!(cpu.step(), StepResult::Waiting)); // no interrupt yet
+        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.step(); // wakes and services IRQ
+        assert_eq!(cpu.regs.pc, 0x0400);
+        assert!(!cpu.is_waiting());
+    }
+
+    #[test]
+    fn wai_wakes_on_nmi() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(NMI_VECTOR, 0x00).unwrap();
+        cpu.bus.write(NMI_VECTOR + 1, 0x03).unwrap();
+        cpu.regs.p.insert(StatusRegister::I); // I set — NMI still wakes
+        write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
+        cpu.step(); // execute WAI
+        cpu.interrupts_mut().signal_nmi();
+        cpu.step(); // wakes and services NMI
+        assert_eq!(cpu.regs.pc, 0x0300);
+        assert!(!cpu.is_waiting());
+    }
+
+    // --- STP ---
+
+    #[test]
+    fn stp_cleared_by_reset() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xDB]); // STP
+        cpu.step(); // execute STP
+        assert!(cpu.is_stopped());
+        cpu.reset().unwrap();
+        assert!(!cpu.is_stopped());
     }
 }

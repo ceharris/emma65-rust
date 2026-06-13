@@ -136,6 +136,17 @@ impl Bus {
         }
     }
 
+    /// Returns the IRQ state of every device as `(DeviceId, irq_active)` pairs.
+    pub fn device_irq_states(&self) -> Vec<(crate::emulator::device::DeviceId, bool)> {
+        self.regions.iter().filter_map(|r| {
+            if let Region::Device { id, device, .. } = r {
+                Some((*id, device.irq_active()))
+            } else {
+                None
+            }
+        }).collect()
+    }
+
     /// Replaces the ROM data for the region starting at `range.start` with `data`.
     ///
     /// `data.len()` must equal `range.len()`.  Useful for patching ROM after construction.
