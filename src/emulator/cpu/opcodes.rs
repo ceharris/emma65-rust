@@ -1,7 +1,7 @@
 use crate::emulator::cpu::variant::CpuVariant;
 
 /// All instruction mnemonics for the 65C02 family, including WDC-only additions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mnemonic {
     Adc, And, Asl, Bbc, Bbr0, Bbr1, Bbr2, Bbr3, Bbr4, Bbr5, Bbr6, Bbr7,
     Bbs0, Bbs1, Bbs2, Bbs3, Bbs4, Bbs5, Bbs6, Bbs7,
@@ -84,6 +84,63 @@ impl DecodedOp {
 
 use Mnemonic::*;
 use AddressingMode::*;
+
+impl std::fmt::Display for Mnemonic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Adc  => "ADC",  And  => "AND",  Asl  => "ASL",
+            Bbc  => "BBC",
+            Bbr0 => "BBR0", Bbr1 => "BBR1", Bbr2 => "BBR2",
+            Bbr3 => "BBR3", Bbr4 => "BBR4", Bbr5 => "BBR5",
+            Bbr6 => "BBR6", Bbr7 => "BBR7",
+            Bbs0 => "BBS0", Bbs1 => "BBS1", Bbs2 => "BBS2",
+            Bbs3 => "BBS3", Bbs4 => "BBS4", Bbs5 => "BBS5",
+            Bbs6 => "BBS6", Bbs7 => "BBS7",
+            Bcc  => "BCC",  Bcs  => "BCS",  Beq  => "BEQ",
+            Bit  => "BIT",  Bmi  => "BMI",  Bne  => "BNE",
+            Bpl  => "BPL",  Bra  => "BRA",  Brk  => "BRK",
+            Bvc  => "BVC",  Bvs  => "BVS",
+            Clc  => "CLC",  Cld  => "CLD",  Cli  => "CLI",
+            Clv  => "CLV",  Cmp  => "CMP",  Cpx  => "CPX",
+            Cpy  => "CPY",
+            Dec  => "DEC",  Dex  => "DEX",  Dey  => "DEY",
+            Eor  => "EOR",
+            Inc  => "INC",  Inx  => "INX",  Iny  => "INY",
+            Jmp  => "JMP",  Jsr  => "JSR",
+            Lda  => "LDA",  Ldx  => "LDX",  Ldy  => "LDY",
+            Lsr  => "LSR",
+            Nop  => "NOP",
+            Ora  => "ORA",
+            Pha  => "PHA",  Php  => "PHP",  Phx  => "PHX",
+            Phy  => "PHY",  Pla  => "PLA",  Plp  => "PLP",
+            Plx  => "PLX",  Ply  => "PLY",
+            Rmb0 => "RMB0", Rmb1 => "RMB1", Rmb2 => "RMB2",
+            Rmb3 => "RMB3", Rmb4 => "RMB4", Rmb5 => "RMB5",
+            Rmb6 => "RMB6", Rmb7 => "RMB7",
+            Rol  => "ROL",  Ror  => "ROR",  Rti  => "RTI",
+            Rts  => "RTS",
+            Sbc  => "SBC",  Sec  => "SEC",  Sed  => "SED",
+            Sei  => "SEI",
+            Smb0 => "SMB0", Smb1 => "SMB1", Smb2 => "SMB2",
+            Smb3 => "SMB3", Smb4 => "SMB4", Smb5 => "SMB5",
+            Smb6 => "SMB6", Smb7 => "SMB7",
+            Sta  => "STA",  Stp  => "STP",  Stx  => "STX",
+            Sty  => "STY",  Stz  => "STZ",
+            Tax  => "TAX",  Tay  => "TAY",  Trb  => "TRB",
+            Tsb  => "TSB",  Tsx  => "TSX",  Txa  => "TXA",
+            Txs  => "TXS",  Tya  => "TYA",
+            Wai  => "WAI",
+            Ill  => "<ILL>",
+        };
+        f.write_str(s)
+    }
+}
+
+impl std::fmt::Debug for Mnemonic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 
 /// Returns the decode table for the given variant. WDC-only opcodes have `is_valid = false`
 /// under `Cmos65C02`.
@@ -525,5 +582,26 @@ mod tests {
         assert_eq!(t[0x0F].mode, ZeroPageRelative);
         assert_eq!(t[0x8F].mode, ZeroPageRelative);
         assert_eq!(t[0x0F].byte_len, 3);
+    }
+
+    #[test]
+    fn mnemonic_display_is_uppercase() {
+        assert_eq!(format!("{}", Nop), "NOP");
+        assert_eq!(format!("{}", Lda), "LDA");
+        assert_eq!(format!("{}", Bbr0), "BBR0");
+        assert_eq!(format!("{}", Smb7), "SMB7");
+        assert_eq!(format!("{}", Wai), "WAI");
+    }
+
+    #[test]
+    fn mnemonic_debug_matches_display() {
+        assert_eq!(format!("{:?}", Nop), "NOP");
+        assert_eq!(format!("{:?}", Jsr), "JSR");
+    }
+
+    #[test]
+    fn ill_mnemonic_displays_as_ill_tag() {
+        assert_eq!(format!("{}", Ill), "<ILL>");
+        assert_eq!(format!("{:?}", Ill), "<ILL>");
     }
 }
