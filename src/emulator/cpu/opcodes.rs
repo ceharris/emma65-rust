@@ -82,52 +82,55 @@ impl DecodedOp {
     }
 }
 
+use Mnemonic::*;
+use AddressingMode::*;
+
 impl std::fmt::Display for Mnemonic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            Mnemonic::Adc  => "ADC",  Mnemonic::And  => "AND",  Mnemonic::Asl  => "ASL",
-            Mnemonic::Bbc  => "BBC",
-            Mnemonic::Bbr0 => "BBR0", Mnemonic::Bbr1 => "BBR1", Mnemonic::Bbr2 => "BBR2",
-            Mnemonic::Bbr3 => "BBR3", Mnemonic::Bbr4 => "BBR4", Mnemonic::Bbr5 => "BBR5",
-            Mnemonic::Bbr6 => "BBR6", Mnemonic::Bbr7 => "BBR7",
-            Mnemonic::Bbs0 => "BBS0", Mnemonic::Bbs1 => "BBS1", Mnemonic::Bbs2 => "BBS2",
-            Mnemonic::Bbs3 => "BBS3", Mnemonic::Bbs4 => "BBS4", Mnemonic::Bbs5 => "BBS5",
-            Mnemonic::Bbs6 => "BBS6", Mnemonic::Bbs7 => "BBS7",
-            Mnemonic::Bcc  => "BCC",  Mnemonic::Bcs  => "BCS",  Mnemonic::Beq  => "BEQ",
-            Mnemonic::Bit  => "BIT",  Mnemonic::Bmi  => "BMI",  Mnemonic::Bne  => "BNE",
-            Mnemonic::Bpl  => "BPL",  Mnemonic::Bra  => "BRA",  Mnemonic::Brk  => "BRK",
-            Mnemonic::Bvc  => "BVC",  Mnemonic::Bvs  => "BVS",
-            Mnemonic::Clc  => "CLC",  Mnemonic::Cld  => "CLD",  Mnemonic::Cli  => "CLI",
-            Mnemonic::Clv  => "CLV",  Mnemonic::Cmp  => "CMP",  Mnemonic::Cpx  => "CPX",
-            Mnemonic::Cpy  => "CPY",
-            Mnemonic::Dec  => "DEC",  Mnemonic::Dex  => "DEX",  Mnemonic::Dey  => "DEY",
-            Mnemonic::Eor  => "EOR",
-            Mnemonic::Inc  => "INC",  Mnemonic::Inx  => "INX",  Mnemonic::Iny  => "INY",
-            Mnemonic::Jmp  => "JMP",  Mnemonic::Jsr  => "JSR",
-            Mnemonic::Lda  => "LDA",  Mnemonic::Ldx  => "LDX",  Mnemonic::Ldy  => "LDY",
-            Mnemonic::Lsr  => "LSR",
-            Mnemonic::Nop  => "NOP",
-            Mnemonic::Ora  => "ORA",
-            Mnemonic::Pha  => "PHA",  Mnemonic::Php  => "PHP",  Mnemonic::Phx  => "PHX",
-            Mnemonic::Phy  => "PHY",  Mnemonic::Pla  => "PLA",  Mnemonic::Plp  => "PLP",
-            Mnemonic::Plx  => "PLX",  Mnemonic::Ply  => "PLY",
-            Mnemonic::Rmb0 => "RMB0", Mnemonic::Rmb1 => "RMB1", Mnemonic::Rmb2 => "RMB2",
-            Mnemonic::Rmb3 => "RMB3", Mnemonic::Rmb4 => "RMB4", Mnemonic::Rmb5 => "RMB5",
-            Mnemonic::Rmb6 => "RMB6", Mnemonic::Rmb7 => "RMB7",
-            Mnemonic::Rol  => "ROL",  Mnemonic::Ror  => "ROR",  Mnemonic::Rti  => "RTI",
-            Mnemonic::Rts  => "RTS",
-            Mnemonic::Sbc  => "SBC",  Mnemonic::Sec  => "SEC",  Mnemonic::Sed  => "SED",
-            Mnemonic::Sei  => "SEI",
-            Mnemonic::Smb0 => "SMB0", Mnemonic::Smb1 => "SMB1", Mnemonic::Smb2 => "SMB2",
-            Mnemonic::Smb3 => "SMB3", Mnemonic::Smb4 => "SMB4", Mnemonic::Smb5 => "SMB5",
-            Mnemonic::Smb6 => "SMB6", Mnemonic::Smb7 => "SMB7",
-            Mnemonic::Sta  => "STA",  Mnemonic::Stp  => "STP",  Mnemonic::Stx  => "STX",
-            Mnemonic::Sty  => "STY",  Mnemonic::Stz  => "STZ",
-            Mnemonic::Tax  => "TAX",  Mnemonic::Tay  => "TAY",  Mnemonic::Trb  => "TRB",
-            Mnemonic::Tsb  => "TSB",  Mnemonic::Tsx  => "TSX",  Mnemonic::Txa  => "TXA",
-            Mnemonic::Txs  => "TXS",  Mnemonic::Tya  => "TYA",
-            Mnemonic::Wai  => "WAI",
-            Mnemonic::Ill  => "<ILL>",
+            Adc  => "ADC",  And  => "AND",  Asl  => "ASL",
+            Bbc  => "BBC",
+            Bbr0 => "BBR0", Bbr1 => "BBR1", Bbr2 => "BBR2",
+            Bbr3 => "BBR3", Bbr4 => "BBR4", Bbr5 => "BBR5",
+            Bbr6 => "BBR6", Bbr7 => "BBR7",
+            Bbs0 => "BBS0", Bbs1 => "BBS1", Bbs2 => "BBS2",
+            Bbs3 => "BBS3", Bbs4 => "BBS4", Bbs5 => "BBS5",
+            Bbs6 => "BBS6", Bbs7 => "BBS7",
+            Bcc  => "BCC",  Bcs  => "BCS",  Beq  => "BEQ",
+            Bit  => "BIT",  Bmi  => "BMI",  Bne  => "BNE",
+            Bpl  => "BPL",  Bra  => "BRA",  Brk  => "BRK",
+            Bvc  => "BVC",  Bvs  => "BVS",
+            Clc  => "CLC",  Cld  => "CLD",  Cli  => "CLI",
+            Clv  => "CLV",  Cmp  => "CMP",  Cpx  => "CPX",
+            Cpy  => "CPY",
+            Dec  => "DEC",  Dex  => "DEX",  Dey  => "DEY",
+            Eor  => "EOR",
+            Inc  => "INC",  Inx  => "INX",  Iny  => "INY",
+            Jmp  => "JMP",  Jsr  => "JSR",
+            Lda  => "LDA",  Ldx  => "LDX",  Ldy  => "LDY",
+            Lsr  => "LSR",
+            Nop  => "NOP",
+            Ora  => "ORA",
+            Pha  => "PHA",  Php  => "PHP",  Phx  => "PHX",
+            Phy  => "PHY",  Pla  => "PLA",  Plp  => "PLP",
+            Plx  => "PLX",  Ply  => "PLY",
+            Rmb0 => "RMB0", Rmb1 => "RMB1", Rmb2 => "RMB2",
+            Rmb3 => "RMB3", Rmb4 => "RMB4", Rmb5 => "RMB5",
+            Rmb6 => "RMB6", Rmb7 => "RMB7",
+            Rol  => "ROL",  Ror  => "ROR",  Rti  => "RTI",
+            Rts  => "RTS",
+            Sbc  => "SBC",  Sec  => "SEC",  Sed  => "SED",
+            Sei  => "SEI",
+            Smb0 => "SMB0", Smb1 => "SMB1", Smb2 => "SMB2",
+            Smb3 => "SMB3", Smb4 => "SMB4", Smb5 => "SMB5",
+            Smb6 => "SMB6", Smb7 => "SMB7",
+            Sta  => "STA",  Stp  => "STP",  Stx  => "STX",
+            Sty  => "STY",  Stz  => "STZ",
+            Tax  => "TAX",  Tay  => "TAY",  Trb  => "TRB",
+            Tsb  => "TSB",  Tsx  => "TSX",  Txa  => "TXA",
+            Txs  => "TXS",  Tya  => "TYA",
+            Wai  => "WAI",
+            Ill  => "<ILL>",
         };
         f.write_str(s)
     }
@@ -138,9 +141,6 @@ impl std::fmt::Debug for Mnemonic {
         std::fmt::Display::fmt(self, f)
     }
 }
-
-use Mnemonic::*;
-use AddressingMode::*;
 
 /// Returns the decode table for the given variant. WDC-only opcodes have `is_valid = false`
 /// under `Cmos65C02`.
