@@ -1,6 +1,82 @@
+use tokio::sync::mpsc;
+
 /// Uniquely identifies a device registered on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub u32);
+
+/// Asynchronous event emitted by a device to notify the host application of transport state changes.
+#[derive(Debug)]
+pub enum DeviceEvent {
+    /// A transport connection was established for the given device.
+    TransportConnected { device: DeviceId },
+    /// A transport connection was lost.
+    TransportDisconnected {
+        /// The device that lost its transport.
+        device: DeviceId,
+        /// Human-readable reason for the disconnection.
+        reason: String,
+    },
+    /// A transport error occurred during IO.
+    TransportError {
+        /// The device that encountered the error.
+        device: DeviceId,
+        /// The error that occurred.
+        error: crate::emulator::transport::TransportError,
+    },
+    /// An informational message from the device.
+    DeviceInfo {
+        /// The device emitting the message.
+        device: DeviceId,
+        /// The message text.
+        message: String,
+    },
+}
+
+/// Sending half of a device event channel.
+///
+/// Devices hold an `ErrorSender` to report asynchronous transport events to the host.
+pub type ErrorSender = mpsc::UnboundedSender<DeviceEvent>;
+
+/// Receiving half of a device event channel.
+///
+/// The host holds an `ErrorReceiver` and polls it independently of CPU execution.
+pub type ErrorReceiver = mpsc::UnboundedReceiver<DeviceEvent>;
+
+/// Creates a new `(ErrorSender, ErrorReceiver)` pair for device event reporting.
+pub fn device_event_channel() -> (ErrorSender, ErrorReceiver) {
+    mpsc::unbounded_channel()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn send_events_receive_from_other_thread() {
+        let (sender, mut receiver) = device_event_channel();
+        let id = DeviceId(1);
+
+        let handle = thread::spawn(move || {
+            sender.send(DeviceEvent::TransportConnected { device: id }).unwrap();
+            sender.send(DeviceEvent::DeviceInfo {
+                device: id,
+                message: "hello".to_string(),
+            }).unwrap();
+        });
+
+        handle.join().unwrap();
+
+        // Use tokio runtime to drive the async receiver.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let ev1 = receiver.recv().await.unwrap();
+            assert!(matches!(ev1, DeviceEvent::TransportConnected { .. }));
+            let ev2 = receiver.recv().await.unwrap();
+            assert!(matches!(ev2, DeviceEvent::DeviceInfo { .. }));
+        });
+    }
+}
 
 /// A device that can be mapped into the bus address space.
 pub trait IoDevice {

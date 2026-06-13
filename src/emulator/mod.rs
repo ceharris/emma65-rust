@@ -4,7 +4,7 @@ pub mod bus;
 pub mod cpu;
 /// Disassembler: decodes bus memory into human-readable instruction listings.
 pub mod disasm;
-/// IO device trait and device identification.
+/// IO device trait, device identification, and async device event channel.
 pub mod device;
 /// Error types for execution, bus, configuration, and CPU construction failures.
 pub mod error;
@@ -12,6 +12,8 @@ pub mod error;
 pub mod exec;
 /// IRQ and NMI interrupt controller.
 pub mod interrupt;
+/// Transport abstraction and implementations for device IO.
+pub mod transport;
 
 pub use bus::region::{AddressRange, BusOp};
 pub use bus::{Bus, BusConfig, RomWritePolicy, UnmappedPolicy};
@@ -20,8 +22,9 @@ pub use cpu::{Cpu, CpuBuilder, Registers, map_register_name, map_flag_name};
 pub use cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
 pub use cpu::status::StatusRegister;
 pub use cpu::variant::{CpuVariant, InvalidOpcodePolicy};
-pub use device::{DeviceId, IoDevice};
+pub use device::{DeviceId, DeviceEvent, ErrorSender, ErrorReceiver, IoDevice, device_event_channel};
 pub use disasm::{Disassembler, DisassembledLine};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
 pub use exec::{ClockSpeed, StepResult};
 pub use interrupt::{InterruptController, IrqSource};
+pub use transport::{Transport, TransportError, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport};
