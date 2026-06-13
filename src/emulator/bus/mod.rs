@@ -127,6 +127,15 @@ impl Bus {
         Ok(())
     }
 
+    /// Calls `tick(cycles)` on every IO device mapped on the bus.
+    pub fn tick_devices(&mut self, cycles: u8) {
+        for region in &mut self.regions {
+            if let Region::Device { device, .. } = region {
+                device.tick(cycles);
+            }
+        }
+    }
+
     /// Replaces the ROM data for the region starting at `range.start` with `data`.
     ///
     /// `data.len()` must equal `range.len()`.  Useful for patching ROM after construction.
