@@ -68,7 +68,9 @@ pub fn adc_bcd(a: u8, operand: u8, status: StatusRegister) -> AluResult {
 
 /// SBC in binary mode.
 pub fn sbc_binary(a: u8, operand: u8, status: StatusRegister) -> AluResult {
-    // SBC with borrow = ADC with ~operand (borrow = !carry)
+    // 6502 identity: A - operand - borrow  =  A + ~operand + carry
+    // (borrow = !carry, and bitwise NOT satisfies ~operand = -operand - 1,
+    // so adding ~operand + 1 via the carry bit gives the subtraction).
     adc_binary(a, !operand, status)
 }
 
@@ -186,7 +188,7 @@ pub fn compare(reg: u8, operand: u8, status: StatusRegister) -> StatusRegister {
 // BIT
 // ---------------------------------------------------------------------------
 
-/// BIT (zero-page / absolute) — sets Z from (A & mem), N from mem[7], V from mem[6].
+/// BIT (zero-page / absolute) — sets Z from (A & mem), N from bit 7 of mem, V from bit 6 of mem.
 pub fn bit_mem(a: u8, mem: u8, status: StatusRegister) -> StatusRegister {
     let mut s = status;
     s.set(StatusRegister::Z, (a & mem) == 0);
