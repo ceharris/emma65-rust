@@ -41,4 +41,6 @@ pub enum BusConfigError {
 pub enum CpuBuildError {
     #[error("bus configuration error: {0}")]
     BusConfig(#[from] BusConfigError),
+    #[error("no bus provided; call .bus() before .build()")]
+    NoBus,
 }
