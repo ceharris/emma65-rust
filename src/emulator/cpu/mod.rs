@@ -148,7 +148,7 @@ impl Cpu {
                     self.regs.pc = self.regs.pc.wrapping_add(decoded.byte_len as u16);
                     let cycles = decoded.base_cycles;
                     self.cycles += cycles as u64;
-                    self.bus.tick_devices(cycles);
+                    self.bus.tick_devices(cycles as u32);
                     return StepResult::Executed(decoded);
                 }
                 InvalidOpcodePolicy::Error => {
@@ -160,7 +160,7 @@ impl Cpu {
         match self.execute(decoded) {
             Ok((result, cycles)) => {
                 self.cycles += cycles as u64;
-                self.bus.tick_devices(cycles);
+                self.bus.tick_devices(cycles as u32);
                 result
             }
             Err(e) => StepResult::Error(e),
