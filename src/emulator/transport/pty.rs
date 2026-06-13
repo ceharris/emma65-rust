@@ -2,7 +2,7 @@ use std::fs::File;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
 use std::path::{Path, PathBuf};
 
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{Receiver, Sender};
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::pty::{openpty, OpenptyResult};
 use nix::unistd;
@@ -10,9 +10,7 @@ use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::oneshot;
 
-use super::{Transport, TransportError};
-
-const CHANNEL_CAPACITY: usize = 256;
+use super::{ChannelBridge, Transport, TransportError};
 
 /// Transport over a pseudo-terminal (PTY).
 ///
@@ -23,21 +21,17 @@ const CHANNEL_CAPACITY: usize = 256;
 /// programs (e.g. terminal emulators) can find the port by a predictable name;
 /// the symlink is removed automatically when the transport is shut down or dropped.
 pub struct PtyTransport {
-    rx: Receiver<u8>,
-    tx: Sender<u8>,
-    /// Signals the Tokio task to shut down.
-    shutdown_tx: Option<oneshot::Sender<()>>,
+    bridge: ChannelBridge,
     /// Path to the slave side of the PTY (e.g. `/dev/pts/N`).
     slave_path: Option<String>,
     /// Optional stable symlink pointing to the slave device node.
     symlink_path: Option<PathBuf>,
-    connected: bool,
 }
 
 impl PtyTransport {
     /// Opens a new PTY pair and starts the Tokio IO task on the master side.
     ///
-    /// If `symlink` is `Some(path)`, a symlink is created at `path` pointing to
+    /// If `symlink_path` is `Some(path)`, a symlink is created at `path` pointing to
     /// the slave device node, giving external programs a predictable port name.
     /// The symlink is removed when the transport is shut down or dropped.
     pub fn open(symlink_path: Option<&Path>) -> std::io::Result<Self> {
@@ -64,9 +58,7 @@ impl PtyTransport {
         fcntl(raw, FcntlArg::F_SETFL(new_flags))
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
-        let (in_tx, in_rx) = bounded::<u8>(CHANNEL_CAPACITY);
-        let (out_tx, out_rx) = bounded::<u8>(CHANNEL_CAPACITY);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::new();
 
         // Convert the master OwnedFd into a tokio::fs::File for async IO.
         // SAFETY: we own master; forget prevents double-close.
@@ -78,14 +70,7 @@ impl PtyTransport {
 
         tokio::spawn(run_pty_task(reader, writer, in_tx, out_rx, shutdown_rx));
 
-        Ok(Self {
-            rx: in_rx,
-            tx: out_tx,
-            shutdown_tx: Some(shutdown_tx),
-            slave_path,
-            symlink_path,
-            connected: true,
-        })
+        Ok(Self { bridge, slave_path, symlink_path })
     }
 
     /// Returns the path of the slave PTY device (e.g. `/dev/pts/3`), if available.
@@ -95,43 +80,15 @@ impl PtyTransport {
 }
 
 impl Transport for PtyTransport {
-    fn try_recv(&mut self) -> Option<u8> {
-        match self.rx.try_recv() {
-            Ok(b) => Some(b),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.connected = false;
-                None
-            }
-        }
-    }
-
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        if !self.connected {
-            return Err(TransportError::Disconnected);
-        }
-        match self.tx.try_send(byte) {
-            Ok(()) => Ok(()),
-            Err(crossbeam_channel::TrySendError::Full(_)) => Err(TransportError::Full),
-            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
-                self.connected = false;
-                Err(TransportError::Disconnected)
-            }
-        }
-    }
-
-    fn is_connected(&self) -> bool {
-        self.connected
-    }
+    fn try_recv(&mut self) -> Option<u8> { self.bridge.try_recv() }
+    fn send(&mut self, byte: u8) -> Result<(), TransportError> { self.bridge.send(byte) }
+    fn is_connected(&self) -> bool { self.bridge.is_connected() }
 
     fn shutdown(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
+        self.bridge.shutdown();
         if let Some(ref link) = self.symlink_path.take() {
             let _ = std::fs::remove_file(link);
         }
-        self.connected = false;
     }
 }
 

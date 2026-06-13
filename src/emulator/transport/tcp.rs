@@ -1,24 +1,18 @@
 use std::net::SocketAddr;
 
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{Receiver, Sender};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
-use super::{Transport, TransportError};
-
-const CHANNEL_CAPACITY: usize = 256;
+use super::{ChannelBridge, Transport, TransportError};
 
 /// Transport over a TCP connection.
 ///
 /// A Tokio task owns the `TcpStream`; the sync side communicates via bounded
 /// `crossbeam` channels so the CPU thread never blocks on async IO.
 pub struct TcpTransport {
-    rx: Receiver<u8>,
-    tx: Sender<u8>,
-    /// Signals the Tokio task to shut down.
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    connected: bool,
+    bridge: ChannelBridge,
 }
 
 impl TcpTransport {
@@ -30,57 +24,17 @@ impl TcpTransport {
 
     /// Wraps an already-connected `TcpStream`.
     pub fn from_stream(stream: TcpStream) -> Self {
-        let (in_tx, in_rx) = bounded::<u8>(CHANNEL_CAPACITY);
-        let (out_tx, out_rx) = bounded::<u8>(CHANNEL_CAPACITY);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
+        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::new();
         tokio::spawn(run_tcp_task(stream, in_tx, out_rx, shutdown_rx));
-
-        Self {
-            rx: in_rx,
-            tx: out_tx,
-            shutdown_tx: Some(shutdown_tx),
-            connected: true,
-        }
+        Self { bridge }
     }
 }
 
 impl Transport for TcpTransport {
-    fn try_recv(&mut self) -> Option<u8> {
-        match self.rx.try_recv() {
-            Ok(b) => Some(b),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.connected = false;
-                None
-            }
-        }
-    }
-
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        if !self.connected {
-            return Err(TransportError::Disconnected);
-        }
-        match self.tx.try_send(byte) {
-            Ok(()) => Ok(()),
-            Err(crossbeam_channel::TrySendError::Full(_)) => Err(TransportError::Full),
-            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
-                self.connected = false;
-                Err(TransportError::Disconnected)
-            }
-        }
-    }
-
-    fn is_connected(&self) -> bool {
-        self.connected
-    }
-
-    fn shutdown(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        self.connected = false;
-    }
+    fn try_recv(&mut self) -> Option<u8> { self.bridge.try_recv() }
+    fn send(&mut self, byte: u8) -> Result<(), TransportError> { self.bridge.send(byte) }
+    fn is_connected(&self) -> bool { self.bridge.is_connected() }
+    fn shutdown(&mut self) { self.bridge.shutdown() }
 }
 
 #[cfg(test)]
@@ -121,7 +75,6 @@ mod tests {
 
         drop(client);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        // Server should observe None from a disconnected channel.
         assert_eq!(server.try_recv(), None);
     }
 }
@@ -166,6 +119,5 @@ async fn drain_outbound(
             return;
         }
     }
-    // Yield so tokio::select! can poll the other branches.
     tokio::task::yield_now().await;
 }
