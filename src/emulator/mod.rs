@@ -8,6 +8,8 @@ pub mod device;
 pub mod error;
 /// Execution model: clock speed, step results, and free-running run handle.
 pub mod exec;
+/// IRQ and NMI interrupt controller.
+pub mod interrupt;
 
 pub use bus::region::{AddressRange, BusOp};
 pub use bus::{Bus, BusConfig, RomWritePolicy, UnmappedPolicy};
@@ -18,3 +20,4 @@ pub use cpu::variant::{CpuVariant, InvalidOpcodePolicy};
 pub use device::{DeviceId, IoDevice};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
 pub use exec::{ClockSpeed, StepResult};
+pub use interrupt::{InterruptController, IrqSource};
