@@ -1,3 +1,5 @@
+/// Pure ALU functions consumed by the CPU instruction dispatcher.
+pub mod alu;
 /// 256-entry opcode decode table, mnemonics, and addressing modes.
 pub mod opcodes;
 /// Processor status register (P) as a bitflags newtype over `u8`.
