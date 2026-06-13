@@ -26,7 +26,23 @@ use crate::emulator::transport::{Transport, TransportError};
 /// - Bit 4: Receiver clock source — `0` = external (poll every tick), `1` = internal (baud rate)
 /// - Bits 3–0: Baud rate select when bit 4 = 1 (0x1=50 … 0xF=19200 baud)
 ///
-/// TX is immediate: bytes are sent to the transport on write; TDRE is always set.
+/// TX is immediate: bytes are sent to the transport on write.
+///
+/// # TDRE behaviour and the WDC 65C51 hardware bug
+///
+/// The real WDC 65C51 has a well-known silicon bug: TDRE is permanently stuck high and is
+/// never cleared after a TX write. Software targeting the real chip therefore cannot poll
+/// TDRE to detect transmit-ready; it must use fixed timing delays instead.
+///
+/// This emulation supports two modes, selectable at construction time:
+///
+/// - **Correct mode** (default): TDRE clears when a byte is written to the TX register and
+///   is restored after one byte-period worth of cycles (or on the next `tick()` call in
+///   external-clock mode). Use this for new software that does not rely on the hardware bug.
+/// - **Bug-compatible mode** ([`Acia6551::with_tdre_bug`]): TDRE is permanently set,
+///   matching real-hardware behaviour. Use this when running software written for the
+///   actual WDC 65C51 chip.
+///
 /// RX is timer-driven: `tick()` polls the transport once per byte period at the configured
 /// baud rate, or on every call when using the external clock (default).
 pub struct Acia6551 {
@@ -40,7 +56,7 @@ pub struct Acia6551 {
     rx_data: u8,
     /// Receive Data Register Full — set when a byte has been received and not yet read.
     rdrf: bool,
-    /// Transmit Data Register Empty — always true since TX is immediate.
+    /// Transmit Data Register Empty — clears on TX write in correct mode; always set in bug-compatible mode.
     tdre: bool,
     /// Overrun error — set when a new byte arrives while RDRF is already set.
     overrun: bool,
@@ -52,10 +68,14 @@ pub struct Acia6551 {
     cycle_accum: u32,
     /// Cycles between transport polls; 0 = poll every tick (external clock mode).
     cycles_per_byte: u32,
+    /// When true, emulates the WDC 65C51 hardware bug: TDRE is permanently set.
+    tdre_bug_compatible: bool,
+    /// Remaining cycles before TDRE is restored after a TX write (correct mode only).
+    tx_cycles_remaining: u32,
 }
 
 impl Acia6551 {
-    /// Creates a new `Acia6551` with no transport, external clock mode, and TDRE set.
+    /// Creates a new `Acia6551` in correct (non-bug-compatible) mode with TDRE set.
     pub fn new() -> Self {
         Self {
             transport: None,
@@ -69,7 +89,19 @@ impl Acia6551 {
             control: 0,
             cycle_accum: 0,
             cycles_per_byte: 0,
+            tdre_bug_compatible: false,
+            tx_cycles_remaining: 0,
         }
+    }
+
+    /// Enables WDC 65C51 bug-compatible mode: TDRE is permanently set and never cleared
+    /// after a TX write, matching the behaviour of the real hardware.
+    ///
+    /// Use this when running software written for the actual WDC 65C51 chip that relies
+    /// on timing delays rather than polling TDRE.
+    pub fn with_tdre_bug(mut self) -> Self {
+        self.tdre_bug_compatible = true;
+        self
     }
 
     /// Attaches a transport for byte-stream IO.
@@ -172,14 +204,25 @@ impl IoDevice for Acia6551 {
 
     /// Writes the register at `offset`.
     ///
-    /// Writing offset 0 sends a byte to the transport. Writing offset 1 is a programmed
-    /// reset that clears the overrun flag. Offsets 2 and 3 update command and control.
+    /// Writing offset 0 sends a byte to the transport. In correct mode, TDRE is cleared
+    /// until the byte period elapses. In bug-compatible mode, TDRE remains permanently set.
+    /// Writing offset 1 is a programmed reset that clears the overrun flag. Offsets 2 and 3
+    /// update command and control.
     fn write(&mut self, offset: u16, value: u8) {
         match offset {
             0 => {
                 if let Some(transport) = self.transport.as_mut()
                     && let Err(e) = transport.send(value) {
                     self.report_error(e);
+                }
+                if !self.tdre_bug_compatible {
+                    self.tdre = false;
+                    // Restore TDRE after one byte period (or on next tick if external clock).
+                    self.tx_cycles_remaining = if self.cycles_per_byte > 0 {
+                        self.cycles_per_byte
+                    } else {
+                        1
+                    };
                 }
             }
             1 => {
@@ -209,8 +252,18 @@ impl IoDevice for Acia6551 {
         }
     }
 
-    /// Advances baud rate timing and polls the transport for incoming bytes.
+    /// Advances baud rate timing, polls the transport for incoming bytes, and restores
+    /// TDRE after the TX byte period elapses (correct mode only).
     fn tick(&mut self, cycles: u32) {
+        if !self.tdre && !self.tdre_bug_compatible {
+            if cycles >= self.tx_cycles_remaining {
+                self.tx_cycles_remaining = 0;
+                self.tdre = true;
+            } else {
+                self.tx_cycles_remaining -= cycles;
+            }
+        }
+
         if self.cycles_per_byte == 0 {
             self.poll_transport();
         } else {
@@ -387,6 +440,47 @@ mod tests {
         let mut device = Acia6551::new();
         device.write(2, 0x00); // TIC=00: TX IRQ disabled
         assert!(!device.irq_active());
+    }
+
+    // --- TDRE behaviour ---
+
+    #[test]
+    fn tdre_clears_on_tx_write_in_correct_mode() {
+        let (mut device, _remote) = device_with_pipe();
+        assert_ne!(device.peek(1) & 0x10, 0); // TDRE set before write
+        device.write(0, 0x41);
+        assert_eq!(device.peek(1) & 0x10, 0); // TDRE cleared after TX write
+    }
+
+    #[test]
+    fn tdre_restores_after_tick_in_correct_mode() {
+        let (mut device, _remote) = device_with_pipe();
+        device.write(0, 0x41); // clears TDRE; external clock sets tx_cycles_remaining = 1
+        device.tick(1);
+        assert_ne!(device.peek(1) & 0x10, 0); // TDRE restored
+    }
+
+    #[test]
+    fn tdre_always_set_in_bug_compatible_mode() {
+        let (local, _remote) = PipeTransport::pair().unwrap();
+        let mut device = Acia6551::new().with_tdre_bug();
+        device.attach_transport(Box::new(local));
+        device.write(0, 0x41); // TX write — should NOT clear TDRE
+        assert_ne!(device.peek(1) & 0x10, 0);
+        device.tick(1000); // many ticks — TDRE must stay set
+        assert_ne!(device.peek(1) & 0x10, 0);
+    }
+
+    #[test]
+    fn tdre_restores_after_baud_rate_period_in_correct_mode() {
+        let (mut device, _remote) = device_with_pipe();
+        device.write(3, 0x1F); // 19200 baud, internal clock → 520 cycles/byte
+        device.write(0, 0x41);
+        assert_eq!(device.peek(1) & 0x10, 0); // TDRE cleared
+        device.tick(519);
+        assert_eq!(device.peek(1) & 0x10, 0); // still not restored
+        device.tick(1);
+        assert_ne!(device.peek(1) & 0x10, 0); // TDRE restored after full period
     }
 
     // --- Peek ---
