@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
+use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
@@ -17,7 +18,10 @@ const CHANNEL_CAPACITY: usize = 256;
 ///
 /// Opens a PTY pair on construction. A Tokio task owns the master side fd;
 /// the sync side communicates via bounded `crossbeam` channels. The slave
-/// device path is available for external processes to connect to.
+/// device path is available for external processes to connect to. An optional
+/// stable symlink may be created at a caller-supplied path so that external
+/// programs (e.g. terminal emulators) can find the port by a predictable name;
+/// the symlink is removed automatically when the transport is shut down or dropped.
 pub struct PtyTransport {
     rx: Receiver<u8>,
     tx: Sender<u8>,
@@ -25,18 +29,31 @@ pub struct PtyTransport {
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Path to the slave side of the PTY (e.g. `/dev/pts/N`).
     slave_path: Option<String>,
+    /// Optional stable symlink pointing to the slave device node.
+    symlink_path: Option<PathBuf>,
     connected: bool,
 }
 
 impl PtyTransport {
     /// Opens a new PTY pair and starts the Tokio IO task on the master side.
-    pub fn open() -> std::io::Result<Self> {
+    ///
+    /// If `symlink` is `Some(path)`, a symlink is created at `path` pointing to
+    /// the slave device node, giving external programs a predictable port name.
+    /// The symlink is removed when the transport is shut down or dropped.
+    pub fn open(symlink_path: Option<&Path>) -> std::io::Result<Self> {
         let OpenptyResult { master, slave } = openpty(None, None)
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
         // SAFETY: slave is valid for the duration of this call.
         let slave_path = unsafe {
             tty_name(BorrowedFd::borrow_raw(slave.as_raw_fd()))
+        };
+
+        let symlink_path = if let (Some(link), Some(target)) = (symlink_path, &slave_path) {
+            std::os::unix::fs::symlink(target, link)?;
+            Some(link.to_path_buf())
+        } else {
+            None
         };
 
         // Set master non-blocking so tokio can drive it without blocking the thread.
@@ -66,6 +83,7 @@ impl PtyTransport {
             tx: out_tx,
             shutdown_tx: Some(shutdown_tx),
             slave_path,
+            symlink_path,
             connected: true,
         })
     }
@@ -110,7 +128,18 @@ impl Transport for PtyTransport {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
+        if let Some(ref link) = self.symlink_path.take() {
+            let _ = std::fs::remove_file(link);
+        }
         self.connected = false;
+    }
+}
+
+impl Drop for PtyTransport {
+    fn drop(&mut self) {
+        if let Some(ref link) = self.symlink_path {
+            let _ = std::fs::remove_file(link);
+        }
     }
 }
 
@@ -160,7 +189,7 @@ mod tests {
 
     #[tokio::test]
     async fn open_send_recv() {
-        let mut transport = PtyTransport::open().unwrap();
+        let mut transport = PtyTransport::open(None).unwrap();
         assert!(transport.is_connected());
         assert!(transport.slave_path().is_some());
 
@@ -179,9 +208,21 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_marks_disconnected() {
-        let mut transport = PtyTransport::open().unwrap();
+        let mut transport = PtyTransport::open(None).unwrap();
         transport.shutdown();
         assert!(!transport.is_connected());
+    }
+
+    #[tokio::test]
+    async fn open_with_symlink_creates_and_removes_link() {
+        let link_path = PathBuf::from("/tmp/emma65_test_pty_link");
+        let _ = std::fs::remove_file(&link_path);
+
+        let transport = PtyTransport::open(Some(&link_path)).unwrap();
+        assert!(link_path.exists(), "symlink should exist after open");
+
+        drop(transport);
+        assert!(!link_path.exists(), "symlink should be removed after drop");
     }
 }
 
