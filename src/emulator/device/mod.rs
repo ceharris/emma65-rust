@@ -1,3 +1,7 @@
+pub mod console;
+
+pub use self::console::Console;
+
 use tokio::sync::mpsc;
 
 /// Uniquely identifies a device registered on the bus.

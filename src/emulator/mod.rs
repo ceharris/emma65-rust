@@ -23,6 +23,7 @@ pub use cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
 pub use cpu::status::StatusRegister;
 pub use cpu::variant::{CpuVariant, InvalidOpcodePolicy};
 pub use device::{DeviceId, DeviceEvent, ErrorSender, ErrorReceiver, IoDevice, device_event_channel};
+pub use device::Console;
 pub use disasm::{Disassembler, DisassembledLine};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
 pub use exec::{ClockSpeed, StepResult};
