@@ -1795,6 +1795,125 @@ mod tests {
         assert!(!cpu.is_waiting());
     }
 
+    // --- CpuWatchContext reads ---
+
+    // Compiles `expr` as a single watchpoint, steps once (NOP at $0200), and
+    // returns the StepResult. The watch fires before instruction execution, so
+    // the instruction at $0200 is never fetched.
+    fn watch_step(cpu: &mut Cpu, expr: &str) -> StepResult {
+        let mut compiler = make_compiler();
+        let wp = compiler.compile(expr, cpu.evaluator_mut()).unwrap();
+        cpu.evaluator_mut().add(wp);
+        cpu.step()
+    }
+
+    #[test]
+    fn watch_context_reads_register_a() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.registers_mut().a = 0x42;
+        assert!(matches!(watch_step(&mut cpu, "A == $42"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_register_x() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.registers_mut().x = 0x05;
+        assert!(matches!(watch_step(&mut cpu, "X == 5"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_register_y() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.registers_mut().y = 0x10;
+        assert!(matches!(watch_step(&mut cpu, "Y == $10"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_register_p() {
+        // After reset: P = UNUSED | I = 0x24.
+        let mut cpu = make_cpu(0x0200);
+        assert!(matches!(watch_step(&mut cpu, "P == $24"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_register_s() {
+        // After reset: S = 0xFF.
+        let mut cpu = make_cpu(0x0200);
+        assert!(matches!(watch_step(&mut cpu, "S == $FF"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_register_pc() {
+        let mut cpu = make_cpu(0x0200);
+        assert!(matches!(watch_step(&mut cpu, "PC == $200"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_register_a_signed() {
+        // A = 0x80 → signed read gives -128 → as u32 = 0xFFFFFF80.
+        let mut cpu = make_cpu(0x0200);
+        cpu.registers_mut().a = 0x80;
+        assert!(matches!(watch_step(&mut cpu, "+A == $FFFFFF80"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_flag() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.registers_mut().p.insert(StatusRegister::C);
+        assert!(matches!(watch_step(&mut cpu, "`C == 1"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_mem_byte() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus_mut().write(0x0050, 0xAA).unwrap();
+        assert!(matches!(watch_step(&mut cpu, "B[$50] == $AA"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_mem_byte_signed() {
+        // 0xAA as i8 = -86; sign-extended to u32 = 0xFFFFFFAA.
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus_mut().write(0x0050, 0xAA).unwrap();
+        assert!(matches!(watch_step(&mut cpu, "+b[$50] == $FFFFFFAA"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_mem_word() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus_mut().write(0x0050, 0x55).unwrap();
+        cpu.bus_mut().write(0x0051, 0xAA).unwrap();
+        assert!(matches!(watch_step(&mut cpu, "W[$50] == $AA55"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_mem_word_wraps() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus_mut().write(0xFFFF, 0x55).unwrap();
+        cpu.bus_mut().write(0x0000, 0xAA).unwrap();
+        assert!(matches!(watch_step(&mut cpu, "W[$FFFF] == $AA55"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_mem_dword() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus_mut().write(0x0050, 0x55).unwrap();
+        cpu.bus_mut().write(0x0051, 0xAA).unwrap();
+        cpu.bus_mut().write(0x0052, 0x55).unwrap();
+        cpu.bus_mut().write(0x0053, 0xAA).unwrap();
+        assert!(matches!(watch_step(&mut cpu, "D[$50] == $AA55AA55"), StepResult::WatchTriggered { .. }));
+    }
+
+    #[test]
+    fn watch_context_reads_mem_dword_wraps() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus_mut().write(0xFFFE, 0x55).unwrap();
+        cpu.bus_mut().write(0xFFFF, 0xAA).unwrap();
+        cpu.bus_mut().write(0x0000, 0x55).unwrap();
+        cpu.bus_mut().write(0x0001, 0xAA).unwrap();
+        assert!(matches!(watch_step(&mut cpu, "D[$FFFE] == $AA55AA55"), StepResult::WatchTriggered { .. }));
+    }
+
     // --- STP ---
 
     #[test]
