@@ -202,6 +202,7 @@ impl Cpu {
             // Fall through to service the interrupt below.
         }
 
+        self.bus.advance_trace_timestamp();
         let pc = self.regs.pc;
 
         // Step 3: breakpoint check — before instruction execution.
