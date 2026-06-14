@@ -76,6 +76,8 @@ pub struct Acia6551 {
     clock_hz: u64,
 }
 
+const ASSUMED_CLOCK_SPEED: u64 = 1_000_000;
+
 impl Acia6551 {
     /// Creates a new `Acia6551` in correct (non-bug-compatible) mode with TDRE set.
     ///
@@ -96,7 +98,7 @@ impl Acia6551 {
             cycles_per_byte: 0,
             tdre_bug_compatible: false,
             tx_cycles_remaining: 0,
-            clock_hz: 1_000_000,
+            clock_hz: ASSUMED_CLOCK_SPEED,
         }
     }
 
