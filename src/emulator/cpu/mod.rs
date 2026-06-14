@@ -1548,8 +1548,8 @@ mod tests {
     #[test]
     fn invalid_opcode_nop_policy_advances_pc() {
         let mut cpu = make_cpu(0x0200);
-        // $02 is an illegal opcode (byte_len=1 in the ILL entry)
-        write_program(&mut cpu, 0x0200, &[0x02]);
+        // $CB is WAI — valid only on WDC; invalid (1 byte) on Cmos65C02
+        write_program(&mut cpu, 0x0200, &[0xCB]);
         cpu.step();
         assert_eq!(cpu.regs.pc, 0x0201);
     }
@@ -1562,7 +1562,7 @@ mod tests {
             .build();
         bus.write(RESET_VECTOR, 0x00).unwrap();
         bus.write(RESET_VECTOR + 1, 0x02).unwrap();
-        bus.write(0x0200, 0x02).unwrap(); // illegal opcode
+        bus.write(0x0200, 0xCB).unwrap(); // WAI — invalid on Cmos65C02 variant
         let mut cpu = Cpu::builder(CpuVariant::Cmos65C02)
             .invalid_opcode_policy(InvalidOpcodePolicy::Error)
             .bus(bus)

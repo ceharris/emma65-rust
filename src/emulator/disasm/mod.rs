@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn invalid_opcode_marked_not_valid() {
-        let bus = make_bus(0x0200, &[0x02]); // illegal under CMOS
+        let bus = make_bus(0x0200, &[0xCB]); // WAI — invalid on Cmos65C02
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert!(!line.is_valid);
     }
