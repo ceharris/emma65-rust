@@ -72,24 +72,26 @@ pub fn sbc_binary(a: u8, operand: u8, status: StatusRegister) -> AluResult {
     adc_binary(a, !operand, status)
 }
 
-/// SBC in BCD (decimal) mode.
+/// SBC in BCD (decimal) mode for the CMOS 65C02.
+///
+/// Computes binary subtraction then applies conditional nibble corrections:
+/// −6 for low-nibble borrow, −$60 for full-byte borrow.
 pub fn sbc_bcd(a: u8, operand: u8, status: StatusRegister) -> AluResult {
     let borrow_in = !status.contains(StatusRegister::C) as u8;
-
-    let mut lo = (a as i16 & 0x0F) - (operand as i16 & 0x0F) - borrow_in as i16;
-    let lo_borrow = if lo < 0 { lo += 10; 1i16 } else { 0i16 };
-
-    let mut hi = (a as i16 >> 4) - (operand as i16 >> 4) - lo_borrow;
-    // V reflects binary subtraction overflow (65C02 behavior).
     let bin_result = a.wrapping_sub(operand).wrapping_sub(borrow_in);
     let overflow = ((a ^ operand) & (a ^ bin_result) & 0x80) != 0;
 
-    let borrow_out = hi < 0;
-    if borrow_out { hi += 10; }
+    let mut result = bin_result;
+    if (a & 0x0F) < (operand & 0x0F) + borrow_in {
+        result = result.wrapping_sub(6);
+    }
+    let full_borrow = (a as u16) < (operand as u16) + (borrow_in as u16);
+    if full_borrow {
+        result = result.wrapping_sub(0x60);
+    }
 
-    let result = ((hi as u8 & 0x0F) << 4) | (lo as u8 & 0x0F);
     let mut s = set_nz(status, result);
-    s.set(StatusRegister::C, !borrow_out);
+    s.set(StatusRegister::C, !full_borrow);
     s.set(StatusRegister::V, overflow);
     AluResult { value: result, status: s }
 }
