@@ -228,20 +228,11 @@ pub fn trb(a: u8, mem: u8, status: StatusRegister) -> AluResult {
 mod tests {
     use super::*;
 
-    fn s(byte: u8) -> StatusRegister {
-        StatusRegister::from_byte(byte)
-    }
-
-    const N: u8 = 0x80;
-    const V: u8 = 0x40;
-    const Z: u8 = 0x02;
-    const C: u8 = 0x01;
-
     // --- ADC binary ---
 
     #[test]
     fn adc_binary_no_carry() {
-        let r = adc_binary(0x10, 0x20, s(0));
+        let r = adc_binary(0x10, 0x20, StatusRegister::empty());
         assert_eq!(r.value, 0x30);
         assert!(!r.status.contains(StatusRegister::C));
         assert!(!r.status.contains(StatusRegister::Z));
@@ -251,13 +242,13 @@ mod tests {
 
     #[test]
     fn adc_binary_carry_in() {
-        let r = adc_binary(0x10, 0x20, s(C));
+        let r = adc_binary(0x10, 0x20, StatusRegister::C);
         assert_eq!(r.value, 0x31);
     }
 
     #[test]
     fn adc_binary_carry_out() {
-        let r = adc_binary(0xFF, 0x01, s(0));
+        let r = adc_binary(0xFF, 0x01, StatusRegister::empty());
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::C));
         assert!(r.status.contains(StatusRegister::Z));
@@ -266,7 +257,7 @@ mod tests {
     #[test]
     fn adc_binary_overflow_positive() {
         // 0x50 + 0x50 = 0xA0 — two positives yield a negative: overflow
-        let r = adc_binary(0x50, 0x50, s(0));
+        let r = adc_binary(0x50, 0x50, StatusRegister::empty());
         assert_eq!(r.value, 0xA0);
         assert!(r.status.contains(StatusRegister::V));
         assert!(r.status.contains(StatusRegister::N));
@@ -275,7 +266,7 @@ mod tests {
     #[test]
     fn adc_binary_overflow_negative() {
         // 0xD0 + 0x90 = 0x60 — two negatives yield a positive: overflow
-        let r = adc_binary(0xD0, 0x90, s(0));
+        let r = adc_binary(0xD0, 0x90, StatusRegister::empty());
         assert_eq!(r.value, 0x60);
         assert!(r.status.contains(StatusRegister::V));
         assert!(r.status.contains(StatusRegister::C));
@@ -283,13 +274,13 @@ mod tests {
 
     #[test]
     fn adc_binary_no_overflow_mixed_signs() {
-        let r = adc_binary(0x50, 0xD0, s(0));
+        let r = adc_binary(0x50, 0xD0, StatusRegister::empty());
         assert!(!r.status.contains(StatusRegister::V));
     }
 
     #[test]
     fn adc_binary_zero_flag() {
-        let r = adc_binary(0x80, 0x80, s(0));
+        let r = adc_binary(0x80, 0x80, StatusRegister::empty());
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::Z));
         assert!(r.status.contains(StatusRegister::C));
@@ -300,7 +291,7 @@ mod tests {
     #[test]
     fn sbc_binary_no_borrow() {
         // C=1 means no borrow
-        let r = sbc_binary(0x50, 0x10, s(C));
+        let r = sbc_binary(0x50, 0x10, StatusRegister::C);
         assert_eq!(r.value, 0x40);
         assert!(r.status.contains(StatusRegister::C));
         assert!(!r.status.contains(StatusRegister::V));
@@ -309,7 +300,7 @@ mod tests {
     #[test]
     fn sbc_binary_borrow_out() {
         // C=1 (no borrow in), 0x10 - 0x20 borrows
-        let r = sbc_binary(0x10, 0x20, s(C));
+        let r = sbc_binary(0x10, 0x20, StatusRegister::C);
         assert_eq!(r.value, 0xF0);
         assert!(!r.status.contains(StatusRegister::C)); // borrow out
         assert!(r.status.contains(StatusRegister::N));
@@ -318,7 +309,7 @@ mod tests {
     #[test]
     fn sbc_binary_overflow_positive_minus_negative() {
         // 0x50 - 0xB0 = 0xA0: positive - negative = negative → overflow
-        let r = sbc_binary(0x50, 0xB0, s(C));
+        let r = sbc_binary(0x50, 0xB0, StatusRegister::C);
         assert_eq!(r.value, 0xA0);
         assert!(r.status.contains(StatusRegister::V));
     }
@@ -326,14 +317,14 @@ mod tests {
     #[test]
     fn sbc_binary_overflow_negative_minus_positive() {
         // 0xD0 - 0x70 = 0x60: negative - positive = positive → overflow
-        let r = sbc_binary(0xD0, 0x70, s(C));
+        let r = sbc_binary(0xD0, 0x70, StatusRegister::C);
         assert_eq!(r.value, 0x60);
         assert!(r.status.contains(StatusRegister::V));
     }
 
     #[test]
     fn sbc_binary_zero_result() {
-        let r = sbc_binary(0x42, 0x42, s(C));
+        let r = sbc_binary(0x42, 0x42, StatusRegister::C);
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::Z));
         assert!(r.status.contains(StatusRegister::C));
@@ -343,14 +334,14 @@ mod tests {
 
     #[test]
     fn adc_bcd_simple() {
-        let r = adc_bcd(0x15, 0x27, s(0));
+        let r = adc_bcd(0x15, 0x27, StatusRegister::empty());
         assert_eq!(r.value, 0x42);
         assert!(!r.status.contains(StatusRegister::C));
     }
 
     #[test]
     fn adc_bcd_carry_out() {
-        let r = adc_bcd(0x99, 0x01, s(0));
+        let r = adc_bcd(0x99, 0x01, StatusRegister::empty());
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::C));
         assert!(r.status.contains(StatusRegister::Z));
@@ -359,14 +350,14 @@ mod tests {
     #[test]
     fn adc_bcd_low_nibble_carry() {
         // 0x09 + 0x01 = 0x10 in BCD
-        let r = adc_bcd(0x09, 0x01, s(0));
+        let r = adc_bcd(0x09, 0x01, StatusRegister::empty());
         assert_eq!(r.value, 0x10);
         assert!(!r.status.contains(StatusRegister::C));
     }
 
     #[test]
     fn adc_bcd_with_carry_in() {
-        let r = adc_bcd(0x58, 0x46, s(C));
+        let r = adc_bcd(0x58, 0x46, StatusRegister::C);
         assert_eq!(r.value, 0x05);
         assert!(r.status.contains(StatusRegister::C));
     }
@@ -375,21 +366,21 @@ mod tests {
 
     #[test]
     fn sbc_bcd_simple() {
-        let r = sbc_bcd(0x46, 0x12, s(C));
+        let r = sbc_bcd(0x46, 0x12, StatusRegister::C);
         assert_eq!(r.value, 0x34);
         assert!(r.status.contains(StatusRegister::C));
     }
 
     #[test]
     fn sbc_bcd_borrow_out() {
-        let r = sbc_bcd(0x00, 0x01, s(C));
+        let r = sbc_bcd(0x00, 0x01, StatusRegister::C);
         assert_eq!(r.value, 0x99);
         assert!(!r.status.contains(StatusRegister::C));
     }
 
     #[test]
     fn sbc_bcd_zero_result() {
-        let r = sbc_bcd(0x42, 0x42, s(C));
+        let r = sbc_bcd(0x42, 0x42, StatusRegister::C);
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::Z));
         assert!(r.status.contains(StatusRegister::C));
@@ -399,7 +390,7 @@ mod tests {
 
     #[test]
     fn and_clears_bits() {
-        let r = and(0xFF, 0x0F, s(0));
+        let r = and(0xFF, 0x0F, StatusRegister::empty());
         assert_eq!(r.value, 0x0F);
         assert!(!r.status.contains(StatusRegister::N));
         assert!(!r.status.contains(StatusRegister::Z));
@@ -407,21 +398,21 @@ mod tests {
 
     #[test]
     fn and_zero_result() {
-        let r = and(0xF0, 0x0F, s(0));
+        let r = and(0xF0, 0x0F, StatusRegister::empty());
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::Z));
     }
 
     #[test]
     fn ora_sets_bits() {
-        let r = ora(0x0F, 0xF0, s(0));
+        let r = ora(0x0F, 0xF0, StatusRegister::empty());
         assert_eq!(r.value, 0xFF);
         assert!(r.status.contains(StatusRegister::N));
     }
 
     #[test]
     fn eor_toggles_bits() {
-        let r = eor(0xFF, 0x0F, s(0));
+        let r = eor(0xFF, 0x0F, StatusRegister::empty());
         assert_eq!(r.value, 0xF0);
         assert!(r.status.contains(StatusRegister::N));
     }
@@ -430,7 +421,7 @@ mod tests {
 
     #[test]
     fn asl_shifts_and_carries() {
-        let r = asl(0x81, s(0));
+        let r = asl(0x81, StatusRegister::empty());
         assert_eq!(r.value, 0x02);
         assert!(r.status.contains(StatusRegister::C));
         assert!(!r.status.contains(StatusRegister::N));
@@ -438,7 +429,7 @@ mod tests {
 
     #[test]
     fn asl_zero_result() {
-        let r = asl(0x80, s(0));
+        let r = asl(0x80, StatusRegister::empty());
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::C));
         assert!(r.status.contains(StatusRegister::Z));
@@ -446,7 +437,7 @@ mod tests {
 
     #[test]
     fn lsr_shifts_and_carries() {
-        let r = lsr(0x03, s(0));
+        let r = lsr(0x03, StatusRegister::empty());
         assert_eq!(r.value, 0x01);
         assert!(r.status.contains(StatusRegister::C));
         assert!(!r.status.contains(StatusRegister::N));
@@ -454,7 +445,7 @@ mod tests {
 
     #[test]
     fn lsr_clears_n_flag() {
-        let r = lsr(0x80, s(0));
+        let r = lsr(0x80, StatusRegister::empty());
         assert_eq!(r.value, 0x40);
         assert!(!r.status.contains(StatusRegister::N));
         assert!(!r.status.contains(StatusRegister::C));
@@ -462,14 +453,14 @@ mod tests {
 
     #[test]
     fn rol_rotates_carry_in() {
-        let r = rol(0x80, s(C));
+        let r = rol(0x80, StatusRegister::C);
         assert_eq!(r.value, 0x01);
         assert!(r.status.contains(StatusRegister::C));
     }
 
     #[test]
     fn rol_no_carry_in() {
-        let r = rol(0x40, s(0));
+        let r = rol(0x40, StatusRegister::empty());
         assert_eq!(r.value, 0x80);
         assert!(!r.status.contains(StatusRegister::C));
         assert!(r.status.contains(StatusRegister::N));
@@ -477,7 +468,7 @@ mod tests {
 
     #[test]
     fn ror_rotates_carry_in() {
-        let r = ror(0x01, s(C));
+        let r = ror(0x01, StatusRegister::C);
         assert_eq!(r.value, 0x80);
         assert!(r.status.contains(StatusRegister::C));
         assert!(r.status.contains(StatusRegister::N));
@@ -485,7 +476,7 @@ mod tests {
 
     #[test]
     fn ror_no_carry_in() {
-        let r = ror(0x02, s(0));
+        let r = ror(0x02, StatusRegister::empty());
         assert_eq!(r.value, 0x01);
         assert!(!r.status.contains(StatusRegister::C));
     }
@@ -494,28 +485,28 @@ mod tests {
 
     #[test]
     fn inc_wraps() {
-        let r = inc(0xFF, s(0));
+        let r = inc(0xFF, StatusRegister::empty());
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::Z));
     }
 
     #[test]
     fn inc_sets_n() {
-        let r = inc(0x7F, s(0));
+        let r = inc(0x7F, StatusRegister::empty());
         assert_eq!(r.value, 0x80);
         assert!(r.status.contains(StatusRegister::N));
     }
 
     #[test]
     fn dec_wraps() {
-        let r = dec(0x00, s(0));
+        let r = dec(0x00, StatusRegister::empty());
         assert_eq!(r.value, 0xFF);
         assert!(r.status.contains(StatusRegister::N));
     }
 
     #[test]
     fn dec_sets_z() {
-        let r = dec(0x01, s(0));
+        let r = dec(0x01, StatusRegister::empty());
         assert_eq!(r.value, 0x00);
         assert!(r.status.contains(StatusRegister::Z));
     }
@@ -524,7 +515,7 @@ mod tests {
 
     #[test]
     fn compare_equal() {
-        let s = compare(0x42, 0x42, s(0));
+        let s = compare(0x42, 0x42, StatusRegister::empty());
         assert!(s.contains(StatusRegister::Z));
         assert!(s.contains(StatusRegister::C));
         assert!(!s.contains(StatusRegister::N));
@@ -532,7 +523,7 @@ mod tests {
 
     #[test]
     fn compare_greater() {
-        let s = compare(0x50, 0x10, s(0));
+        let s = compare(0x50, 0x10, StatusRegister::empty());
         assert!(!s.contains(StatusRegister::Z));
         assert!(s.contains(StatusRegister::C));
         assert!(!s.contains(StatusRegister::N));
@@ -540,7 +531,7 @@ mod tests {
 
     #[test]
     fn compare_less() {
-        let s = compare(0x10, 0x50, s(0));
+        let s = compare(0x10, 0x50, StatusRegister::empty());
         assert!(!s.contains(StatusRegister::Z));
         assert!(!s.contains(StatusRegister::C));
         assert!(s.contains(StatusRegister::N));
@@ -549,7 +540,7 @@ mod tests {
     #[test]
     fn compare_negative_flag_from_difference() {
         // 0x01 - 0x02 = 0xFF → N set, C clear
-        let s = compare(0x01, 0x02, s(0));
+        let s = compare(0x01, 0x02, StatusRegister::empty());
         assert!(s.contains(StatusRegister::N));
         assert!(!s.contains(StatusRegister::C));
     }
@@ -559,7 +550,7 @@ mod tests {
     #[test]
     fn bit_mem_zero_flag() {
         // 0x0F & 0x80 == 0 → Z; mem bit 7 set → N; mem bit 6 clear → no V
-        let s = bit_mem(0x0F, 0x80, s(0));
+        let s = bit_mem(0x0F, 0x80, StatusRegister::empty());
         assert!(s.contains(StatusRegister::Z));
         assert!(s.contains(StatusRegister::N));
         assert!(!s.contains(StatusRegister::V));
@@ -567,7 +558,7 @@ mod tests {
 
     #[test]
     fn bit_mem_nv_from_memory() {
-        let s = bit_mem(0xFF, 0xC0, s(0));
+        let s = bit_mem(0xFF, 0xC0, StatusRegister::empty());
         assert!(!s.contains(StatusRegister::Z));
         assert!(s.contains(StatusRegister::N));
         assert!(s.contains(StatusRegister::V));
@@ -576,7 +567,7 @@ mod tests {
     #[test]
     fn bit_imm_only_z() {
         // BIT immediate: N and V must not change
-        let initial = s(N | V);
+        let initial = StatusRegister::N | StatusRegister::V;
         let result = bit_imm(0x0F, 0xF0, initial);
         assert!(result.contains(StatusRegister::Z));
         assert!(result.contains(StatusRegister::N)); // unchanged
@@ -585,7 +576,7 @@ mod tests {
 
     #[test]
     fn bit_imm_no_match_clears_z() {
-        let result = bit_imm(0xFF, 0xFF, s(0));
+        let result = bit_imm(0xFF, 0xFF, StatusRegister::empty());
         assert!(!result.contains(StatusRegister::Z));
     }
 
@@ -593,14 +584,14 @@ mod tests {
 
     #[test]
     fn tsb_sets_bits_and_z_flag() {
-        let r = tsb(0x0F, 0xF0, s(0));
+        let r = tsb(0x0F, 0xF0, StatusRegister::empty());
         assert_eq!(r.value, 0xFF);
         assert!(r.status.contains(StatusRegister::Z)); // (A & mem) == 0x00
     }
 
     #[test]
     fn tsb_clears_z_when_overlap() {
-        let r = tsb(0x0F, 0x0F, s(0));
+        let r = tsb(0x0F, 0x0F, StatusRegister::empty());
         assert_eq!(r.value, 0x0F);
         assert!(!r.status.contains(StatusRegister::Z));
     }
@@ -608,14 +599,14 @@ mod tests {
     #[test]
     fn trb_clears_bits_and_z_clear_when_overlap() {
         // (A & mem) = 0x0F & 0xFF = 0x0F ≠ 0 → Z clear
-        let r = trb(0x0F, 0xFF, s(0));
+        let r = trb(0x0F, 0xFF, StatusRegister::empty());
         assert_eq!(r.value, 0xF0);
         assert!(!r.status.contains(StatusRegister::Z));
     }
 
     #[test]
     fn trb_z_set_when_no_overlap() {
-        let r = trb(0xF0, 0x0F, s(0));
+        let r = trb(0xF0, 0x0F, StatusRegister::empty());
         assert_eq!(r.value, 0x0F);
         assert!(r.status.contains(StatusRegister::Z));
     }
