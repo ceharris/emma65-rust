@@ -2,33 +2,17 @@ use emma65::emulator::{
     AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, InvalidOpcodePolicy, StepResult,
 };
 
-/// Load address for the flat 64 KB image.
-const LOAD_ADDR: u16 = 0x0000;
-
-/// Entry point: first instruction of the test suite.
-const START_ADDR: u16 = 0x0400;
-
-/// PC value of the success infinite loop (`JMP $24F1`).
-const SUCCESS_PC: u16 = 0x24F1;
-
-/// Maximum steps before declaring the test hung (well above any reasonable run count).
+/// Maximum steps before declaring a test hung (well above any reasonable run count).
 const MAX_STEPS: u64 = 500_000_000;
 
-/// Path to the Klaus Dormann 65C02 extended opcodes functional test ROM.
-const ROM_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/roms/65C02_extended_opcodes_test.bin"
-);
-
-/// Loads the Klaus Dormann 65C02 functional test ROM, runs it to completion, and
-/// asserts that execution reaches the success infinite loop at `SUCCESS_PC`.
+/// Loads a flat 64 KB ROM image into a `Wdc65C02` CPU with full 64 KB writable RAM,
+/// sets PC to `start`, and steps until `success_pc` is reached.
 ///
-/// On failure the test traps in a `JMP *` at the address of the failing test, so a
-/// non-success PC in the assertion output directly identifies which test failed.
-#[test]
-fn klaus_dormann_65c02_functional_test() {
-    let image = std::fs::read(ROM_PATH)
-        .expect("failed to read Klaus Dormann ROM — ensure tests/roms/65C02_extended_opcodes_test.bin is present");
+/// On failure the Klaus Dormann tests trap in a `JMP *` at the failing test's address,
+/// so a non-success PC in the panic message directly identifies which test failed.
+fn run_functional_test(rom_path: &str, start: u16, success_pc: u16) {
+    let image = std::fs::read(rom_path)
+        .unwrap_or_else(|_| panic!("failed to read ROM image — ensure {rom_path} is present"));
 
     assert_eq!(
         image.len(),
@@ -38,7 +22,7 @@ fn klaus_dormann_65c02_functional_test() {
     );
 
     let bus = Bus::config()
-        .ram_with_data(AddressRange::new(LOAD_ADDR, 0xFFFF), image)
+        .ram_with_data(AddressRange::new(0x0000, 0xFFFF), image)
         .expect("bus configuration failed")
         .build();
 
@@ -49,12 +33,11 @@ fn klaus_dormann_65c02_functional_test() {
         .build()
         .expect("CPU build failed");
 
-    cpu.registers_mut().pc = START_ADDR;
+    cpu.registers_mut().pc = start;
 
     for _ in 0..MAX_STEPS {
         let pc = cpu.registers().pc;
-        if pc == SUCCESS_PC {
-            // All tests passed.
+        if pc == success_pc {
             return;
         }
 
@@ -64,16 +47,41 @@ fn klaus_dormann_65c02_functional_test() {
                 unreachable!("no breakpoints or watches configured")
             }
             StepResult::Stopped => {
-                panic!("CPU halted (STP) at PC=${pc:04X} before reaching success address ${SUCCESS_PC:04X}")
+                panic!("CPU halted (STP) at PC=${pc:04X} before reaching success address ${success_pc:04X}")
             }
             StepResult::Error(e) => {
-                panic!("CPU error at PC=${pc:04X}: {e} — test suite failed before reaching ${SUCCESS_PC:04X}")
+                panic!("CPU error at PC=${pc:04X}: {e} — test failed before reaching ${success_pc:04X}")
             }
         }
     }
 
     let pc = cpu.registers().pc;
     panic!(
-        "Test did not complete within {MAX_STEPS} steps; stuck at PC=${pc:04X} (success would be ${SUCCESS_PC:04X})"
+        "Test did not complete within {MAX_STEPS} steps; stuck at PC=${pc:04X} (success would be ${success_pc:04X})"
+    );
+}
+
+/// Tests the full 6502 base instruction set and all addressing modes.
+///
+/// On failure, the non-success PC value identifies the failing test group.
+#[test]
+fn base_6502_functional_test() {
+    run_functional_test(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/roms/6502_functional_test.bin"),
+        0x0400,
+        0x3469,
+    );
+}
+
+/// Tests all 65C02 extended opcodes: new addressing modes, `STZ`, `BRA`, `PHX`/`PHY`/`PLX`/`PLY`,
+/// `TRB`/`TSB`, `BIT` immediate, `JMP (abs,X)`, WDC-only instructions, and defined NOPs.
+///
+/// On failure, the non-success PC value identifies the failing test group.
+#[test]
+fn extended_65c02_functional_test() {
+    run_functional_test(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/roms/65C02_extended_opcodes_test.bin"),
+        0x0400,
+        0x24F1,
     );
 }
