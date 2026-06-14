@@ -43,6 +43,25 @@ fn step_to_stop(cpu: &mut emma65::emulator::Cpu) {
     panic!("CPU did not reach STP within {MAX_STEPS} steps");
 }
 
+/// Steps `cpu` until `StepResult::Stopped`, panicking on any error or if the wall-clock
+/// deadline is exceeded. Used when the CPU may spend many steps in WAI waiting for a
+/// device interrupt that arrives asynchronously from another thread.
+fn step_to_stop_deadline(cpu: &mut emma65::emulator::Cpu, deadline: std::time::Instant) {
+    loop {
+        if std::time::Instant::now() >= deadline {
+            panic!("CPU did not reach STP within the time limit");
+        }
+        match cpu.step() {
+            StepResult::Stopped => return,
+            StepResult::Executed(_) | StepResult::Waiting => {}
+            StepResult::Error(e) => panic!("CPU error: {e}"),
+            StepResult::Breakpoint(_)
+            | StepResult::WatchTriggered { .. }
+            | StepResult::WatchError { .. } => unreachable!(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Category 1: Instruction integration
 // ---------------------------------------------------------------------------
@@ -339,6 +358,350 @@ fn mc6850_transmit_and_receive() {
             "MC6850 received byte should be stored at $0300"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Category 4: Interrupt-driven device I/O
+// ---------------------------------------------------------------------------
+
+/// ACIA6551 RX interrupt: remote sends one byte; CPU uses WAI to suspend until the IRQ fires,
+/// ISR reads the byte and stores it, RTI resumes at STP.
+///
+/// ACIA command = $00 (IRD=0 → RX IRQ enabled; TIC=00 → TX IRQ disabled).
+/// IRQ vector ($FFFE/$FFFF) points to ISR at $0400.
+/// ISR: LDA $DF00 (clears RDRF, deasserts IRQ); STA $0300; RTI.
+#[test]
+fn acia6551_irq_driven_receive() {
+    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let mut acia = Acia6551::new();
+    acia.attach_transport(Box::new(local));
+
+    let bus = Bus::config()
+        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia)).unwrap()
+        .ram(AddressRange::new(0xDF04, 0xFFFF)).unwrap()
+        .build();
+
+    let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
+        .clock_speed(ClockSpeed::unlimited())
+        .invalid_opcode_policy(InvalidOpcodePolicy::Error)
+        .bus(bus)
+        .build()
+        .unwrap();
+
+    // ISR at $0400:
+    //   LDA $DF00   AD 00 DF   -- read RX data (clears RDRF, deasserts IRQ)
+    //   STA $0300   8D 00 03   -- store received byte
+    //   RTI         40
+    let isr: &[u8] = &[0xAD, 0x00, 0xDF, 0x8D, 0x00, 0x03, 0x40];
+    for (i, &b) in isr.iter().enumerate() {
+        cpu.bus_mut().write(0x0400 + i as u16, b).unwrap();
+    }
+
+    // IRQ vector → $0400
+    cpu.bus_mut().write(0xFFFE, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFF, 0x04).unwrap();
+
+    // Program at $0200:
+    //   LDA #$00    A9 00       -- RX IRQ enabled (IRD=0, TIC=00)
+    //   STA $DF02   8D 02 DF   -- write command register
+    //   CLI         58          -- enable IRQ
+    //   WAI         CB          -- suspend until IRQ fires
+    //   STP         DB          -- RTI resumes here
+    let prog: &[u8] = &[
+        0xA9, 0x00, 0x8D, 0x02, 0xDF,
+        0x58,
+        0xCB,
+        0xDB,
+    ];
+    for (i, &b) in prog.iter().enumerate() {
+        cpu.bus_mut().write(0x0200 + i as u16, b).unwrap();
+    }
+    cpu.bus_mut().write(0xFFFC, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
+    cpu.reset().unwrap();
+
+    // Send the byte from a background thread after a short delay so the CPU reaches
+    // WAI before the byte arrives (avoiding the IRQ firing before WAI executes).
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        remote.send(0x55).unwrap();
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    step_to_stop_deadline(&mut cpu, deadline);
+
+    assert_eq!(
+        cpu.bus_mut().peek(0x0300).unwrap(), 0x55,
+        "ISR should have stored the received byte at $0300"
+    );
+}
+
+/// ACIA6551 TX interrupt: CPU uses IRQ-driven transmit to send 3 bytes.
+///
+/// ACIA command = $06 (IRD=1 → RX IRQ disabled; TIC=01 → TX IRQ enabled).
+/// IRQ fires immediately when TDRE is set. ISR sends the next byte; after the last
+/// byte is sent, ISR disables TX IRQ (TIC=00) so no further interrupts fire.
+/// Main program spins on a zero-page counter until all bytes are sent, then STPs.
+#[test]
+fn acia6551_irq_driven_transmit() {
+    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let mut acia = Acia6551::new();
+    acia.attach_transport(Box::new(local));
+
+    let bus = Bus::config()
+        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia)).unwrap()
+        .ram(AddressRange::new(0xDF04, 0xFFFF)).unwrap()
+        .build();
+
+    let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
+        .clock_speed(ClockSpeed::unlimited())
+        .invalid_opcode_policy(InvalidOpcodePolicy::Error)
+        .bus(bus)
+        .build()
+        .unwrap();
+
+    // Data to transmit at $0300
+    cpu.bus_mut().write(0x0300, 0x41).unwrap(); // 'A'
+    cpu.bus_mut().write(0x0301, 0x42).unwrap(); // 'B'
+    cpu.bus_mut().write(0x0302, 0x43).unwrap(); // 'C'
+
+    // ISR at $0400:
+    //   LDX $01       A6 01       -- load index (ZP $01)
+    //   LDA $0300,X   BD 00 03   -- load next byte
+    //   STA $DF00     8D 00 DF   -- send via TX (clears TDRE, IRQ deasserts until restored)
+    //   INX           E8
+    //   STX $01       86 01       -- advance index
+    //   DEC $00       C6 00       -- decrement remaining count
+    //   BNE done      D0 05       -- if bytes remain, RTI and wait for next TDRE
+    //   LDA #$02      A9 02       -- IRD=1, TIC=00: disable TX IRQ
+    //   STA $DF02     8D 02 DF
+    //   done: RTI    40
+    let isr: &[u8] = &[
+        0xA6, 0x01,
+        0xBD, 0x00, 0x03,
+        0x8D, 0x00, 0xDF,
+        0xE8,
+        0x86, 0x01,
+        0xC6, 0x00,
+        0xD0, 0x05,
+        0xA9, 0x02,
+        0x8D, 0x02, 0xDF,
+        0x40,
+    ];
+    for (i, &b) in isr.iter().enumerate() {
+        cpu.bus_mut().write(0x0400 + i as u16, b).unwrap();
+    }
+
+    // IRQ vector → $0400
+    cpu.bus_mut().write(0xFFFE, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFF, 0x04).unwrap();
+
+    // Program at $0200:
+    //   LDA #$03    A9 03       -- 3 bytes remaining
+    //   STA $00     85 00       -- store count in ZP $00
+    //   LDA #$00    A9 00       -- index = 0
+    //   STA $01     85 01       -- store index in ZP $01
+    //   LDA #$06    A9 06       -- IRD=1 (RX IRQ off), TIC=01 (TX IRQ on)
+    //   STA $DF02   8D 02 DF   -- write command register
+    //   CLI         58          -- enable IRQ
+    //   poll:
+    //   LDA $00     A5 00       -- load remaining count
+    //   BNE poll    D0 FD      -- loop until zero (offset -3)
+    //   STP         DB
+    let prog: &[u8] = &[
+        0xA9, 0x03, 0x85, 0x00,
+        0xA9, 0x00, 0x85, 0x01,
+        0xA9, 0x06, 0x8D, 0x02, 0xDF,
+        0x58,
+        0xA5, 0x00,
+        0xD0, 0xFD,
+        0xDB,
+    ];
+    for (i, &b) in prog.iter().enumerate() {
+        cpu.bus_mut().write(0x0200 + i as u16, b).unwrap();
+    }
+    cpu.bus_mut().write(0xFFFC, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
+    cpu.reset().unwrap();
+
+    step_to_stop(&mut cpu);
+
+    std::thread::sleep(std::time::Duration::from_millis(1));
+    assert_eq!(remote.try_recv(), Some(0x41), "first TX byte should be 'A'");
+    assert_eq!(remote.try_recv(), Some(0x42), "second TX byte should be 'B'");
+    assert_eq!(remote.try_recv(), Some(0x43), "third TX byte should be 'C'");
+}
+
+/// MC6850 RX interrupt: remote sends one byte; CPU uses WAI to suspend until the IRQ fires,
+/// ISR reads the byte and stores it, RTI resumes at STP.
+///
+/// MC6850 control = $81 (RIE=1 → RX IRQ enabled; TC=00 → TX IRQ disabled; CD=01).
+/// IRQ vector ($FFFE/$FFFF) points to ISR at $0400.
+/// ISR: LDA $DF01 (clears RDRF, deasserts IRQ); STA $0300; RTI.
+#[test]
+fn mc6850_irq_driven_receive() {
+    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let mut mc = Mc6850::new();
+    mc.attach_transport(Box::new(local));
+
+    let bus = Bus::config()
+        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .device(AddressRange::new(0xDF00, 0xDF01), DeviceId(1), Box::new(mc)).unwrap()
+        .ram(AddressRange::new(0xDF02, 0xFFFF)).unwrap()
+        .build();
+
+    let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
+        .clock_speed(ClockSpeed::unlimited())
+        .invalid_opcode_policy(InvalidOpcodePolicy::Error)
+        .bus(bus)
+        .build()
+        .unwrap();
+
+    // ISR at $0400:
+    //   LDA $DF01   AD 01 DF   -- read RX data (clears RDRF, deasserts IRQ)
+    //   STA $0300   8D 00 03
+    //   RTI         40
+    let isr: &[u8] = &[0xAD, 0x01, 0xDF, 0x8D, 0x00, 0x03, 0x40];
+    for (i, &b) in isr.iter().enumerate() {
+        cpu.bus_mut().write(0x0400 + i as u16, b).unwrap();
+    }
+
+    // IRQ vector → $0400
+    cpu.bus_mut().write(0xFFFE, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFF, 0x04).unwrap();
+
+    // Program at $0200:
+    //   LDA #$81    A9 81       -- RIE=1, TC=00, CD=01
+    //   STA $DF00   8D 00 DF   -- write control register
+    //   CLI         58
+    //   WAI         CB
+    //   STP         DB
+    let prog: &[u8] = &[
+        0xA9, 0x81, 0x8D, 0x00, 0xDF,
+        0x58,
+        0xCB,
+        0xDB,
+    ];
+    for (i, &b) in prog.iter().enumerate() {
+        cpu.bus_mut().write(0x0200 + i as u16, b).unwrap();
+    }
+    cpu.bus_mut().write(0xFFFC, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
+    cpu.reset().unwrap();
+
+    // Send the byte from a background thread after a short delay so the CPU reaches
+    // WAI before the byte arrives (avoiding the IRQ firing before WAI executes).
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        remote.send(0x77).unwrap();
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    step_to_stop_deadline(&mut cpu, deadline);
+
+    assert_eq!(
+        cpu.bus_mut().peek(0x0300).unwrap(), 0x77,
+        "ISR should have stored the received byte at $0300"
+    );
+}
+
+/// MC6850 TX interrupt: CPU uses IRQ-driven transmit to send 3 bytes.
+///
+/// MC6850 control = $42 (TC=10 → TX IRQ enabled; RIE=0; CD=10).
+/// IRQ fires immediately when TDRE is set. ISR sends the next byte; after the last
+/// byte is sent, ISR disables TX IRQ (TC=00) so no further interrupts fire.
+/// Main program spins on a zero-page counter until all bytes are sent, then STPs.
+#[test]
+fn mc6850_irq_driven_transmit() {
+    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let mut mc = Mc6850::new();
+    mc.attach_transport(Box::new(local));
+
+    let bus = Bus::config()
+        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .device(AddressRange::new(0xDF00, 0xDF01), DeviceId(1), Box::new(mc)).unwrap()
+        .ram(AddressRange::new(0xDF02, 0xFFFF)).unwrap()
+        .build();
+
+    let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
+        .clock_speed(ClockSpeed::unlimited())
+        .invalid_opcode_policy(InvalidOpcodePolicy::Error)
+        .bus(bus)
+        .build()
+        .unwrap();
+
+    // Data to transmit at $0300
+    cpu.bus_mut().write(0x0300, 0x41).unwrap(); // 'A'
+    cpu.bus_mut().write(0x0301, 0x42).unwrap(); // 'B'
+    cpu.bus_mut().write(0x0302, 0x43).unwrap(); // 'C'
+
+    // ISR at $0400:
+    //   LDX $01       A6 01
+    //   LDA $0300,X   BD 00 03
+    //   STA $DF01     8D 01 DF   -- send byte (clears TDRE until next tick)
+    //   INX           E8
+    //   STX $01       86 01
+    //   DEC $00       C6 00
+    //   BNE done      D0 05
+    //   LDA #$02      A9 02      -- TC=00 (TX IRQ disabled), CD=10
+    //   STA $DF00     8D 00 DF
+    //   done: RTI    40
+    let isr: &[u8] = &[
+        0xA6, 0x01,
+        0xBD, 0x00, 0x03,
+        0x8D, 0x01, 0xDF,
+        0xE8,
+        0x86, 0x01,
+        0xC6, 0x00,
+        0xD0, 0x05,
+        0xA9, 0x02,
+        0x8D, 0x00, 0xDF,
+        0x40,
+    ];
+    for (i, &b) in isr.iter().enumerate() {
+        cpu.bus_mut().write(0x0400 + i as u16, b).unwrap();
+    }
+
+    // IRQ vector → $0400
+    cpu.bus_mut().write(0xFFFE, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFF, 0x04).unwrap();
+
+    // Program at $0200:
+    //   LDA #$03    A9 03
+    //   STA $00     85 00
+    //   LDA #$00    A9 00
+    //   STA $01     85 01
+    //   LDA #$42    A9 42       -- TC=10 (TX IRQ enabled), RIE=0, CD=10
+    //   STA $DF00   8D 00 DF
+    //   CLI         58
+    //   poll:
+    //   LDA $00     A5 00
+    //   BNE poll    D0 FD
+    //   STP         DB
+    let prog: &[u8] = &[
+        0xA9, 0x03, 0x85, 0x00,
+        0xA9, 0x00, 0x85, 0x01,
+        0xA9, 0x42, 0x8D, 0x00, 0xDF,
+        0x58,
+        0xA5, 0x00,
+        0xD0, 0xFD,
+        0xDB,
+    ];
+    for (i, &b) in prog.iter().enumerate() {
+        cpu.bus_mut().write(0x0200 + i as u16, b).unwrap();
+    }
+    cpu.bus_mut().write(0xFFFC, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
+    cpu.reset().unwrap();
+
+    step_to_stop(&mut cpu);
+
+    std::thread::sleep(std::time::Duration::from_millis(1));
+    assert_eq!(remote.try_recv(), Some(0x41), "first TX byte should be 'A'");
+    assert_eq!(remote.try_recv(), Some(0x42), "second TX byte should be 'B'");
+    assert_eq!(remote.try_recv(), Some(0x43), "third TX byte should be 'C'");
 }
 
 /// VIA6522 Timer 1 fires after counting down from a known value; IFR bit 6 is set.

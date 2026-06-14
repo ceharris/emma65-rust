@@ -179,10 +179,9 @@ impl IoDevice for Mc6850 {
             self.tx_pending = false;
             self.tdre = true;
         }
-        if let Some(byte) = self.transport.as_mut().and_then(|t| t.try_recv()) {
-            if self.rdrf {
-                self.overrun = true;
-            }
+        if !self.rdrf
+            && let Some(byte) = self.transport.as_mut().and_then(|t| t.try_recv())
+        {
             self.rx_data = byte;
             self.rdrf = true;
         }
@@ -236,16 +235,14 @@ mod tests {
     }
 
     #[test]
-    fn master_reset_clears_rdrf_and_overrun() {
+    fn master_reset_clears_rdrf() {
         let (mut device, mut remote) = device_with_pipe();
         remote.send(0xAA).unwrap();
-        remote.send(0xBB).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // RDRF
-        device.tick(1); // OVRN
+        assert_ne!(device.peek(0) & 0x01, 0); // RDRF set
         device.write(0, 0x03); // master reset
         assert_eq!(device.peek(0) & 0x01, 0); // RDRF cleared
-        assert_eq!(device.peek(0) & 0x20, 0); // OVRN cleared
     }
 
     #[test]
@@ -310,26 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn overrun_set_when_second_byte_arrives_before_read() {
+    fn second_byte_held_in_transport_until_first_read() {
         let (mut device, mut remote) = device_with_pipe();
         remote.send(0x01).unwrap();
         remote.send(0x02).unwrap();
         std::thread::sleep(Duration::from_millis(1));
-        device.tick(1); // RDRF
-        device.tick(1); // OVRN
-        assert_ne!(device.peek(0) & 0x20, 0); // OVRN set
-    }
-
-    #[test]
-    fn read_clears_overrun() {
-        let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x01).unwrap();
-        remote.send(0x02).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
-        device.tick(1);
-        device.tick(1);
-        device.read(1); // clears RDRF + OVRN
-        assert_eq!(device.peek(0) & 0x20, 0); // OVRN cleared
+        device.tick(1); // receives 0x01 → RDRF
+        device.tick(1); // 0x02 stays in pipe (RDRF still set)
+        assert_eq!(device.read(1), 0x01);
+        device.tick(1); // now receives 0x02
+        assert_eq!(device.read(1), 0x02);
     }
 
     // --- IRQ ---
