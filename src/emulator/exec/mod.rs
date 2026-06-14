@@ -273,35 +273,35 @@ mod tests {
 
     #[tokio::test]
     async fn throttled_execution_takes_at_least_wall_time() {
-        // At 1 MHz, 10_000 cycles should take at least 5ms (50% tolerance).
-        // We stop after a time that should correspond to ~10ms of emulated time.
-        let cpu = make_cpu_with_speed(ClockSpeed::mhz(1.0));
+        // Test at 2 MHz — the most demanding common clock speed (1 MHz, 1.8432 MHz, 2 MHz).
+        // At 2 MHz, BATCH_SIZE=1000 instructions ≈ 2500 cycles ≈ 1.25ms of emulated time,
+        // so the throttle fires roughly every 1ms — still fine-grained enough.
+        // We allow 2× tolerance: cycles must not exceed 2 × (wall_elapsed × 2_000_000 Hz).
+        let cpu = make_cpu_with_speed(ClockSpeed::mhz(2.0));
         let handle = run(cpu);
-        // Wait 15ms — at 1 MHz with throttling, we should have slept at least once.
         let wall_start = Instant::now();
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
         let cpu = handle.take_cpu().await;
         let wall_elapsed = wall_start.elapsed();
-        // At 1 MHz, `cpu.cycles()` cycles would take cpu.cycles() microseconds.
-        // The throttle should have kept wall time ≥ (cycles / 1_000_000) seconds.
-        // We just check that we spent at least 5ms (very loose) and cycles are capped
-        // roughly to 1MHz × wall_elapsed (within 2×).
-        let max_expected_cycles = wall_elapsed.as_micros() as u64 * 2;
+        // cycles / 2_000_000 should be ≤ wall_elapsed; allow 2× slack for CI jitter.
+        let max_expected_cycles = wall_elapsed.as_micros() as u64 * 4; // 2 cycles/µs × 2 slack
         assert!(cpu.cycles() <= max_expected_cycles,
             "throttled CPU ran too fast: {} cycles in {:?}", cpu.cycles(), wall_elapsed);
     }
 
     #[tokio::test]
     async fn unlimited_faster_than_throttled() {
-        // Run both for 20ms wall time. Unlimited should accumulate far more cycles.
-        let target_wall = std::time::Duration::from_millis(20);
+        // Use 50 kHz throttle — well below even a debug-build's natural step() throughput,
+        // so the throttle demonstrably limits cycle accumulation compared to unlimited.
+        // 50ms × 50_000 Hz = 2500 expected throttled cycles; unlimited should far exceed that.
+        let target_wall = std::time::Duration::from_millis(50);
 
         let cpu_unlimited = make_cpu_with_speed(ClockSpeed::unlimited());
         let handle_unlimited = run(cpu_unlimited);
         tokio::time::sleep(target_wall).await;
         let cpu_unlimited = handle_unlimited.take_cpu().await;
 
-        let cpu_throttled = make_cpu_with_speed(ClockSpeed::mhz(1.0));
+        let cpu_throttled = make_cpu_with_speed(ClockSpeed::hz(50_000));
         let handle_throttled = run(cpu_throttled);
         tokio::time::sleep(target_wall).await;
         let cpu_throttled = handle_throttled.take_cpu().await;
