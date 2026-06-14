@@ -74,6 +74,9 @@ pub struct Acia6551 {
     tx_cycles_remaining: u32,
     /// CPU clock frequency in Hz, used to compute cycles-per-byte for baud rate timing.
     clock_hz: u64,
+    /// When true, allows overrun in internal-clock mode: a byte arriving while RDRF is set
+    /// overwrites rx_data and sets the overrun flag, matching real hardware behaviour.
+    overrun_enabled: bool,
 }
 
 const ASSUMED_CLOCK_SPEED: u64 = 1_000_000;
@@ -99,6 +102,7 @@ impl Acia6551 {
             tdre_bug_compatible: false,
             tx_cycles_remaining: 0,
             clock_hz: ASSUMED_CLOCK_SPEED,
+            overrun_enabled: false,
         }
     }
 
@@ -121,6 +125,20 @@ impl Acia6551 {
     /// on timing delays rather than polling TDRE.
     pub fn with_tdre_bug(mut self) -> Self {
         self.tdre_bug_compatible = true;
+        self
+    }
+
+    /// Enables receive overrun in internal-clock mode.
+    ///
+    /// When enabled, a byte arriving from the transport while RDRF is already set will
+    /// overwrite `rx_data` and set the overrun flag, matching real 65C51 hardware where
+    /// the shift register clocks in the next byte regardless of whether the CPU has read
+    /// the previous one.
+    ///
+    /// Has no effect in external-clock mode, where the transport is not timing-driven and
+    /// bytes are held in the pipe until RDRF is cleared.
+    pub fn with_overrun(mut self) -> Self {
+        self.overrun_enabled = true;
         self
     }
 
@@ -159,11 +177,14 @@ impl Acia6551 {
         (self.command & 0x0C) == 0x04
     }
 
-    fn poll_transport(&mut self) {
-        if self.rdrf {
+    fn poll_transport(&mut self, allow_overrun: bool) {
+        if self.rdrf && !allow_overrun {
             return;
         }
         if let Some(byte) = self.transport.as_mut().and_then(|t| t.try_recv()) {
+            if self.rdrf {
+                self.overrun = true;
+            }
             self.rx_data = byte;
             self.rdrf = true;
         }
@@ -289,12 +310,12 @@ impl IoDevice for Acia6551 {
         }
 
         if self.cycles_per_byte == 0 {
-            self.poll_transport();
+            self.poll_transport(false);
         } else {
             self.cycle_accum += cycles;
             while self.cycle_accum >= self.cycles_per_byte {
                 self.cycle_accum -= self.cycles_per_byte;
-                self.poll_transport();
+                self.poll_transport(self.overrun_enabled);
             }
         }
     }
@@ -398,6 +419,44 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // receives 0x01 → RDRF
         device.tick(1); // 0x02 stays in pipe (RDRF still set)
+        assert_eq!(device.read(0), 0x01);
+        device.tick(1); // now receives 0x02
+        assert_eq!(device.read(0), 0x02);
+    }
+
+    // --- Overrun ---
+
+    #[test]
+    fn overrun_set_in_internal_clock_mode_with_overrun_enabled() {
+        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let mut device = Acia6551::new()
+            .with_clock_hz(1_000_000)
+            .with_overrun();
+        device.attach_transport(Box::new(local));
+        // 19200 baud internal clock: cycles_per_byte = 1_000_000 * 10 / 19200 = 520
+        device.write(3, 0x1F);
+        remote.send(0x01).unwrap();
+        remote.send(0x02).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        device.tick(520); // receives 0x01 → RDRF
+        device.tick(520); // receives 0x02 → OVRN (overwrites rx_data)
+        assert_ne!(device.peek(1) & 0x04, 0); // OVRN set
+        assert_eq!(device.read(0), 0x02); // second byte overwrote first
+    }
+
+    #[test]
+    fn no_overrun_in_external_clock_mode_even_with_flag() {
+        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let mut device = Acia6551::new()
+            .with_overrun();
+        device.attach_transport(Box::new(local));
+        // Control defaults to 0x00 → external clock (cycles_per_byte = 0)
+        remote.send(0x01).unwrap();
+        remote.send(0x02).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        device.tick(1); // receives 0x01 → RDRF
+        device.tick(1); // 0x02 stays in pipe (external clock ignores overrun flag)
+        assert_eq!(device.peek(1) & 0x04, 0); // OVRN not set
         assert_eq!(device.read(0), 0x01);
         device.tick(1); // now receives 0x02
         assert_eq!(device.read(0), 0x02);
