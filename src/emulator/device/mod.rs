@@ -102,6 +102,11 @@ pub trait IoDevice: Send {
     fn tick(&mut self, _cycles: u32) {}
     /// Returns `true` if this device is currently asserting an IRQ.
     fn irq_active(&self) -> bool { false }
+    /// Consumes a pending NMI edge event from this device, returning `true` if one was pending.
+    ///
+    /// Called once per CPU step. Implementations set an internal flag on the triggering write and
+    /// clear it here. The default returns `false` (no NMI capability).
+    fn take_nmi(&mut self) -> bool { false }
     /// Returns a human-readable name for this device, used in diagnostics and tracing.
     fn name(&self) -> &str { "unknown" }
 }
