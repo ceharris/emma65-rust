@@ -43,6 +43,32 @@
 //! - Bit 5: T2 timeout
 //! - Bit 6: T1 timeout
 //! - Bit 7: IRQ active (IFR) / set-not-clear (IER write)
+//!
+//! # Virtual peripheral connections
+//!
+//! Virtual peripherals connect to the VIA over byte-stream transports using the
+//! [`crate::emulator::device::via_protocol`] message protocol. Any number of transports may
+//! be attached with [`Via6522::attach_transport`]; each undergoes an independent format
+//! negotiation handshake.
+//!
+//! **Handshake.** The peripheral opens the connection by sending a single format-selector byte.
+//! On the next [`IoDevice::tick`] call that receives it, the VIA completes the handshake and
+//! immediately sends a six-message state dump (port A value, port B value, CA1, CA2, CB1,
+//! CB2), giving the peripheral the current GPIO state before any further exchange.
+//!
+//! **VIA → peripheral (outgoing).** After the handshake the VIA sends a
+//! [`ViaProtocolMessage::PortStateChange`] or [`ViaProtocolMessage::ControlSignalChange`]
+//! message whenever the observable GPIO state changes:
+//! - Writes to ORB/ORA or the DDR registers that alter output-pin state.
+//! - Timer 1 PB7 toggles (when `ACR_T1_PB7_OUTPUT` is set and messages are not suppressed).
+//!
+//! Every attached transport that has completed its handshake receives the message.
+//!
+//! **Peripheral → VIA (incoming).** The peripheral drives the VIA's input pins by sending
+//! `PortStateChange` and `ControlSignalChange` messages at any time after the handshake.
+//! Incoming messages update the VIA's latched input state (`input_a`/`input_b`) and the
+//! control-signal lines (CA1, CA2, CB1, CB2). If the resulting edge matches the PCR
+//! configuration, the corresponding IFR bit is set and an IRQ may be asserted.
 
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::device::via_protocol::{

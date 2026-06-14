@@ -3,9 +3,39 @@
 //! This module implements encoding and decoding of the two-message protocol used between
 //! a virtual VIA and an external peripheral over a byte-stream transport (socket, PTY, etc.).
 //!
-//! The protocol defines two message types, sent in both directions:
-//! - [`ViaProtocolMessage::PortStateChange`] — communicates the state of GPIO port A or B.
-//! - [`ViaProtocolMessage::ControlSignalChange`] — sets or clears one or more control signals.
+//! # Message types
+//!
+//! The protocol defines two message types, exchanged in both directions:
+//! - [`ViaProtocolMessage::PortStateChange`] — carries the 8-bit pin state of port A or B.
+//! - [`ViaProtocolMessage::ControlSignalChange`] — sets or clears one or more control signals
+//!   (CA1, CA2, CB1, CB2).
+//!
+//! # Connection lifecycle
+//!
+//! The peripheral initiates the connection by sending a single format-selector byte:
+//! - Any byte with its high-order bit **set** selects [`ViaProtocolFormat::Binary`].
+//! - Any byte with its high-order bit **clear** selects [`ViaProtocolFormat::Ascii`].
+//!
+//! On receiving the first qualifying byte the VIA completes the handshake: it matches its
+//! encoder to the selected format and immediately sends a six-message state dump so the
+//! peripheral can synchronise with the current GPIO state:
+//!
+//! 1. `PortStateChange { port: 'A', value: <current port A> }`
+//! 2. `PortStateChange { port: 'B', value: <current port B> }`
+//! 3. `ControlSignalChange { signals: CA1, state: <current CA1> }`
+//! 4. `ControlSignalChange { signals: CA2, state: <current CA2> }`
+//! 5. `ControlSignalChange { signals: CB1, state: <current CB1> }`
+//! 6. `ControlSignalChange { signals: CB2, state: <current CB2> }`
+//!
+//! After the handshake, the VIA sends a `PortStateChange` or `ControlSignalChange` message
+//! whenever output-register writes, DDR changes, or timer events alter the observable GPIO
+//! state. The peripheral responds with the same message types to drive the VIA's input pins
+//! and control-signal lines.
+//!
+//! Any number of transports may be attached to a single VIA instance. Each transport undergoes
+//! its own independent handshake; once complete it receives every subsequent state change.
+//!
+//! # Wire formats
 //!
 //! Two wire formats are supported:
 //! - [`ViaProtocolFormat::Binary`] — compact one- or two-byte encoding; selected by the first
