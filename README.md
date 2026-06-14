@@ -14,7 +14,7 @@ which exhaustively exercises every instruction, addressing mode, flag computatio
 interrupt sequence, and decimal-mode operation defined by the 65C02 architecture. It also
 passes the [Bruce Clark decimal mode test](http://www.6502.org/tutorials/decimal_mode.html),
 which independently verifies all 256×256 ADC and SBC operand combinations in BCD mode
-against predicted CMOS 65C02 results. Users can rely on emma65's instruction-level
+against predicted CMOS 65C02 results. Users can rely on Emma65's instruction-level
 behavior matching real hardware.
 
 ## Features
@@ -49,13 +49,13 @@ Emma65 implements the full 65C02 interrupt model:
 - **BRK** — software interrupt; sets the B flag in the pushed status byte so interrupt
   handlers can distinguish a BRK from a hardware IRQ.
 
-On interrupt entry the CMOS D flag is cleared, matching real WDC 65C02 hardware behavior.
+On interrupt entry the D flag is cleared, matching CMOS 65C02 hardware behavior.
 
 ### Clock Speed Simulation
 
 Free-running execution throttles to a configurable target clock frequency by comparing
 accumulated emulated cycles against elapsed wall time, sleeping as needed to match the
-target rate. Throttling is batched over roughly 1000 instructions at a time, keeping
+target rate. Throttling is batched over roughly 1,000 instructions at a time, keeping
 sleep-syscall overhead negligible while maintaining sub-millisecond timing granularity.
 Tested and accurate up to approximately 2 MHz on typical hardware, covering the clock
 speeds of all historically common 6502-based systems.
@@ -110,9 +110,9 @@ state and control signal transitions with real or emulated peripherals. On conne
 VIA performs a format-negotiation handshake and sends a full state dump so the peripheral
 starts with an accurate picture of all pins and control lines.
 
-#### ACIA 6551 (`Acia6551`)
+#### Rockwell 6551 ACIA (`Acia6551`)
 
-An implementation of the WDC 65C51 Asynchronous Communications Interface Adapter:
+An implementation of the Rockwell 6551 Asynchronous Communications Interface Adapter:
 
 - 4 addressable registers: RX data, TX data, status, and command/control
 - RDRF (Receive Data Register Full) and TDRE (Transmit Data Register Empty) status bits
@@ -120,7 +120,7 @@ An implementation of the WDC 65C51 Asynchronous Communications Interface Adapter
 - Baud rate selection from the control register; external-clock mode polls the transport
   on every CPU tick for maximum responsiveness
 - Hardware bug–compatible mode (`Acia6551::with_tdre_bug()`) keeps TDRE permanently set,
-  matching the behavior of real WDC 65C51 silicon for software that uses timed delays
+  matching the behavior of the WDC 65C51 variant for software that uses timed delays
   rather than TDRE polling
 
 #### MC6850 ACIA (`Mc6850`)
@@ -138,8 +138,9 @@ An implementation of the Motorola MC6850 Asynchronous Communications Interface A
 A simple polling console device for byte-stream I/O:
 
 - 2 addressable registers: data output/availability (offset 0) and data latch (offset 1)
-- The data latch register latches an incoming byte in a single read, making it easy to
-  write polling loops without separate status and data registers
+- The data latch register latches an incoming byte in a single read, providing a
+  non-blocking one-byte look-ahead and making it easy to write polling loops without
+  separate status and data registers
 - No IRQ — purely poll-based
 - Designed as the backend for a future built-in terminal emulator
 
@@ -211,9 +212,8 @@ top-level public modules:
   `WatchEvaluator` owns variable name-to-index mappings and persistent variable storage
   so that watchpoint variables survive across steps.
 
-The binary (`src/main.rs`) wires the library together with a concrete `WatchContext`
-implementation for the WDC 65C02 (`src/wdc6502.rs`) and serves as both a usage example
-and a manual exercise harness.
+The binary (`src/main.rs`) exercises the library against a small inline program and serves
+as a usage example and manual exercise harness.
 
 ```
 cargo build      # build
