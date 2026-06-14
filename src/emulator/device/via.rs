@@ -90,8 +90,15 @@ const IRQ_ANY: u8 = 0x80;
 #[allow(dead_code)]
 const ACR_T1_PB7_LATCH:  u8 = 0x01; // reserved for future latch-enable use
 const ACR_T1_PB7_OUTPUT: u8 = 0x02;
-#[allow(dead_code)]
-const ACR_SR_MODE_MASK:  u8 = 0x1C; // reserved for shift register mode
+const ACR_SR_MODE_MASK:     u8 = 0x1C;
+const SR_MODE_DISABLED:     u8 = 0x00;
+const SR_MODE_IN_T2:        u8 = 0x04;
+const SR_MODE_IN_T1:        u8 = 0x08;
+const SR_MODE_IN_EXT:       u8 = 0x0C;
+const SR_MODE_OUT_FREE_T2:  u8 = 0x10;
+const SR_MODE_OUT_T2:       u8 = 0x14;
+const SR_MODE_OUT_T1:       u8 = 0x18;
+const SR_MODE_OUT_EXT:      u8 = 0x1C;
 const ACR_T2_COUNT_PB6:  u8 = 0x20;
 const ACR_T1_MODE_MASK:  u8 = 0xC0;
 #[allow(dead_code)]
@@ -162,15 +169,22 @@ pub struct Via6522 {
     t2_counter: u16,
     /// Timer 2 latch low byte (written to offset 8 before loading).
     t2_latch_lo: u8,
+    /// Timer 2 latch high byte; needed to reload T2 for free-running SR mode.
+    t2_latch_hi: u8,
     /// True when timer 2 is actively counting.
     t2_running: bool,
 
     // --- Shift register ---
     /// Shift register data byte.
     sr: u8,
-    /// Shift bit counter (0–8; 8 = complete). Reserved for shift register implementation.
-    #[allow(dead_code)]
+    /// Number of bits shifted so far in the current operation (0–7; resets after 8th bit).
     sr_count: u8,
+    /// True when an SR shift operation is in progress.
+    sr_running: bool,
+    /// True when shifting out (toward peripheral); false when shifting in.
+    sr_shifting_out: bool,
+    /// SR-driven CB1 clock-line state (internal; separate from the `cb1` input latch).
+    sr_cb1: bool,
 
     // --- Control and interrupt registers ---
     /// Auxiliary control register.
@@ -213,8 +227,8 @@ impl Via6522 {
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
             input_b: 0, input_a: 0,
             t1_counter: 0, t1_latch: 0, t1_running: false, t1_pb7: false,
-            t2_counter: 0, t2_latch_lo: 0, t2_running: false,
-            sr: 0, sr_count: 0,
+            t2_counter: 0, t2_latch_lo: 0, t2_latch_hi: 0, t2_running: false,
+            sr: 0, sr_count: 0, sr_running: false, sr_shifting_out: false, sr_cb1: false,
             acr: 0, pcr: 0, ifr: 0, ier: 0,
             ca1: false, ca2: false, cb1: false, cb2: false,
             transports: Vec::new(),
@@ -384,6 +398,21 @@ impl Via6522 {
                     };
                     if triggered { self.set_ifr(IRQ_CB1); }
                 }
+                // T2 pulse-counting mode: count negative PB6 transitions.
+                if self.acr & ACR_T2_COUNT_PB6 != 0 && self.t2_running {
+                    let old_pb6 = (old >> 6) & 1 != 0;
+                    let new_pb6 = (value >> 6) & 1 != 0;
+                    if old_pb6 && !new_pb6 {
+                        let (new_counter, wrapped) = self.t2_counter.overflowing_sub(1);
+                        if wrapped || new_counter == 0 {
+                            self.set_ifr(IRQ_T2);
+                            self.t2_running = false;
+                            self.t2_counter = 0xFFFF;
+                        } else {
+                            self.t2_counter = new_counter;
+                        }
+                    }
+                }
             }
             ViaProtocolMessage::ControlSignalChange { signals, state } => {
                 if signals & 0x02 != 0 { // CA1
@@ -403,6 +432,9 @@ impl Via6522 {
                     let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
                     if state == pos_edge { self.set_ifr(IRQ_CB1); }
                     self.cb1 = state;
+                    if state && matches!(self.sr_mode(), SR_MODE_IN_EXT | SR_MODE_OUT_EXT) {
+                        self.sr_clock();
+                    }
                 }
                 if signals & 0x04 != 0 { // CB2 (when configured as input)
                     let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
@@ -417,6 +449,53 @@ impl Via6522 {
         }
     }
 
+    fn sr_mode(&self) -> u8 {
+        self.acr & ACR_SR_MODE_MASK
+    }
+
+    /// Clocks one bit through the shift register: pulses CB1 low then high, shifts
+    /// a bit out on CB2 (or samples CB2 for shift-in), and sets `IRQ_SR` after 8 bits.
+    fn sr_clock(&mut self) {
+        if !self.sr_running { return; }
+
+        let shifting_out = self.sr_shifting_out;
+        let bit_index = 7 - self.sr_count; // MSB first
+
+        // CB1 falling edge (clock low).
+        self.sr_cb1 = false;
+        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+
+        if shifting_out {
+            let bit = (self.sr >> bit_index) & 1 != 0;
+            self.cb2 = bit;
+            self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: bit });
+        }
+
+        // CB1 rising edge (clock high; data sampled here for shift-in).
+        self.sr_cb1 = true;
+        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
+
+        if !shifting_out {
+            let bit = self.cb2;
+            let mask = 1u8 << bit_index;
+            if bit { self.sr |= mask; } else { self.sr &= !mask; }
+        }
+
+        self.sr_count += 1;
+
+        if self.sr_count >= 8 {
+            self.sr_count = 0;
+            self.set_ifr(IRQ_SR);
+            let self_terminating = matches!(
+                self.sr_mode(),
+                SR_MODE_IN_T2 | SR_MODE_OUT_T2 | SR_MODE_IN_EXT | SR_MODE_OUT_EXT
+            );
+            if self_terminating {
+                self.sr_running = false;
+            }
+        }
+    }
+
     // --- Timer tick ---
 
     fn tick_timers(&mut self, cycles: u32) {
@@ -425,6 +504,9 @@ impl Via6522 {
             let (new_counter, wrapped) = self.t1_counter.overflowing_sub(cycles as u16);
             if wrapped || new_counter == 0 {
                 self.set_ifr(IRQ_T1);
+                if matches!(self.sr_mode(), SR_MODE_IN_T1 | SR_MODE_OUT_T1) {
+                    self.sr_clock();
+                }
                 if self.acr & ACR_T1_PB7_OUTPUT != 0 {
                     self.t1_pb7 = !self.t1_pb7;
                     if !self.suppress_t1_pb7_messages {
@@ -445,10 +527,20 @@ impl Via6522 {
             }
         }
 
-        // Timer 2 (timed mode only; PB6 pulse-counting not implemented here).
+        // Timer 2 (timed mode only; PB6 pulse-counting handled in apply_message).
         if self.t2_running && self.acr & ACR_T2_COUNT_PB6 == 0 {
             let (new_counter, wrapped) = self.t2_counter.overflowing_sub(cycles as u16);
             if wrapped || new_counter == 0 {
+                if matches!(self.sr_mode(), SR_MODE_IN_T2 | SR_MODE_OUT_T2 | SR_MODE_OUT_FREE_T2) {
+                    self.sr_clock();
+                    // T2 reloads for the next SR clock unless the SR just finished.
+                    // For OUT_FREE_T2, sr_running stays true indefinitely.
+                    if self.sr_running {
+                        self.t2_counter = ((self.t2_latch_hi as u16) << 8) | self.t2_latch_lo as u16;
+                        return; // keep T2 running; no IRQ_T2
+                    }
+                    // SR complete (self-terminating modes): fall through to stop T2.
+                }
                 self.set_ifr(IRQ_T2);
                 self.t2_running = false;
                 self.t2_counter = 0xFFFF;
@@ -584,7 +676,8 @@ impl IoDevice for Via6522 {
                 self.t2_latch_lo = value;
             }
             0x9 => {
-                // Write T2 counter high — loads counter, starts timer.
+                // Write T2 counter high — loads counter and latch, starts timer.
+                self.t2_latch_hi = value;
                 self.t2_counter = ((value as u16) << 8) | self.t2_latch_lo as u16;
                 self.t2_running = true;
                 self.clear_ifr(IRQ_T2);
@@ -592,6 +685,12 @@ impl IoDevice for Via6522 {
             0xA => {
                 self.sr = value;
                 self.clear_ifr(IRQ_SR);
+                let mode = self.sr_mode();
+                if mode != SR_MODE_DISABLED {
+                    self.sr_count = 0;
+                    self.sr_running = true;
+                    self.sr_shifting_out = mode >= SR_MODE_OUT_FREE_T2;
+                }
             }
             0xB => {
                 self.acr = value;
@@ -1214,6 +1313,209 @@ mod tests {
             "transport 1 missing state dump: {:?}", String::from_utf8_lossy(&r1));
         assert!(r2.windows(3).any(|w| w == b"A00"),
             "transport 2 missing state dump: {:?}", String::from_utf8_lossy(&r2));
+    }
+
+    // --- Shift register ---
+
+    fn sr_device_with_pipe_and_mode(acr: u8) -> (Via6522, PipeTransport) {
+        let (mut via, remote) = device_with_pipe();
+        via.write(0xB, acr);
+        (via, remote)
+    }
+
+    fn handshake(via: &mut Via6522, remote: &mut PipeTransport) {
+        remote.send(0x20).unwrap(); // ASCII
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+        std::thread::sleep(Duration::from_millis(1));
+        collect_bytes(remote); // drain state dump
+    }
+
+    #[test]
+    fn sr_disabled_mode_is_noop() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_DISABLED); // ACR SR mode = 000
+        via.write(0xA, 0xAB);            // write SR data
+        for _ in 0..20 { via.tick(1); }
+        assert_eq!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR should not fire when disabled");
+        assert!(!via.sr_running);
+        assert_eq!(via.peek(0xA), 0xAB);
+    }
+
+    #[test]
+    fn sr_shift_out_t2_sends_cb1_cb2_messages() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_T2);
+        handshake(&mut via, &mut remote);
+
+        // Load T2 = 2, write SR to start (ACR already set).
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00); // T2 starts
+        via.write(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
+
+        // 8 T2 underflows → 8 SR clocks. Each clock: CB1 low + optional CB2 + CB1 high.
+        for _ in 0..8 {
+            via.tick(2); // T2 underflow fires sr_clock
+        }
+
+        std::thread::sleep(Duration::from_millis(1));
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+
+        // Expect CB1 messages to appear (at least 8 low + 8 high).
+        let cb1_low_count = s.match_indices("CB10").count();
+        let cb1_high_count = s.match_indices("CB11").count();
+        assert_eq!(cb1_low_count, 8, "expected 8 CB10 messages, got {cb1_low_count}; output: {s}");
+        assert_eq!(cb1_high_count, 8, "expected 8 CB11 messages, got {cb1_high_count}; output: {s}");
+
+        // Verify MSB-first bit order: 0b10110100 → bits 1,0,1,1,0,1,0,0
+        let expected_bits = [1u8, 0, 1, 1, 0, 1, 0, 0];
+        let mut cb2_bits: Vec<u8> = Vec::new();
+        let mut search = s.as_ref();
+        while let Some(pos) = search.find("CB2") {
+            if pos + 4 <= search.len() {
+                let state_char = &search[pos + 3..pos + 4];
+                cb2_bits.push(if state_char == "1" { 1 } else { 0 });
+            }
+            search = &search[pos + 3..];
+        }
+        assert_eq!(cb2_bits.len(), 8, "expected 8 CB2 messages, got {}: {s}", cb2_bits.len());
+        for (i, (&expected, &got)) in expected_bits.iter().zip(cb2_bits.iter()).enumerate() {
+            assert_eq!(got, expected, "bit {i}: expected CB2={expected}, got CB2={got}");
+        }
+    }
+
+    #[test]
+    fn sr_shift_out_t2_sets_ifr_after_8_clocks() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xAA);
+        for _ in 0..8 { via.tick(2); }
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 T2 underflows");
+    }
+
+    #[test]
+    fn sr_shift_out_t2_stops_after_8_bits() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xFF);
+        for _ in 0..8 { via.tick(2); }
+        assert!(!via.sr_running, "sr_running must be false after self-terminating mode completes");
+    }
+
+    #[test]
+    fn sr_shift_out_free_t2_continues_indefinitely() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_FREE_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0x55);
+        // Tick 20 T2-length intervals (well past 8 bits).
+        for _ in 0..20 { via.tick(2); }
+        assert!(via.sr_running, "sr_running must remain true for free-running mode");
+    }
+
+    #[test]
+    fn sr_shift_in_ext_clk_captures_cb2() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
+        handshake(&mut via, &mut remote);
+
+        via.write(0xA, 0x00); // start SR shift-in
+
+        // Clock in byte 0b10110010 by toggling CB2 then sending CB1 rising edge.
+        // Bit order: MSB first, so bit7=1, bit6=0, bit5=1, bit4=1, bit3=0, bit2=0, bit1=1, bit0=0
+        let bits = [1u8, 0, 1, 1, 0, 0, 1, 0];
+        for bit in bits {
+            via.cb2 = bit != 0;
+            // CB1 rising edge clocks the SR.
+            via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
+            // CB1 back low (not a clock).
+            via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+        }
+
+        assert_eq!(via.sr, 0b10110010, "shifted-in byte mismatch: got 0x{:02X}", via.sr);
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
+    }
+
+    #[test]
+    fn sr_shift_in_t1_sets_ifr_after_8_clocks() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_IN_T1 | T1_MODE_FREE_RUN);
+        via.write(0x4, 5u8);
+        via.write(0x5, 0x00); // T1 start
+        via.write(0xA, 0x00); // SR shift-in start
+        for _ in 0..8 { via.tick(5); }
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 T1 underflows");
+    }
+
+    // --- T2 pulse-counting ---
+
+    #[test]
+    fn t2_pulse_count_pb6_neg_transition_decrements_counter() {
+        let (mut via, mut remote) = device_with_pipe();
+        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0x8, 5u8);
+        via.write(0x9, 0x00); // T2 = 5, starts
+        handshake(&mut via, &mut remote);
+
+        // PB6 high→low: negative transition should decrement counter.
+        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 }); // PB6=1
+        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 }); // PB6=0
+
+        assert_eq!(via.t2_counter, 4, "expected T2 counter = 4 after one PB6 neg transition");
+    }
+
+    #[test]
+    fn t2_pulse_count_fires_irq_on_underflow() {
+        let (mut via, mut remote) = device_with_pipe();
+        via.write(0xE, 0xA0); // enable T2 IRQ
+        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0x8, 3u8);
+        via.write(0x9, 0x00); // T2 = 3
+        handshake(&mut via, &mut remote);
+
+        for _ in 0..3 {
+            via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 });
+            via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 });
+        }
+
+        assert_ne!(via.peek(0xD) & IRQ_T2, 0, "IRQ_T2 must fire after 3 PB6 neg transitions");
+        assert!(via.irq_active());
+        assert!(!via.t2_running);
+    }
+
+    #[test]
+    fn t2_pulse_count_ignores_positive_transitions() {
+        let (mut via, mut remote) = device_with_pipe();
+        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0x8, 5u8);
+        via.write(0x9, 0x00);
+        handshake(&mut via, &mut remote);
+
+        // PB6 low → high (positive transition) must not decrement.
+        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 }); // PB6=0
+        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 }); // PB6=1
+
+        assert_eq!(via.t2_counter, 5, "positive PB6 transition must not decrement T2 counter");
+    }
+
+    #[test]
+    fn t2_timed_mode_not_affected_by_pb6() {
+        let (mut via, mut remote) = device_with_pipe();
+        // ACR bit 5 clear → timed mode.
+        via.write(0xB, 0x00);
+        via.write(0x8, 100u8);
+        via.write(0x9, 0x00);
+        handshake(&mut via, &mut remote);
+
+        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 });
+        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 });
+
+        // Counter should still be near 100 (only a tick or two from handshake).
+        assert!(via.t2_counter >= 98, "timed T2 must not be decremented by PB6 transitions");
     }
 
     #[test]
