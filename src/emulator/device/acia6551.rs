@@ -160,10 +160,10 @@ impl Acia6551 {
     }
 
     fn poll_transport(&mut self) {
+        if self.rdrf {
+            return;
+        }
         if let Some(byte) = self.transport.as_mut().and_then(|t| t.try_recv()) {
-            if self.rdrf {
-                self.overrun = true;
-            }
             self.rx_data = byte;
             self.rdrf = true;
         }
@@ -391,26 +391,16 @@ mod tests {
     }
 
     #[test]
-    fn overrun_set_when_second_byte_arrives_before_read() {
+    fn second_byte_held_in_transport_until_first_read() {
         let (mut device, mut remote) = device_with_pipe();
         remote.send(0x01).unwrap();
         remote.send(0x02).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // receives 0x01 → RDRF
-        device.tick(1); // receives 0x02 → OVRN
-        assert_ne!(device.peek(1) & 0x04, 0); // OVRN set
-    }
-
-    #[test]
-    fn programmed_reset_clears_overrun() {
-        let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x01).unwrap();
-        remote.send(0x02).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
-        device.tick(1);
-        device.tick(1);
-        device.write(1, 0x00); // programmed reset
-        assert_eq!(device.peek(1) & 0x04, 0); // OVRN cleared
+        device.tick(1); // 0x02 stays in pipe (RDRF still set)
+        assert_eq!(device.read(0), 0x01);
+        device.tick(1); // now receives 0x02
+        assert_eq!(device.read(0), 0x02);
     }
 
     // --- Baud rate timing ---
