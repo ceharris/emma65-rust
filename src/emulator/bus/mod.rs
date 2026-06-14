@@ -174,6 +174,17 @@ impl Bus {
         }).collect()
     }
 
+    /// Drains pending NMI edge events from all devices. Returns `true` if any device had one.
+    pub fn take_device_nmi(&mut self) -> bool {
+        let mut any = false;
+        for region in &mut self.regions {
+            if let Region::Device { device, .. } = region {
+                any |= device.take_nmi();
+            }
+        }
+        any
+    }
+
     /// Replaces the ROM data for the region starting at `range.start` with `data`.
     ///
     /// `data.len()` must equal `range.len()`.  Useful for patching ROM after construction.
