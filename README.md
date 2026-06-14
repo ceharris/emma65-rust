@@ -1,4 +1,4 @@
-# emma65
+# Emma65
 
 Emma65 is a software emulator for the 65C02-family of 8-bit microprocessors. It provides
 a complete execution environment suitable for running and debugging programs written for
@@ -95,7 +95,7 @@ and `take_nmi()`, and with the transport system for byte-stream I/O.
 
 #### 6522 VIA (`Via6522`)
 
-A complete implementation of the WDC 65C22 Versatile Interface Adapter:
+A complete implementation of the MOS 6522 Versatile Interface Adapter:
 
 - All 16 addressable registers (offsets `$0`–`$F`)
 - Two independent 8-bit I/O ports (A and B), each with a data direction register

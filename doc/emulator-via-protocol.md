@@ -1,7 +1,7 @@
 Virtual 6522 VIA
 ================
 
-This document descripts a protocol for peripheral communication with
+This document describes a protocol for peripheral communication with
 for a virtual 6522 Versatile Interface Adapter (VIA) over a transport such
 as a socket or PTY.
 
@@ -32,7 +32,7 @@ for an incoming connection from a peripheral. Once connected, the VIA
 transmits and receives data with the peripheral asynchronously, conveying
 and updating the GPIO and control pin states in registers accessible under
 program control by the virtual MPU. Incoming GPIO pin state changes from
-the peripheral can be trigger interrupt conditions on the VIA, just as they
+the peripheral can trigger interrupt conditions on the VIA, just as they
 would on real hardware.
 
 The protocol defines two message types:
@@ -50,15 +50,15 @@ changes are communicated according to changes to these controls on the VIA or
 by the external peripheral.
 
 The protocol supports two representation formats; a compact binary format, and 
-an ASCII format. Either format can be selected by a external peripheral after
+an ASCII format. Either format can be selected by an external peripheral after
 connecting to the VIA. The ASCII format is especially useful for allowing a
 person (connected via a simple terminal) to play the role of the external 
 peripheral, and can be very helpful in learning how to use the VIA in programs
 for the 6502.
 
 An implementation of the protocol MUST silently ignore received data that 
-does not correspond to legitmate protocol messages. No provision exists in 
-this protocol for communicating syntatic or semantic errors.
+does not correspond to legitimate protocol messages. No provision exists in 
+this protocol for communicating syntactic or semantic errors.
 
 An implementation of the protocol SHOULD disconnect the socket on any 
 indication of an (operating system) error in communicating on the socket.
@@ -70,10 +70,10 @@ of data.
 
 The binary protocol is selected by the first message received on the socket
 whose high-order bit is set. Subsequently, the recipient MUST use only the 
-binary protocol for communicating on the connected  socket; it must send 
-messages in the binary format, and must accept only binary format messages.
+binary protocol for communicating on the connected socket; it must send 
+messages in the binary format and must accept only binary format messages.
 
-**Port State Change**. This message consisting of a one byte port identifier, 
+**Port State Change**. This message consists of a one-byte port identifier, 
 followed by a second byte describing the state of the port's pins. Port A is 
 identified using 0x80 as the leading byte, while port B is identified using 
 0x90 as the leading byte. The second byte communicates the state of the port's 
@@ -109,13 +109,13 @@ conventions used in the VIA's Interrupt Flag and Interrupt Enable registers.
 The binary protocol is selected by the first message received on the socket
 whose high-order bit is set. Subsequently, the VIA will use only the binary
 protocol for communicating with the external peripheral on the connected 
-socket; it will send messages in the binary format, and will accept only
+socket; it will send messages in the binary format and will accept only
 binary format messages from the peripheral. 
 
 **Until the binary mode has been selected, the VIA will communicate using the 
-ASCII protocol**. To ensure that the VIA uses only binary format messages 
-the peripheral should send a single byte `0xFF` upon connection. The high 
-order bit of this byte will select the binary protocol, but it will 
+ASCII protocol**. To ensure that the VIA uses only binary format messages,
+the peripheral should send a single byte `0xFF` upon connection. 
+The high-order bit of this byte will select the binary protocol, but it will 
 be otherwise ignored. It is possible that the peripheral could receive ASCII
 format messages before the mode is selected. The peripheral should ignore 
 data received until the binary mode is acknowledged by reciept of a byte 
@@ -131,18 +131,18 @@ more difficult.
 The ASCII protocol is selected by the first character received on the socket
 whose high-order bit is not set. Subsequently, the recipient MUST use 
 only the ASCII protocol for messages communicated on the socket; it must send 
-messages in the ASCII format, and must accept only ASCII format messages.
+messages in the ASCII format and must accept only ASCII format messages.
 
 An implementation of the ASCII protocol MUST ignore all control character 
 codes (0x00..0x1F), space (0x20), delete (0x7f), and any character whose
 high-order bit is set (0x80..0xFF), up to the start of a valid message. 
-These characters are not allowed within the sequene of characters that 
+These characters are not allowed within the sequence of characters that 
 compromise a message.
 
 An implementation MUST NOT distinguish ASCII upper case letters (0x40..0x5A) 
 from ASCII lower case letters (0x60..0x7A). For brevity, the message 
 descriptions that follow use upper case letters, but messages may consist 
-of upper and/or lower case letter with no distinction between the two.
+of uppercase and/or lowercase letters with no distinction between the two.
 
 **Port Change Message**. Port change messages consist of three consecutive
 ASCII characters. The first character is either 'A' or 'B', signifying the 
@@ -174,7 +174,7 @@ is an ASCII digit '1' or '2'.
 
 Because spaces and control characters are ignored, you can type a series 
 of messages with intervening spaces or newlines for easy reading; the VIA
-includes a space between each message in ASCII mode as an aid to readibility.
+includes a space between each message in ASCII mode as an aid to readability.
 
 On receipt of a valid start-of-message character ('A', 'B', 'C'), an 
 implementation MUST consume characters from the stream for the full length 
@@ -183,7 +183,7 @@ the message. Until a valid start-of-message character is received, an
 implementation MUST ignore all other received characters.
 
 **Unless the binary mode is selected, the VIA will communicate using the
-ASCII protocol**. To ensure that the VIA uses only ASCII format messages
+ASCII protocol**. To ensure that the VIA uses only ASCII format messages,
 the peripheral should send a space (0x20) or any ASCII control character
 (0x00..0x1f, 0x7f) upon connection to the VIA. This character will select 
 the ASCII mode, but will be otherwise ignored.
