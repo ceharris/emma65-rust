@@ -46,7 +46,7 @@
 
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::device::via_protocol::{
-    ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolMessage,
+    ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage,
 };
 use crate::emulator::transport::{Transport, TransportError};
 
@@ -82,15 +82,27 @@ const PCR_CB2_MASK:  u8 = 0xE0;
 const T1_MODE_ONE_SHOT:  u8 = 0x00; // reserved for explicit mode comparison
 const T1_MODE_FREE_RUN:  u8 = 0x40;
 
-/// Selects which VIA interface a transport is bound to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViaPortBinding {
-    /// Transport communicates port A and CA1/CA2 state changes.
-    PortA,
-    /// Transport communicates port B and CB1/CB2 state changes.
-    PortB,
-    /// Transport communicates shift register clock (CB1) and data (CB2) transitions.
-    ShiftRegister,
+/// One active transport connection with its associated protocol state.
+struct TransportSlot {
+    /// The underlying byte-stream transport.
+    transport: Box<dyn Transport>,
+    /// Encoder for outgoing protocol messages (format selected after handshake).
+    encoder: ViaProtocolEncoder,
+    /// Decoder for incoming protocol messages.
+    decoder: ViaProtocolDecoder,
+    /// True once the format-negotiation handshake has completed.
+    handshake_done: bool,
+}
+
+impl TransportSlot {
+    fn new(transport: Box<dyn Transport>) -> Self {
+        Self {
+            transport,
+            encoder: ViaProtocolEncoder::new(),
+            decoder: ViaProtocolDecoder::new(),
+            handshake_done: false,
+        }
+    }
 }
 
 /// WDC 65C22 Versatile Interface Adapter.
@@ -154,25 +166,9 @@ pub struct Via6522 {
     /// CB2 input/output line state.
     cb2: bool,
 
-    // --- Transport / protocol (Port A binding) ---
-    /// Transport for port A / CA1/CA2.
-    transport_a: Option<Box<dyn Transport>>,
-    /// Encoder for outgoing messages on transport A.
-    encoder_a: ViaProtocolEncoder,
-    /// Decoder for incoming messages on transport A.
-    decoder_a: ViaProtocolDecoder,
-    /// True once the transport A connection handshake is complete.
-    handshake_a_done: bool,
-
-    // --- Transport / protocol (Port B / shift register binding) ---
-    /// Transport for port B / CB1/CB2 / shift register.
-    transport_b: Option<Box<dyn Transport>>,
-    /// Encoder for outgoing messages on transport B.
-    encoder_b: ViaProtocolEncoder,
-    /// Decoder for incoming messages on transport B.
-    decoder_b: ViaProtocolDecoder,
-    /// True once the transport B connection handshake is complete.
-    handshake_b_done: bool,
+    // --- Transport connections ---
+    /// All active transport connections; each peripheral sees all port and signal state changes.
+    transports: Vec<TransportSlot>,
 
     // --- Async error reporting ---
     /// Destination for async transport error events.
@@ -182,9 +178,6 @@ pub struct Via6522 {
 
     /// Suppress Timer 1 PB7 protocol messages even when ACR enables PB7 output.
     suppress_t1_pb7_messages: bool,
-
-    /// Scratch buffer for encoding outgoing protocol bytes.
-    tx_buf: Vec<u8>,
 }
 
 impl Via6522 {
@@ -198,37 +191,17 @@ impl Via6522 {
             sr: 0, sr_count: 0,
             acr: 0, pcr: 0, ifr: 0, ier: 0,
             ca1: false, ca2: false, cb1: false, cb2: false,
-            transport_a: None,
-            encoder_a: ViaProtocolEncoder::new(),
-            decoder_a: ViaProtocolDecoder::new(),
-            handshake_a_done: false,
-            transport_b: None,
-            encoder_b: ViaProtocolEncoder::new(),
-            decoder_b: ViaProtocolDecoder::new(),
-            handshake_b_done: false,
+            transports: Vec::new(),
             error_sender: None,
             device_id: None,
             suppress_t1_pb7_messages: false,
-            tx_buf: Vec::new(),
         }
     }
 
-    /// Attaches a transport bound to the given port interface.
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, binding: ViaPortBinding) {
-        match binding {
-            ViaPortBinding::PortA => {
-                self.transport_a = Some(transport);
-                self.encoder_a = ViaProtocolEncoder::new();
-                self.decoder_a = ViaProtocolDecoder::new();
-                self.handshake_a_done = false;
-            }
-            ViaPortBinding::PortB | ViaPortBinding::ShiftRegister => {
-                self.transport_b = Some(transport);
-                self.encoder_b = ViaProtocolEncoder::new();
-                self.decoder_b = ViaProtocolDecoder::new();
-                self.handshake_b_done = false;
-            }
-        }
+    /// Attaches a transport. All attached transports receive every port and control-signal
+    /// state change; any number of peripherals may be connected simultaneously.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
+        self.transports.push(TransportSlot::new(transport));
     }
 
     /// Sets the error sender for async transport event reporting.
@@ -287,109 +260,77 @@ impl Via6522 {
 
     // --- Protocol transmission helpers ---
 
-    fn send_a(&mut self, message: ViaProtocolMessage) {
-        self.tx_buf.clear();
-        self.encoder_a.encode(message, &mut self.tx_buf);
-        let bytes: Vec<u8> = self.tx_buf.drain(..).collect();
-        if let Some(t) = self.transport_a.as_mut() {
+    /// Encodes `message` and sends it to all transport connections that have completed
+    /// the format-negotiation handshake.
+    fn send_to_all(&mut self, message: ViaProtocolMessage) {
+        for i in 0..self.transports.len() {
+            if !self.transports[i].handshake_done { continue; }
+            let mut bytes = Vec::new();
+            self.transports[i].encoder.encode(message, &mut bytes);
             for b in bytes {
-                if let Err(e) = t.send(b) {
+                if let Err(e) = self.transports[i].transport.send(b) {
+                    self.report_error(e);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Sends the full port and control-signal state dump to transport `idx` after
+    /// format negotiation, so the newly-connected peripheral can synchronise.
+    fn send_state_dump(&mut self, idx: usize) {
+        let port_a = self.read_port_a();
+        let port_b = self.read_port_b();
+        let (ca1, ca2, cb1, cb2) = (self.ca1, self.ca2, self.cb1, self.cb2);
+        // Control signal bit layout: CA1=bit1, CA2=bit0, CB1=bit3, CB2=bit2.
+        let msgs = [
+            ViaProtocolMessage::PortStateChange { port: 'A', value: port_a },
+            ViaProtocolMessage::PortStateChange { port: 'B', value: port_b },
+            ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: ca1 },
+            ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: ca2 },
+            ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: cb1 },
+            ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: cb2 },
+        ];
+        for msg in msgs {
+            let mut bytes = Vec::new();
+            self.transports[idx].encoder.encode(msg, &mut bytes);
+            for b in bytes {
+                if let Err(e) = self.transports[idx].transport.send(b) {
                     self.report_error(e);
                     return;
                 }
             }
         }
     }
-
-    fn send_b(&mut self, message: ViaProtocolMessage) {
-        self.tx_buf.clear();
-        self.encoder_b.encode(message, &mut self.tx_buf);
-        let bytes: Vec<u8> = self.tx_buf.drain(..).collect();
-        if let Some(t) = self.transport_b.as_mut() {
-            for b in bytes {
-                if let Err(e) = t.send(b) {
-                    self.report_error(e);
-                    return;
-                }
-            }
-        }
-    }
-
-    /// Sends the full state dump (port A + CA1/CA2) on transport A after format negotiation.
-    fn send_state_dump_a(&mut self) {
-        self.send_a(ViaProtocolMessage::PortStateChange { port: 'A', value: self.read_port_a() });
-        // Control signal bit layout: CA1=bit1, CA2=bit0.
-        for (signals, state) in [(0x02u8, self.ca1), (0x01u8, self.ca2)] {
-            self.send_a(ViaProtocolMessage::ControlSignalChange { signals, state });
-        }
-    }
-
-    /// Sends the full state dump (port B + CB1/CB2) on transport B after format negotiation.
-    fn send_state_dump_b(&mut self) {
-        self.send_b(ViaProtocolMessage::PortStateChange { port: 'B', value: self.read_port_b() });
-        // Control signal bit layout: CB1=bit3, CB2=bit2.
-        for (signals, state) in [(0x08u8, self.cb1), (0x04u8, self.cb2)] {
-            self.send_b(ViaProtocolMessage::ControlSignalChange { signals, state });
-        }
-    }
-
 
     // --- Handshake / incoming byte processing ---
 
-    /// Polls transport A for incoming bytes and processes any decoded messages.
-    fn poll_transport_a(&mut self) {
-        loop {
-            let byte = match self.transport_a.as_mut().and_then(|t| t.try_recv()) {
-                Some(b) => b,
-                None => break,
-            };
+    /// Polls all transport connections for incoming bytes and processes decoded messages.
+    fn poll_transports(&mut self) {
+        for i in 0..self.transports.len() {
+            while let Some(byte) = self.transports[i].transport.try_recv() {
+                let msg = self.transports[i].decoder.feed(byte);
 
-            // Feed into decoder; this may lock the format.
-            let msg = self.decoder_a.feed(byte);
-
-            // First qualifying byte locks format → complete the handshake.
-            if !self.handshake_a_done && self.decoder_a.format().is_some() {
-                self.handshake_a_done = true;
-                use crate::emulator::device::via_protocol::ViaProtocolFormat;
-                if self.decoder_a.format() == Some(ViaProtocolFormat::Binary) {
-                    self.encoder_a.select_binary();
+                // First qualifying byte locks the format → complete the handshake.
+                if !self.transports[i].handshake_done
+                    && self.transports[i].decoder.format().is_some()
+                {
+                    self.transports[i].handshake_done = true;
+                    if self.transports[i].decoder.format() == Some(ViaProtocolFormat::Binary) {
+                        self.transports[i].encoder.select_binary();
+                    }
+                    self.send_state_dump(i);
                 }
-                self.send_state_dump_a();
-            }
 
-            if let Some(m) = msg {
-                self.apply_message_a(m);
+                if let Some(m) = msg {
+                    self.apply_message(m);
+                }
             }
         }
     }
 
-    /// Polls transport B for incoming bytes and processes any decoded messages.
-    fn poll_transport_b(&mut self) {
-        loop {
-            let byte = match self.transport_b.as_mut().and_then(|t| t.try_recv()) {
-                Some(b) => b,
-                None => break,
-            };
-
-            let msg = self.decoder_b.feed(byte);
-
-            if !self.handshake_b_done && self.decoder_b.format().is_some() {
-                self.handshake_b_done = true;
-                use crate::emulator::device::via_protocol::ViaProtocolFormat;
-                if self.decoder_b.format() == Some(ViaProtocolFormat::Binary) {
-                    self.encoder_b.select_binary();
-                }
-                self.send_state_dump_b();
-            }
-
-            if let Some(m) = msg {
-                self.apply_message_b(m);
-            }
-        }
-    }
-
-    /// Applies an incoming protocol message on the port A transport.
-    fn apply_message_a(&mut self, msg: ViaProtocolMessage) {
+    /// Applies an incoming protocol message, updating port inputs and triggering interrupts.
+    fn apply_message(&mut self, msg: ViaProtocolMessage) {
         match msg {
             ViaProtocolMessage::PortStateChange { port: 'A', value } => {
                 let old = self.input_a;
@@ -398,11 +339,24 @@ impl Via6522 {
                     // CA1 latches on configured edge.
                     let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
                     let triggered = if pos_edge {
-                        (old & !value) != 0 || (!old & value) != 0 // any change; simplified
+                        (old & !value) != 0 || (!old & value) != 0
                     } else {
                         true
                     };
                     if triggered { self.set_ifr(IRQ_CA1); }
+                }
+            }
+            ViaProtocolMessage::PortStateChange { port: 'B', value } => {
+                let old = self.input_b;
+                self.input_b = value;
+                if old != value {
+                    let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
+                    let triggered = if pos_edge {
+                        (!old & value) != 0
+                    } else {
+                        (old & !value) != 0
+                    };
+                    if triggered { self.set_ifr(IRQ_CB1); }
                 }
             }
             ViaProtocolMessage::ControlSignalChange { signals, state } => {
@@ -419,28 +373,6 @@ impl Via6522 {
                         self.ca2 = state;
                     }
                 }
-            }
-            _ => {} // ignore misrouted messages
-        }
-    }
-
-    /// Applies an incoming protocol message on the port B transport.
-    fn apply_message_b(&mut self, msg: ViaProtocolMessage) {
-        match msg {
-            ViaProtocolMessage::PortStateChange { port: 'B', value } => {
-                let old = self.input_b;
-                self.input_b = value;
-                if old != value {
-                    let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
-                    let triggered = if pos_edge {
-                        (!old & value) != 0
-                    } else {
-                        (old & !value) != 0
-                    };
-                    if triggered { self.set_ifr(IRQ_CB1); }
-                }
-            }
-            ViaProtocolMessage::ControlSignalChange { signals, state } => {
                 if signals & 0x08 != 0 { // CB1
                     let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
                     if state == pos_edge { self.set_ifr(IRQ_CB1); }
@@ -472,13 +404,12 @@ impl Via6522 {
                     if !self.suppress_t1_pb7_messages {
                         // read_port_b() reflects the updated t1_pb7.
                         let pb = self.read_port_b();
-                        self.send_b(ViaProtocolMessage::PortStateChange { port: 'B', value: pb });
+                        self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: pb });
                     }
                 }
                 if self.acr & ACR_T1_MODE_MASK == T1_MODE_FREE_RUN {
                     // Reload from latch; account for any cycles past zero.
-                    let overshoot = if wrapped { 0u16 } else { 0u16 };
-                    self.t1_counter = self.t1_latch.saturating_sub(overshoot);
+                    self.t1_counter = self.t1_latch;
                 } else {
                     self.t1_running = false;
                     self.t1_counter = 0xFFFF;
@@ -567,7 +498,7 @@ impl IoDevice for Via6522 {
                 let old_b = (old_orb & self.ddrb) | (self.input_b & !self.ddrb);
                 let new_b = self.read_port_b();
                 if old_b != new_b {
-                    self.send_b(ViaProtocolMessage::PortStateChange { port: 'B', value: new_b });
+                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_b });
                 }
             }
             0x1 => {
@@ -578,7 +509,7 @@ impl IoDevice for Via6522 {
                 let old_a = (old_ora & self.ddra) | (self.input_a & !self.ddra);
                 let new_a = self.read_port_a();
                 if old_a != new_a {
-                    self.send_a(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
+                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
                 }
             }
             0x2 => {
@@ -588,7 +519,7 @@ impl IoDevice for Via6522 {
                 let old_b = (self.orb & old_ddrb) | (self.input_b & !old_ddrb);
                 let new_b = self.read_port_b();
                 if old_b != new_b {
-                    self.send_b(ViaProtocolMessage::PortStateChange { port: 'B', value: new_b });
+                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_b });
                 }
             }
             0x3 => {
@@ -597,7 +528,7 @@ impl IoDevice for Via6522 {
                 let old_a = (self.ora & old_ddra) | (self.input_a & !old_ddra);
                 let new_a = self.read_port_a();
                 if old_a != new_a {
-                    self.send_a(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
+                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
                 }
             }
             0x4 => {
@@ -661,7 +592,7 @@ impl IoDevice for Via6522 {
                 let old_a = (old_ora & self.ddra) | (self.input_a & !self.ddra);
                 let new_a = self.read_port_a();
                 if old_a != new_a {
-                    self.send_a(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
+                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
                 }
             }
             _ => {}
@@ -694,8 +625,7 @@ impl IoDevice for Via6522 {
     /// Ticks timers and polls transports for incoming protocol messages.
     fn tick(&mut self, cycles: u32) {
         self.tick_timers(cycles);
-        self.poll_transport_a();
-        self.poll_transport_b();
+        self.poll_transports();
     }
 
     /// Returns `true` when any enabled interrupt flag is set.
@@ -718,18 +648,22 @@ mod tests {
         Via6522::new()
     }
 
-    fn device_with_pipe_b() -> (Via6522, PipeTransport) {
+    fn device_with_pipe() -> (Via6522, PipeTransport) {
         let (local, remote) = PipeTransport::pair().unwrap();
         let mut via = Via6522::new();
-        via.attach_transport(Box::new(local), ViaPortBinding::PortB);
+        via.attach_transport(Box::new(local));
         (via, remote)
     }
 
-    fn device_with_pipe_a() -> (Via6522, PipeTransport) {
-        let (local, remote) = PipeTransport::pair().unwrap();
-        let mut via = Via6522::new();
-        via.attach_transport(Box::new(local), ViaPortBinding::PortA);
-        (via, remote)
+    fn collect_bytes(remote: &mut PipeTransport) -> Vec<u8> {
+        let mut buf = Vec::new();
+        loop {
+            match remote.try_recv() {
+                Some(b) => buf.push(b),
+                None => break,
+            }
+        }
+        buf
     }
 
     // --- Initial state ---
@@ -1013,12 +947,11 @@ mod tests {
         assert_ne!(before, after);
     }
 
-    // --- Port B output sends protocol message ---
+    // --- Port output sends protocol message ---
 
     #[test]
     fn write_orb_sends_port_b_state_change() {
-        let (mut via, mut remote) = device_with_pipe_b();
-        // Select ASCII format on the remote side.
+        let (mut via, mut remote) = device_with_pipe();
         remote.send(0x20).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
@@ -1028,15 +961,8 @@ mod tests {
         via.write(0x0, 0x01); // drive PB0 high
 
         std::thread::sleep(Duration::from_millis(1));
-        // Flush tx_buf to remote. Collect all bytes sent.
-        let mut received = Vec::new();
-        loop {
-            match remote.try_recv() {
-                Some(b) => received.push(b),
-                None => break,
-            }
-        }
-        // The state dump sends "B00", then ORB write sends "B01".
+        let received = collect_bytes(&mut remote);
+        // The state dump sends initial state; ORB write sends "B01".
         assert!(received.windows(3).any(|w| w == b"B01"),
             "expected B01 in {:?}", String::from_utf8_lossy(&received));
     }
@@ -1045,32 +971,31 @@ mod tests {
 
     #[test]
     fn binary_format_selector_triggers_handshake() {
-        let (mut via, mut remote) = device_with_pipe_b();
+        let (mut via, mut remote) = device_with_pipe();
         remote.send(0xFF).unwrap(); // binary selector
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
-        assert!(via.handshake_b_done);
+        assert!(via.transports[0].handshake_done);
     }
 
     #[test]
     fn ascii_format_selector_triggers_handshake() {
-        let (mut via, mut remote) = device_with_pipe_a();
+        let (mut via, mut remote) = device_with_pipe();
         remote.send(0x20).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
-        assert!(via.handshake_a_done);
+        assert!(via.transports[0].handshake_done);
     }
 
-    // --- Incoming port B message updates input pins ---
+    // --- Incoming port message updates input pins ---
 
     #[test]
     fn incoming_port_b_message_updates_input_b() {
-        let (mut via, mut remote) = device_with_pipe_b();
+        let (mut via, mut remote) = device_with_pipe();
         remote.send(0x20).unwrap(); // ASCII
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        // Send port B state 0xAB.
         for b in b"BAB".iter() { remote.send(*b).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
@@ -1079,11 +1004,26 @@ mod tests {
         assert_eq!(via.read(0x0), 0xAB);
     }
 
+    #[test]
+    fn incoming_port_a_message_updates_input_a() {
+        let (mut via, mut remote) = device_with_pipe();
+        remote.send(0x20).unwrap(); // ASCII
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1); // handshake
+
+        for b in b"A55".iter() { remote.send(*b).unwrap(); }
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        // PA pins configured as inputs (DDRA=0), so read returns input_a.
+        assert_eq!(via.read(0x1), 0x55);
+    }
+
     // --- Control signal interrupts ---
 
     #[test]
     fn incoming_ca1_low_triggers_irq_when_neg_edge_configured() {
-        let (mut via, mut remote) = device_with_pipe_a();
+        let (mut via, mut remote) = device_with_pipe();
         via.write(0xE, 0x82); // enable CA1 IRQ
         via.write(0xC, 0x00); // PCR: CA1 negative edge (bit 0 = 0)
         via.ca1 = true; // start high
@@ -1102,7 +1042,7 @@ mod tests {
 
     #[test]
     fn incoming_ca1_high_does_not_trigger_when_neg_edge_configured() {
-        let (mut via, mut remote) = device_with_pipe_a();
+        let (mut via, mut remote) = device_with_pipe();
         via.write(0xE, 0x82); // enable CA1 IRQ
         via.write(0xC, 0x00); // PCR: CA1 negative edge
         via.ca1 = false;
@@ -1120,10 +1060,9 @@ mod tests {
 
     #[test]
     fn incoming_ca2_triggers_irq_when_input_mode() {
-        let (mut via, mut remote) = device_with_pipe_a();
+        let (mut via, mut remote) = device_with_pipe();
         via.write(0xE, 0x81); // enable CA2 IRQ
-        // PCR bits 3:1 = 000 → CA2 input, negative edge
-        via.write(0xC, 0x00);
+        via.write(0xC, 0x00); // PCR bits 3:1 = 000 → CA2 input, negative edge
         via.ca2 = true;
 
         remote.send(0x20).unwrap();
@@ -1139,7 +1078,7 @@ mod tests {
 
     #[test]
     fn incoming_cb1_triggers_irq_when_neg_edge_configured() {
-        let (mut via, mut remote) = device_with_pipe_b();
+        let (mut via, mut remote) = device_with_pipe();
         via.write(0xE, 0x90); // enable CB1 IRQ
         via.write(0xC, 0x00); // PCR: CB1 negative edge (bit 4 = 0)
         via.cb1 = true;
@@ -1158,10 +1097,9 @@ mod tests {
 
     #[test]
     fn incoming_cb2_triggers_irq_when_input_mode() {
-        let (mut via, mut remote) = device_with_pipe_b();
+        let (mut via, mut remote) = device_with_pipe();
         via.write(0xE, 0x88); // enable CB2 IRQ
-        // PCR bits 7:5 = 000 → CB2 input, negative edge
-        via.write(0xC, 0x00);
+        via.write(0xC, 0x00); // PCR bits 7:5 = 000 → CB2 input, negative edge
         via.cb2 = true;
 
         remote.send(0x20).unwrap();
@@ -1175,7 +1113,7 @@ mod tests {
         assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
 
-    // --- peek does not affect timer counters or send protocol messages ---
+    // --- peek does not affect timer counters or flags ---
 
     #[test]
     fn peek_t1_does_not_clear_flag_or_alter_counter() {
@@ -1203,46 +1141,84 @@ mod tests {
     // --- State dump on handshake ---
 
     #[test]
-    fn state_dump_a_sends_correct_ca1_signal_bit() {
-        let (mut via, mut remote) = device_with_pipe_a();
+    fn state_dump_sends_all_six_messages() {
+        let (mut via, mut remote) = device_with_pipe();
         via.ca1 = true;
+        via.cb2 = true;
 
         remote.send(0x20).unwrap(); // ASCII selector
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake → state dump sent
 
-        let mut received = Vec::new();
         std::thread::sleep(Duration::from_millis(1));
-        loop {
-            match remote.try_recv() {
-                Some(b) => received.push(b),
-                None => break,
-            }
-        }
+        let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        // State dump must include CA11 (CA1=bit1, state=1).
+
+        assert!(s.contains("A00"), "expected A00 in state dump, got: {s}");
+        assert!(s.contains("B00"), "expected B00 in state dump, got: {s}");
         assert!(s.contains("CA11"), "expected CA11 in state dump, got: {s}");
+        assert!(s.contains("CA20"), "expected CA20 in state dump, got: {s}");
+        assert!(s.contains("CB10"), "expected CB10 in state dump, got: {s}");
+        assert!(s.contains("CB21"), "expected CB21 in state dump, got: {s}");
     }
 
-    #[test]
-    fn state_dump_b_sends_correct_cb2_signal_bit() {
-        let (mut via, mut remote) = device_with_pipe_b();
-        via.cb2 = true;
+    // --- Multiple transports ---
 
-        remote.send(0x20).unwrap();
+    #[test]
+    fn multiple_transports_both_receive_state_dump() {
+        let (local1, mut remote1) = PipeTransport::pair().unwrap();
+        let (local2, mut remote2) = PipeTransport::pair().unwrap();
+        let mut via = Via6522::new();
+        via.attach_transport(Box::new(local1));
+        via.attach_transport(Box::new(local2));
+
+        remote1.send(0x20).unwrap();
+        remote2.send(0x20).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        let mut received = Vec::new();
+        assert!(via.transports[0].handshake_done);
+        assert!(via.transports[1].handshake_done);
+
         std::thread::sleep(Duration::from_millis(1));
-        loop {
-            match remote.try_recv() {
-                Some(b) => received.push(b),
-                None => break,
-            }
-        }
-        let s = String::from_utf8_lossy(&received);
-        // State dump must include CB21 (CB2=bit2, state=1).
-        assert!(s.contains("CB21"), "expected CB21 in state dump, got: {s}");
+        let r1 = collect_bytes(&mut remote1);
+        let r2 = collect_bytes(&mut remote2);
+
+        assert!(r1.windows(3).any(|w| w == b"A00"),
+            "transport 1 missing state dump: {:?}", String::from_utf8_lossy(&r1));
+        assert!(r2.windows(3).any(|w| w == b"A00"),
+            "transport 2 missing state dump: {:?}", String::from_utf8_lossy(&r2));
+    }
+
+    #[test]
+    fn multiple_transports_both_receive_port_state_change() {
+        let (local1, mut remote1) = PipeTransport::pair().unwrap();
+        let (local2, mut remote2) = PipeTransport::pair().unwrap();
+        let mut via = Via6522::new();
+        via.attach_transport(Box::new(local1));
+        via.attach_transport(Box::new(local2));
+
+        remote1.send(0x20).unwrap();
+        remote2.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+
+        // Drain state dumps.
+        std::thread::sleep(Duration::from_millis(1));
+        collect_bytes(&mut remote1);
+        collect_bytes(&mut remote2);
+
+        // Drive PA0 high.
+        via.write(0x3, 0x01); // DDRA: PA0 = output
+        via.write(0x1, 0x01); // ORA: PA0 high
+
+        std::thread::sleep(Duration::from_millis(1));
+        let r1 = collect_bytes(&mut remote1);
+        let r2 = collect_bytes(&mut remote2);
+
+        assert!(r1.windows(3).any(|w| w == b"A01"),
+            "transport 1 missing A01: {:?}", String::from_utf8_lossy(&r1));
+        assert!(r2.windows(3).any(|w| w == b"A01"),
+            "transport 2 missing A01: {:?}", String::from_utf8_lossy(&r2));
     }
 }
