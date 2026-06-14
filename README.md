@@ -1,11 +1,21 @@
-# Emma65
+# emma65
 
-Emma65 is a software emulator for the 65C02-family of 8-bit microprocessors.
-It provides a complete execution environment suitable for running and
-debugging programs written for classic 65C02-based systems, with support for
-flexible memory configuration, virtual I/O devices, and expression-based
-watchpoints that make it a capable foundation for building retro-computing
-tools, educational simulators, and hardware-in-the-loop test rigs.
+Emma65 is a software emulator for the 65C02-family of 8-bit microprocessors. It provides
+a complete execution environment suitable for running and debugging programs written for
+classic 65C02-based systems, with support for flexible memory configuration, a rich set
+of virtual I/O devices, and expression-based watchpoints. It is designed as a foundation
+for building retro-computing tools, educational simulators, and hardware-in-the-loop test
+rigs.
+
+## Correctness
+
+Emma65 passes the [Klaus Dormann 65C02 test suite](https://github.com/Klaus2m5/6502_65C02_functional_tests),
+which exhaustively exercises every instruction, addressing mode, flag computation,
+interrupt sequence, and decimal-mode operation defined by the 65C02 architecture. It also
+passes the [Bruce Clark decimal mode test](http://www.6502.org/tutorials/decimal_mode.html),
+which independently verifies all 256×256 ADC and SBC operand combinations in BCD mode
+against predicted CMOS 65C02 results. Users can rely on Emma65's instruction-level
+behavior matching real hardware.
 
 ## Features
 
@@ -13,97 +23,200 @@ tools, educational simulators, and hardware-in-the-loop test rigs.
 
 Emma65 emulates two variants of the 65C02 processor family:
 
-- **CMOS 65C02** — the standard CMOS variant, including all instructions added
-  over the original NMOS 6502: `BRA`, `STZ`, `TSB`, `TRB`, `PHX`, `PHY`,
-  `PLX`, `PLY`, accumulator-mode `INC` and `DEC`, zero-page indirect
-  addressing, and `JMP (abs,X)`.
+- **CMOS 65C02** — the standard CMOS variant, including all instructions added over the
+  original NMOS 6502: `BRA`, `STZ`, `TSB`, `TRB`, `PHX`, `PHY`, `PLX`, `PLY`,
+  accumulator-mode `INC` and `DEC`, zero-page indirect addressing, and `JMP (abs,X)`.
 
-- **WDC 65C02** — the Western Design Center variant, which adds 34 opcodes to
-  the CMOS baseline:
-  `STP` (stop the processor), `WAI` (wait for interrupt), `BBR0`–`BBR7` and
-  `BBS0`–`BBS7` (branch on bit clear/set), and `RMB0`–`RMB7` and
-  `SMB0`–`SMB7` (reset/set memory bit).
+- **WDC 65C02** — the Western Design Center variant, which adds 34 opcodes to the CMOS
+  baseline: `STP` (stop the processor), `WAI` (wait for interrupt), `BBR0`–`BBR7` and
+  `BBS0`–`BBS7` (branch on bit clear/set), and `RMB0`–`RMB7` and `SMB0`–`SMB7`
+  (reset/set memory bit).
 
-All 16 addressing modes are supported, including the zero-page relative mode
-used by the WDC bit-branch instructions. Invalid opcodes can be configured to
-either silently act as NOPs (advancing PC by the correct byte length) or to
-halt execution with an error.
+All 16 addressing modes are supported, including the zero-page relative mode used by the
+WDC bit-branch instructions. Invalid opcodes can be configured to either silently act as
+NOPs or to halt execution with an error.
 
-### Memory and Bus Mapping
+### Interrupt Support
 
-The memory bus is organized around named address regions mapped into the
-16-bit address space. Regions can be configured as RAM, ROM (with
-write-protection), or I/O device windows. The bus resolver supports
-overlapping regions with unambiguous priority rules, and reports configuration
-errors — including ROM size mismatches and duplicate device registrations — at
-build time rather than at runtime. Bus errors (unmapped reads/writes, ROM
-write violations) are surfaced through the step result so the host application
-can decide how to respond.
+Emma65 implements the full 65C02 interrupt model:
+
+- **NMI** — edge-triggered and latched: the first falling edge sets a pending flag that
+  is consumed exactly once, with highest priority over simultaneous IRQ. Any device can
+  signal an NMI by implementing `IoDevice::take_nmi()`.
+- **IRQ** — level-triggered and multi-source: multiple devices can independently assert
+  and release the IRQ line; the interrupt fires when any source is active and the I flag
+  is clear. Each device's IRQ state is polled after every instruction.
+- **BRK** — software interrupt; sets the B flag in the pushed status byte so interrupt
+  handlers can distinguish a BRK from a hardware IRQ.
+
+On interrupt entry the D flag is cleared, matching CMOS 65C02 hardware behavior.
+
+### Clock Speed Simulation
+
+Free-running execution throttles to a configurable target clock frequency by comparing
+accumulated emulated cycles against elapsed wall time, sleeping as needed to match the
+target rate. Throttling is batched over roughly 1,000 instructions at a time, keeping
+sleep-syscall overhead negligible while maintaining sub-millisecond timing granularity.
+Tested and accurate up to approximately 2 MHz on typical hardware, covering the clock
+speeds of all historically common 6502-based systems.
+
+```rust
+ClockSpeed::mhz(1.0)       // 1 MHz — Apple II speed
+ClockSpeed::mhz(1.8432)    // 1.8432 MHz — common UART baud-rate crystal
+ClockSpeed::mhz(2.0)       // 2 MHz — BBC Micro speed
+ClockSpeed::unlimited()    // Maximum throughput; no throttling
+```
+
+### Memory and Bus Configuration
+
+The memory bus is organized around named address regions mapped into the 16-bit address
+space. Regions can be RAM, ROM (write-protected), or I/O device windows. The bus uses a
+most-specific-wins overlap policy: a smaller region always shadows a larger one at the
+same addresses, which makes it easy to place a device register window inside a ROM
+region. Ambiguous overlaps (same-size regions at the same addresses) and ROM size
+mismatches are caught at build time.
+
+```rust
+let bus = Bus::config()
+    .ram(AddressRange::new(0x0000, 0x7FFF))?
+    .rom(AddressRange::new(0xC000, 0xFFFF), rom_data)?
+    .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(my_device))?
+    .build();
+```
+
+Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
+`StepResult::Error` so the host application can decide how to respond.
 
 ### Virtual I/O Devices
 
-I/O devices are registered on the bus by `DeviceId` and mapped to one or more
-address ranges. The device interface handles byte-level reads and writes from
-the CPU, making it straightforward to implement common 65C02 peripherals such
-as UARTs, timers, and parallel I/O ports. Connectivity options allow virtual
-devices to be backed by real host resources — such as TCP sockets, files, or
-pipes — so that emulated peripherals can exchange data with external processes
-and tools.
+All four built-in devices implement the `IoDevice` trait and can be mapped into any
+address range on the bus. Each integrates with the interrupt controller via `irq_active()`
+and `take_nmi()`, and with the transport system for byte-stream I/O.
 
-### Execution Model
+#### 6522 VIA (`Via6522`)
 
-Execution is step-based: each call to `Cpu::step()` executes one instruction
-and returns a `StepResult` describing what happened. Results include normal
-instruction execution (with the decoded opcode), breakpoint hits, watchpoint
-triggers, `WAI`/`STP` processor states, and fatal bus or CPU errors. A
-free-running mode drives the step loop automatically at a configurable clock
-speed (specified in MHz or Hz, or left unlimited for maximum throughput).
+A complete implementation of the WDC 65C22 Versatile Interface Adapter:
+
+- All 16 addressable registers (offsets `$0`–`$F`)
+- Two independent 8-bit I/O ports (A and B), each with a data direction register
+- CA1, CA2, CB1, CB2 control lines with configurable edge and level triggering via PCR
+- Timer 1 (one-shot or free-run, with optional PB7 square-wave output) and Timer 2
+  (one-shot or pulse counting)
+- Shift register with six configurable modes (in/out driven by T2, T1, or external clock)
+- Full IFR/IER interrupt flag and enable registers with independent masking per source
+
+The VIA uses a GPIO communication protocol over any attached `Transport` to exchange port
+state and control signal transitions with real or emulated peripherals. On connection the
+VIA performs a format-negotiation handshake and sends a full state dump so the peripheral
+starts with an accurate picture of all pins and control lines.
+
+#### Rockwell 6551 ACIA (`Acia6551`)
+
+An implementation of the Rockwell 6551 Asynchronous Communications Interface Adapter:
+
+- 4 addressable registers: RX data, TX data, status, and command/control
+- RDRF (Receive Data Register Full) and TDRE (Transmit Data Register Empty) status bits
+- Interrupt-driven I/O with separate RX and TX interrupt enables
+- Baud rate selection from the control register; external-clock mode polls the transport
+  on every CPU tick for maximum responsiveness
+- Hardware bug–compatible mode (`Acia6551::with_tdre_bug()`) keeps TDRE permanently set,
+  matching the behavior of the WDC 65C51 variant for software that uses timed delays
+  rather than TDRE polling
+
+#### MC6850 ACIA (`Mc6850`)
+
+An implementation of the Motorola MC6850 Asynchronous Communications Interface Adapter:
+
+- 2 addressable registers: status/control and RX/TX data
+- RDRF and TDRE status with IRQ support for both receive and transmit
+- Master reset via control register bits
+- TX is immediate: bytes are forwarded to the transport on write; TDRE is restored on the
+  next CPU tick
+
+#### Console (`Console`)
+
+A simple polling console device for byte-stream I/O:
+
+- 2 addressable registers: data output/availability (offset 0) and data latch (offset 1)
+- The data latch register latches an incoming byte in a single read, providing a
+  non-blocking one-byte look-ahead and making it easy to write polling loops without
+  separate status and data registers
+- No IRQ — purely poll-based
+- Designed as the backend for a future built-in terminal emulator
+
+### Transport Options
+
+Devices that exchange byte streams attach a `Transport`. Four implementations are
+provided:
+
+| Transport | Best for |
+|-----------|----------|
+| `PipeTransport` | In-process tests; inter-process stdin/stdout |
+| `TcpTransport` | Connecting a terminal emulator or remote process over the network |
+| `UnixSocketTransport` | Low-latency local IPC (lower overhead than TCP) |
+| `PtyTransport` | Any program that expects a real TTY — `screen`, `minicom`, `cu`, etc. |
+
+All transports are non-blocking: `try_recv()` returns `None` immediately when no data is
+available, so device `tick()` implementations never stall the CPU thread.
+
+### Extensibility
+
+Custom devices implement the `IoDevice` trait. Only three methods are required:
+
+```rust
+fn read(&mut self, offset: u16) -> u8;
+fn write(&mut self, offset: u16, value: u8);
+fn peek(&self, offset: u16) -> u8;  // Side-effect-free read (watchpoints, disassembler)
+```
+
+The remaining methods — `tick`, `irq_active`, `take_nmi`, and `name` — have default
+no-op implementations and can be added as needed.
 
 ### Watchpoint Expressions
 
-Watchpoints are specified as expressions evaluated against live machine state
-before each instruction. The expression language supports registers (`A`, `X`,
-`Y`, `P`, `S`, `PC`), named CPU status flags (`` `N ``, `` `Z ``, etc.),
-memory reads at byte, word, and doubleword widths (`B[addr]`, `W[addr]`,
-`D[addr]`), hex literals (`$FF`), arithmetic and bitwise operators,
-comparisons, and a walrus operator (`:=`) for snapshotting values across
-steps. Expressions are compiled to bytecode once and evaluated efficiently on
+Watchpoints are expressions evaluated against live machine state before each instruction.
+The expression language supports registers (`A`, `X`, `Y`, `P`, `S`, `PC`), named CPU
+status flags (`` `N ``, `` `Z ``, `` `C ``, etc.), memory reads at byte, word, and
+doubleword widths (`B[addr]`, `W[addr]`, `D[addr]`), hex literals (`$FF`), arithmetic
+and bitwise operators, comparisons, and a walrus operator (`:=`) for snapshotting values
+across steps. Expressions are compiled to bytecode once and evaluated efficiently on
 every step, making it practical to run many watchpoints simultaneously.
 
 ## For Contributors
 
-Emma65 is written in Rust (2024 edition) with minimal dependencies — only
-`bitflags` for the processor status register and `thiserror` for structured
-error types. There are no runtime allocations on the hot path.
+Emma65 is written in Rust (2024 edition). Dependencies are kept small:
 
-The crate exposes both a library (`emma65`) and a binary (`emma65`). The
-library contains two top-level modules:
+| Crate | Purpose |
+|-------|---------|
+| `bitflags` | Processor status register flag sets |
+| `thiserror` | Structured, typed error enums |
+| `tokio` | Async runtime backing TCP, Unix socket, and PTY transport tasks |
+| `crossbeam-channel` | Sync/async bridge between device `tick()` calls and transport tasks |
+| `libc` / `nix` | PTY and pipe setup on Unix |
 
-- **`emulator`** — the CPU, memory bus, and device infrastructure, organized
-  into submodules:
-  `cpu` (opcode decode table, addressing modes, status register, variant
-  selection), `bus`
-  (address ranges and bus operations), `device` (device identity), `exec` (
-  clock speed and step results), and `error` (typed errors for bus config, bus
-  I/O, CPU construction, and execution).
+The crate exposes both a library (`emma65`) and a binary (`emma65`). The library has two
+top-level public modules:
 
-- **`watch`** — a complete watchpoint expression pipeline: `Scanner` →
-  `Vec<Token>` → `Parser`
-  → `Expr` AST → `Compiler` → `Vec<OpCode>` → `Evaluator` → `Operand`. The
-  scanner and parser use zero-copy techniques — token text slices borrow
-  directly from the source string — so the pipeline produces no heap
-  allocations until bytecode emission. The `WatchCompiler` and
-  `WatchEvaluator` types are the primary public entry points; `WatchEvaluator`
-  owns variable name-to-index mappings and persistent variable storage so that
-  watchpoint variables survive across steps.
+- **`emulator`** — the CPU, memory bus, and device infrastructure. Submodules: `cpu`
+  (opcode decode table, addressing modes, status register, variant selection), `bus`
+  (address regions, bus operations, tracing), `device` (device trait and built-in
+  devices), `exec` (clock speed, step results, free-running handle), `interrupt` (IRQ/NMI
+  controller), `transport` (byte-stream abstraction and implementations), `disasm`
+  (instruction disassembler), and `error` (typed errors for every failure category).
 
-The binary (`src/main.rs`) wires the library together with a concrete
-`WatchContext`
-implementation for the WDC 65C02 (`src/wdc6502.rs`) and serves as both a usage
-example and a manual exercise harness.
+- **`watch`** — a self-contained watchpoint expression pipeline: `Scanner` →
+  `Vec<Token>` → `Parser` → `Expr` AST → `Compiler` → `Vec<OpCode>` → `Evaluator` →
+  `Operand`. The scanner and parser use zero-copy techniques — token text slices borrow
+  directly from the source string — so the pipeline produces no heap allocations until
+  bytecode emission. `WatchCompiler` and `WatchEvaluator` are the primary entry points;
+  `WatchEvaluator` owns variable name-to-index mappings and persistent variable storage
+  so that watchpoint variables survive across steps.
+
+The binary (`src/main.rs`) exercises the library against a small inline program and serves
+as a usage example and manual exercise harness.
 
 ```
 cargo build      # build
-cargo test       # run all tests
+cargo test       # run all tests (includes Klaus Dormann and Bruce Clark suites)
 cargo clippy     # lint
 ```
