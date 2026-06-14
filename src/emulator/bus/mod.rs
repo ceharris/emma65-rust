@@ -306,6 +306,24 @@ impl BusConfig {
         Ok(self)
     }
 
+    /// Maps a RAM region over `range`, pre-loaded with `data`.
+    ///
+    /// Unlike `rom()`, writes to this region succeed normally after construction.
+    /// `data.len()` must equal `range.len()`.
+    pub fn ram_with_data(mut self, range: AddressRange, data: Vec<u8>) -> Result<Self, BusConfigError> {
+        let expected = range.len() as usize;
+        if data.len() != expected {
+            return Err(BusConfigError::RomSizeMismatch {
+                range,
+                data_len: data.len(),
+                expected,
+            });
+        }
+        self.check_overlap(range)?;
+        self.regions.push(Region::Ram { range, data });
+        Ok(self)
+    }
+
     /// Maps a ROM region over `range`, pre-loaded with `data`.
     ///
     /// `data.len()` must equal `range.len()`.
@@ -554,6 +572,34 @@ mod tests {
     fn rom_size_mismatch_error() {
         let result = Bus::config()
             .rom(AddressRange::new(0xC000, 0xC0FF), vec![0u8; 100]);
+        assert!(matches!(result, Err(BusConfigError::RomSizeMismatch { .. })));
+    }
+
+    #[test]
+    fn ram_with_data_preloads_initial_contents() {
+        let data = vec![0xABu8; 256];
+        let mut bus = Bus::config()
+            .ram_with_data(AddressRange::new(0xC000, 0xC0FF), data)
+            .unwrap()
+            .build();
+        assert_eq!(bus.read(0xC042).unwrap(), 0xAB);
+    }
+
+    #[test]
+    fn ram_with_data_allows_writes() {
+        let data = vec![0xABu8; 256];
+        let mut bus = Bus::config()
+            .ram_with_data(AddressRange::new(0xC000, 0xC0FF), data)
+            .unwrap()
+            .build();
+        bus.write(0xC042, 0x99).unwrap();
+        assert_eq!(bus.read(0xC042).unwrap(), 0x99);
+    }
+
+    #[test]
+    fn ram_with_data_size_mismatch_error() {
+        let result = Bus::config()
+            .ram_with_data(AddressRange::new(0xC000, 0xC0FF), vec![0u8; 100]);
         assert!(matches!(result, Err(BusConfigError::RomSizeMismatch { .. })));
     }
 
