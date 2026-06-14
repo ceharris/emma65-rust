@@ -16,7 +16,7 @@ pub struct TraceRecord {
 }
 
 /// Receives bus trace records as they are generated.
-pub trait BusTraceCallback {
+pub trait BusTraceCallback: Send {
     /// Called once for each bus read or write. Never called for `peek`.
     fn record(&mut self, rec: TraceRecord);
 }
@@ -44,7 +44,7 @@ impl<W: Write> BinaryTraceWriter<W> {
     }
 }
 
-impl<W: Write> BusTraceCallback for BinaryTraceWriter<W> {
+impl<W: Write + Send> BusTraceCallback for BinaryTraceWriter<W> {
     fn record(&mut self, rec: TraceRecord) {
         let op_byte: u8 = match rec.op {
             BusOp::Read  => 0,

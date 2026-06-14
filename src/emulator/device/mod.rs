@@ -91,7 +91,7 @@ mod tests {
 }
 
 /// A device that can be mapped into the bus address space.
-pub trait IoDevice {
+pub trait IoDevice: Send {
     /// Reads a byte from `offset` relative to the device's base address, with side effects.
     fn read(&mut self, offset: u16) -> u8;
     /// Writes `value` to `offset` relative to the device's base address.
