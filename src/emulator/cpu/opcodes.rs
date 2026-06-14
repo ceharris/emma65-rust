@@ -174,6 +174,8 @@ const fn base_table() -> [DecodedOp; 256] {
     // 0x00–0x0F
     t[0x00] = DecodedOp::new(0x00, Brk, Implied,          2, 7);
     t[0x01] = DecodedOp::new(0x01, Ora, IndirectX,         2, 6);
+    t[0x02] = DecodedOp::new(0x02, Nop, Immediate,         2, 2);
+    t[0x03] = DecodedOp::new(0x03, Nop, Implied,           1, 1);
     t[0x04] = DecodedOp::new(0x04, Tsb, ZeroPage,          2, 5);
     t[0x05] = DecodedOp::new(0x05, Ora, ZeroPage,          2, 3);
     t[0x06] = DecodedOp::new(0x06, Asl, ZeroPage,          2, 5);
@@ -181,6 +183,7 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x08] = DecodedOp::new(0x08, Php, Implied,           1, 3);
     t[0x09] = DecodedOp::new(0x09, Ora, Immediate,         2, 2);
     t[0x0A] = DecodedOp::new(0x0A, Asl, Accumulator,       1, 2);
+    t[0x0B] = DecodedOp::new(0x0B, Nop, Implied,           1, 1);
     t[0x0C] = DecodedOp::new(0x0C, Tsb, Absolute,          3, 6);
     t[0x0D] = DecodedOp::new(0x0D, Ora, Absolute,          3, 4);
     t[0x0E] = DecodedOp::new(0x0E, Asl, Absolute,          3, 6);
@@ -190,6 +193,8 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x10] = DecodedOp::new(0x10, Bpl, Relative,          2, 2);
     t[0x11] = DecodedOp::new(0x11, Ora, IndirectY,         2, 5);
     t[0x12] = DecodedOp::new(0x12, Ora, ZeroPageIndirect,  2, 5);
+    t[0x13] = DecodedOp::new(0x13, Nop, Implied,           1, 1);
+    t[0x1B] = DecodedOp::new(0x1B, Nop, Implied,           1, 1);
     t[0x14] = DecodedOp::new(0x14, Trb, ZeroPage,          2, 5);
     t[0x15] = DecodedOp::new(0x15, Ora, ZeroPageX,         2, 4);
     t[0x16] = DecodedOp::new(0x16, Asl, ZeroPageX,         2, 6);
@@ -205,6 +210,8 @@ const fn base_table() -> [DecodedOp; 256] {
     // 0x20–0x2F
     t[0x20] = DecodedOp::new(0x20, Jsr, Absolute,          3, 6);
     t[0x21] = DecodedOp::new(0x21, And, IndirectX,         2, 6);
+    t[0x22] = DecodedOp::new(0x22, Nop, Immediate,         2, 2);
+    t[0x23] = DecodedOp::new(0x23, Nop, Implied,           1, 1);
     t[0x24] = DecodedOp::new(0x24, Bit, ZeroPage,          2, 3);
     t[0x25] = DecodedOp::new(0x25, And, ZeroPage,          2, 3);
     t[0x26] = DecodedOp::new(0x26, Rol, ZeroPage,          2, 5);
@@ -218,9 +225,13 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x2F] = DecodedOp::wdc_only(0x2F, Bbr2, ZeroPageRelative, 3, 5);
 
     // 0x30–0x3F
+    t[0x2B] = DecodedOp::new(0x2B, Nop, Implied,           1, 1);
+
+    // 0x30–0x3F
     t[0x30] = DecodedOp::new(0x30, Bmi, Relative,          2, 2);
     t[0x31] = DecodedOp::new(0x31, And, IndirectY,         2, 5);
     t[0x32] = DecodedOp::new(0x32, And, ZeroPageIndirect,  2, 5);
+    t[0x33] = DecodedOp::new(0x33, Nop, Implied,           1, 1);
     t[0x34] = DecodedOp::new(0x34, Bit, ZeroPageX,         2, 4);
     t[0x35] = DecodedOp::new(0x35, And, ZeroPageX,         2, 4);
     t[0x36] = DecodedOp::new(0x36, Rol, ZeroPageX,         2, 6);
@@ -228,6 +239,7 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x38] = DecodedOp::new(0x38, Sec, Implied,           1, 2);
     t[0x39] = DecodedOp::new(0x39, And, AbsoluteY,         3, 4);
     t[0x3A] = DecodedOp::new(0x3A, Dec, Accumulator,       1, 2);
+    t[0x3B] = DecodedOp::new(0x3B, Nop, Implied,           1, 1);
     t[0x3C] = DecodedOp::new(0x3C, Bit, AbsoluteX,         3, 4);
     t[0x3D] = DecodedOp::new(0x3D, And, AbsoluteX,         3, 4);
     t[0x3E] = DecodedOp::new(0x3E, Rol, AbsoluteX,         3, 7);
@@ -236,12 +248,16 @@ const fn base_table() -> [DecodedOp; 256] {
     // 0x40–0x4F
     t[0x40] = DecodedOp::new(0x40, Rti, Implied,           1, 6);
     t[0x41] = DecodedOp::new(0x41, Eor, IndirectX,         2, 6);
+    t[0x42] = DecodedOp::new(0x42, Nop, Immediate,         2, 2);
+    t[0x43] = DecodedOp::new(0x43, Nop, Implied,           1, 1);
+    t[0x44] = DecodedOp::new(0x44, Nop, ZeroPage,          2, 3);
     t[0x45] = DecodedOp::new(0x45, Eor, ZeroPage,          2, 3);
     t[0x46] = DecodedOp::new(0x46, Lsr, ZeroPage,          2, 5);
     t[0x47] = DecodedOp::wdc_only(0x47, Rmb4, ZeroPage,    2, 5);
     t[0x48] = DecodedOp::new(0x48, Pha, Implied,           1, 3);
     t[0x49] = DecodedOp::new(0x49, Eor, Immediate,         2, 2);
     t[0x4A] = DecodedOp::new(0x4A, Lsr, Accumulator,       1, 2);
+    t[0x4B] = DecodedOp::new(0x4B, Nop, Implied,           1, 1);
     t[0x4C] = DecodedOp::new(0x4C, Jmp, Absolute,          3, 3);
     t[0x4D] = DecodedOp::new(0x4D, Eor, Absolute,          3, 4);
     t[0x4E] = DecodedOp::new(0x4E, Lsr, Absolute,          3, 6);
@@ -251,7 +267,11 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x50] = DecodedOp::new(0x50, Bvc, Relative,          2, 2);
     t[0x51] = DecodedOp::new(0x51, Eor, IndirectY,         2, 5);
     t[0x52] = DecodedOp::new(0x52, Eor, ZeroPageIndirect,  2, 5);
+    t[0x53] = DecodedOp::new(0x53, Nop, Implied,           1, 1);
+    t[0x54] = DecodedOp::new(0x54, Nop, ZeroPageX,         2, 4);
     t[0x55] = DecodedOp::new(0x55, Eor, ZeroPageX,         2, 4);
+    t[0x5B] = DecodedOp::new(0x5B, Nop, Implied,           1, 1);
+    t[0x5C] = DecodedOp::new(0x5C, Nop, Absolute,          3, 8);
     t[0x56] = DecodedOp::new(0x56, Lsr, ZeroPageX,         2, 6);
     t[0x57] = DecodedOp::wdc_only(0x57, Rmb5, ZeroPage,    2, 5);
     t[0x58] = DecodedOp::new(0x58, Cli, Implied,           1, 2);
@@ -264,6 +284,8 @@ const fn base_table() -> [DecodedOp; 256] {
     // 0x60–0x6F
     t[0x60] = DecodedOp::new(0x60, Rts, Implied,           1, 6);
     t[0x61] = DecodedOp::new(0x61, Adc, IndirectX,         2, 6);
+    t[0x62] = DecodedOp::new(0x62, Nop, Immediate,         2, 2);
+    t[0x63] = DecodedOp::new(0x63, Nop, Implied,           1, 1);
     t[0x64] = DecodedOp::new(0x64, Stz, ZeroPage,          2, 3);
     t[0x65] = DecodedOp::new(0x65, Adc, ZeroPage,          2, 3);
     t[0x66] = DecodedOp::new(0x66, Ror, ZeroPage,          2, 5);
@@ -271,6 +293,7 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x68] = DecodedOp::new(0x68, Pla, Implied,           1, 4);
     t[0x69] = DecodedOp::new(0x69, Adc, Immediate,         2, 2);
     t[0x6A] = DecodedOp::new(0x6A, Ror, Accumulator,       1, 2);
+    t[0x6B] = DecodedOp::new(0x6B, Nop, Implied,           1, 1);
     t[0x6C] = DecodedOp::new(0x6C, Jmp, Indirect,          3, 6);
     t[0x6D] = DecodedOp::new(0x6D, Adc, Absolute,          3, 4);
     t[0x6E] = DecodedOp::new(0x6E, Ror, Absolute,          3, 6);
@@ -284,9 +307,11 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x75] = DecodedOp::new(0x75, Adc, ZeroPageX,         2, 4);
     t[0x76] = DecodedOp::new(0x76, Ror, ZeroPageX,         2, 6);
     t[0x77] = DecodedOp::wdc_only(0x77, Rmb7, ZeroPage,    2, 5);
+    t[0x73] = DecodedOp::new(0x73, Nop, Implied,           1, 1);
     t[0x78] = DecodedOp::new(0x78, Sei, Implied,           1, 2);
     t[0x79] = DecodedOp::new(0x79, Adc, AbsoluteY,         3, 4);
     t[0x7A] = DecodedOp::new(0x7A, Ply, Implied,           1, 4);
+    t[0x7B] = DecodedOp::new(0x7B, Nop, Implied,           1, 1);
     t[0x7C] = DecodedOp::new(0x7C, Jmp, AbsoluteIndirectX, 3, 6);
     t[0x7D] = DecodedOp::new(0x7D, Adc, AbsoluteX,         3, 4);
     t[0x7E] = DecodedOp::new(0x7E, Ror, AbsoluteX,         3, 7);
@@ -295,6 +320,8 @@ const fn base_table() -> [DecodedOp; 256] {
     // 0x80–0x8F
     t[0x80] = DecodedOp::new(0x80, Bra, Relative,          2, 3);
     t[0x81] = DecodedOp::new(0x81, Sta, IndirectX,         2, 6);
+    t[0x82] = DecodedOp::new(0x82, Nop, Immediate,         2, 2);
+    t[0x83] = DecodedOp::new(0x83, Nop, Implied,           1, 1);
     t[0x84] = DecodedOp::new(0x84, Sty, ZeroPage,          2, 3);
     t[0x85] = DecodedOp::new(0x85, Sta, ZeroPage,          2, 3);
     t[0x86] = DecodedOp::new(0x86, Stx, ZeroPage,          2, 3);
@@ -302,6 +329,7 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x88] = DecodedOp::new(0x88, Dey, Implied,           1, 2);
     t[0x89] = DecodedOp::new(0x89, Bit, Immediate,         2, 2);
     t[0x8A] = DecodedOp::new(0x8A, Txa, Implied,           1, 2);
+    t[0x8B] = DecodedOp::new(0x8B, Nop, Implied,           1, 1);
     t[0x8C] = DecodedOp::new(0x8C, Sty, Absolute,          3, 4);
     t[0x8D] = DecodedOp::new(0x8D, Sta, Absolute,          3, 4);
     t[0x8E] = DecodedOp::new(0x8E, Stx, Absolute,          3, 4);
@@ -315,9 +343,11 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0x95] = DecodedOp::new(0x95, Sta, ZeroPageX,         2, 4);
     t[0x96] = DecodedOp::new(0x96, Stx, ZeroPageY,         2, 4);
     t[0x97] = DecodedOp::wdc_only(0x97, Smb1, ZeroPage,    2, 5);
+    t[0x93] = DecodedOp::new(0x93, Nop, Implied,           1, 1);
     t[0x98] = DecodedOp::new(0x98, Tya, Implied,           1, 2);
     t[0x99] = DecodedOp::new(0x99, Sta, AbsoluteY,         3, 5);
     t[0x9A] = DecodedOp::new(0x9A, Txs, Implied,           1, 2);
+    t[0x9B] = DecodedOp::new(0x9B, Nop, Implied,           1, 1);
     t[0x9C] = DecodedOp::new(0x9C, Stz, Absolute,          3, 4);
     t[0x9D] = DecodedOp::new(0x9D, Sta, AbsoluteX,         3, 5);
     t[0x9E] = DecodedOp::new(0x9E, Stz, AbsoluteX,         3, 5);
@@ -331,9 +361,11 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0xA5] = DecodedOp::new(0xA5, Lda, ZeroPage,          2, 3);
     t[0xA6] = DecodedOp::new(0xA6, Ldx, ZeroPage,          2, 3);
     t[0xA7] = DecodedOp::wdc_only(0xA7, Smb2, ZeroPage,    2, 5);
+    t[0xA3] = DecodedOp::new(0xA3, Nop, Implied,           1, 1);
     t[0xA8] = DecodedOp::new(0xA8, Tay, Implied,           1, 2);
     t[0xA9] = DecodedOp::new(0xA9, Lda, Immediate,         2, 2);
     t[0xAA] = DecodedOp::new(0xAA, Tax, Implied,           1, 2);
+    t[0xAB] = DecodedOp::new(0xAB, Nop, Implied,           1, 1);
     t[0xAC] = DecodedOp::new(0xAC, Ldy, Absolute,          3, 4);
     t[0xAD] = DecodedOp::new(0xAD, Lda, Absolute,          3, 4);
     t[0xAE] = DecodedOp::new(0xAE, Ldx, Absolute,          3, 4);
@@ -347,9 +379,11 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0xB5] = DecodedOp::new(0xB5, Lda, ZeroPageX,         2, 4);
     t[0xB6] = DecodedOp::new(0xB6, Ldx, ZeroPageY,         2, 4);
     t[0xB7] = DecodedOp::wdc_only(0xB7, Smb3, ZeroPage,    2, 5);
+    t[0xB3] = DecodedOp::new(0xB3, Nop, Implied,           1, 1);
     t[0xB8] = DecodedOp::new(0xB8, Clv, Implied,           1, 2);
     t[0xB9] = DecodedOp::new(0xB9, Lda, AbsoluteY,         3, 4);
     t[0xBA] = DecodedOp::new(0xBA, Tsx, Implied,           1, 2);
+    t[0xBB] = DecodedOp::new(0xBB, Nop, Implied,           1, 1);
     t[0xBC] = DecodedOp::new(0xBC, Ldy, AbsoluteX,         3, 4);
     t[0xBD] = DecodedOp::new(0xBD, Lda, AbsoluteX,         3, 4);
     t[0xBE] = DecodedOp::new(0xBE, Ldx, AbsoluteY,         3, 4);
@@ -358,6 +392,8 @@ const fn base_table() -> [DecodedOp; 256] {
     // 0xC0–0xCF
     t[0xC0] = DecodedOp::new(0xC0, Cpy, Immediate,         2, 2);
     t[0xC1] = DecodedOp::new(0xC1, Cmp, IndirectX,         2, 6);
+    t[0xC2] = DecodedOp::new(0xC2, Nop, Immediate,         2, 2);
+    t[0xC3] = DecodedOp::new(0xC3, Nop, Implied,           1, 1);
     t[0xC4] = DecodedOp::new(0xC4, Cpy, ZeroPage,          2, 3);
     t[0xC5] = DecodedOp::new(0xC5, Cmp, ZeroPage,          2, 3);
     t[0xC6] = DecodedOp::new(0xC6, Dec, ZeroPage,          2, 5);
@@ -375,7 +411,10 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0xD0] = DecodedOp::new(0xD0, Bne, Relative,          2, 2);
     t[0xD1] = DecodedOp::new(0xD1, Cmp, IndirectY,         2, 5);
     t[0xD2] = DecodedOp::new(0xD2, Cmp, ZeroPageIndirect,  2, 5);
+    t[0xD3] = DecodedOp::new(0xD3, Nop, Implied,           1, 1);
+    t[0xD4] = DecodedOp::new(0xD4, Nop, ZeroPageX,         2, 4);
     t[0xD5] = DecodedOp::new(0xD5, Cmp, ZeroPageX,         2, 4);
+    t[0xDC] = DecodedOp::new(0xDC, Nop, AbsoluteX,         3, 4);
     t[0xD6] = DecodedOp::new(0xD6, Dec, ZeroPageX,         2, 6);
     t[0xD7] = DecodedOp::wdc_only(0xD7, Smb5, ZeroPage,    2, 5);
     t[0xD8] = DecodedOp::new(0xD8, Cld, Implied,           1, 2);
@@ -389,6 +428,8 @@ const fn base_table() -> [DecodedOp; 256] {
     // 0xE0–0xEF
     t[0xE0] = DecodedOp::new(0xE0, Cpx, Immediate,         2, 2);
     t[0xE1] = DecodedOp::new(0xE1, Sbc, IndirectX,         2, 6);
+    t[0xE2] = DecodedOp::new(0xE2, Nop, Immediate,         2, 2);
+    t[0xE3] = DecodedOp::new(0xE3, Nop, Implied,           1, 1);
     t[0xE4] = DecodedOp::new(0xE4, Cpx, ZeroPage,          2, 3);
     t[0xE5] = DecodedOp::new(0xE5, Sbc, ZeroPage,          2, 3);
     t[0xE6] = DecodedOp::new(0xE6, Inc, ZeroPage,          2, 5);
@@ -396,6 +437,7 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0xE8] = DecodedOp::new(0xE8, Inx, Implied,           1, 2);
     t[0xE9] = DecodedOp::new(0xE9, Sbc, Immediate,         2, 2);
     t[0xEA] = DecodedOp::new(0xEA, Nop, Implied,           1, 2);
+    t[0xEB] = DecodedOp::new(0xEB, Nop, Implied,           1, 1);
     t[0xEC] = DecodedOp::new(0xEC, Cpx, Absolute,          3, 4);
     t[0xED] = DecodedOp::new(0xED, Sbc, Absolute,          3, 4);
     t[0xEE] = DecodedOp::new(0xEE, Inc, Absolute,          3, 6);
@@ -405,7 +447,11 @@ const fn base_table() -> [DecodedOp; 256] {
     t[0xF0] = DecodedOp::new(0xF0, Beq, Relative,          2, 2);
     t[0xF1] = DecodedOp::new(0xF1, Sbc, IndirectY,         2, 5);
     t[0xF2] = DecodedOp::new(0xF2, Sbc, ZeroPageIndirect,  2, 5);
+    t[0xF3] = DecodedOp::new(0xF3, Nop, Implied,           1, 1);
+    t[0xF4] = DecodedOp::new(0xF4, Nop, ZeroPageX,         2, 4);
     t[0xF5] = DecodedOp::new(0xF5, Sbc, ZeroPageX,         2, 4);
+    t[0xFB] = DecodedOp::new(0xFB, Nop, Implied,           1, 1);
+    t[0xFC] = DecodedOp::new(0xFC, Nop, AbsoluteX,         3, 4);
     t[0xF6] = DecodedOp::new(0xF6, Inc, ZeroPageX,         2, 6);
     t[0xF7] = DecodedOp::wdc_only(0xF7, Smb7, ZeroPage,    2, 5);
     t[0xF8] = DecodedOp::new(0xF8, Sed, Implied,           1, 2);
@@ -569,11 +615,31 @@ mod tests {
     #[test]
     fn ill_opcode_slots_are_invalid() {
         let t = cmos_table();
-        // A few slots known to be illegal on the 65C02
-        assert!(!t[0x02].is_valid);
-        assert!(!t[0x03].is_valid);
-        assert!(!t[0x22].is_valid);
-        assert!(!t[0x44].is_valid);
+        // WDC-only opcodes are invalid on Cmos65C02
+        assert!(!t[0xCB].is_valid); // WAI
+        assert!(!t[0xDB].is_valid); // STP
+        assert!(!t[0x0F].is_valid); // BBR0
+        assert!(!t[0x07].is_valid); // RMB0
+    }
+
+    #[test]
+    fn defined_nop_opcodes_are_valid() {
+        let t = cmos_table();
+        // 65C02-defined multi-byte NOPs (formerly illegal NMOS opcodes)
+        assert!(t[0x02].is_valid); // NOP imm
+        assert!(t[0x22].is_valid); // NOP imm
+        assert!(t[0x42].is_valid); // NOP imm
+        assert!(t[0x62].is_valid); // NOP imm
+        assert!(t[0x82].is_valid); // NOP imm
+        assert!(t[0xC2].is_valid); // NOP imm
+        assert!(t[0xE2].is_valid); // NOP imm
+        assert!(t[0x44].is_valid); // NOP zp
+        assert!(t[0x54].is_valid); // NOP zp,x
+        assert!(t[0xD4].is_valid); // NOP zp,x
+        assert!(t[0xF4].is_valid); // NOP zp,x
+        assert!(t[0x5C].is_valid); // NOP abs
+        assert!(t[0xDC].is_valid); // NOP abs,x
+        assert!(t[0xFC].is_valid); // NOP abs,x
     }
 
     #[test]
