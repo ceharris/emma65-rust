@@ -72,10 +72,15 @@ pub struct Acia6551 {
     tdre_bug_compatible: bool,
     /// Remaining cycles before TDRE is restored after a TX write (correct mode only).
     tx_cycles_remaining: u32,
+    /// CPU clock frequency in Hz, used to compute cycles-per-byte for baud rate timing.
+    clock_hz: u64,
 }
 
 impl Acia6551 {
     /// Creates a new `Acia6551` in correct (non-bug-compatible) mode with TDRE set.
+    ///
+    /// The default CPU clock is 1 MHz. Use [`Acia6551::with_clock_hz`] to match the actual
+    /// CPU clock speed so that baud rate timing is accurate.
     pub fn new() -> Self {
         Self {
             transport: None,
@@ -91,7 +96,20 @@ impl Acia6551 {
             cycles_per_byte: 0,
             tdre_bug_compatible: false,
             tx_cycles_remaining: 0,
+            clock_hz: 1_000_000,
         }
+    }
+
+    /// Sets the CPU clock frequency used to compute baud rate timing.
+    ///
+    /// The ACIA derives its baud rate from the CPU clock. Setting this to match the actual
+    /// CPU clock speed ensures that `cycles_per_byte` reflects the correct number of CPU
+    /// cycles per serial byte at the configured baud rate.
+    ///
+    /// Defaults to 1 MHz if not set.
+    pub fn with_clock_hz(mut self, clock_hz: u64) -> Self {
+        self.clock_hz = clock_hz;
+        self
     }
 
     /// Enables WDC 65C51 bug-compatible mode: TDRE is permanently set and never cleared
@@ -149,12 +167,17 @@ impl Acia6551 {
         }
     }
 
-    /// Returns cycles-per-byte for the given control register value, or 0 for external clock.
-    fn compute_cycles_per_byte(control: u8) -> u32 {
+    /// Returns cycles-per-byte for the given control register value and CPU clock, or 0 for external clock.
+    ///
+    /// Uses 10 bits per byte (1 start + 8 data + 1 stop). The control register's word-select
+    /// bits (bits 6–5) encode the actual data bits, parity, and stop-bit configuration, but
+    /// this calculation ignores them. Revisit whether using the configured word size and stop
+    /// bit count would be feasible and useful.
+    fn compute_cycles_per_byte(control: u8, clock_hz: u64) -> u32 {
         if (control & 0x10) == 0 {
             return 0; // external receiver clock: poll every tick
         }
-        let baud: u32 = match control & 0x0F {
+        let baud: u64 = match control & 0x0F {
             0x01 => 50,
             0x02 => 75,
             0x03 => 110,
@@ -172,8 +195,7 @@ impl Acia6551 {
             0x0F => 19200,
             _ => return 0,
         };
-        // Assume 1 MHz CPU clock; 10 bits per byte (start + 8 data + stop).
-        1_000_000 * 10 / baud
+        (clock_hz * 10 / baud) as u32
     }
 }
 
@@ -234,7 +256,7 @@ impl IoDevice for Acia6551 {
             }
             3 => {
                 self.control = value;
-                self.cycles_per_byte = Self::compute_cycles_per_byte(value);
+                self.cycles_per_byte = Self::compute_cycles_per_byte(value, self.clock_hz);
                 self.cycle_accum = 0;
             }
             _ => {}
