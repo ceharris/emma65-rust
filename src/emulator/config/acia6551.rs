@@ -6,9 +6,6 @@ use serde::Deserialize;
 use crate::emulator::{Acia6551, AddressRange, BusConfig, DeviceId};
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 
-// Bus ID for the device.
-const DEVICE_ID: DeviceId = DeviceId(2);
-
 // Type name used in registering the device
 const DEVICE_TYPE: &str = "acia/6551";
 
@@ -48,6 +45,7 @@ impl DeviceModule for Acia6551Module {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
+        let device_id = DeviceId(address as u32);
         let device = {
             let mut dev = Acia6551::new()
                 .with_tdre_bug(config.with_tdre_bug)
@@ -61,14 +59,14 @@ impl DeviceModule for Acia6551Module {
                 dev.attach_transport(transport);
             }
             if let Some(sender) = &context.error_sender {
-                dev.set_error_sender(sender.clone(), DEVICE_ID);
+                dev.set_error_sender(sender.clone(), device_id);
             }
             dev
         };
 
         bus_config.device(
             AddressRange::new(address, address + (BUS_SIZE - 1)),
-            DEVICE_ID, Box::new(device))
+            device_id, Box::new(device))
             .map_err(DeviceModuleError::BusConfig)
     }
 
