@@ -6,9 +6,6 @@ use serde::Deserialize;
 use crate::emulator::{AddressRange, BusConfig, Console, DeviceId};
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 
-// Bus ID for the device.
-const DEVICE_ID: DeviceId = DeviceId(0);
-
 // Type name used in registering the device
 const DEVICE_TYPE: &str = "console";
 
@@ -45,6 +42,7 @@ impl DeviceModule for ConsoleModule {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
+        let device_id = DeviceId(address as u32);
         let console = {
             let mut dev = Console::new();
             if let Some(transport_spec) = transport_spec {
@@ -54,14 +52,14 @@ impl DeviceModule for ConsoleModule {
                 dev.attach_transport(transport);
             }
             if let Some(sender) = &context.error_sender {
-                dev.set_error_sender(sender.clone(), DEVICE_ID);
+                dev.set_error_sender(sender.clone(), device_id);
             }
             dev
         };
 
         bus_config.device(
             AddressRange::new(address, address + (BUS_SIZE - 1)),
-            DEVICE_ID, Box::new(console))
+            device_id, Box::new(console))
             .map_err(DeviceModuleError::BusConfig)
     }
 

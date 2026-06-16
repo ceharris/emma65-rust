@@ -124,7 +124,7 @@ impl Acia6551 {
     /// Use this when running software written for the actual WDC 65C51 chip that relies
     /// on timing delays rather than polling TDRE.
     pub fn with_tdre_bug(mut self, enabled: bool) -> Self {
-        self.tdre_bug_compatible = true;
+        self.tdre_bug_compatible = enabled;
         self
     }
 
@@ -138,7 +138,7 @@ impl Acia6551 {
     /// Has no effect in external-clock mode, where the transport is not timing-driven and
     /// bytes are held in the pipe until RDRF is cleared.
     pub fn with_overrun(mut self, enabled: bool) -> Self {
-        self.overrun_enabled = true;
+        self.overrun_enabled = enabled;
         self
     }
 

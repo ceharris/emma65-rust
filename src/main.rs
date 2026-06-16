@@ -1,7 +1,5 @@
-use std::collections::HashMap;
 use emma65::emulator::{BusConfig, Cpu, CpuVariant, StepResult, map_flag_name, map_register_name};
 use emma65::emulator::bus::region::AddressRange;
-use emma65::emulator::config::DeviceModule;
 use emma65::watch::WatchCompiler;
 
 fn main() {
