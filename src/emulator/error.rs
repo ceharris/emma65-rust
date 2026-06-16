@@ -28,8 +28,6 @@ pub enum BusError {
 /// An error detected while building or configuring the memory bus.
 #[derive(Debug, Error)]
 pub enum BusConfigError {
-    #[error("invalid configuration parameters: {message}")]
-    InvalidConfigParams { message: String },
     #[error("ambiguous overlap at {range:?}: two regions of identical size covering the same address")]
     AmbiguousOverlap { range: AddressRange },
     #[error("ROM data length {data_len} does not match range {range:?} (expected {expected})")]
