@@ -32,5 +32,3 @@ pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
 pub use exec::{ClockSpeed, RunHandle, StepResult, run};
 pub use interrupt::{InterruptController, IrqSource};
 pub use transport::{Transport, TransportError, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport};
-
-pub use config::{TransportSpec, DeviceModule, ConsoleModule, ConsoleAttributes};

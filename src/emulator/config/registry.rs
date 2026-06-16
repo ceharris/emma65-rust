@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use figment::value::Value;
-use crate::emulator::{BusConfig, DeviceModule};
-use crate::emulator::config::DeviceModuleError;
+use crate::emulator::{BusConfig};
+use super::{DeviceModule, DeviceModuleError};
 
 /// A context of application attributes that may be used by device modules during instantiation.
 #[derive(Clone)]

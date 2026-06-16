@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use emma65::emulator::{BusConfig, Cpu, CpuVariant, StepResult, map_flag_name, map_register_name, ConsoleModule};
+use emma65::emulator::{BusConfig, Cpu, CpuVariant, StepResult, map_flag_name, map_register_name};
 use emma65::emulator::bus::region::AddressRange;
 use emma65::emulator::config::DeviceModule;
 use emma65::watch::WatchCompiler;
@@ -47,13 +47,4 @@ fn main() {
         }
     }
 }
-
-#[allow(dead_code)]
-fn device_registry() -> HashMap<&'static str, Box<dyn DeviceModule>> {
-    use emma65::emulator::ConsoleModule;
-    let mut registry: HashMap<&'static str, Box<dyn DeviceModule>> = HashMap::new();
-    registry.insert("console", Box::new(ConsoleModule));
-    registry
-}
-
 
