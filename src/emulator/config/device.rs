@@ -3,8 +3,8 @@ use std::str::FromStr;
 use figment::value::{Tag, Value};
 use serde::{Deserialize, Serialize};
 
-use crate::emulator::{BusConfig, BusConfigError};
-
+use crate::emulator::{BusConfig, BusConfigError, TransportError};
+use super::InstantiationContext;
 
 /// A configuration spec for a pluggable device module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,12 +23,20 @@ impl FromStr for DeviceSpec {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(parse_spec(s)?)
+        parse_spec(s)
     }
 }
 
+/// An error occurring during instantiation of a device during bus configuration
+#[derive(Debug)]
+pub enum DeviceModuleError {
+    BusConfig(BusConfigError),
+    Transport(TransportError),
+    Config(String),
+}
+
 /// A pluggable device module.
-pub trait DeviceModule {
+pub trait DeviceModule: Clone {
     /// Gets the name of this device module.
     fn name(&self) -> &'static  str;
     /// Instantiates the device represented by this module.
@@ -36,8 +44,10 @@ pub trait DeviceModule {
     /// * bus_config - bus configuration builder
     /// * address - address at which the device will be mapped on the bus
     /// * attributes - device configuration attributes
-    fn instantiate(&self, bus_config: BusConfig, address: u16, 
-                   attributes: &HashMap<String, Value>) -> Result<BusConfig, BusConfigError>;
+    /// * context - application-level configuration attributes
+    fn instantiate(&self, bus_config: BusConfig, address: u16,
+                   attributes: &HashMap<String, Value>, context: &InstantiationContext)
+        -> impl Future<Output = Result<BusConfig, DeviceModuleError>> + Send;
 }
 
 fn parse_prefixed_u16(s: &str) -> Result<u16, std::num::ParseIntError> {

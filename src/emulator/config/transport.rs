@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::emulator::{Transport, TransportError};
+use crate::emulator::{PtyTransport, TcpTransport, Transport, TransportError, UnixSocketTransport};
 
 /// A transport configuration spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,11 +16,35 @@ pub enum TransportSpec {
 
 impl TransportSpec {
     const DEFAULT_BIND_IP_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-    
-    fn to_transport(&self) -> Result<Box<dyn Transport>, TransportError> {
-        todo!()
+
+    pub async fn to_transport(&self) -> Result<Box<dyn Transport>, TransportError> {
+        match self {
+            TransportSpec::Tcp { port, address} => {
+                let addr = SocketAddr::new(*address, *port);
+                let transport = TcpTransport::listen(addr).await;
+                match transport {
+                    Ok(transport) => Ok(Box::new(transport)),
+                    Err(e) => Err(TransportError::Io(e))
+                }
+            }
+            TransportSpec::Unix { path } => {
+                let transport = UnixSocketTransport::listen(path).await;
+                match transport {
+                    Ok(transport) => Ok(Box::new(transport)),
+                    Err(e) => Err(TransportError::Io(e))
+                }
+            }
+            TransportSpec::Pty { path} => {
+                let transport = if let Some(path) = path {
+                    PtyTransport::open(Some(path))
+                } else {
+                    PtyTransport::open(None)
+                }?;
+                Ok(Box::new(transport))
+            }
+        }
     }
-    
+
 }
 
 impl FromStr for TransportSpec {

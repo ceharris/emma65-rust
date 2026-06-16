@@ -3,39 +3,40 @@ use figment::value::{Dict, Value};
 use figment::providers::Serialized;
 use serde::Deserialize;
 
-use crate::emulator::{AddressRange, BusConfig, Console, DeviceId};
-use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
+use crate::emulator::{AddressRange, BusConfig, DeviceId, Via6522};
+use super::{DeviceModule, InstantiationContext, DeviceModuleError, TransportSpec, TransportSpecFormat};
 
 // Bus ID for the device.
-const DEVICE_ID: DeviceId = DeviceId(0);
+const DEVICE_ID: DeviceId = DeviceId(1);
 
 // Type name used in registering the device
-const DEVICE_TYPE: &str = "console";
+const DEVICE_TYPE: &str = "via/6522";
 
 // Size of the device on the bus (in contiguous bytes of address space)
-const BUS_SIZE: u16 = 2;
+const BUS_SIZE: u16 = 16;
 
-/// Console device module.
+
+/// 6522 Versatile Interface Adapter module.
 #[derive(Clone)]
-pub struct ConsoleModule;
+pub struct Via6522Module;
 
 #[derive(Deserialize)]
-pub struct ConsoleAttributes {
+pub struct Via6522Attributes {
     transport: Option<TransportSpecFormat>,
 }
 
-impl DeviceModule for ConsoleModule {
+impl DeviceModule for Via6522Module {
 
     fn name(&self) -> &'static str {
         DEVICE_TYPE
     }
 
-    async fn instantiate(&self, bus_config: BusConfig, address: u16,
+    async fn instantiate(&self, bus_config: BusConfig, address: u16, 
                          attributes: &HashMap<String, Value>, _context: &InstantiationContext)
             -> Result<BusConfig, DeviceModuleError> {
-
+        
         let attrs = Dict::from_iter(attributes.clone());
-        let config: ConsoleAttributes = figment::Figment::new()
+        let config: Via6522Attributes = figment::Figment::new()
             .merge(Serialized::defaults(attrs))
             .extract()
             .map_err(|e| DeviceModuleError::Config(format!("configuration error: {e}")))?;
@@ -45,20 +46,20 @@ impl DeviceModule for ConsoleModule {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let console = {
-            let mut c = Console::new();
+        let device = {
+            let mut dev = Via6522::new();
             if let Some(transport_spec) = transport_spec {
                 let transport = transport_spec
                     .to_transport().await
                     .map_err(DeviceModuleError::Transport)?;
-                c.attach_transport(transport);
+                dev.attach_transport(transport);
             }
-            c
+            dev
         };
 
         bus_config.device(
             AddressRange::new(address, address + (BUS_SIZE - 1)),
-            DEVICE_ID, Box::new(console))
+            DEVICE_ID, Box::new(device))
             .map_err(DeviceModuleError::BusConfig)
     }
 
