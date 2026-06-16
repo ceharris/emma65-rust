@@ -79,7 +79,7 @@ pub struct Acia6551 {
     overrun_enabled: bool,
 }
 
-const ASSUMED_CLOCK_SPEED: u64 = 1_000_000;
+const DEFAULT_CLOCK_HZ: u64 = 1_000_000;
 
 impl Acia6551 {
     /// Creates a new `Acia6551` in correct (non-bug-compatible) mode with TDRE set.
@@ -101,16 +101,16 @@ impl Acia6551 {
             cycles_per_byte: 0,
             tdre_bug_compatible: false,
             tx_cycles_remaining: 0,
-            clock_hz: ASSUMED_CLOCK_SPEED,
+            clock_hz: DEFAULT_CLOCK_HZ,
             overrun_enabled: false,
         }
     }
 
     /// Sets the CPU clock frequency used to compute baud rate timing.
     ///
-    /// The ACIA derives its baud rate from the CPU clock. Setting this to match the actual
-    /// CPU clock speed ensures that `cycles_per_byte` reflects the correct number of CPU
-    /// cycles per serial byte at the configured baud rate.
+    /// Only used when the control register selects internal clock mode (bit 4 set).
+    /// In external clock mode the transport is polled on every `tick()` regardless
+    /// of this value.
     ///
     /// Defaults to 1 MHz if not set.
     pub fn with_clock_hz(mut self, clock_hz: u64) -> Self {
@@ -118,17 +118,17 @@ impl Acia6551 {
         self
     }
 
-    /// Enables WDC 65C51 bug-compatible mode: TDRE is permanently set and never cleared
-    /// after a TX write, matching the behaviour of the real hardware.
+    /// Enables or disables WDC 65C51 bug-compatible mode: TDRE is permanently set and never cleared
+    /// after a TX write, matching the behavior of the real hardware.
     ///
     /// Use this when running software written for the actual WDC 65C51 chip that relies
     /// on timing delays rather than polling TDRE.
-    pub fn with_tdre_bug(mut self) -> Self {
+    pub fn with_tdre_bug(mut self, enabled: bool) -> Self {
         self.tdre_bug_compatible = true;
         self
     }
 
-    /// Enables receive overrun in internal-clock mode.
+    /// Enables or disables receive overrun in internal clock mode.
     ///
     /// When enabled, a byte arriving from the transport while RDRF is already set will
     /// overwrite `rx_data` and set the overrun flag, matching real 65C51 hardware where
@@ -137,7 +137,7 @@ impl Acia6551 {
     ///
     /// Has no effect in external-clock mode, where the transport is not timing-driven and
     /// bytes are held in the pipe until RDRF is cleared.
-    pub fn with_overrun(mut self) -> Self {
+    pub fn with_overrun(mut self, enabled: bool) -> Self {
         self.overrun_enabled = true;
         self
     }
@@ -431,7 +431,7 @@ mod tests {
         let (local, mut remote) = PipeTransport::pair().unwrap();
         let mut device = Acia6551::new()
             .with_clock_hz(1_000_000)
-            .with_overrun();
+            .with_overrun(true);
         device.attach_transport(Box::new(local));
         // 19200 baud internal clock: cycles_per_byte = 1_000_000 * 10 / 19200 = 520
         device.write(3, 0x1F);
@@ -448,7 +448,7 @@ mod tests {
     fn no_overrun_in_external_clock_mode_even_with_flag() {
         let (local, mut remote) = PipeTransport::pair().unwrap();
         let mut device = Acia6551::new()
-            .with_overrun();
+            .with_overrun(true);
         device.attach_transport(Box::new(local));
         // Control defaults to 0x00 → external clock (cycles_per_byte = 0)
         remote.send(0x01).unwrap();
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn tdre_always_set_in_bug_compatible_mode() {
         let (local, _remote) = PipeTransport::pair().unwrap();
-        let mut device = Acia6551::new().with_tdre_bug();
+        let mut device = Acia6551::new().with_tdre_bug(true);
         device.attach_transport(Box::new(local));
         device.write(0, 0x41); // TX write — should NOT clear TDRE
         assert_ne!(device.peek(1) & 0x10, 0);
