@@ -60,6 +60,9 @@ impl DeviceModule for Acia6551Module {
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport);
             }
+            if let Some(sender) = &context.error_sender {
+                dev.set_error_sender(sender.clone(), DEVICE_ID);
+            }
             dev
         };
 

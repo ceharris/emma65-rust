@@ -32,7 +32,7 @@ impl DeviceModule for Via6522Module {
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16, 
-                         attributes: &HashMap<String, Value>, _context: &InstantiationContext)
+                         attributes: &HashMap<String, Value>, context: &InstantiationContext)
             -> Result<BusConfig, DeviceModuleError> {
         
         let attrs = Dict::from_iter(attributes.clone());
@@ -53,6 +53,9 @@ impl DeviceModule for Via6522Module {
                     .to_transport().await
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport);
+            }
+            if let Some(sender) = &context.error_sender {
+                dev.set_error_sender(sender.clone(), DEVICE_ID);
             }
             dev
         };

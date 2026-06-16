@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use figment::value::Value;
-use crate::emulator::{BusConfig};
+use crate::emulator::{BusConfig, ErrorSender};
 use super::{DeviceModule, DeviceModuleError};
 
 /// A context of application attributes that may be used by device modules during instantiation.
 #[derive(Clone)]
 pub struct InstantiationContext {
-    /// Configured clock speed of the CPU (None signifies no throttling)
+    /// Configured clock speed of the CPU (None signifies no throttling).
     pub clock_hz: Option<u64>,
+    /// An error sender that can be cloned into any device that needs it.
+    pub error_sender: Option<ErrorSender>,
 }
 
 type InstantiateFn = Box<
@@ -104,7 +106,7 @@ mod tests {
             self.name
         }
 
-        async fn instantiate(&self, _bus_config: BusConfig, _address: u16, 
+        async fn instantiate(&self, _bus_config: BusConfig, _address: u16,
                              _attributes: &HashMap<String, Value>, _context: &InstantiationContext)
                 -> Result<BusConfig, DeviceModuleError> {
             Err(DeviceModuleError::Config(self.tag.unwrap_or(self.name).to_string()))
@@ -115,7 +117,7 @@ mod tests {
     async fn instantiate_unknown_device_type() {
         let registry = DeviceRegistry::default();
         let bus_config = BusConfig::new();
-        let context = InstantiationContext { clock_hz: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None };
         let attributes: HashMap<String, Value> = HashMap::new();
         let err = registry.instantiate("foobar", bus_config, 0x55aa, &attributes, &context)
             .await.err().unwrap();
@@ -126,7 +128,7 @@ mod tests {
     async fn instantiate_routes_to_correct_module() {
         let mut registry = DeviceRegistry::default();
         let attributes: HashMap<String, Value> = HashMap::new();
-        let context = InstantiationContext { clock_hz: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None };
         registry.register(MockModule::from_name("alpha"));
         registry.register(MockModule::from_name("beta"));
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context)
@@ -143,7 +145,7 @@ mod tests {
         let attributes: HashMap<String, Value> = HashMap::new();
         registry.register(MockModule::from_name_and_tag("alpha", "alpha1"));
         registry.register(MockModule::from_name_and_tag("alpha", "alpha2"));
-        let context = InstantiationContext { clock_hz: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None };
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context)
             .await.err().unwrap();
         assert!(matches!(err_a, DeviceModuleError::Config(s) if s == "alpha2"));
