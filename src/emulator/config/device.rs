@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use figment::value::{Tag, Value};
 use serde::{Deserialize, Serialize};
@@ -9,14 +10,33 @@ use super::InstantiationContext;
 /// A configuration spec for a pluggable device module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceSpec {
-    /// Address at which the device is to be mapped on the bus.
+    // Address at which the device is to be mapped on the bus.
     address: u16,
-    /// Device module name used to identify the device to be instantiated.
+    // Device module name, used to identify the device to be instantiated.
     #[serde(rename = "type")]
-    type_name: String,
-    /// Additional device-specific attributes.
+    module_name: String,
+    // Additional device-specific attributes.
     #[serde(flatten)]
     attributes: HashMap<String, figment::value::Value>,
+}
+
+impl DeviceSpec {
+
+    /// Address at which the device will be mapped on the bus.
+    pub fn address(&self) -> u16 {
+        self.address
+    }
+
+    /// Device module name, used to identify the device to be instantiated.
+    pub fn module_name(&self) -> &str {
+        &self.module_name
+    }
+
+    /// Additional configuration attributes for the device.
+    pub fn attributes(&self) -> &HashMap<String, Value> {
+        &self.attributes
+    }
+
 }
 
 impl FromStr for DeviceSpec {
@@ -33,6 +53,22 @@ pub enum DeviceModuleError {
     BusConfig(BusConfigError),
     Transport(TransportError),
     Config(String),
+    Io(std::io::Error)
+}
+
+impl Display for DeviceModuleError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeviceModuleError::BusConfig(e) => 
+                write!(f, "bus configuration error: {e}"),
+            DeviceModuleError::Transport(e) =>
+                write!(f, "transport error: {e}"),
+            DeviceModuleError::Config(e) =>
+                write!(f, "configuration error: {e}"),
+            DeviceModuleError::Io(e ) =>
+                write!(f, "I/O error: {e}"),
+        }
+    }
 }
 
 /// A pluggable device module.
@@ -144,7 +180,7 @@ fn parse_spec(s: &str) -> Result<DeviceSpec, String> {
     };
     Ok(DeviceSpec {
         address,
-        type_name,
+        module_name: type_name,
         attributes,
     })
 }
@@ -296,7 +332,7 @@ mod tests {
     fn parse_spec_without_attributes() {
         match parse_spec("console@0xfff8") {
             Ok(device_spec) => {
-                assert_eq!(device_spec.type_name, "console");
+                assert_eq!(device_spec.module_name, "console");
                 assert_eq!(device_spec.address, 0xfff8);
                 assert!(device_spec.attributes.is_empty());
             }
@@ -308,7 +344,7 @@ mod tests {
     fn parse_spec_with_attributes() {
         match parse_spec("console@0xfff8,transport=pty:.emma/dev/ttyS0") {
             Ok(device_spec) => {
-                assert_eq!(device_spec.type_name, "console");
+                assert_eq!(device_spec.module_name, "console");
                 assert_eq!(device_spec.address, 0xfff8);
                 assert_eq!(device_spec.attributes.get("transport").unwrap().as_str().unwrap(),
                            "pty:.emma/dev/ttyS0".to_string());

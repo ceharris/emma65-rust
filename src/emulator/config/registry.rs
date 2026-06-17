@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use figment::value::Value;
 use crate::emulator::{BusConfig, ErrorSender};
-use super::{DeviceModule, DeviceModuleError};
+use super::{DeviceModule, DeviceModuleError, RamModule, RomModule, ConsoleModule, Acia6551Module, Mc6850Module, Via6522Module};
 
 /// A context of application attributes that may be used by device modules during instantiation.
 #[derive(Clone)]
@@ -36,6 +36,18 @@ impl DeviceRegistry {
         DeviceRegistry {
             modules: HashMap::new(),
         }
+    }
+
+    /// Creates a registry containing all the built-in device modules.
+    pub fn with_builtins() -> Self {
+        let mut r = Self::new();
+        r.register(RamModule);
+        r.register(RomModule);
+        r.register(ConsoleModule);
+        r.register(Acia6551Module);
+        r.register(Mc6850Module);
+        r.register(Via6522Module);
+        r
     }
 
     /// Captures the specified [`DeviceModule`] and assigns it a name.
@@ -149,6 +161,20 @@ mod tests {
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context)
             .await.err().unwrap();
         assert!(matches!(err_a, DeviceModuleError::Config(s) if s == "alpha2"));
+    }
+
+    #[tokio::test]
+    async fn with_builtins_has_ram_module() {
+        let registry = DeviceRegistry::with_builtins();
+        let context = InstantiationContext { clock_hz: None, error_sender: None };
+        let mut attributes: HashMap<String, Value> = HashMap::new();
+        attributes.insert("size".to_string(), Value::from(65536));
+        let bus_config = registry.instantiate("ram", BusConfig::new(), 0, &attributes, &context).await.unwrap();
+        let mut bus = bus_config.build();
+        bus.write(0, 0x55).unwrap();
+        assert_eq!(bus.read(0).unwrap(), 0x55);
+        bus.write(0xffff, 0xaa).unwrap();
+        assert_eq!(bus.read(0xffff).unwrap(), 0xaa);
     }
 
 }

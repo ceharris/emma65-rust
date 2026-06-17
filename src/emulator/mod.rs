@@ -16,6 +16,7 @@ pub mod interrupt;
 pub mod transport;
 /// Device and app configuration.
 pub mod config;
+mod session;
 
 pub use bus::region::{AddressRange, BusOp};
 pub use bus::{Bus, BusConfig, RomWritePolicy, UnmappedPolicy};
@@ -32,3 +33,4 @@ pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
 pub use exec::{ClockSpeed, RunHandle, StepResult, run};
 pub use interrupt::{InterruptController, IrqSource};
 pub use transport::{Transport, TransportError, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport};
+pub use session::{EmulatorSession};
