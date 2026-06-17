@@ -39,21 +39,21 @@ impl FromStr for CpuVariantSpec {
 
 }
 
-/// An error that occurs during app configuration or startup.
+/// An error that occurs during emulator configuration or startup.
 #[derive(Debug)]
-pub enum StartupError {
+pub enum BuildError {
     /// An error that occurred while creating and configuring the CPU.
     Cpu(CpuBuildError),
     /// An error that occurred while instantiating a device module.
     Device { module_name: String, address: u16, source: DeviceModuleError },
 }
 
-impl Display for StartupError {
+impl Display for BuildError {
 
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            StartupError::Cpu(e) => write!(f, "CPU configuration error: {e}"),
-            StartupError::Device { module_name, address, source } =>
+            BuildError::Cpu(e) => write!(f, "CPU configuration error: {e}"),
+            BuildError::Device { module_name, address, source } =>
                 write!(f, "failed to configure device '{module_name}' at address {address:#06x}: {source}"),
         }
     }
@@ -63,12 +63,16 @@ impl Display for StartupError {
 #[derive(Debug, Clone, Parser, Serialize, Deserialize)]
 #[clap(name = "Emulator")]
 #[serde(rename_all = "kebab-case")]
-pub struct AppConfig {
+/// Configuration attributes for the emulator.
+pub struct Config {
 
     /// Selected CPU variant (e.g. 65C02, WDC65C02).
+    #[serde(rename = "cpu_variant")]
+    #[clap(long = "cpu-variant")]
     pub cpu_variant_spec: Option<CpuVariantSpec>,
 
     /// Clock speed to simulate via throttling.
+    #[clap(long = "clock-speed-hz")]
     pub clock_speed_hz: Option<u64>,
 
     /// Device config specifications.
@@ -77,9 +81,9 @@ pub struct AppConfig {
 
 }
 
-impl AppConfig {
+impl Config {
 
-    pub async fn build(&self, registry: &DeviceRegistry) -> Result<EmulatorSession, StartupError>{
+    pub async fn build(&self, registry: &DeviceRegistry) -> Result<EmulatorSession, BuildError> {
         let (error_sender, error_receiver) = device_event_channel();
         let context = InstantiationContext {
             clock_hz: self.clock_speed_hz,
@@ -89,7 +93,7 @@ impl AppConfig {
         for spec in self.devices.iter().flatten() {
             bus_config = registry.instantiate(spec.module_name(), bus_config, spec.address(), spec.attributes(), &context)
                 .await
-                .map_err(|e| StartupError::Device {
+                .map_err(|e| BuildError::Device {
                     module_name: spec.module_name().to_string(),
                     address: spec.address(),
                     source: e,
@@ -101,7 +105,7 @@ impl AppConfig {
             .clock_speed(self.clock_speed_hz.map_or(ClockSpeed::unlimited(), ClockSpeed::hz))
             .bus(bus)
             .build()
-            .map_err(StartupError::Cpu)?;
+            .map_err(BuildError::Cpu)?;
         Ok(EmulatorSession {
             cpu, error_receiver
         })

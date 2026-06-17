@@ -4,11 +4,11 @@ mod console;
 mod acia6551;
 mod mc6850;
 mod via6522;
-mod app;
+mod emulator;
 mod registry;
 mod memory;
 
-pub use app::{AppConfig, CpuVariantSpec};
+pub use emulator::{Config, CpuVariantSpec};
 pub use registry::{DeviceRegistry, InstantiationContext};
 pub use transport::{TransportSpec, TransportSpecFormat};
 pub use device::{DeviceSpec, DeviceModule, DeviceModuleError};

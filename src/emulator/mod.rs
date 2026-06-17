@@ -14,8 +14,7 @@ pub mod exec;
 pub mod interrupt;
 /// Transport abstraction and implementations for device IO.
 pub mod transport;
-/// Device and app configuration.
-pub mod config;
+mod config;
 mod session;
 
 pub use bus::region::{AddressRange, BusOp};
@@ -34,3 +33,4 @@ pub use exec::{ClockSpeed, RunHandle, StepResult, run};
 pub use interrupt::{InterruptController, IrqSource};
 pub use transport::{Transport, TransportError, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport};
 pub use session::{EmulatorSession};
+pub use config::{Config, DeviceModule, DeviceModuleError, InstantiationContext, DeviceRegistry, TransportSpec, TransportSpecFormat};
