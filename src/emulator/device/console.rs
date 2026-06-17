@@ -268,9 +268,9 @@ mod tests {
         // Map all of RAM (including reset vector region) plus console at 0xF000.
         // Using RAM for 0xFF00–0xFFFF lets us write the reset vector after build().
         let bus = BusConfig::new()
-            .ram(AddressRange::new(0x0000, 0xEFFF)).unwrap()
+            .ram_with_fill(AddressRange::new(0x0000, 0xEFFF), 0).unwrap()
             .device(AddressRange::new(0xF000, 0xF001), DeviceId(1), Box::new(console)).unwrap()
-            .ram(AddressRange::new(0xFF00, 0xFFFF)).unwrap()
+            .ram_with_fill(AddressRange::new(0xFF00, 0xFFFF), 0).unwrap()
             .build();
 
         let mut cpu = crate::emulator::Cpu::builder(CpuVariant::Wdc65C02)
@@ -324,9 +324,9 @@ mod tests {
         console.attach_transport(Box::new(local));
 
         let bus = BusConfig::new()
-            .ram(AddressRange::new(0x0000, 0xEFFF)).unwrap()
+            .ram_with_fill(AddressRange::new(0x0000, 0xEFFF), 0).unwrap()
             .device(AddressRange::new(0xF000, 0xF001), DeviceId(1), Box::new(console)).unwrap()
-            .ram(AddressRange::new(0xFF00, 0xFFFF)).unwrap()
+            .ram_with_fill(AddressRange::new(0xFF00, 0xFFFF), 0).unwrap()
             .build();
 
         let mut cpu = crate::emulator::Cpu::builder(CpuVariant::Wdc65C02)

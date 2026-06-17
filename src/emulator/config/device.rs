@@ -86,31 +86,31 @@ pub trait DeviceModule: Clone {
         -> impl Future<Output = Result<BusConfig, DeviceModuleError>> + Send;
 }
 
-fn parse_prefixed_u16(s: &str) -> Result<u16, std::num::ParseIntError> {
+fn parse_prefixed_u32(s: &str) -> Result<u32, std::num::ParseIntError> {
     if let Some(hex_str) = s.strip_prefix("0x") {
-        u16::from_str_radix(hex_str, 16)
+        u32::from_str_radix(hex_str, 16)
     } else if let Some(hex_str) = s.strip_prefix("0X") {
-        u16::from_str_radix(hex_str, 16)
+        u32::from_str_radix(hex_str, 16)
     } else if let Some(oct_str) = s.strip_prefix("0o") {
-        u16::from_str_radix(oct_str, 8)
+        u32::from_str_radix(oct_str, 8)
     } else if let Some(oct_str) = s.strip_prefix("0O") {
-        u16::from_str_radix(oct_str, 8)
+        u32::from_str_radix(oct_str, 8)
     } else if let Some(bin_str) = s.strip_prefix("0b") {
-        u16::from_str_radix(bin_str, 2)
+        u32::from_str_radix(bin_str, 2)
     } else if let Some(bin_str) = s.strip_prefix("0B") {
-        u16::from_str_radix(bin_str, 2)
+        u32::from_str_radix(bin_str, 2)
     } else {
-        s.parse::<u16>() // Fallback to standard base-10
+        s.parse::<u32>() // Fallback to standard base-10
     }
 }
 
-fn parse_suffixed_u16(s: &str) -> Result<u16, std::num::ParseIntError> {
+fn parse_suffixed_u32(s: &str) -> Result<u32, std::num::ParseIntError> {
     if let Some(k_str) = s.strip_suffix("K") {
-        Ok(k_str.parse::<u16>()? * 1024)
+        Ok(k_str.parse::<u32>()? * 1024)
     } else if let Some(k_str) = s.strip_suffix("k") {
-        Ok(k_str.parse::<u16>()? * 1024)
+        Ok(k_str.parse::<u32>()? * 1024)
     } else {
-        s.parse::<u16>()
+        s.parse::<u32>()
     }
 }
 
@@ -125,8 +125,8 @@ fn parse_device_mapping(s: &str) -> Result<(String, u16), String> {
         if address.is_empty() {
             return Err("Address is required on the right-hand side of '@'".to_string())
         }
-        match parse_prefixed_u16(address) {
-            Ok(address) => Ok((device_type, address)),
+        match parse_prefixed_u32(address) {
+            Ok(address) => Ok((device_type, address as u16)),
             Err(error) => Err(error.to_string())
         }
     } else {
@@ -152,9 +152,9 @@ fn parse_attributes(s: &str) -> Result<HashMap<String, figment::value::Value>, S
 
         let value = if let Ok(b) = val_str.parse::<bool>() {
             Value::from(b)
-        } else if let Ok(i) = parse_prefixed_u16(val_str) {
+        } else if let Ok(i) = parse_prefixed_u32(val_str) {
             Value::from(i)
-        } else if let Ok(i) = parse_suffixed_u16(val_str) {
+        } else if let Ok(i) = parse_suffixed_u32(val_str) {
             Value::from(i)
         } else if let Ok(i) = val_str.parse::<u32>() {
             Value::from(i)
@@ -193,37 +193,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_prefixed_u16_hex() {
-        assert_eq!(parse_prefixed_u16("0xdead").unwrap(), 0xdead);
-        assert_eq!(parse_prefixed_u16("0XDEAD").unwrap(), 0xdead);
+    fn parse_prefixed_u32_hex() {
+        assert_eq!(parse_prefixed_u32("0xdead").unwrap(), 0xdead);
+        assert_eq!(parse_prefixed_u32("0XDEAD").unwrap(), 0xdead);
     }
 
     #[test]
-    fn parse_prefixed_u16_octal() {
-        assert_eq!(parse_prefixed_u16("0o777").unwrap(), 0o777);
-        assert_eq!(parse_prefixed_u16("0O777").unwrap(), 0o777);
+    fn parse_prefixed_u32_octal() {
+        assert_eq!(parse_prefixed_u32("0o777").unwrap(), 0o777);
+        assert_eq!(parse_prefixed_u32("0O777").unwrap(), 0o777);
     }
 
     #[test]
-    fn parse_prefixed_u16_binary() {
-        assert_eq!(parse_prefixed_u16("0b10100101").unwrap(), 0b10100101);
-        assert_eq!(parse_prefixed_u16("0B10100101").unwrap(), 0b10100101);
+    fn parse_prefixed_u32_binary() {
+        assert_eq!(parse_prefixed_u32("0b10100101").unwrap(), 0b10100101);
+        assert_eq!(parse_prefixed_u32("0B10100101").unwrap(), 0b10100101);
     }
 
     #[test]
-    fn parse_prefixed_u16_decimal() {
-        assert_eq!(parse_prefixed_u16("65535").unwrap(), 65535);
+    fn parse_prefixed_u3_decimal() {
+        assert_eq!(parse_prefixed_u32("65535").unwrap(), 65535);
     }
 
     #[test]
-    fn parse_suffixed_u16_kilobytes() {
-        assert_eq!(parse_suffixed_u16("16K").unwrap(), 16384);
-        assert_eq!(parse_suffixed_u16("16k").unwrap(), 16384);
+    fn parse_suffixed_u32_kilobytes() {
+        assert_eq!(parse_suffixed_u32("16K").unwrap(), 16384);
+        assert_eq!(parse_suffixed_u32("16k").unwrap(), 16384);
     }
 
     #[test]
-    fn parse_suffixed_u16_bytes() {
-        assert_eq!(parse_suffixed_u16("16384").unwrap(), 16384)
+    fn parse_suffixed_u32_bytes() {
+        assert_eq!(parse_suffixed_u32("16384").unwrap(), 16384)
     }
 
     #[test]

@@ -3,6 +3,7 @@ pub mod region;
 /// Bus tracing: callback trait, record type, and binary trace writer.
 pub mod trace;
 
+use rand::RngExt;
 pub use region::{AddressRange, BusOp};
 pub use trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
 
@@ -309,11 +310,21 @@ impl BusConfig {
         self
     }
 
-    /// Maps a RAM region over `range`.  Initial contents are zero.
+    /// Maps a RAM region over `range`. Initial contents are random.
     pub fn ram(mut self, range: AddressRange) -> Result<Self, BusConfigError> {
         self.check_overlap(range)?;
         let len = range.len() as usize;
-        self.regions.push(Region::Ram { range, data: vec![0u8; len] });
+        let mut v = vec![0u8; len];
+        rand::rng().fill(&mut v[..]);
+        self.regions.push(Region::Ram { range, data: v });
+        Ok(self)
+    }
+
+    /// Maps a RAM region over `range`, filling each cell with the specified value.
+    pub fn ram_with_fill(mut self, range: AddressRange, fill_value: u8) -> Result<Self, BusConfigError> {
+        self.check_overlap(range)?;
+        let len = range.len() as usize;
+        self.regions.push(Region::Ram { range, data: vec![fill_value; len] });
         Ok(self)
     }
 
@@ -437,7 +448,7 @@ mod tests {
 
     fn ram_bus(start: u16, end: u16) -> Bus {
         Bus::config()
-            .ram(AddressRange::new(start, end))
+            .ram_with_fill(AddressRange::new(start, end), 0)
             .unwrap()
             .build()
     }
@@ -511,9 +522,9 @@ mod tests {
     #[test]
     fn ambiguous_overlap_error_for_same_size() {
         let result = Bus::config()
-            .ram(AddressRange::new(0x0000, 0x00FF))
+            .ram_with_fill(AddressRange::new(0x0000, 0x00FF), 0)
             .unwrap()
-            .ram(AddressRange::new(0x0000, 0x00FF));
+            .ram_with_fill(AddressRange::new(0x0000, 0x00FF), 0);
         assert!(matches!(result, Err(BusConfigError::AmbiguousOverlap { .. })));
     }
 

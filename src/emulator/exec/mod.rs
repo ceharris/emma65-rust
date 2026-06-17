@@ -214,7 +214,7 @@ mod tests {
     /// Builds a CPU with 64KB RAM and an infinite NOP loop at `NOP_ADDR`.
     fn make_cpu_with_speed(speed: ClockSpeed) -> Cpu {
         let mut bus = Bus::config()
-            .ram(AddressRange::new(0x0000, 0xFFFF))
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
             .unwrap()
             .build();
         // Reset vector → NOP_ADDR

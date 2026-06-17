@@ -9,7 +9,7 @@ const MAX_STEPS: u32 = 10_000;
 /// The reset vector is set to `prog_addr`.
 fn build_cpu(prog_addr: u16, prog: &[u8]) -> emma65::emulator::Cpu {
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xFFFF))
+        .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
         .unwrap()
         .build();
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -125,9 +125,9 @@ fn console_full_system_echo() {
 
     // 64 KB RAM; Console at $DF00–$DF01.
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF01), DeviceId(1), Box::new(console)).unwrap()
-        .ram(AddressRange::new(0xDF02, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF02, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -177,9 +177,9 @@ fn acia6551_transmit() {
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia)).unwrap()
-        .ram(AddressRange::new(0xDF04, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF04, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -214,9 +214,9 @@ fn acia6551_receive() {
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia)).unwrap()
-        .ram(AddressRange::new(0xDF04, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF04, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -270,9 +270,9 @@ fn mc6850_transmit_and_receive() {
         mc.attach_transport(Box::new(local));
 
         let bus = Bus::config()
-            .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+            .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
             .device(AddressRange::new(0xDF00, 0xDF01), DeviceId(1), Box::new(mc)).unwrap()
-            .ram(AddressRange::new(0xDF02, 0xFFFF)).unwrap()
+            .ram_with_fill(AddressRange::new(0xDF02, 0xFFFF), 0).unwrap()
             .build();
 
         let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -315,9 +315,9 @@ fn mc6850_transmit_and_receive() {
         mc.attach_transport(Box::new(local));
 
         let bus = Bus::config()
-            .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+            .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
             .device(AddressRange::new(0xDF00, 0xDF01), DeviceId(1), Box::new(mc)).unwrap()
-            .ram(AddressRange::new(0xDF02, 0xFFFF)).unwrap()
+            .ram_with_fill(AddressRange::new(0xDF02, 0xFFFF), 0).unwrap()
             .build();
 
         let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -377,9 +377,9 @@ fn acia6551_irq_driven_receive() {
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia)).unwrap()
-        .ram(AddressRange::new(0xDF04, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF04, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -450,9 +450,9 @@ fn acia6551_irq_driven_transmit() {
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia)).unwrap()
-        .ram(AddressRange::new(0xDF04, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF04, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -547,9 +547,9 @@ fn mc6850_irq_driven_receive() {
     mc.attach_transport(Box::new(local));
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF01), DeviceId(1), Box::new(mc)).unwrap()
-        .ram(AddressRange::new(0xDF02, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF02, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -620,9 +620,9 @@ fn mc6850_irq_driven_transmit() {
     mc.attach_transport(Box::new(local));
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF01), DeviceId(1), Box::new(mc)).unwrap()
-        .ram(AddressRange::new(0xDF02, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF02, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -714,9 +714,9 @@ fn via6522_timer1_sets_ifr() {
     let via = Via6522::new();
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDFFF), 0).unwrap()
         .device(AddressRange::new(0xE000, 0xE00F), DeviceId(1), Box::new(via)).unwrap()
-        .ram(AddressRange::new(0xE010, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xE010, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)

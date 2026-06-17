@@ -106,7 +106,7 @@ mod tests {
 
     fn make_bus(start: u16, bytes: &[u8]) -> Bus {
         let mut bus = BusConfig::new()
-            .ram(AddressRange::new(0x0000, 0xFFFF))
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
             .unwrap()
             .build();
         for (i, &b) in bytes.iter().enumerate() {

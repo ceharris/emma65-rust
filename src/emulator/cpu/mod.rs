@@ -1083,7 +1083,7 @@ mod tests {
     // Build a CPU with 64KB RAM and a reset vector pointing to `start`.
     fn make_cpu(start: u16) -> Cpu {
         let mut bus = Bus::config()
-            .ram(AddressRange::new(0x0000, 0xFFFF))
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
             .unwrap()
             .build();
         bus.write(RESET_VECTOR, (start & 0xFF) as u8).unwrap();
@@ -1560,7 +1560,7 @@ mod tests {
     #[test]
     fn invalid_opcode_error_policy() {
         let mut bus = Bus::config()
-            .ram(AddressRange::new(0x0000, 0xFFFF))
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
             .unwrap()
             .build();
         bus.write(RESET_VECTOR, 0x00).unwrap();

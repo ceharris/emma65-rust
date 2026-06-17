@@ -23,11 +23,12 @@ pub struct RomModule;
 #[derive(Deserialize)]
 pub struct MemoryAttributes {
     size: u32,
+    fill: Option<u8>,
     image: Option<std::path::PathBuf>,
 }
 
-impl MemoryAttributes {
 
+impl MemoryAttributes {
     fn from_attributes(attributes: &HashMap<String, Value>) -> Result<Self, DeviceModuleError> {
         let attrs = Dict::from_iter(attributes.clone());
         figment::Figment::new()
@@ -54,8 +55,13 @@ impl DeviceModule for RamModule {
         let config = MemoryAttributes::from_attributes(attributes)?;
         let range = AddressRange::new(address, address + (config.size - 1) as u16);
         if let Some(filename) = config.image {
+            if config.fill.is_some() {
+                return Err(DeviceModuleError::Config("Options 'image' and 'fill' are mutually exclusive".to_string()));
+            }
             let data = read_image_file(&filename).await?;
             bus_config.ram_with_data(range, data).map_err(DeviceModuleError::BusConfig)
+        } else if let Some(fill) = config.fill {
+            bus_config.ram_with_fill(range, fill).map_err(DeviceModuleError::BusConfig)
         } else {
             bus_config.ram(range).map_err(DeviceModuleError::BusConfig)
         }

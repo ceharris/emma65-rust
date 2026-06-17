@@ -32,9 +32,9 @@ async fn free_run_console_output() {
 
     // 64 KB RAM; Console at $F000–$F001.
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xEFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xEFFF), 0).unwrap()
         .device(AddressRange::new(0xF000, 0xF001), DeviceId(1), Box::new(console)).unwrap()
-        .ram(AddressRange::new(0xF002, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xF002, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -99,7 +99,7 @@ fn bus_trace_captures_reads_and_writes() {
     let records = Arc::new(Mutex::new(Vec::<TraceRecord>::new()));
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0).unwrap()
         .build();
 
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -184,9 +184,9 @@ fn bus_trace_captures_reads_and_writes() {
 /// and setting the reset vector to $0200.
 fn build_acia_cpu(acia: Acia6551, prog: &[u8]) -> emma65::emulator::Cpu {
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia)).unwrap()
-        .ram(AddressRange::new(0xDF04, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF04, 0xFFFF), 0).unwrap()
         .build();
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
         .clock_speed(ClockSpeed::mhz(1.8432))
@@ -366,9 +366,9 @@ async fn mc6850_throughput_at_1_8432_mhz() {
     mc.attach_transport(Box::new(local));
 
     let bus = Bus::config()
-        .ram(AddressRange::new(0x0000, 0xDEFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF01), DeviceId(1), Box::new(mc)).unwrap()
-        .ram(AddressRange::new(0xDF02, 0xFFFF)).unwrap()
+        .ram_with_fill(AddressRange::new(0xDF02, 0xFFFF), 0).unwrap()
         .build();
 
     // Program: write control (CD=10, RIE=0, TC=00), poll RDRF (status bit 0), receive N bytes.
