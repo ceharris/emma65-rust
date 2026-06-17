@@ -1,50 +1,58 @@
 mod config;
 
-use emma65::emulator::{BusConfig, Cpu, CpuVariant, StepResult, map_flag_name, map_register_name};
-use emma65::emulator::bus::region::AddressRange;
-use emma65::watch::WatchCompiler;
+use crate::config::AppConfig;
+use emma65::emulator::{DeviceEvent, StepResult};
 
-fn main() {
-    let bus = BusConfig::new()
-        .ram(AddressRange::new(0x0000, 0xFFFF))
-        .unwrap()
-        .build();
+#[tokio::main]
+async fn main() {
+    let config = AppConfig::load().unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    });
+    let registry = emma65::emulator::DeviceRegistry::with_builtins();
+    let session = match config.emulator.build(&registry).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("startup error: {e}");
+            std::process::exit(1);
+        }
+    };
 
-    let mut cpu = Cpu::builder(CpuVariant::Wdc65C02)
-        .bus(bus)
-        .build()
-        .unwrap();
+    let (cpu, mut error_receiver) = (session.cpu, session.error_receiver);
+    let run_handle = emma65::emulator::run(cpu);
+    let (cpu_done_tx, mut cpu_done_rx) = tokio::sync::oneshot::channel::<StepResult>();
+    tokio::spawn(async move {
+       let _ = cpu_done_tx.send(run_handle.wait().await);
+    });
 
-    // Write a small program: LDA #$00 at reset vector target, then NOP loop.
-    let start: u16 = 0x0400;
-    cpu.bus_mut().write(0xFFFC, (start & 0xFF) as u8).unwrap();
-    cpu.bus_mut().write(0xFFFD, (start >> 8) as u8).unwrap();
-    cpu.bus_mut().write(start, 0xA9).unwrap();     // LDA #$01
-    cpu.bus_mut().write(start + 1, 0x01).unwrap();
-    cpu.bus_mut().write(start + 2, 0xEA).unwrap(); // NOP
-    cpu.reset().unwrap();
+    let mut events_open = true;
+    loop {
+        tokio::select! {
+            event = error_receiver.recv(), if events_open => match event {
+                Some(DeviceEvent::TransportError { device, error}) =>
+                    eprintln!("device {}: transport error: {}", device.0, error),
+                Some(DeviceEvent::TransportDisconnected { device, reason}) =>
+                    eprintln!("device {} disconnected: {}", device.0, reason),
+                Some(DeviceEvent::TransportConnected { device }) =>
+                    println!("device {} connected", device.0),
+                Some(DeviceEvent::DeviceInfo { device, message}) =>
+                    eprintln!("device {}: {}", device.0, message),
+                None => events_open = false,      // all senders dropped
+            },
 
-    // Watch for A changing from its previous value via walrus assignment.
-    let mut compiler = WatchCompiler::new(map_register_name, map_flag_name, |_| None);
-    let wp = compiler
-        .compile("(prev_A := A) != prev_A", cpu.evaluator_mut())
-        .unwrap();
-    cpu.evaluator_mut().add(wp);
-
-    for _ in 0..4 {
-        match cpu.step() {
-            StepResult::WatchTriggered { watch_index, pc } => {
-                println!("triggered: watchpoint {watch_index} at PC=${pc:04X}");
-            }
-            StepResult::Executed(decoded) => {
-                println!("executed: {:?} at PC=${:04X}", decoded.mnemonic, cpu.registers().pc);
-            }
-            StepResult::Error(e) => {
-                println!("error: {e}");
-                break;
-            }
-            _ => break,
+            result = &mut cpu_done_rx => {
+                match result.unwrap_or(StepResult::Stopped) {
+                    StepResult::Error(e) => {
+                        eprintln!("CPU error: {e}");
+                        std::process::exit(1);
+                    }
+                    _ => break,
+                }
+            },
+            _ = tokio::signal::ctrl_c() => break,
         }
     }
+
 }
+
 

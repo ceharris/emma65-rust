@@ -68,9 +68,11 @@ pub struct Config {
 
     /// Selected CPU variant (e.g. 65C02, WDC65C02).
     #[serde(rename = "cpu_variant")]
+    #[clap(long = "cpu-variant")]
     pub cpu_variant_spec: Option<CpuVariantSpec>,
 
     /// Clock speed to simulate via throttling.
+    #[clap(long = "clock-speed-hz")]
     pub clock_speed_hz: Option<u64>,
 
     /// Device config specifications.
