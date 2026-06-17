@@ -5,7 +5,7 @@ edition = "2024"
 
 [[bin]]
 name = "emma65"
-path = "src/main.rs"
+path = "src/bin/emulator/main.rs"
 
 [lib]
 name = "emma65"

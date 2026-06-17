@@ -26,8 +26,7 @@ No external dependencies; zero-copy design throughout.
 ### Crate structure
 
 - **`src/lib.rs`** — crate root; exposes `pub mod watch`
-- **`src/main.rs`** — binary entry point; declares `mod wdc6502` and exercises the `watch` pipeline against a WDC 6502 machine
-- **`src/wdc6502.rs`** — private module of the binary; concrete `EvalContext` implementation for the WDC 6502 (see below)
+- **`src/main.rs`** — binary entry point
 - **`src/watch/`** — watchpoint expression pipeline (see below)
 
 ### `watch` module (`src/watch/`)
@@ -93,10 +92,6 @@ The primary public entry points for emulator/debugger code are `WatchCompiler` a
   `evaluate_all` evaluates watchpoints in order, returning `Ok(Some(index))` on first non-zero result, `Ok(None)` if none triggered, or `Err((index, error))` on failure.
 
 - **`error`** / **`location`** — `Error` and `Location` structs carrying line/column for error reporting.
-
-### `wdc6502` module (`src/wdc6502.rs`)
-
-Concrete `WatchContext` implementation for the WDC 6502. Holds registers (`A`, `X`, `Y`, `P`, `S`, `PC`) and 64KB memory. Provides `map_register_name()` and `map_flag_name()` functions for use as `watch::Mapper`s. Implements `read_register_u32`/`_i32`, `read_flag`, and `read_mem_u32`/`_i32`.
 
 ### Domain-specific operators
 
