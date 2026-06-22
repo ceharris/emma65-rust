@@ -153,6 +153,38 @@ fn run_with_unknown_device_type() {
 }
 
 #[test]
+fn run_with_no_config_uses_default() {
+    // Launch with no arguments; the binary should apply the built-in default config.
+    // TaliForth runs a REPL and never halts on its own, so we kill the process after a
+    // short delay and check that (a) it didn't exit immediately with an error, and
+    // (b) the default-config notice appeared on stderr.
+    let mut child = std::process::Command::new(emulator_bin())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    // If it already exited it was a startup error — capture status.
+    match child.try_wait().unwrap() {
+        Some(status) => {
+            // Collect stderr to report the error, then fail.
+            let output = child.wait_with_output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!("binary exited unexpectedly with {status}: {stderr}");
+        }
+        None => {
+            // Still running — good. Kill it and check stderr for the notice.
+            child.kill().unwrap();
+            let output = child.wait_with_output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("using default configuration"),
+                "expected default-config notice in stderr, got: {stderr}"
+            );
+        }
+    }
+}
+
+#[test]
 fn run_with_missing_rom_image() {
     // Point the ROM image attribute at a path that doesn't exist.
     let output = std::process::Command::new(emulator_bin())
