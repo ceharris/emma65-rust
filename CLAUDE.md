@@ -13,25 +13,121 @@ cargo clippy         # lint
 
 ## Architecture
 
-`emma65` is a Rust crate with a library and a binary. The library currently contains one public module, `watch`, which implements a complete pipeline for evaluating **watchpoint expressions** — conditions used to break or watch memory/registers in the emma65 6502-family emulator.
+`emma65` is a Rust crate (2024 edition) with a library and a binary. The library exposes
+two top-level public modules:
 
-The full pipeline is:
+- **`emulator`** — CPU, memory bus, devices, transport, config, and execution model
+- **`watch`** — watchpoint expression pipeline (scanner → parser → compiler → evaluator)
+
+The binary is in `src/bin/emulator/`. It uses `emulator::config` to load configuration
+from TOML, environment variables, and CLI arguments, then builds and runs an
+`EmulatorSession`.
+
+### Crate structure
+
+```
+src/
+  lib.rs                  — exposes pub mod emulator, pub mod watch
+  bin/emulator/
+    main.rs               — binary entry point; embeds default.bin ROM
+    config.rs             — AppConfig, CliArgs, apply_default_if_unconfigured
+  emulator/
+    mod.rs                — re-exports public API surface
+    bus/                  — Bus, BusConfig, address regions, bus tracing
+    cpu/                  — Cpu, Registers, opcode decode, status register, variant
+    device/               — IoDevice trait, built-in devices (Console, Acia6551, Mc6850, Via6522)
+    disasm/               — Disassembler
+    error.rs              — BusConfigError, BusError, CpuBuildError, ExecError
+    exec/                 — ClockSpeed, StepResult, RunHandle, run()
+    interrupt.rs          — InterruptController, IrqSource
+    transport/            — Transport trait, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport
+    session.rs            — EmulatorSession (owns Cpu + ErrorReceiver)
+    config/               — configuration loading and device module registry (see below)
+  watch/                  — watchpoint expression pipeline (see below)
+```
+
+---
+
+### `emulator::config` module (`src/emulator/config/`)
+
+Multi-source configuration (TOML < `EMMA65_*` env vars < CLI args) via `figment` + `clap`.
+
+Key types re-exported from `emulator`:
+
+```rust
+Config              // emulator config: cpu_variant_spec, clock_speed_hz, devices
+BuildError          // errors from Config::build()
+CpuVariantSpec      // "65C02" | "WDC65C02"
+DeviceSpec          // parsed device entry: type@address,key=val,...
+DeviceModule        // trait for pluggable device modules
+DeviceModuleError   // BusConfig | Transport | Config | Load | Io
+DeviceRegistry      // maps module names to InstantiateFn closures
+InstantiationContext // clock_hz, error_sender passed to DeviceModule::instantiate()
+RamModule / RomModule
+TransportSpec       // Tcp { port, address } | Unix { path } | Pty { path }
+TransportSpecFormat // serde-untagged: Shorthand(String) | Structured(TransportSpec)
+ExpandedPathBuf     // PathBuf that expands ~/ at construction; used for path attrs
+```
+
+Built-in device modules (registered by `DeviceRegistry::with_builtins()`):
+`ram`, `rom`, `console`, `acia/6551`, `acia/6850`, `via/6522`
+
+`Config::build(&registry)` iterates `devices`, dispatches each to its `DeviceModule`,
+builds the `BusConfig`, constructs `Cpu`, and returns `EmulatorSession`.
+
+`DeviceSpec::from_str` format: `type@address[,key=value,...]`
+- Address: decimal, `0x`/`0o`/`0b` prefix
+- Size: bytes or `K`/`k` suffix
+- Transport: `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`, `pty:SYMLINK`
+
+The binary applies a built-in default (TaliForth ROM + RAM + console PTY at
+`~/.emma/dev/ttyS0`, WDC65C02, 1.8432 MHz) when no devices are configured.
+
+---
+
+### `emulator::bus`
+
+`BusConfig` is a builder. Regions are added with `.ram()`, `.rom()`, `.device()`, then
+`.build()` produces a `Bus`. Most-specific-wins overlap: smaller regions shadow larger
+ones at the same addresses. Ambiguous same-size overlaps are caught at build time.
+
+---
+
+### `emulator::cpu`
+
+`Cpu::builder(variant)` → `CpuBuilder` → `Cpu`. Two variants: `Cmos65C02` and
+`Wdc65C02`. The builder accepts a `ClockSpeed` and a `Bus`.
+
+`Cpu::step()` returns `StepResult`. `exec::run()` drives a free-running loop with
+optional clock throttling.
+
+---
+
+### `emulator::device`
+
+All built-in devices implement `IoDevice`:
+
+```rust
+fn read(&mut self, offset: u16) -> u8;
+fn write(&mut self, offset: u16, value: u8);
+fn peek(&self, offset: u16) -> u8;   // side-effect-free (watchpoints, disassembler)
+// optional: tick(), irq_active(), take_nmi(), name()
+```
+
+Devices that need byte-stream I/O hold an `Option<Box<dyn Transport>>`. TCP and Unix
+socket transports listen for incoming connections; PTY creates a pseudoterminal.
+
+---
+
+### `watch` module (`src/watch/`)
+
+A self-contained pipeline for evaluating watchpoint expressions against live machine state.
 
 ```
 source &str → Scanner → Vec<Token> → Parser → Expr tree → Compiler → Vec<OpCode> → Evaluator → Operand (u32)
 ```
 
-No external dependencies; zero-copy design throughout.
-
-### Crate structure
-
-- **`src/lib.rs`** — crate root; exposes `pub mod watch`
-- **`src/main.rs`** — binary entry point
-- **`src/watch/`** — watchpoint expression pipeline (see below)
-
-### `watch` module (`src/watch/`)
-
-All items are internal submodules of `emma65::watch`. The module re-exports its public API from `mod.rs`:
+Public API (re-exported from `emma65::watch`):
 
 ```rust
 pub use self::context::WatchContext;
@@ -41,69 +137,33 @@ pub use self::parser::Mapper;
 pub use self::session::{WatchCompiler, WatchEvaluator, Watchpoint};
 ```
 
-The primary public entry points for emulator/debugger code are `WatchCompiler` and `WatchEvaluator`. The `WatchEvaluator` owns variable name→index mappings and runtime storage internally.
+`WatchCompiler::new(map_register, map_flag, map_symbol)` — owns a `Parser`.
+`compiler.compile(source, evaluator)` → `Watchpoint` (stores `Vec<OpCode>`).
+`WatchEvaluator::new()` — owns watchpoints, `Variables`, and variable runtime storage.
+`evaluator.evaluate_all(context)` → `Ok(Some(index))` | `Ok(None)` | `Err((index, err))`.
 
 #### Submodules
 
-- **`text`** — zero-copy cursor over a `&str`. `consume()` returns slice `[start..current]` and resets `start`. Used by `Scanner` to produce token text without allocating.
+- **`text`** — zero-copy cursor over `&str`; `consume()` returns `[start..current]`
+- **`scanner`** — tokenizes source; handles `0x`/`$`/`0o`/`0q`/`0b`/decimal literals
+- **`token`** — `Token<'a>` with `TokenType`, `&'a str` text slice, and `Location`
+- **`expr`** — `Expr<'a>` AST: leaf nodes (Number, Register, Flag, Variable), Assign (walrus), UnaryOperator (includes Fetch), BinaryOperator; `signed: bool` field
+- **`variables`** — `Variables` maps names to stable `Operand` IDs via `get_or_create`
+- **`parser`** — recursive descent; precedence: `:=` → `||` → `&&` → `|` → `^` → `&` → `==` → relational → shift → `+/-` → `*/` → unary → primary
+- **`compiler`** — depth-first `Expr` traversal → flat `Vec<OpCode>`; signedness selects opcode variant
+- **`evaluator`** — stack VM over `&[OpCode]` against `&dyn WatchContext` and `&mut [Operand]`
+- **`context`** — `WatchContext` trait: `read_register_u32/i32`, `read_flag`, `read_mem_u32/i32`
+- **`session`** — high-level `WatchCompiler` + `WatchEvaluator` API
 
-- **`scanner`** — tokenizes source text into `Vec<Token<'a>>`, borrowing text slices from the source. Handles decimal, hex (`0x`/`$`), octal (`0o`/`0q`/leading-`0`), and binary (`0b`) number literals. Tracks line/column for error reporting.
+#### Domain-specific operators
 
-- **`token`** — `Token<'a>` holds a `TokenType`, a `&'a str` text slice, and a `Location`. `TokenType` includes 40+ variants for operators, literals (`Number(u32)`, `String(String)`, `Symbol(String)`), and punctuation.
+- `B[addr]`, `W[addr]`, `D[addr]` — byte/word/dword memory fetch; leading `+`/`-` controls signedness
+- `` `flagname `` — reads a named CPU status flag
+- `:=` — walrus: assigns RHS to a named variable and yields its value; variables persist across `evaluate_all` calls
+- `$hex` — hexadecimal literal shorthand
 
-- **`expr`** — AST node types. `Expr<'a>` has a `Token<'a>` and an `ExprType<'a>`:
-  - `Number(Operand)`, `Register(Operand)`, `Flag(Operand)`, `Variable(Operand)` — leaf nodes
-  - `Assign(Operand, Box<Expr>)` — walrus assignment; stores RHS into variable slot and yields the value
-  - `UnaryOperator(UnaryOperatorType, Box<Expr>)` — includes `Fetch(OperandWidth)` for memory reads
-  - `BinaryOperator(BinaryOperatorType, Box<Expr>, Box<Expr>)`
-  - `signed: bool` field tracks whether the result should be treated as signed
+#### Lifetime threading
 
-- **`variables`** — `Variables` maps variable names to stable `Operand` IDs. `get_or_create` allocates a new ID on first use and is idempotent thereafter. Used internally by `WatchEvaluator`.
-
-- **`parser`** — recursive descent. Precedence (lowest to highest): assignment (`:=`) → logical-or → logical-and → bitwise-or → bitwise-xor → bitwise-and → equality → relational → shift → term → factor → unary → primary. `Parser` has no lifetime parameter; parse state is held in a private `ParseState<'a, 'p>` created for each call. Public API:
-  ```rust
-  pub type Mapper = Box<dyn Fn(&str) -> Option<Operand>>;
-  Parser::from(map_register, map_flag, map_symbol)  // accepts any Fn, boxed internally
-  parser.parse(source: &'a str, vars: &mut Variables) -> Result<Option<Expr<'a>>, Error>
-  ```
-  Symbol resolution order: register mappers → symbol mappers → variables. Walrus LHS allocates or reuses a variable ID via `vars.get_or_create`.
-
-- **`compiler`** — depth-first traversal of `Expr` tree, emitting a flat `Vec<OpCode>`. Signedness from the AST determines which opcode variant is emitted (e.g. `Divide` vs `DivideSigned`). Entry point: `compile(root: Expr) -> Vec<OpCode>`.
-
-- **`evaluator`** — stack-based VM executing `&[OpCode]` against a `&dyn WatchContext` and a `&mut [Operand]` variable storage slice. Entry point: `eval(code: &[OpCode], context: &dyn WatchContext, vars: &mut [Operand]) -> Result<Operand, WatchError>`. Returns errors for division by zero.
-
-- **`context`** — defines the `WatchContext` trait, which the emulator implements to give the evaluator access to machine state: `read_register_u32`/`_i32`, `read_flag`, `read_mem_u32`/`_i32`.
-
-- **`session`** — high-level API over the full pipeline. `WatchCompiler` owns a `Parser`; `WatchEvaluator` owns watchpoints, `Variables`, and variable runtime storage. Public API:
-  ```rust
-  WatchCompiler::new(map_register, map_flag, map_symbol) -> WatchCompiler
-  compiler.compile(source: &str, evaluator: &mut WatchEvaluator) -> Result<Watchpoint, Error>
-  compiler.compile_all(source: &str, evaluator: &mut WatchEvaluator) -> (Vec<Watchpoint>, Vec<Error>)
-  WatchEvaluator::new() -> WatchEvaluator
-  evaluator.add(watchpoint: Watchpoint) -> usize
-  evaluator.remove(index: usize) -> Watchpoint
-  evaluator.clear()
-  evaluator.watchpoints() -> &[Watchpoint]
-  evaluator.evaluate_all(context: &dyn WatchContext) -> Result<Option<usize>, (usize, WatchError)>
-  evaluator.variables() -> &[Operand]
-  evaluator.set_variable(id: usize, value: Operand)
-  watchpoint.source() -> &str
-  ```
-  `evaluate_all` evaluates watchpoints in order, returning `Ok(Some(index))` on first non-zero result, `Ok(None)` if none triggered, or `Err((index, error))` on failure.
-
-- **`error`** / **`location`** — `Error` and `Location` structs carrying line/column for error reporting.
-
-### Domain-specific operators
-
-- **Memory read**: `B[addr]`, `W[addr]`, `D[addr]`, `b[addr]`, `w[addr]`, `d[addr]` — byte/word/dword fetch. Uppercase and lowercase are equivalent; signedness is controlled by a leading unary `+` or `-` (e.g. `+b[addr]` fetches a signed byte).
-- **Flag read**: `` `flagname `` — reads a named CPU status flag.
-- **Walrus** (`:=`) — assigns the RHS expression to a named variable and yields its value. Variables persist across `evaluate_all` calls via the evaluator's internal storage. Useful for snapshotting state (e.g. `prev_a := A`) to detect changes across steps.
-- **`$hex`** — hexadecimal literal shorthand common in 6502 assembly.
-
-### Signedness
-
-The `signed` field on `Expr` nodes tracks whether results are signed. Unary `-`/`+` mark expressions signed; binary operators propagate signedness from operands. The compiler uses this to emit signed vs. unsigned opcode variants; the evaluator casts to `i32` for signed operations.
-
-### Lifetime threading
-
-`Token<'a>` borrows its text from the source `&'a str`. `Expr<'a>` carries `Token<'a>` values, so the source string must outlive the expression tree. `Parser` itself has no lifetime parameter — per-call parse state lives in a local `ParseState<'a, 'p>` that is dropped when `parse()` returns. After `compiler::compile` consumes the `Expr<'a>` tree, the resulting `Vec<OpCode>` has no lifetime parameters and can be stored freely (as `Watchpoint` does).
+`Token<'a>` and `Expr<'a>` borrow from the source `&'a str`. After `compiler::compile`
+consumes the tree, the resulting `Vec<OpCode>` (stored in `Watchpoint`) has no lifetime
+parameters and can be stored freely.
