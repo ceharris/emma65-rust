@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,10 @@ pub struct PtyTransport {
     bridge: ChannelBridge,
     /// Path to the slave side of the PTY (e.g. `/dev/pts/N`).
     slave_path: Option<String>,
+    /// Keeps the master fd open so the devpts node remains valid even if the IO task exits.
+    _master: OwnedFd,
+    /// Keeps the slave fd open so the master doesn't see EIO before an external process connects.
+    _slave: OwnedFd,
     /// Optional stable symlink pointing to the slave device node.
     symlink_path: Option<PathBuf>,
 }
@@ -44,6 +49,9 @@ impl PtyTransport {
         };
 
         let symlink_path = if let (Some(link), Some(target)) = (symlink_path, &slave_path) {
+            if link.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+                std::fs::remove_file(link)?;
+            }
             std::os::unix::fs::symlink(target, link)?;
             Some(link.to_path_buf())
         } else {
@@ -60,6 +68,11 @@ impl PtyTransport {
 
         let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::new();
 
+        // Dup the master fd so we can keep it alive in the struct independent of the IO task.
+        let master_keeper = unistd::dup(master.as_raw_fd())
+            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
+            .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+
         // Convert the master OwnedFd into a tokio::fs::File for async IO.
         // SAFETY: we own master; forget prevents double-close.
         let master_std = unsafe { File::from_raw_fd(raw) };
@@ -70,7 +83,7 @@ impl PtyTransport {
 
         tokio::spawn(run_pty_task(reader, writer, in_tx, out_rx, shutdown_rx));
 
-        Ok(Self { bridge, slave_path, symlink_path })
+        Ok(Self { bridge, slave_path, _master: master_keeper, _slave: slave, symlink_path })
     }
 
     /// Returns the path of the slave PTY device (e.g. `/dev/pts/3`), if available.
