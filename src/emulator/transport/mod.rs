@@ -39,7 +39,6 @@ pub(crate) struct ChannelBridge {
     pub(crate) tx: Sender<u8>,
     /// One-shot signal sent to the Tokio task to request shutdown.
     pub(crate) shutdown_tx: Option<oneshot::Sender<()>>,
-    pub(crate) connected: bool,
 }
 
 impl ChannelBridge {
@@ -56,7 +55,6 @@ impl ChannelBridge {
             rx: in_rx,
             tx: out_tx,
             shutdown_tx: Some(shutdown_tx),
-            connected: true,
         };
         (bridge, in_tx, out_rx, shutdown_rx)
     }
@@ -64,37 +62,22 @@ impl ChannelBridge {
     pub(crate) fn try_recv(&mut self) -> Option<u8> {
         match self.rx.try_recv() {
             Ok(b) => Some(b),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.connected = false;
-                None
-            }
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
         }
     }
 
     pub(crate) fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        if !self.connected {
-            return Err(TransportError::Disconnected);
-        }
         match self.tx.try_send(byte) {
             Ok(()) => Ok(()),
             Err(crossbeam_channel::TrySendError::Full(_)) => Err(TransportError::Full),
-            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
-                self.connected = false;
-                Err(TransportError::Disconnected)
-            }
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => Err(TransportError::Disconnected),
         }
-    }
-
-    pub(crate) fn is_connected(&self) -> bool {
-        self.connected
     }
 
     pub(crate) fn shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
-        self.connected = false;
     }
 }
 

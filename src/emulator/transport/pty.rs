@@ -1,34 +1,37 @@
 use std::fs::File;
+use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::pty::{openpty, OpenptyResult};
 use nix::unistd;
-use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
 use super::{ChannelBridge, Transport, TransportError};
 
 /// Transport over a pseudo-terminal (PTY).
 ///
-/// Opens a PTY pair on construction. A Tokio task owns the master side fd;
-/// the sync side communicates via bounded `crossbeam` channels. The slave
-/// device path is available for external processes to connect to. An optional
-/// stable symlink may be created at a caller-supplied path so that external
-/// programs (e.g. terminal emulators) can find the port by a predictable name;
-/// the symlink is removed automatically when the transport is shut down or dropped.
+/// Opens a PTY pair on construction. A Tokio task owns the master side fd via
+/// [`AsyncFd`] for proper non-blocking epoll integration. The sync side
+/// communicates via bounded `crossbeam` channels. The slave device path is
+/// available for external processes to connect to. An optional stable symlink
+/// may be created at a caller-supplied path so that external programs (e.g.
+/// terminal emulators) can find the port by a predictable name; the symlink
+/// is removed automatically when the transport is shut down or dropped.
 pub struct PtyTransport {
     bridge: ChannelBridge,
     /// Path to the slave side of the PTY (e.g. `/dev/pts/N`).
     slave_path: Option<String>,
-    /// Keeps the master fd open so the devpts node remains valid even if the IO task exits.
-    _master: OwnedFd,
-    /// Keeps the slave fd open so the master doesn't see EIO before an external process connects.
+    /// Keeps the slave fd open so the devpts node remains valid for the transport's lifetime.
     _slave: OwnedFd,
+    /// Reflects whether an external process is currently connected; shared with the Tokio task.
+    client_connected: Arc<AtomicBool>,
     /// Optional stable symlink pointing to the slave device node.
     symlink_path: Option<PathBuf>,
 }
@@ -38,6 +41,7 @@ impl PtyTransport {
     ///
     /// If `symlink_path` is `Some(path)`, a symlink is created at `path` pointing to
     /// the slave device node, giving external programs a predictable port name.
+    /// If a symlink already exists at `path`, it is removed before creating the new one.
     /// The symlink is removed when the transport is shut down or dropped.
     pub fn open(symlink_path: Option<&Path>) -> std::io::Result<Self> {
         let OpenptyResult { master, slave } = openpty(None, None)
@@ -58,7 +62,7 @@ impl PtyTransport {
             None
         };
 
-        // Set master non-blocking so tokio can drive it without blocking the thread.
+        // Set master non-blocking for AsyncFd/epoll integration.
         let raw = master.as_raw_fd();
         let flags = fcntl(raw, FcntlArg::F_GETFL)
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
@@ -67,23 +71,22 @@ impl PtyTransport {
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
         let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::new();
+        let client_connected = Arc::new(AtomicBool::new(false));
 
-        // Dup the master fd so we can keep it alive in the struct independent of the IO task.
-        let master_keeper = unistd::dup(master.as_raw_fd())
-            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
-            .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-
-        // Convert the master OwnedFd into a tokio::fs::File for async IO.
         // SAFETY: we own master; forget prevents double-close.
         let master_std = unsafe { File::from_raw_fd(raw) };
         std::mem::forget(master);
-        let master_async = TokioFile::from_std(master_std);
-        // Split so reader and writer can be polled independently in tokio::select!.
-        let (reader, writer) = tokio::io::split(master_async);
+        let async_fd = AsyncFd::new(master_std)?;
 
-        tokio::spawn(run_pty_task(reader, writer, in_tx, out_rx, shutdown_rx));
+        tokio::spawn(run_pty_task(
+            async_fd,
+            in_tx,
+            out_rx,
+            shutdown_rx,
+            Arc::clone(&client_connected),
+        ));
 
-        Ok(Self { bridge, slave_path, _master: master_keeper, _slave: slave, symlink_path })
+        Ok(Self { bridge, slave_path, _slave: slave, client_connected, symlink_path })
     }
 
     /// Returns the path of the slave PTY device (e.g. `/dev/pts/3`), if available.
@@ -94,8 +97,18 @@ impl PtyTransport {
 
 impl Transport for PtyTransport {
     fn try_recv(&mut self) -> Option<u8> { self.bridge.try_recv() }
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> { self.bridge.send(byte) }
-    fn is_connected(&self) -> bool { self.bridge.is_connected() }
+
+    /// Sends a byte. Returns `Ok(())` silently if no external process has the slave open.
+    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
+        if !self.client_connected.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.bridge.send(byte)
+    }
+
+    fn is_connected(&self) -> bool {
+        self.client_connected.load(Ordering::Acquire)
+    }
 
     fn shutdown(&mut self) {
         self.bridge.shutdown();
@@ -114,39 +127,52 @@ impl Drop for PtyTransport {
 }
 
 /// Tokio task: bridges the async PTY master to sync crossbeam channels.
+///
+/// Sets `client_connected` to `true` on the first successful read (an external
+/// process opened the slave), and back to `false` on EIO (all external openers
+/// have closed). Outbound bytes are dropped silently while disconnected.
 async fn run_pty_task(
-    mut reader: ReadHalf<TokioFile>,
-    mut writer: WriteHalf<TokioFile>,
+    async_fd: AsyncFd<File>,
     in_tx: Sender<u8>,
     out_rx: Receiver<u8>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    client_connected: Arc<AtomicBool>,
 ) {
     let mut buf = [0u8; 1];
-
     loop {
         tokio::select! {
             _ = &mut shutdown_rx => break,
 
-            result = reader.read(&mut buf) => {
-                match result {
-                    Ok(1) => {
+            result = async_fd.readable() => {
+                let mut guard = match result { Ok(g) => g, Err(_) => break };
+                match guard.try_io(|inner| inner.get_ref().read(&mut buf)) {
+                    Ok(Ok(1)) => {
+                        client_connected.store(true, Ordering::Release);
                         if in_tx.send(buf[0]).is_err() {
                             break;
                         }
                     }
-                    _ => break,
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) if e.raw_os_error() == Some(nix::libc::EIO) => {
+                        // All external slave openers closed; drain stale outbound bytes.
+                        while out_rx.try_recv().is_ok() {}
+                        client_connected.store(false, Ordering::Release);
+                    }
+                    Ok(Err(_)) => break,
+                    Err(_) => { guard.clear_ready(); } // WouldBlock — wait for next epoll event
                 }
             }
 
-            _ = drain_outbound(&mut writer, &out_rx) => {}
+            _ = drain_outbound(async_fd.get_ref(), &out_rx), if client_connected.load(Ordering::Acquire) => {}
         }
     }
+    client_connected.store(false, Ordering::Release);
 }
 
-/// Flushes all pending outbound bytes from `out_rx` into `writer`.
-async fn drain_outbound(writer: &mut WriteHalf<TokioFile>, out_rx: &Receiver<u8>) {
+/// Flushes all pending outbound bytes from `out_rx` into the PTY master fd.
+async fn drain_outbound(mut file: &File, out_rx: &Receiver<u8>) {
     while let Ok(byte) = out_rx.try_recv() {
-        if writer.write_all(&[byte]).await.is_err() {
+        if file.write_all(&[byte]).is_err() {
             return;
         }
     }
@@ -160,7 +186,6 @@ mod tests {
     #[tokio::test]
     async fn open_send_recv() {
         let mut transport = PtyTransport::open(None).unwrap();
-        assert!(transport.is_connected());
         assert!(transport.slave_path().is_some());
 
         // Write directly to the slave side to simulate external input.
@@ -181,6 +206,34 @@ mod tests {
         let mut transport = PtyTransport::open(None).unwrap();
         transport.shutdown();
         assert!(!transport.is_connected());
+    }
+
+    #[tokio::test]
+    async fn send_while_no_client() {
+        let mut transport = PtyTransport::open(None).unwrap();
+
+        // No external process connected; send should succeed silently.
+        assert!(!transport.is_connected());
+        assert!(transport.send(0xFF).is_ok());
+    }
+
+    #[tokio::test]
+    async fn is_connected_reflects_client_state() {
+        let transport = PtyTransport::open(None).unwrap();
+        let slave_path = transport.slave_path().unwrap().to_owned();
+
+        assert!(!transport.is_connected());
+
+        // Open slave and write a byte to trigger client_connected = true.
+        let slave = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&slave_path)
+            .unwrap();
+        use std::io::Write;
+        { let mut f = slave; f.write_all(&[0x01]).unwrap(); }
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(transport.is_connected());
     }
 
     #[tokio::test]

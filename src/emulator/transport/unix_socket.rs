@@ -232,8 +232,7 @@ mod tests {
 
         transport.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        // After shutdown, the bridge marks itself disconnected
-        assert!(!transport.bridge.is_connected());
+        assert!(!transport.is_connected());
 
         let _ = std::fs::remove_file(&path);
     }
