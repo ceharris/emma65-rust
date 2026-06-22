@@ -1,14 +1,17 @@
 mod config;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, apply_default_if_unconfigured};
 use emma65::emulator::{DeviceEvent, StepResult};
+
+const DEFAULT_ROM: &[u8] = include_bytes!("default.bin");
 
 #[tokio::main]
 async fn main() {
-    let config = AppConfig::load().unwrap_or_else(|e| {
+    let mut config = AppConfig::load().unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
+    let _default_rom_file = apply_default_if_unconfigured(&mut config, DEFAULT_ROM);
     let registry = emma65::emulator::DeviceRegistry::with_builtins();
     let session = match config.emulator.build(&registry).await {
         Ok(s) => s,
@@ -58,5 +61,3 @@ async fn main() {
     }
 
 }
-
-
