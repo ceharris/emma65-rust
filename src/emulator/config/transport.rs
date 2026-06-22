@@ -4,14 +4,15 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::emulator::{PtyTransport, TcpTransport, Transport, TransportError, UnixSocketTransport};
+use super::ExpandedPathBuf;
 
 /// A transport configuration spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TransportSpec {
     Tcp { port: u16, address: IpAddr },
-    Unix { path: std::path::PathBuf },
-    Pty { path: Option<std::path::PathBuf> },
+    Unix { path: ExpandedPathBuf },
+    Pty { path: Option<ExpandedPathBuf> },
 }
 
 impl TransportSpec {
@@ -63,7 +64,7 @@ impl FromStr for TransportSpec {
             "tcp" => Err("TCP transport spec format is 'tcp:PORT' or 'tcp:IP-ADDR:PORT'".to_string()),
             "unix" if parts.len() == 2 => {
                 if parts[1].trim() != "" {
-                    Ok(TransportSpec::Unix { path: parts[1].into() })
+                    Ok(TransportSpec::Unix { path: ExpandedPathBuf::new(parts[1]) })
                 } else {
                     Err("Path name is required".to_string())
                 }
@@ -71,7 +72,7 @@ impl FromStr for TransportSpec {
             "unix" => Err("Unix-domain transport spec format is 'unix:PATHNAME'".to_string()),
             "pty" if parts.len() == 2 => {
                 if parts[1].trim() != "" {
-                    Ok(TransportSpec::Pty { path: Some(parts[1].into()) })
+                    Ok(TransportSpec::Pty { path: Some(ExpandedPathBuf::new(parts[1])) })
                 } else {
                     Err("Path name is required".to_string())
                 }
@@ -202,7 +203,7 @@ mod tests {
         let spec = TransportSpec::from_str("unix:tmp/my.socket").unwrap();
         match spec {
             TransportSpec::Unix { path }  => {
-                assert_eq!(path, std::path::PathBuf::from("tmp/my.socket"));
+                assert_eq!(&*path, std::path::Path::new("tmp/my.socket"));
             }
             _ => panic!("expected Unix transport")
         }
@@ -225,7 +226,7 @@ mod tests {
         let spec = TransportSpec::from_str("pty:tmp/my.pty").unwrap();
         match spec {
             TransportSpec::Pty { path: Some(path) }  => {
-                assert_eq!(path, std::path::PathBuf::from("tmp/my.pty"));
+                assert_eq!(&*path, std::path::Path::new("tmp/my.pty"));
             }
             _ => panic!("expected PTY transport  with pathname")
         }

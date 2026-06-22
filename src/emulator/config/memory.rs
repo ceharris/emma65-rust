@@ -4,7 +4,7 @@ use figment::providers::Serialized;
 use serde::Deserialize;
 
 use crate::emulator::{AddressRange, BusConfig};
-use super::{loader, DeviceModule, DeviceModuleError, InstantiationContext};
+use super::{loader, DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext};
 
 // Type name used in registering RAM as a device
 const RAM_DEVICE_TYPE: &str = "ram";
@@ -24,7 +24,7 @@ pub struct RomModule;
 pub struct MemoryAttributes {
     size: u32,
     fill: Option<u8>,
-    image: Option<std::path::PathBuf>,
+    image: Option<ExpandedPathBuf>,
 }
 
 
