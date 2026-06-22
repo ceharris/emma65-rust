@@ -8,6 +8,7 @@ use super::CpuVariantSpec::{Cmos6502, Wdc6502};
 use super::{DeviceSpec, DeviceModuleError, DeviceRegistry, InstantiationContext};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "String")]
 pub enum CpuVariantSpec {
     Cmos6502,
     Wdc6502,
@@ -22,6 +23,14 @@ impl CpuVariantSpec {
         }
     }
 
+}
+
+impl TryFrom<String> for CpuVariantSpec {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
 }
 
 impl FromStr for CpuVariantSpec {
