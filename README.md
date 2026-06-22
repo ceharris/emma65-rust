@@ -182,6 +182,98 @@ and bitwise operators, comparisons, and a walrus operator (`:=`) for snapshottin
 across steps. Expressions are compiled to bytecode once and evaluated efficiently on
 every step, making it practical to run many watchpoints simultaneously.
 
+## Running the Emulator
+
+### Default configuration
+
+When launched with no arguments, the emulator runs with a built-in
+[TaliForth 2](https://github.com/SamCoVT/TaliForth2) ROM:
+
+- 32 KB RAM at `0x0000`–`0x7FFF`
+- TaliForth ROM at `0x8000`–`0xFFFF`
+- Console device at `0xFFF8`–`0xFFF9` with a PTY transport symlinked at `~/.emma/dev/ttyS0`
+- WDC 65C02 variant at 1.8432 MHz
+
+Connect any TTY program to the PTY symlink to reach the Forth REPL:
+
+```
+screen ~/.emma/dev/ttyS0
+```
+
+A notice is printed to stderr confirming the default is in use:
+
+```
+notice: using default configuration; connect terminal to ~/.emma/dev/ttyS0
+```
+
+### TOML configuration file
+
+Use `--config <file>` to load a TOML configuration file. Top-level keys map
+directly to emulator fields — there is no `[emulator]` wrapper:
+
+```toml
+cpu-variant = "WDC65C02"   # or "65C02" (CMOS only, default)
+clock-speed-hz = 1843200   # omit for unlimited throughput
+
+[[devices]]
+type = "ram"
+address = 0x0000
+size = 32768               # or "32K"
+
+[[devices]]
+type = "rom"
+address = 0x8000
+size = 32768
+image = "~/roms/my.bin"    # .bin, .rom, .hex, .ihx, .ihex, .s19, .srec
+
+[[devices]]
+type = "console"
+address = 0xFFF8
+transport = { pty = { path = "~/.emma/dev/ttyS0" } }
+```
+
+### CLI flags
+
+All config values can also be set from the command line. CLI takes precedence
+over TOML, which takes precedence over environment variables.
+
+```
+emma65 --cpu-variant WDC65C02 \
+       --clock-speed-hz 1843200 \
+       --device ram@0x0000,size=32768,fill=0 \
+       --device rom@0x8000,size=32768,image=~/roms/my.bin \
+       --device console@0xFFF8,transport=pty:~/.emma/dev/ttyS0
+```
+
+Device shorthand format: `type@address[,key=value,...]`
+
+- Address: decimal, `0x` hex, `0o` octal, or `0b` binary
+- Size: bytes, or `K`/`k` suffix for kibibytes (e.g. `32K`)
+- Paths support `~/` tilde expansion
+
+### Environment variables
+
+Any config key can be set with the `EMMA65_` prefix, using `_` in place of `-`:
+
+```
+EMMA65_CPU_VARIANT=WDC65C02
+EMMA65_CLOCK_SPEED_HZ=1843200
+```
+
+### Built-in device types
+
+| Type | Registers | Key attributes |
+|------|:---------:|----------------|
+| `ram` | — | `size` (required), `fill` (optional byte), `image` (optional path) |
+| `rom` | — | `size` (required), `image` (required path), `fill` (optional byte) |
+| `console` | 2 | `transport` (optional) |
+| `acia/6551` | 4 | `transport` (optional), `with_tdre_bug` (bool), `with_overrun` (bool) |
+| `acia/6850` | 2 | `transport` (optional) |
+| `via/6522` | 16 | `transport` (optional) |
+
+Transport shorthand values for CLI and TOML string form:
+`tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`, `pty:SYMLINK_PATH`
+
 ## For Contributors
 
 Emma65 is written in Rust (2024 edition). Dependencies are kept small:
@@ -212,8 +304,86 @@ top-level public modules:
   `WatchEvaluator` owns variable name-to-index mappings and persistent variable storage
   so that watchpoint variables survive across steps.
 
-The binary (`src/main.rs`) exercises the library against a small inline program and serves
-as a usage example and manual exercise harness.
+The binary (`src/bin/emulator/`) uses the `emulator::config` module to load configuration
+from all sources (TOML, environment, CLI), build an `EmulatorSession`, and run the free
+loop. The `emulator::config` module is the integration point for contributors adding new
+device types.
+
+### Adding a Custom Device Module
+
+Device modules are registered with `DeviceRegistry` before `Config::build()` is called.
+Once registered, a module's `name()` can appear as the `type` field in a TOML
+`[[devices]]` entry or in a CLI `--device` shorthand.
+
+**Step 1** — Implement `DeviceModule`. The trait requires `name()` and an async
+`instantiate()` that receives a `BusConfig` builder, the mapped address, a
+`HashMap<String, figment::value::Value>` of configuration attributes, and an
+`InstantiationContext` (holds the configured clock speed and an error-event sender).
+The implementing struct must also be `Clone + Send + Sync + 'static`.
+
+```rust
+use std::collections::HashMap;
+use emma65::emulator::{AddressRange, BusConfig, DeviceId};
+use emma65::emulator::config::{DeviceModule, DeviceModuleError, InstantiationContext};
+
+#[derive(Clone)]
+struct LedModule;
+
+impl DeviceModule for LedModule {
+    fn name(&self) -> &'static str { "myvendor/led" }
+
+    async fn instantiate(
+        &self,
+        bus_config: BusConfig,
+        address: u16,
+        _attributes: &HashMap<String, figment::value::Value>,
+        _context: &InstantiationContext,
+    ) -> Result<BusConfig, DeviceModuleError> {
+        bus_config
+            .device(
+                AddressRange::new(address, address + 1),
+                DeviceId(address as u32),
+                Box::new(LedDevice::new()),
+            )
+            .map_err(DeviceModuleError::BusConfig)
+    }
+}
+```
+
+**Step 2** — Deserialize attributes from the `HashMap`. Follow the pattern used by
+`RamModule` and `RomModule` in `src/emulator/config/memory.rs`: define a serde
+`Deserialize` struct, then extract it with `figment::Figment`:
+
+```rust
+use figment::providers::Serialized;
+use figment::value::{Dict, Value};
+
+#[derive(serde::Deserialize)]
+struct LedAttributes { color: String }
+
+let attrs = Dict::from_iter(attributes.clone());
+let config: LedAttributes = figment::Figment::new()
+    .merge(Serialized::defaults(attrs))
+    .extract()
+    .map_err(|e| DeviceModuleError::Config(e.to_string()))?;
+```
+
+**Step 3** — Register the module and build:
+
+```rust
+let mut registry = emma65::emulator::DeviceRegistry::with_builtins();
+registry.register(LedModule);
+let session = config.build(&registry).await?;
+```
+
+Once registered, the module is available by name in TOML and CLI configuration:
+
+```toml
+[[devices]]
+type = "myvendor/led"
+address = 0xD000
+color = "red"
+```
 
 ```
 cargo build      # build
