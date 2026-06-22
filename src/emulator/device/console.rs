@@ -72,7 +72,7 @@ impl IoDevice for Console {
     /// Offset 0 read: Data Input.
     ///
     /// If the latch is non-zero, returns the latched value and clears the latch.
-    /// Otherwise returns non-zero if a byte is available on the transport, zero if not.
+    /// Otherwise returns the next byte from the transport, or zero if none is available.
     fn read(&mut self, offset: u16) -> u8 {
         match offset {
             0 => {
@@ -81,10 +81,7 @@ impl IoDevice for Console {
                     self.latch = 0;
                     val
                 } else {
-                    match self.transport.as_mut().and_then(|t| t.try_recv()) {
-                        Some(_) => 0xFF,
-                        None => 0x00,
-                    }
+                    self.transport.as_mut().and_then(|t| t.try_recv()).unwrap_or(0x00)
                 }
             }
             1 => {
@@ -186,12 +183,11 @@ mod tests {
     // --- Data Input (offset 0 read) ---
 
     #[test]
-    fn read_offset0_returns_nonzero_when_byte_available() {
+    fn read_offset0_returns_byte_from_transport() {
         let (mut console, mut remote) = console_with_pipe();
         remote.send(0x01).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1));
-        // latch is zero, so offset 0 peeks at availability
-        assert_ne!(console.read(0), 0);
+        assert_eq!(console.read(0), 0x01);
     }
 
     #[test]
