@@ -70,21 +70,23 @@ impl Display for BuildError {
 }
 
 #[derive(Debug, Clone, Parser, Serialize, Deserialize)]
-#[clap(name = "Emulator")]
+#[clap(name = "emulator")]
 #[serde(rename_all = "kebab-case")]
 /// Configuration attributes for the emulator.
 pub struct Config {
 
     /// Selected CPU variant (e.g. 65C02, WDC65C02).
-    #[serde(rename = "cpu_variant")]
+    #[serde(rename = "cpu-variant", skip_serializing_if = "Option::is_none")]
     #[clap(long = "cpu-variant")]
     pub cpu_variant_spec: Option<CpuVariantSpec>,
 
     /// Clock speed to simulate via throttling.
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[clap(long = "clock-speed-hz")]
     pub clock_speed_hz: Option<u64>,
 
     /// Device config specifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[clap(long = "device", num_args = 1..)]
     pub devices: Option<Vec<DeviceSpec>>,
 
