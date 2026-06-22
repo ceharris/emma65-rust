@@ -66,6 +66,7 @@ impl Transport for UnixSocketTransport {
 
     fn shutdown(&mut self) {
         self.bridge.shutdown();
+        self.client_connected.store(false, Ordering::Release);
     }
 }
 

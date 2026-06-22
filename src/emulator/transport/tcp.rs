@@ -63,6 +63,7 @@ impl Transport for TcpTransport {
 
     fn shutdown(&mut self) {
         self.bridge.shutdown();
+        self.client_connected.store(false, Ordering::Release);
     }
 }
 
