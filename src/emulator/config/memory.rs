@@ -4,7 +4,7 @@ use figment::providers::Serialized;
 use serde::Deserialize;
 
 use crate::emulator::{AddressRange, BusConfig};
-use super::{DeviceModule, DeviceModuleError, InstantiationContext};
+use super::{loader, DeviceModule, DeviceModuleError, InstantiationContext};
 
 // Type name used in registering RAM as a device
 const RAM_DEVICE_TYPE: &str = "ram";
@@ -38,9 +38,11 @@ impl MemoryAttributes {
     }
 }
 
-async fn read_image_file(filename: &std::path::Path) -> Result<Vec<u8>, DeviceModuleError> {
-    tokio::fs::read(&filename).await
-        .map_err(DeviceModuleError::Io)
+fn make_buffer(size: usize, fill_value: Option<u8>) -> Vec<u8> {
+    match fill_value {
+        Some(v) => vec![v; size],
+        None => (0..size).map(|_| rand::random::<u8>()).collect(),
+    }
 }
 
 impl DeviceModule for RamModule {
@@ -55,10 +57,8 @@ impl DeviceModule for RamModule {
         let config = MemoryAttributes::from_attributes(attributes)?;
         let range = AddressRange::new(address, address + (config.size - 1) as u16);
         if let Some(filename) = config.image {
-            if config.fill.is_some() {
-                return Err(DeviceModuleError::Config("Options 'image' and 'fill' are mutually exclusive".to_string()));
-            }
-            let data = read_image_file(&filename).await?;
+            let mut data = make_buffer(config.size as usize, config.fill);
+            loader::load_image(&filename, &mut data, address as usize).await.map_err(DeviceModuleError::Load)?;
             bus_config.ram_with_data(range, data).map_err(DeviceModuleError::BusConfig)
         } else if let Some(fill) = config.fill {
             bus_config.ram_with_fill(range, fill).map_err(DeviceModuleError::BusConfig)
@@ -79,7 +79,8 @@ impl DeviceModule for RomModule {
         let config = MemoryAttributes::from_attributes(attributes)?;
         let range = AddressRange::new(address, address + (config.size - 1) as u16);
         if let Some(filename) = config.image {
-            let data = read_image_file(&filename).await?;
+            let mut data = make_buffer(config.size as usize, config.fill);
+            loader::load_image(&filename, &mut data, address as usize).await.map_err(DeviceModuleError::Load)?;
             bus_config.rom(range, data).map_err(DeviceModuleError::BusConfig)
         }
         else {

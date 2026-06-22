@@ -33,4 +33,4 @@ pub use exec::{ClockSpeed, RunHandle, StepResult, run};
 pub use interrupt::{InterruptController, IrqSource};
 pub use transport::{Transport, TransportError, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport};
 pub use session::{EmulatorSession};
-pub use config::{Config, DeviceModule, DeviceModuleError, InstantiationContext, DeviceRegistry, TransportSpec, TransportSpecFormat};
+pub use config::{Config, BuildError, CpuVariantSpec, DeviceSpec, DeviceModule, DeviceModuleError, InstantiationContext, DeviceRegistry, RamModule, RomModule, TransportSpec, TransportSpecFormat};

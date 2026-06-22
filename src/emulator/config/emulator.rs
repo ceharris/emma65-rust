@@ -8,7 +8,7 @@ use super::CpuVariantSpec::{Cmos6502, Wdc6502};
 use super::{DeviceSpec, DeviceModuleError, DeviceRegistry, InstantiationContext};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "String")]
+#[serde(try_from = "String", into = "String")]
 pub enum CpuVariantSpec {
     Cmos6502,
     Wdc6502,
@@ -23,6 +23,21 @@ impl CpuVariantSpec {
         }
     }
 
+}
+
+impl Display for CpuVariantSpec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Cmos6502 => write!(f, "65C02"),
+            Wdc6502 => write!(f, "WDC65C02"),
+        }
+    }
+}
+
+impl From<CpuVariantSpec> for String {
+    fn from(v: CpuVariantSpec) -> Self {
+        v.to_string()
+    }
 }
 
 impl TryFrom<String> for CpuVariantSpec {

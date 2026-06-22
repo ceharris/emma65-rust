@@ -7,8 +7,9 @@ mod via6522;
 mod emulator;
 mod registry;
 mod memory;
+mod loader;
 
-pub use emulator::{Config, CpuVariantSpec};
+pub use emulator::{Config, BuildError, CpuVariantSpec};
 pub use registry::{DeviceRegistry, InstantiationContext};
 pub use transport::{TransportSpec, TransportSpecFormat};
 pub use device::{DeviceSpec, DeviceModule, DeviceModuleError};

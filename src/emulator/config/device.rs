@@ -5,6 +5,7 @@ use figment::value::{Tag, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::emulator::{BusConfig, BusConfigError, TransportError};
+use crate::emulator::config::loader::LoadError;
 use super::InstantiationContext;
 
 /// A configuration spec for a pluggable device module.
@@ -53,6 +54,7 @@ pub enum DeviceModuleError {
     BusConfig(BusConfigError),
     Transport(TransportError),
     Config(String),
+    Load(LoadError),
     Io(std::io::Error)
 }
 
@@ -65,6 +67,8 @@ impl Display for DeviceModuleError {
                 write!(f, "transport error: {e}"),
             DeviceModuleError::Config(e) =>
                 write!(f, "configuration error: {e}"),
+            DeviceModuleError::Load(e) =>
+                write!(f, "load error: {e}"),
             DeviceModuleError::Io(e ) =>
                 write!(f, "I/O error: {e}"),
         }

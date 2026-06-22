@@ -18,7 +18,11 @@ async fn main() {
         }
     };
 
-    let (cpu, mut error_receiver) = (session.cpu, session.error_receiver);
+    let (mut cpu, mut error_receiver) = (session.cpu, session.error_receiver);
+    if let Err(e) = cpu.reset() {
+        eprintln!("reset error: {e}");
+        std::process::exit(1);
+    }
     let run_handle = emma65::emulator::run(cpu);
     let (cpu_done_tx, mut cpu_done_rx) = tokio::sync::oneshot::channel::<StepResult>();
     tokio::spawn(async move {

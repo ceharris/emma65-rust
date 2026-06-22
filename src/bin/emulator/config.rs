@@ -22,8 +22,8 @@ struct CliArgs {
 pub struct AppConfig {
     /// Embeds all emulator config files (cpu-variant, clock-speed-hz, device, etc).
     #[clap(flatten)]
+    #[serde(flatten)]
     pub emulator: emma65::emulator::Config,
-
 }
 
 impl AppConfig {
@@ -35,7 +35,7 @@ impl AppConfig {
             figment = figment.merge(Toml::file(path))
         }
         figment
-            .merge(Env::prefixed("EMMA65_"))
+            .merge(Env::prefixed("EMMA65_").map(|k| k.as_str().replace('_', "-").into()))
             .merge(Serialized::globals(&cli.app))
             .extract()
             .map_err(Box::new)
