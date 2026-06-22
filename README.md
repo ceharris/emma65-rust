@@ -276,15 +276,20 @@ Transport shorthand values for CLI and TOML string form:
 
 ## For Contributors
 
-Emma65 is written in Rust (2024 edition). Dependencies are kept small:
+Emma65 is written in Rust (2024 edition). Key dependencies:
 
 | Crate | Purpose |
 |-------|---------|
 | `bitflags` | Processor status register flag sets |
 | `thiserror` | Structured, typed error enums |
+| `rand` | Random fill for uninitialized RAM |
 | `tokio` | Async runtime backing TCP, Unix socket, and PTY transport tasks |
 | `crossbeam-channel` | Sync/async bridge between device `tick()` calls and transport tasks |
 | `libc` / `nix` | PTY and pipe setup on Unix |
+| `serde` | Serialization framework for configuration structs |
+| `clap` | CLI argument parsing |
+| `figment` | Multi-source configuration merging (TOML, env vars, CLI) |
+| `tempfile` | Temporary file for the embedded default ROM at startup |
 
 The crate exposes both a library (`emma65`) and a binary (`emma65`). The library has two
 top-level public modules:
