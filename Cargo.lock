@@ -854,9 +854,11 @@ name = "emma65-debugger"
 version = "0.1.0"
 dependencies = [
  "emma65",
+ "figment",
  "serde",
  "tauri",
  "tauri-build",
+ "tokio",
 ]
 
 [[package]]

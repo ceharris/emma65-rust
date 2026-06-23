@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use crate::emulator::{BusConfig, ClockSpeed, Cpu, CpuBuildError, CpuVariant, EmulatorSession};
+use crate::emulator::{BusConfig, ClockSpeed, Cpu, CpuBuildError, CpuVariant, EmulatorSession, ErrorReceiver};
 use crate::emulator::device::device_event_channel;
 use super::CpuVariantSpec::{Cmos6502, Wdc6502};
 use super::{DeviceSpec, DeviceModuleError, DeviceRegistry, InstantiationContext};
@@ -109,6 +109,7 @@ pub struct Config {
 
 impl Config {
 
+    /// Builds an [`EmulatorSession`] using a default [`InstantiationContext`].
     pub async fn build(&self, registry: &DeviceRegistry) -> Result<EmulatorSession, BuildError> {
         let (error_sender, error_receiver) = device_event_channel();
         let context = InstantiationContext {
@@ -116,6 +117,24 @@ impl Config {
             error_sender: Some(error_sender),
             console_transport: None,
         };
+        self.build_devices(registry, context, error_receiver).await
+    }
+
+    /// Builds an [`EmulatorSession`] using the provided [`InstantiationContext`].
+    ///
+    /// Use this when the caller needs to inject a pre-created console transport or
+    /// supply a custom error sender before building. If `context.error_sender` is
+    /// `None`, a new error channel is created and its receiver is stored in the session.
+    pub async fn build_with_context(&self, registry: &DeviceRegistry, context: InstantiationContext) -> Result<EmulatorSession, BuildError> {
+        let (error_sender, error_receiver) = device_event_channel();
+        let context = InstantiationContext {
+            error_sender: context.error_sender.or(Some(error_sender)),
+            ..context
+        };
+        self.build_devices(registry, context, error_receiver).await
+    }
+
+    async fn build_devices(&self, registry: &DeviceRegistry, context: InstantiationContext, error_receiver: ErrorReceiver) -> Result<EmulatorSession, BuildError> {
         let mut bus_config = BusConfig::new();
         for spec in self.devices.iter().flatten() {
             bus_config = registry.instantiate(spec.module_name(), bus_config, spec.address(), spec.attributes(), &context)
