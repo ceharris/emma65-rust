@@ -67,31 +67,27 @@ async fn load_session() -> Result<(EmulatorSession, PipeTransport), String> {
 
 /// Tokio task that reads bytes from the remote pipe rx and emits `terminal-output` events.
 async fn run_terminal_bridge(rx: File, app: AppHandle) {
-    eprintln!("[bridge] starting");
     let async_rx = match AsyncFd::new(rx) {
         Ok(fd) => fd,
-        Err(e) => { eprintln!("[bridge] AsyncFd::new failed: {e}"); return; }
+        Err(e) => { eprintln!("terminal bridge: AsyncFd::new failed: {e}"); return; }
     };
-    eprintln!("[bridge] AsyncFd created, entering loop");
     let mut buf = [0u8; 256];
     loop {
         let mut guard = match async_rx.readable().await {
             Ok(g) => g,
-            Err(e) => { eprintln!("[bridge] readable() failed: {e}"); break; }
+            Err(_) => break,
         };
         match guard.try_io(|fd| fd.get_ref().read(&mut buf)) {
-            Ok(Ok(0)) => { eprintln!("[bridge] EOF"); break; }
+            Ok(Ok(0)) => break,
             Ok(Ok(n)) => {
-                eprintln!("[bridge] got {n} bytes");
                 let bytes: Vec<u8> = buf[..n].to_vec();
                 let _ = app.emit_to(TERMINAL_WINDOW_LABEL, "terminal-output", bytes);
             }
             Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-            Ok(Err(e)) => { eprintln!("[bridge] read error: {e}"); break; }
+            Ok(Err(_)) => break,
             Err(_would_block) => continue,
         }
     }
-    eprintln!("[bridge] exited loop");
 }
 
 /// Tauri command: called by the terminal window once its event listener is registered.
@@ -99,7 +95,6 @@ async fn run_terminal_bridge(rx: File, app: AppHandle) {
 /// Fires the one-shot that unblocks the bridge and CPU startup.
 #[tauri::command]
 fn terminal_ready(state: State<TerminalReadyTx>) {
-    eprintln!("[backend] terminal_ready called");
     if let Some(tx) = state.0.lock().unwrap().take() {
         let _ = tx.send(());
     }
@@ -166,9 +161,7 @@ pub fn run() {
                         }
 
                         // Wait for the terminal window to signal it is ready.
-                        eprintln!("[backend] waiting for terminal_ready");
                         let _ = ready_rx.await;
-                        eprintln!("[backend] terminal ready, starting bridge and CPU");
 
                         // Start the terminal bridge.
                         let bridge_handle = handle.clone();
@@ -177,16 +170,22 @@ pub fn run() {
                         });
 
                         // Start the CPU on a dedicated thread and watch for STP.
-                        let cpu = handle.state::<SessionState>()
+                        let mut cpu = handle.state::<SessionState>()
                             .0.lock().unwrap()
                             .take()
                             .expect("session was just stored")
                             .cpu;
+                        if let Err(e) = cpu.reset() {
+                            emit_status(&handle, SessionStatus {
+                                message: format!("CPU reset failed: {e}"),
+                                ok: false,
+                            });
+                            return;
+                        }
                         let run_handle = run_cpu(cpu);
                         let exit_handle = handle.clone();
                         tauri::async_runtime::spawn(async move {
                             let result = run_handle.wait().await;
-                            eprintln!("[backend] CPU stopped, result: Stopped={}", matches!(result, StepResult::Stopped));
                             if matches!(result, StepResult::Stopped) {
                                 exit_handle.exit(0);
                             }
