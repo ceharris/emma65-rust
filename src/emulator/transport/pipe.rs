@@ -35,6 +35,14 @@ impl PipeTransport {
         Ok(Self { rx, tx, connected: true })
     }
 
+    /// Consumes this transport and returns the underlying `(rx, tx)` files.
+    ///
+    /// Both files remain non-blocking. The caller takes ownership and is
+    /// responsible for all further I/O. The `connected` flag is discarded.
+    pub fn into_split(self) -> (File, File) {
+        (self.rx, self.tx)
+    }
+
     /// Creates a connected `PipeTransport` pair backed by two OS pipe(2) calls.
     ///
     /// Returns `(local, remote)` — both ends are `PipeTransport`s. The local end

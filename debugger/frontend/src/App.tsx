@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import TerminalWindow from "./TerminalWindow";
 
 interface SessionStatus {
   message: string;
@@ -8,6 +9,11 @@ interface SessionStatus {
 }
 
 export default function App() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("window") === "terminal") {
+    return <TerminalWindow />;
+  }
+
   const [status, setStatus] = useState<SessionStatus | null>(null);
 
   useEffect(() => {
