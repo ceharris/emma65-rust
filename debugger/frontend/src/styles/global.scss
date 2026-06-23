@@ -17,9 +17,12 @@ body {
   background-color: #1e1e1e;
   color: #d4d4d4;
   font-family: monospace;
+  overflow: hidden;
 }
 
-.app {
+// --- splash screen (init / error) ---
+
+.app-splash {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -30,16 +33,60 @@ body {
     color: #6a9955;
   }
 
-  .status-ok {
-    font-size: 1.5rem;
-    color: #6a9955;
-  }
-
   .status-error {
-    font-size: 1.5rem;
+    font-size: 1.2rem;
     color: #f44747;
+    white-space: pre-wrap;
+    max-width: 80ch;
+    text-align: center;
   }
 }
+
+// --- three-column debugger layout ---
+
+.app-layout {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  gap: 1px;
+  background-color: #3a3a3a;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: #1e1e1e;
+
+  &.col-left {
+    flex: 0 0 340px;
+  }
+
+  &.col-center {
+    flex: 1 1 auto;
+  }
+
+  &.col-right {
+    flex: 0 0 220px;
+  }
+}
+
+// --- shared panel chrome ---
+
+.panel-title {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9cdcfe;
+  padding: 6px 10px;
+  border-bottom: 1px solid #3a3a3a;
+  background-color: #252526;
+}
+
+// --- terminal window ---
 
 .terminal-container {
   width: 100%;

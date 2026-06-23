@@ -1,0 +1,122 @@
+.disassembly-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.disassembly-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background-color: #252526;
+  border-bottom: 1px solid #3a3a3a;
+  flex-shrink: 0;
+
+  .panel-title {
+    padding: 0;
+    border-bottom: none;
+    background: none;
+  }
+}
+
+.exec-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.exec-btn {
+  background: #2d2d30;
+  border: 1px solid #555;
+  color: #d4d4d4;
+  font-family: monospace;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover:not(:disabled) {
+    background: #3a3a3a;
+    border-color: #9cdcfe;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  &.step-into-btn {
+    color: #9cdcfe;
+  }
+}
+
+.disassembly-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.disassembly-empty {
+  display: block;
+  padding: 16px;
+  color: #666;
+}
+
+.disasm-row {
+  display: flex;
+  align-items: baseline;
+  padding: 0 8px;
+  gap: 6px;
+  white-space: nowrap;
+
+  &:hover {
+    background-color: #2a2d2e;
+  }
+
+  &.current-pc {
+    background-color: #094771;
+
+    &:hover {
+      background-color: #0e5c8a;
+    }
+
+    .disasm-addr {
+      color: #d4d4d4;
+    }
+  }
+
+  &.invalid-op {
+    opacity: 0.45;
+  }
+}
+
+.disasm-gutter {
+  flex: 0 0 14px;
+  color: #c94040;
+  text-align: center;
+}
+
+.disasm-addr {
+  flex: 0 0 4ch;
+  color: #858585;
+  font-size: 0.82rem;
+}
+
+.disasm-bytes {
+  flex: 0 0 9ch;
+  color: #569cd6;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.disasm-mnemonic {
+  flex: 0 0 5ch;
+  color: #c586c0;
+  font-weight: bold;
+}
+
+.disasm-operand {
+  color: #ce9178;
+}
