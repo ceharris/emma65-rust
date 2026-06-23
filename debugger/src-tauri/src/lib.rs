@@ -6,6 +6,9 @@ use emma65::emulator::{Config, DeviceRegistry, EmulatorSession, InstantiationCon
 /// Holds the emulator session once it has been successfully constructed.
 pub struct SessionState(pub Mutex<Option<EmulatorSession>>);
 
+/// Holds the last emitted session status so late-connecting frontends can retrieve it.
+pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
+
 /// Payload emitted to the frontend on the `session-status` event.
 #[derive(Clone, serde::Serialize)]
 pub struct SessionStatus {
@@ -45,7 +48,14 @@ async fn load_session() -> Result<(EmulatorSession, PipeTransport), String> {
     Ok((session, local))
 }
 
+/// Returns the current session status, or `None` if not yet determined.
+#[tauri::command]
+fn get_session_status(state: tauri::State<SessionStatusState>) -> Option<SessionStatus> {
+    state.0.lock().unwrap().clone()
+}
+
 fn emit_status(app: &AppHandle, status: SessionStatus) {
+    app.state::<SessionStatusState>().0.lock().unwrap().replace(status.clone());
     let _ = app.emit("session-status", status);
 }
 
@@ -53,6 +63,8 @@ fn emit_status(app: &AppHandle, status: SessionStatus) {
 pub fn run() {
     tauri::Builder::default()
         .manage(SessionState(Mutex::new(None)))
+        .manage(SessionStatusState(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![get_session_status])
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
