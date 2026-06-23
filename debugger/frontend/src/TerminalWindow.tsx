@@ -35,6 +35,9 @@ export default function TerminalWindow() {
       term.write(new Uint8Array(event.payload));
     });
 
+    // Signal the backend that the listener is registered and output can begin.
+    unlistenPromise.then(() => invoke("terminal_ready").catch(() => {}));
+
     return () => {
       unlistenPromise.then((f) => f());
       term.dispose();

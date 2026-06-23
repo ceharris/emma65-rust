@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use figment::{Figment, providers::{Format, Toml, Env}};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::io::unix::AsyncFd;
+use tokio::sync::oneshot;
 
 use emma65::emulator::{
     Config, DeviceRegistry, EmulatorSession, InstantiationContext, PipeTransport, TransportSlot,
@@ -15,6 +16,9 @@ const TERMINAL_WINDOW_LABEL: &str = "terminal";
 
 /// Holds the tx end of the remote pipe so `write_terminal` can send bytes to the console.
 pub struct TerminalTx(pub Mutex<File>);
+
+/// One-shot sender signalling that the terminal window is ready to receive output.
+pub struct TerminalReadyTx(pub Mutex<Option<oneshot::Sender<()>>>);
 
 /// Holds the emulator session once it has been successfully constructed.
 pub struct SessionState(pub Mutex<Option<EmulatorSession>>);
@@ -85,6 +89,16 @@ async fn run_terminal_bridge(rx: File, app: AppHandle) {
     }
 }
 
+/// Tauri command: called by the terminal window once its event listener is registered.
+///
+/// Fires the one-shot that unblocks the bridge and CPU startup.
+#[tauri::command]
+fn terminal_ready(state: State<TerminalReadyTx>) {
+    if let Some(tx) = state.0.lock().unwrap().take() {
+        let _ = tx.send(());
+    }
+}
+
 /// Tauri command: send bytes typed in the terminal to the emulated console.
 #[tauri::command]
 fn write_terminal(bytes: Vec<u8>, state: State<TerminalTx>) -> Result<(), String> {
@@ -119,12 +133,15 @@ fn open_terminal_window(app: &AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let (ready_tx, ready_rx) = oneshot::channel::<()>();
+
     tauri::Builder::default()
         .manage(SessionState(Mutex::new(None)))
         .manage(SessionStatusState(Mutex::new(None)))
+        .manage(TerminalReadyTx(Mutex::new(Some(ready_tx))))
         // TerminalTx is registered after setup; commands are only called after the
         // terminal window is open, so it will always be present by then.
-        .invoke_handler(tauri::generate_handler![get_session_status, write_terminal])
+        .invoke_handler(tauri::generate_handler![get_session_status, write_terminal, terminal_ready])
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -148,6 +165,9 @@ pub fn run() {
                             eprintln!("Failed to open terminal window: {e}");
                             return;
                         }
+
+                        // Wait for the terminal window to signal it is ready.
+                        let _ = ready_rx.await;
 
                         // Start the terminal bridge.
                         let bridge_handle = handle.clone();
