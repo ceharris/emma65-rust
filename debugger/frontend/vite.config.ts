@@ -11,6 +11,13 @@ export default defineConfig({
       ignored: ["**/src-tauri/**"],
     },
   },
+  css: {
+    preprocessorOptions: {
+      scss: {
+        api: "modern-compiler",
+      },
+    },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,
