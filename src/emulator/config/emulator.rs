@@ -114,6 +114,7 @@ impl Config {
         let context = InstantiationContext {
             clock_hz: self.clock_speed_hz,
             error_sender: Some(error_sender),
+            console_transport: None,
         };
         let mut bus_config = BusConfig::new();
         for spec in self.devices.iter().flatten() {

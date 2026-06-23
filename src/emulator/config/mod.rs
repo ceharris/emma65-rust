@@ -11,7 +11,7 @@ mod memory;
 mod loader;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
-pub use registry::{DeviceRegistry, InstantiationContext};
+pub use registry::{DeviceRegistry, InstantiationContext, TransportSlot};
 pub use transport::{TransportSpec, TransportSpecFormat};
 pub use device::{DeviceSpec, DeviceModule, DeviceModuleError};
 pub use memory::{RamModule, RomModule};
