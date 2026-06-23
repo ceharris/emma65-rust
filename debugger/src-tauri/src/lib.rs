@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::sync::Mutex;
 
 use figment::{Figment, providers::{Format, Toml, Env}};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
@@ -123,18 +123,11 @@ fn emit_status(app: &AppHandle, status: SessionStatus) {
     let _ = app.emit("session-status", status);
 }
 
-fn open_terminal_window(app: &AppHandle) -> Result<(), String> {
-    WebviewWindowBuilder::new(
-        app,
-        TERMINAL_WINDOW_LABEL,
-        WebviewUrl::App("terminal.html".into()),
-    )
-    .title("emma65 Terminal")
-    .inner_size(640.0, 400.0)
-    .resizable(true)
-    .build()
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+fn show_terminal_window(app: &AppHandle) -> Result<(), String> {
+    app.get_webview_window(TERMINAL_WINDOW_LABEL)
+        .ok_or_else(|| "terminal window not found".to_string())?
+        .show()
+        .map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -166,9 +159,9 @@ pub fn run() {
                             ok: true,
                         });
 
-                        // Open the terminal window.
-                        if let Err(e) = open_terminal_window(&handle) {
-                            eprintln!("Failed to open terminal window: {e}");
+                        // Show the terminal window (created hidden at startup).
+                        if let Err(e) = show_terminal_window(&handle) {
+                            eprintln!("Failed to show terminal window: {e}");
                             return;
                         }
 
