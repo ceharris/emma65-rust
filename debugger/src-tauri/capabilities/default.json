@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for all debugger windows",
+  "windows": ["main", "terminal"],
+  "permissions": [
+    "core:default"
+  ]
+}
