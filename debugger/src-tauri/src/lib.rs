@@ -127,7 +127,7 @@ fn open_terminal_window(app: &AppHandle) -> Result<(), String> {
     WebviewWindowBuilder::new(
         app,
         TERMINAL_WINDOW_LABEL,
-        WebviewUrl::App("index.html?window=terminal".into()),
+        WebviewUrl::App("terminal.html".into()),
     )
     .title("emma65 Terminal")
     .inner_size(640.0, 400.0)

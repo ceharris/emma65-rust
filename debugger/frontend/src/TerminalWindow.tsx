@@ -31,12 +31,14 @@ export default function TerminalWindow() {
       invoke("write_terminal", { bytes }).catch(() => {});
     });
 
+    // Register the output listener, then signal the backend that we are ready.
+    // The backend will not start the CPU until it receives this signal.
     const unlistenPromise = listen<number[]>("terminal-output", (event) => {
       term.write(new Uint8Array(event.payload));
+    }).then((unlisten) => {
+      invoke("terminal_ready").catch(() => {});
+      return unlisten;
     });
-
-    // Signal the backend that the listener is registered and output can begin.
-    unlistenPromise.then(() => invoke("terminal_ready").catch(() => {}));
 
     return () => {
       unlistenPromise.then((f) => f());
