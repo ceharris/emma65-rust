@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Permissions for all debugger windows","local":true,"windows":["main","terminal"],"permissions":["core:default"]}}
