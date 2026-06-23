@@ -1,0 +1,20 @@
+[package]
+name = "emma65-debugger"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "emma65_debugger_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "emma65-debugger"
+path = "src/main.rs"
+
+[dependencies]
+emma65 = { path = "../.." }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
