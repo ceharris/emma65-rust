@@ -1,8 +1,13 @@
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use figment::value::Value;
 use crate::emulator::{BusConfig, ErrorSender};
+use crate::emulator::transport::Transport;
 use super::{DeviceModule, DeviceModuleError, RamModule, RomModule, ConsoleModule, Acia6551Module, Mc6850Module, Via6522Module};
+
+/// A shareable slot holding an optional transport, suitable for one-time consumption.
+pub type TransportSlot = Arc<Mutex<Option<Box<dyn Transport>>>>;
 
 /// A context of application attributes that may be used by device modules during instantiation.
 #[derive(Clone)]
@@ -11,6 +16,12 @@ pub struct InstantiationContext {
     pub clock_hz: Option<u64>,
     /// An error sender that can be cloned into any device that needs it.
     pub error_sender: Option<ErrorSender>,
+    /// A pre-created transport to inject into the console device.
+    ///
+    /// When present, the console device module uses this transport instead of
+    /// constructing one from a `TransportSpec`. The transport is taken (consumed)
+    /// on first use, leaving `None` in its place.
+    pub console_transport: Option<TransportSlot>,
 }
 
 type InstantiateFn = Box<
@@ -129,7 +140,7 @@ mod tests {
     async fn instantiate_unknown_device_type() {
         let registry = DeviceRegistry::default();
         let bus_config = BusConfig::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None };
         let attributes: HashMap<String, Value> = HashMap::new();
         let err = registry.instantiate("foobar", bus_config, 0x55aa, &attributes, &context)
             .await.err().unwrap();
@@ -140,7 +151,7 @@ mod tests {
     async fn instantiate_routes_to_correct_module() {
         let mut registry = DeviceRegistry::default();
         let attributes: HashMap<String, Value> = HashMap::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None };
         registry.register(MockModule::from_name("alpha"));
         registry.register(MockModule::from_name("beta"));
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context)
@@ -157,7 +168,7 @@ mod tests {
         let attributes: HashMap<String, Value> = HashMap::new();
         registry.register(MockModule::from_name_and_tag("alpha", "alpha1"));
         registry.register(MockModule::from_name_and_tag("alpha", "alpha2"));
-        let context = InstantiationContext { clock_hz: None, error_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None };
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context)
             .await.err().unwrap();
         assert!(matches!(err_a, DeviceModuleError::Config(s) if s == "alpha2"));
@@ -166,7 +177,7 @@ mod tests {
     #[tokio::test]
     async fn with_builtins_has_ram_module() {
         let registry = DeviceRegistry::with_builtins();
-        let context = InstantiationContext { clock_hz: None, error_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None };
         let mut attributes: HashMap<String, Value> = HashMap::new();
         attributes.insert("size".to_string(), Value::from(65536));
         let bus_config = registry.instantiate("ram", BusConfig::new(), 0, &attributes, &context).await.unwrap();
