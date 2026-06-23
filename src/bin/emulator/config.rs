@@ -44,7 +44,7 @@ impl AppConfig {
 
 }
 
-const PTY_LINK_NAME: &'static str = ".emma/dev/ttyS0";
+const PTY_LINK_NAME: &str = ".emma/dev/ttyS0";
 const DEFAULT_CLOCK_SPEED: u64 = 1_843_200;
 const DEFAULT_CPU_VARIANT: CpuVariantSpec = CpuVariantSpec::Wdc6502;
 
@@ -52,7 +52,7 @@ const DEFAULT_CPU_VARIANT: CpuVariantSpec = CpuVariantSpec::Wdc6502;
 /// populates `config.emulator.devices` with the default RAM + ROM + console layout,
 /// and returns the tempfile handle (must be kept alive until `Config::build()` completes).
 pub fn apply_default_if_unconfigured(config: &mut AppConfig, default_rom: &[u8]) -> Option<tempfile::NamedTempFile> {
-    if config.emulator.devices.as_ref().map_or(true, |d| d.is_empty()) {
+    if config.emulator.devices.as_ref().is_none_or(|d| d.is_empty()) {
         eprintln!("notice: using default configuration; connect terminal to ~/{}", PTY_LINK_NAME);
         let f = tempfile::Builder::new()
             .suffix(".bin")
