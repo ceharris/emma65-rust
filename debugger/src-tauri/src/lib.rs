@@ -8,8 +8,8 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
 use emma65::emulator::{
-    Config, DeviceRegistry, EmulatorSession, InstantiationContext, PipeTransport, TransportSlot,
-    run as run_cpu, StepResult,
+    Config, Cpu, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext,
+    PipeTransport, TransportSlot,
 };
 
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
@@ -20,8 +20,16 @@ pub struct TerminalTx(pub Mutex<File>);
 /// One-shot sender signalling that the terminal window is ready to receive output.
 pub struct TerminalReadyTx(pub Mutex<Option<oneshot::Sender<()>>>);
 
-/// Holds the emulator session once it has been successfully constructed.
-pub struct SessionState(pub Mutex<Option<EmulatorSession>>);
+/// Holds the CPU once the session is ready.
+pub struct CpuState(pub Mutex<Option<Cpu>>);
+
+/// Holds the disassembler once the session is ready.
+pub struct DisassemblerState(pub Mutex<Option<Disassembler>>);
+
+/// Bitmask of P-register bits that changed on the most recent step.
+///
+/// Reset to 0 on session start; updated by `step_into` and read by `get_registers`.
+pub struct ChangedFlagsState(pub Mutex<u8>);
 
 /// Payload emitted to the frontend on the `session-status` event.
 #[derive(Clone, serde::Serialize)]
@@ -34,6 +42,35 @@ pub struct SessionStatus {
 
 /// Holds the last emitted session status so late-connecting frontends can retrieve it.
 pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
+
+/// A single disassembled line returned to the frontend.
+#[derive(Clone, serde::Serialize)]
+pub struct DisassembledRow {
+    /// Instruction address.
+    pub addr: u16,
+    /// Raw bytes as hex strings, e.g. ["4C", "00", "06"].
+    pub bytes: Vec<String>,
+    /// Mnemonic string, e.g. "JMP".
+    pub mnemonic: String,
+    /// Formatted operand text, e.g. "$0600".
+    pub operand: String,
+    /// False for invalid opcodes under the active variant.
+    pub is_valid: bool,
+}
+
+/// Register snapshot returned to the frontend.
+#[derive(Clone, serde::Serialize)]
+pub struct RegisterSnapshot {
+    pub a: u8,
+    pub x: u8,
+    pub y: u8,
+    pub s: u8,
+    pub pc: u16,
+    /// Processor status byte.
+    pub p: u8,
+    /// Bitmask of P-register bits that changed on the most recent step (0 on initial load).
+    pub changed_flags: u8,
+}
 
 /// Loads emulator config from `~/.emma/debugger/default/emulator.toml`,
 /// builds the session with an injected pipe transport for the console,
@@ -91,8 +128,6 @@ async fn run_terminal_bridge(rx: File, app: AppHandle) {
 }
 
 /// Tauri command: called by the terminal window once its event listener is registered.
-///
-/// Fires the one-shot that unblocks the bridge and CPU startup.
 #[tauri::command]
 fn terminal_ready(state: State<TerminalReadyTx>) {
     if let Some(tx) = state.0.lock().unwrap().take() {
@@ -113,6 +148,88 @@ fn get_session_status(state: State<SessionStatusState>) -> Option<SessionStatus>
     state.0.lock().unwrap().clone()
 }
 
+/// Executes a single CPU instruction and returns the updated register snapshot.
+///
+/// Emits `debugger-halted` with the new PC after the step completes.
+#[tauri::command]
+fn step_into(
+    app: AppHandle,
+    cpu_state: State<CpuState>,
+    changed_flags_state: State<ChangedFlagsState>,
+) -> Result<RegisterSnapshot, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+
+    let p_before = cpu.registers().p.to_byte();
+    cpu.step();
+    let regs = *cpu.registers();
+    let changed = p_before ^ regs.p.to_byte();
+
+    *changed_flags_state.0.lock().unwrap() = changed;
+
+    let snapshot = RegisterSnapshot {
+        a: regs.a,
+        x: regs.x,
+        y: regs.y,
+        s: regs.s,
+        pc: regs.pc,
+        p: regs.p.to_byte(),
+        changed_flags: changed,
+    };
+
+    let _ = app.emit("debugger-halted", regs.pc);
+    Ok(snapshot)
+}
+
+/// Returns a register snapshot of the current CPU state without stepping.
+///
+/// `changed_flags` reflects what changed on the most recent `step_into` call, or 0 on
+/// initial load.
+#[tauri::command]
+fn get_registers(
+    cpu_state: State<CpuState>,
+    changed_flags_state: State<ChangedFlagsState>,
+) -> Result<RegisterSnapshot, String> {
+    let guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_ref().ok_or("CPU not ready")?;
+    let regs = cpu.registers();
+    let changed_flags = *changed_flags_state.0.lock().unwrap();
+    Ok(RegisterSnapshot {
+        a: regs.a,
+        x: regs.x,
+        y: regs.y,
+        s: regs.s,
+        pc: regs.pc,
+        p: regs.p.to_byte(),
+        changed_flags,
+    })
+}
+
+/// Returns disassembled instructions starting at `addr`, up to `count` rows.
+#[tauri::command]
+fn get_disassembly(
+    addr: u16,
+    count: usize,
+    cpu_state: State<CpuState>,
+    disasm_state: State<DisassemblerState>,
+) -> Result<Vec<DisassembledRow>, String> {
+    let cpu_guard = cpu_state.0.lock().unwrap();
+    let cpu = cpu_guard.as_ref().ok_or("CPU not ready")?;
+    let disasm_guard = disasm_state.0.lock().unwrap();
+    let disasm = disasm_guard.as_ref().ok_or("Disassembler not ready")?;
+
+    let lines = disasm.disassemble_range(cpu.bus(), addr, 0, count);
+    let rows = lines.into_iter().map(|line| DisassembledRow {
+        addr: line.addr,
+        bytes: line.raw_bytes.iter().map(|b| format!("{b:02X}")).collect(),
+        mnemonic: line.mnemonic.to_string(),
+        operand: line.operand_text,
+        is_valid: line.is_valid,
+    }).collect();
+
+    Ok(rows)
+}
+
 fn emit_status(app: &AppHandle, status: SessionStatus) {
     app.state::<SessionStatusState>().0.lock().unwrap().replace(status.clone());
     let _ = app.emit("session-status", status);
@@ -130,12 +247,21 @@ pub fn run() {
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
     tauri::Builder::default()
-        .manage(SessionState(Mutex::new(None)))
         .manage(SessionStatusState(Mutex::new(None)))
         .manage(TerminalReadyTx(Mutex::new(Some(ready_tx))))
         // TerminalTx is registered after setup; commands are only called after the
         // terminal window is open, so it will always be present by then.
-        .invoke_handler(tauri::generate_handler![get_session_status, write_terminal, terminal_ready])
+        .manage(CpuState(Mutex::new(None)))
+        .manage(DisassemblerState(Mutex::new(None)))
+        .manage(ChangedFlagsState(Mutex::new(0)))
+        .invoke_handler(tauri::generate_handler![
+            get_session_status,
+            write_terminal,
+            terminal_ready,
+            step_into,
+            get_registers,
+            get_disassembly,
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -146,8 +272,21 @@ pub fn run() {
                         // Register the tx side so write_terminal can use it.
                         handle.manage(TerminalTx(Mutex::new(remote_tx)));
 
-                        // Store the session.
-                        handle.state::<SessionState>().0.lock().unwrap().replace(session);
+                        let mut cpu = session.cpu;
+                        let variant = cpu.variant();
+
+                        if let Err(e) = cpu.reset() {
+                            emit_status(&handle, SessionStatus {
+                                message: format!("CPU reset failed: {e}"),
+                                ok: false,
+                            });
+                            return;
+                        }
+
+                        let initial_pc = cpu.registers().pc;
+                        let disasm = Disassembler::new(variant);
+                        *handle.state::<DisassemblerState>().0.lock().unwrap() = Some(disasm);
+                        *handle.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
                         emit_status(&handle, SessionStatus {
                             message: "Emulator session ready".to_string(),
@@ -169,27 +308,9 @@ pub fn run() {
                             run_terminal_bridge(remote_rx, bridge_handle).await;
                         });
 
-                        // Start the CPU on a dedicated thread and watch for STP.
-                        let mut cpu = handle.state::<SessionState>()
-                            .0.lock().unwrap()
-                            .take()
-                            .expect("session was just stored")
-                            .cpu;
-                        if let Err(e) = cpu.reset() {
-                            emit_status(&handle, SessionStatus {
-                                message: format!("CPU reset failed: {e}"),
-                                ok: false,
-                            });
-                            return;
-                        }
-                        let run_handle = run_cpu(cpu);
-                        let exit_handle = handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let result = run_handle.wait().await;
-                            if matches!(result, StepResult::Stopped) {
-                                exit_handle.exit(0);
-                            }
-                        });
+                        // Emit the initial halted state so the frontend can render the
+                        // disassembly view immediately on first load.
+                        let _ = handle.emit("debugger-halted", initial_pc);
                     }
                     Err(message) => {
                         emit_status(&handle, SessionStatus { message, ok: false });

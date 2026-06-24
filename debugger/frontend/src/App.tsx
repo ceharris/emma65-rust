@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import DisassemblyPanel from "./DisassemblyPanel";
+import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
 
 interface SessionStatus {
   message: string;
@@ -9,14 +11,13 @@ interface SessionStatus {
 
 export default function App() {
   const [status, setStatus] = useState<SessionStatus | null>(null);
+  const [lastSnapshot, setLastSnapshot] = useState<RegisterSnapshot | null>(null);
 
   useEffect(() => {
-    // Register the event listener before polling so no event can slip through.
     const unlistenPromise = listen<SessionStatus>("session-status", (event) => {
       setStatus(event.payload);
     });
 
-    // Poll for a status that may have already been set before we registered.
     invoke<SessionStatus | null>("get_session_status").then((current) => {
       if (current !== null) {
         setStatus(current);
@@ -26,15 +27,35 @@ export default function App() {
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
+  const handleStep = useCallback((snap: RegisterSnapshot) => {
+    setLastSnapshot(snap);
+  }, []);
+
+  if (status === null || !status.ok) {
+    return (
+      <div className="app-splash">
+        {status === null ? (
+          <span className="status-pending">Initializing…</span>
+        ) : (
+          <span className="status-error">{status.message}</span>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="app">
-      {status === null ? (
-        <span className="status-pending">Initializing...</span>
-      ) : (
-        <span className={status.ok ? "status-ok" : "status-error"}>
-          {status.message}
-        </span>
-      )}
+    <div className="app-layout">
+      <div className="col col-left">
+        {/* Memory view — story 5 */}
+      </div>
+      <div className="col col-center">
+        <DisassemblyPanel onStep={handleStep} />
+      </div>
+      <div className="col col-right">
+        <RegisterPanel snapshot={lastSnapshot} />
+        {/* Stack view — story 6 */}
+        {/* Watchpoints — story 12 */}
+      </div>
     </div>
   );
 }

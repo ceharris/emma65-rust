@@ -1,0 +1,88 @@
+.register-panel {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+.registers-empty {
+  padding: 10px;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.reg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  padding: 4px 0;
+
+  td {
+    padding: 2px 10px;
+  }
+
+  .reg-group-header td {
+    padding-top: 4px;
+    padding-bottom: 2px;
+  }
+
+  .reg-name {
+    color: #9cdcfe;
+    font-weight: bold;
+    width: 3ch;
+    text-align: right;
+    padding-right: 8px;
+  }
+
+  .reg-value {
+    color: #b5cea8;
+    font-variant-numeric: tabular-nums;
+    min-width: 10ch;
+  }
+
+  .reg-ascii {
+    margin-left: 8px;
+    color: #ce9178;
+    font-size: 0.82rem;
+  }
+
+  .reg-separator {
+    height: 6px;
+  }
+
+  .reg-flags {
+    letter-spacing: 0.08em;
+    font-size: 0.82rem;
+  }
+}
+
+.radix-btn {
+  background: none;
+  border: 1px solid #555;
+  color: #858585;
+  font-family: monospace;
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1.4;
+
+  &:hover {
+    border-color: #9cdcfe;
+    color: #9cdcfe;
+  }
+}
+
+.flag-char {
+  &.flag-set {
+    color: #9cdcfe;
+  }
+
+  &.flag-clear {
+    color: #555;
+  }
+
+  &.flag-changed {
+    color: #f4d03f;
+  }
+}
