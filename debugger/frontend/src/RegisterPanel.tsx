@@ -46,6 +46,11 @@ function formatData(value: number, radix: DataRadix): string {
   }
 }
 
+/** Returns the character in single quotes if `value` is a printable ASCII byte (0x20–0x7E), otherwise null. */
+function printableAscii(value: number): string | null {
+  return value >= 0x20 && value <= 0x7e ? `'${String.fromCharCode(value)}'` : null;
+}
+
 function formatAddr(value: number, radix: AddrRadix, byteWidth: number): string {
   switch (radix) {
     case "hex":  return "$" + value.toString(16).toUpperCase().padStart(byteWidth * 2, "0");
@@ -160,7 +165,12 @@ export default function RegisterPanel({ snapshot: snapFromParent }: Props) {
             </tr>
             <tr>
               <td className="reg-name">A</td>
-              <td className="reg-value">{formatData(snap.a, dataRadix)}</td>
+              <td className="reg-value">
+                {formatData(snap.a, dataRadix)}
+                {printableAscii(snap.a) !== null && (
+                  <span className="reg-ascii">{printableAscii(snap.a)}</span>
+                )}
+              </td>
             </tr>
             <tr>
               <td className="reg-name">X</td>
