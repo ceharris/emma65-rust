@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import DisassemblyPanel from "./DisassemblyPanel";
-import RegisterPanel from "./RegisterPanel";
+import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
 
 interface SessionStatus {
   message: string;
@@ -11,7 +11,7 @@ interface SessionStatus {
 
 export default function App() {
   const [status, setStatus] = useState<SessionStatus | null>(null);
-  const [stepCount, setStepCount] = useState(0);
+  const [lastSnapshot, setLastSnapshot] = useState<RegisterSnapshot | null>(null);
 
   useEffect(() => {
     const unlistenPromise = listen<SessionStatus>("session-status", (event) => {
@@ -27,8 +27,8 @@ export default function App() {
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
-  const handleStep = useCallback(() => {
-    setStepCount((n) => n + 1);
+  const handleStep = useCallback((snap: RegisterSnapshot) => {
+    setLastSnapshot(snap);
   }, []);
 
   if (status === null || !status.ok) {
@@ -46,15 +46,15 @@ export default function App() {
   return (
     <div className="app-layout">
       <div className="col col-left">
-        {/* Memory view placeholder — story 5 */}
+        {/* Memory view — story 5 */}
       </div>
       <div className="col col-center">
         <DisassemblyPanel onStep={handleStep} />
       </div>
       <div className="col col-right">
-        <RegisterPanel refreshKey={stepCount} />
-        {/* Stack view placeholder — story 6 */}
-        {/* Watchpoints placeholder — story 12 */}
+        <RegisterPanel snapshot={lastSnapshot} />
+        {/* Stack view — story 6 */}
+        {/* Watchpoints — story 12 */}
       </div>
     </div>
   );

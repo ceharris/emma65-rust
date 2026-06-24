@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 
 use emma65::emulator::{
     Config, Cpu, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext,
-    PipeTransport, Registers, TransportSlot,
+    PipeTransport, TransportSlot,
 };
 
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
@@ -20,14 +20,16 @@ pub struct TerminalTx(pub Mutex<File>);
 /// One-shot sender signalling that the terminal window is ready to receive output.
 pub struct TerminalReadyTx(pub Mutex<Option<oneshot::Sender<()>>>);
 
-/// Holds the CPU and disassembler once the session is ready.
+/// Holds the CPU once the session is ready.
 pub struct CpuState(pub Mutex<Option<Cpu>>);
 
 /// Holds the disassembler once the session is ready.
 pub struct DisassemblerState(pub Mutex<Option<Disassembler>>);
 
-/// Registers from the previous step; used to compute which flags changed.
-pub struct PrevRegisters(pub Mutex<Option<Registers>>);
+/// Bitmask of P-register bits that changed on the most recent step.
+///
+/// Reset to 0 on session start; updated by `step_into` and read by `get_registers`.
+pub struct ChangedFlagsState(pub Mutex<u8>);
 
 /// Payload emitted to the frontend on the `session-status` event.
 #[derive(Clone, serde::Serialize)]
@@ -66,7 +68,7 @@ pub struct RegisterSnapshot {
     pub pc: u16,
     /// Processor status byte.
     pub p: u8,
-    /// Bitmask of flags that changed since the previous step (0 on first call).
+    /// Bitmask of P-register bits that changed on the most recent step (0 on initial load).
     pub changed_flags: u8,
 }
 
@@ -146,50 +148,52 @@ fn get_session_status(state: State<SessionStatusState>) -> Option<SessionStatus>
     state.0.lock().unwrap().clone()
 }
 
-/// Executes a single CPU instruction and returns the updated register state.
+/// Executes a single CPU instruction and returns the updated register snapshot.
 ///
 /// Emits `debugger-halted` with the new PC after the step completes.
 #[tauri::command]
 fn step_into(
     app: AppHandle,
     cpu_state: State<CpuState>,
-    prev_regs: State<PrevRegisters>,
+    changed_flags_state: State<ChangedFlagsState>,
 ) -> Result<RegisterSnapshot, String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
 
-    let regs_before = *cpu.registers();
+    let p_before = cpu.registers().p.to_byte();
     cpu.step();
-    let regs_after = *cpu.registers();
+    let regs = *cpu.registers();
+    let changed = p_before ^ regs.p.to_byte();
 
-    let changed_flags = regs_before.p.to_byte() ^ regs_after.p.to_byte();
-    *prev_regs.0.lock().unwrap() = Some(regs_after);
+    *changed_flags_state.0.lock().unwrap() = changed;
 
     let snapshot = RegisterSnapshot {
-        a: regs_after.a,
-        x: regs_after.x,
-        y: regs_after.y,
-        s: regs_after.s,
-        pc: regs_after.pc,
-        p: regs_after.p.to_byte(),
-        changed_flags,
+        a: regs.a,
+        x: regs.x,
+        y: regs.y,
+        s: regs.s,
+        pc: regs.pc,
+        p: regs.p.to_byte(),
+        changed_flags: changed,
     };
 
-    let _ = app.emit("debugger-halted", regs_after.pc);
+    let _ = app.emit("debugger-halted", regs.pc);
     Ok(snapshot)
 }
 
 /// Returns a register snapshot of the current CPU state without stepping.
+///
+/// `changed_flags` reflects what changed on the most recent `step_into` call, or 0 on
+/// initial load.
 #[tauri::command]
 fn get_registers(
     cpu_state: State<CpuState>,
-    prev_regs: State<PrevRegisters>,
+    changed_flags_state: State<ChangedFlagsState>,
 ) -> Result<RegisterSnapshot, String> {
     let guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_ref().ok_or("CPU not ready")?;
     let regs = cpu.registers();
-    let prev = prev_regs.0.lock().unwrap();
-    let changed_flags = prev.map(|p| p.p.to_byte() ^ regs.p.to_byte()).unwrap_or(0);
+    let changed_flags = *changed_flags_state.0.lock().unwrap();
     Ok(RegisterSnapshot {
         a: regs.a,
         x: regs.x,
@@ -247,7 +251,7 @@ pub fn run() {
         .manage(TerminalReadyTx(Mutex::new(Some(ready_tx))))
         .manage(CpuState(Mutex::new(None)))
         .manage(DisassemblerState(Mutex::new(None)))
-        .manage(PrevRegisters(Mutex::new(None)))
+        .manage(ChangedFlagsState(Mutex::new(0)))
         .invoke_handler(tauri::generate_handler![
             get_session_status,
             write_terminal,

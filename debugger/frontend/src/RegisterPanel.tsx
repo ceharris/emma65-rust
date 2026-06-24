@@ -2,13 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./styles/registers.scss";
 
-interface RegisterSnapshot {
+export interface RegisterSnapshot {
   a: number;
   x: number;
   y: number;
   s: number;
   pc: number;
+  /** Processor status byte. */
   p: number;
+  /** Bitmask of P-register bits that changed on the most recent step (0 on initial load). */
   changed_flags: number;
 }
 
@@ -24,35 +26,51 @@ const FLAG_CHARS = [
   { label: "C", bit: 0x01 },
 ];
 
-function flagDisplay(p: number, changed: number) {
-  return FLAG_CHARS.map(({ label, bit }) => {
-    const isSet = (p & bit) !== 0;
-    const didChange = label !== "-" && (changed & bit) !== 0;
-    return (
-      <span
-        key={label}
-        className={[
-          "flag-char",
-          isSet ? "flag-set" : "flag-clear",
-          didChange ? "flag-changed" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        {isSet ? label : "-"}
-      </span>
-    );
-  });
+function FlagDisplay({ p, changed }: { p: number; changed: number }) {
+  return (
+    <>
+      {FLAG_CHARS.map(({ label, bit }) => {
+        const isSet = (p & bit) !== 0;
+        // The UNUSED bit (0x20, displayed as "-") never changes meaningfully.
+        const didChange = label !== "-" && (changed & bit) !== 0;
+        return (
+          <span
+            key={label}
+            className={[
+              "flag-char",
+              isSet ? "flag-set" : "flag-clear",
+              didChange ? "flag-changed" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            {isSet ? label : "-"}
+          </span>
+        );
+      })}
+    </>
+  );
 }
 
 interface Props {
-  /** Incremented by the parent whenever a step completes. */
-  refreshKey: number;
+  /**
+   * When provided (after a step_into call), the panel renders this snapshot
+   * immediately without a round-trip to get_registers.
+   */
+  snapshot: RegisterSnapshot | null;
 }
 
-export default function RegisterPanel({ refreshKey }: Props) {
+export default function RegisterPanel({ snapshot: snapFromParent }: Props) {
   const [snap, setSnap] = useState<RegisterSnapshot | null>(null);
 
+  // Show a parent-provided snapshot immediately (post-step fast path).
+  useEffect(() => {
+    if (snapFromParent !== null) {
+      setSnap(snapFromParent);
+    }
+  }, [snapFromParent]);
+
+  // On mount, fetch the initial register state via get_registers.
   const fetchRegisters = useCallback(async () => {
     try {
       const result = await invoke<RegisterSnapshot>("get_registers");
@@ -64,7 +82,7 @@ export default function RegisterPanel({ refreshKey }: Props) {
 
   useEffect(() => {
     fetchRegisters();
-  }, [refreshKey, fetchRegisters]);
+  }, [fetchRegisters]);
 
   const hex2 = (v: number) => v.toString(16).toUpperCase().padStart(2, "0");
   const hex4 = (v: number) => v.toString(16).toUpperCase().padStart(4, "0");
@@ -105,7 +123,7 @@ export default function RegisterPanel({ refreshKey }: Props) {
             <tr>
               <td className="reg-name" />
               <td className="reg-flags">
-                {flagDisplay(snap.p, snap.changed_flags)}
+                <FlagDisplay p={snap.p} changed={snap.changed_flags} />
               </td>
             </tr>
           </tbody>
