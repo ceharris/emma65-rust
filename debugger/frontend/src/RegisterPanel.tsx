@@ -14,6 +14,48 @@ export interface RegisterSnapshot {
   changed_flags: number;
 }
 
+// --- radix cycling ---
+
+type DataRadix = "hex" | "udec" | "sdec" | "bin" | "oct";
+type AddrRadix = "hex" | "udec" | "oct";
+
+const DATA_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "sdec", "bin", "oct"];
+const ADDR_RADIX_CYCLE: AddrRadix[] = ["hex", "udec", "oct"];
+
+const DATA_RADIX_LABEL: Record<DataRadix, string> = {
+  hex:  "HEX",
+  udec: "DEC",
+  sdec: "±DEC",
+  bin:  "BIN",
+  oct:  "OCT",
+};
+
+const ADDR_RADIX_LABEL: Record<AddrRadix, string> = {
+  hex:  "HEX",
+  udec: "DEC",
+  oct:  "OCT",
+};
+
+function formatData(value: number, radix: DataRadix): string {
+  switch (radix) {
+    case "hex":  return "$" + value.toString(16).toUpperCase().padStart(2, "0");
+    case "udec": return value.toString(10);
+    case "sdec": return ((value << 24) >> 24).toString(10);
+    case "bin":  return "%" + value.toString(2).padStart(8, "0");
+    case "oct":  return "0" + value.toString(8).padStart(3, "0");
+  }
+}
+
+function formatAddr(value: number, radix: AddrRadix, byteWidth: number): string {
+  switch (radix) {
+    case "hex":  return "$" + value.toString(16).toUpperCase().padStart(byteWidth * 2, "0");
+    case "udec": return value.toString(10);
+    case "oct":  return "0" + value.toString(8).padStart(byteWidth === 2 ? 6 : 3, "0");
+  }
+}
+
+// --- flag display ---
+
 /** Flag bit positions in the P register, ordered N V - B D I Z C (bit 7 → bit 0). */
 const FLAG_CHARS = [
   { label: "N", bit: 0x80 },
@@ -52,6 +94,8 @@ function FlagDisplay({ p, changed }: { p: number; changed: number }) {
   );
 }
 
+// --- component ---
+
 interface Props {
   /**
    * When provided (after a step_into call), the panel renders this snapshot
@@ -62,15 +106,15 @@ interface Props {
 
 export default function RegisterPanel({ snapshot: snapFromParent }: Props) {
   const [snap, setSnap] = useState<RegisterSnapshot | null>(null);
+  const [dataRadix, setDataRadix] = useState<DataRadix>("hex");
+  const [addrRadix, setAddrRadix] = useState<AddrRadix>("hex");
 
-  // Show a parent-provided snapshot immediately (post-step fast path).
   useEffect(() => {
     if (snapFromParent !== null) {
       setSnap(snapFromParent);
     }
   }, [snapFromParent]);
 
-  // On mount, fetch the initial register state via get_registers.
   const fetchRegisters = useCallback(async () => {
     try {
       const result = await invoke<RegisterSnapshot>("get_registers");
@@ -84,8 +128,19 @@ export default function RegisterPanel({ snapshot: snapFromParent }: Props) {
     fetchRegisters();
   }, [fetchRegisters]);
 
-  const hex2 = (v: number) => v.toString(16).toUpperCase().padStart(2, "0");
-  const hex4 = (v: number) => v.toString(16).toUpperCase().padStart(4, "0");
+  const cycleDataRadix = useCallback(() => {
+    setDataRadix((r) => {
+      const i = DATA_RADIX_CYCLE.indexOf(r);
+      return DATA_RADIX_CYCLE[(i + 1) % DATA_RADIX_CYCLE.length];
+    });
+  }, []);
+
+  const cycleAddrRadix = useCallback(() => {
+    setAddrRadix((r) => {
+      const i = ADDR_RADIX_CYCLE.indexOf(r);
+      return ADDR_RADIX_CYCLE[(i + 1) % ADDR_RADIX_CYCLE.length];
+    });
+  }, []);
 
   return (
     <div className="register-panel">
@@ -95,30 +150,46 @@ export default function RegisterPanel({ snapshot: snapFromParent }: Props) {
       ) : (
         <table className="reg-table">
           <tbody>
+            <tr className="reg-group-header">
+              <td />
+              <td>
+                <button className="radix-btn" onClick={cycleDataRadix} title="Cycle radix">
+                  {DATA_RADIX_LABEL[dataRadix]}
+                </button>
+              </td>
+            </tr>
             <tr>
               <td className="reg-name">A</td>
-              <td className="reg-value">${hex2(snap.a)}</td>
+              <td className="reg-value">{formatData(snap.a, dataRadix)}</td>
             </tr>
             <tr>
               <td className="reg-name">X</td>
-              <td className="reg-value">${hex2(snap.x)}</td>
+              <td className="reg-value">{formatData(snap.x, dataRadix)}</td>
             </tr>
             <tr>
               <td className="reg-name">Y</td>
-              <td className="reg-value">${hex2(snap.y)}</td>
+              <td className="reg-value">{formatData(snap.y, dataRadix)}</td>
             </tr>
             <tr className="reg-separator" />
+            <tr className="reg-group-header">
+              <td />
+              <td>
+                <button className="radix-btn" onClick={cycleAddrRadix} title="Cycle radix">
+                  {ADDR_RADIX_LABEL[addrRadix]}
+                </button>
+              </td>
+            </tr>
             <tr>
               <td className="reg-name">PC</td>
-              <td className="reg-value">${hex4(snap.pc)}</td>
+              <td className="reg-value">{formatAddr(snap.pc, addrRadix, 2)}</td>
             </tr>
             <tr>
               <td className="reg-name">S</td>
-              <td className="reg-value">${hex2(snap.s)}</td>
+              <td className="reg-value">{formatAddr(snap.s, addrRadix, 1)}</td>
             </tr>
             <tr>
               <td className="reg-name">P</td>
-              <td className="reg-value">${hex2(snap.p)}</td>
+              <td className="reg-value">{formatAddr(snap.p, addrRadix, 1)}</td>
             </tr>
             <tr>
               <td className="reg-name" />
