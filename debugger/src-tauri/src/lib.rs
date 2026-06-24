@@ -249,6 +249,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(SessionStatusState(Mutex::new(None)))
         .manage(TerminalReadyTx(Mutex::new(Some(ready_tx))))
+        // TerminalTx is registered after setup; commands are only called after the
+        // terminal window is open, so it will always be present by then.
         .manage(CpuState(Mutex::new(None)))
         .manage(DisassemblerState(Mutex::new(None)))
         .manage(ChangedFlagsState(Mutex::new(0)))
@@ -267,6 +269,7 @@ pub fn run() {
                     Ok((session, remote)) => {
                         let (remote_rx, remote_tx) = remote.into_split();
 
+                        // Register the tx side so write_terminal can use it.
                         handle.manage(TerminalTx(Mutex::new(remote_tx)));
 
                         let mut cpu = session.cpu;
@@ -290,13 +293,16 @@ pub fn run() {
                             ok: true,
                         });
 
+                        // Show the terminal window (created hidden at startup).
                         if let Err(e) = show_terminal_window(&handle) {
                             eprintln!("Failed to show terminal window: {e}");
                             return;
                         }
 
+                        // Wait for the terminal window to signal it is ready.
                         let _ = ready_rx.await;
 
+                        // Start the terminal bridge.
                         let bridge_handle = handle.clone();
                         tauri::async_runtime::spawn(async move {
                             run_terminal_bridge(remote_rx, bridge_handle).await;
