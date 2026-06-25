@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import DisassemblyPanel from "./DisassemblyPanel";
+import MemoryPanel from "./MemoryPanel";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
 
 interface SessionStatus {
@@ -46,7 +47,7 @@ export default function App() {
   return (
     <div className="app-layout">
       <div className="col col-left">
-        {/* Memory view — story 5 */}
+        <MemoryPanel />
       </div>
       <div className="col col-center">
         <DisassemblyPanel onStep={handleStep} />

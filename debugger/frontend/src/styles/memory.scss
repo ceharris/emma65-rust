@@ -1,0 +1,81 @@
+.memory-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.memory-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background-color: #252526;
+  border-bottom: 1px solid #3a3a3a;
+  flex-shrink: 0;
+
+  .panel-title {
+    padding: 0;
+    border-bottom: none;
+    background: none;
+  }
+}
+
+.mem-addr-input {
+  background: #1e1e1e;
+  border: 1px solid #555;
+  color: #d4d4d4;
+  font-family: monospace;
+  font-size: 0.8rem;
+  padding: 2px 6px;
+  width: 8ch;
+  border-radius: 3px;
+  outline: none;
+
+  &:focus {
+    border-color: #9cdcfe;
+  }
+}
+
+.memory-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  padding: 2px 0;
+}
+
+.memory-empty {
+  display: block;
+  padding: 16px;
+  color: #666;
+}
+
+.mem-row {
+  display: flex;
+  align-items: baseline;
+  padding: 0 6px;
+  gap: 8px;
+  white-space: nowrap;
+
+  &:hover {
+    background-color: #2a2d2e;
+  }
+}
+
+.mem-addr {
+  flex: 0 0 5ch;
+  color: #858585;
+}
+
+.mem-hex-group {
+  flex: 0 0 23ch;
+  color: #569cd6;
+  letter-spacing: 0.02em;
+}
+
+.mem-ascii-group {
+  flex: 0 0 8ch;
+  color: #ce9178;
+  letter-spacing: 0.04em;
+}
