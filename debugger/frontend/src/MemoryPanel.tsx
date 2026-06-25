@@ -9,6 +9,12 @@ const BYTES_PER_ROW = 16;
 /** Number of rows in a page (256 bytes). */
 const ROWS_PER_PAGE = 16;
 
+/** Address mask for paragraph alignment */
+const PARAGRAPH_MASK = 0xfff0;
+
+/** Total size of the memory address space */
+const MEMORY_SIZE = 0x10000;
+
 /** Parse a hex (0x/$ prefix) or decimal address string. Returns NaN on failure. */
 function parseAddress(input: string): number {
   const trimmed = input.trim();
@@ -35,7 +41,7 @@ function toAsciiChar(byte: number): string {
 }
 
 export default function MemoryPanel() {
-  /** Page-aligned start address of the currently displayed page. */
+  /** Paragraph-aligned start address of the currently displayed 256-byte page. */
   const [pageAddr, setPageAddr] = useState<number>(0x0000);
   /** Ref mirrors pageAddr so event listeners always see the current value. */
   const pageAddrRef = useRef<number>(0x0000);
@@ -45,7 +51,7 @@ export default function MemoryPanel() {
   const [inputValue, setInputValue] = useState<string>("$0000");
   const [ready, setReady] = useState(false);
 
-  /** Fetch the page starting at `addr` (must be paragraph-aligned). */
+  /** Fetch the 256-byte page starting at `addr` (must be paragraph-aligned). */
   const fetchPage = useCallback(async (addr: number) => {
     try {
       const result = await invoke<number[]>("get_memory", { addr });
@@ -61,7 +67,7 @@ export default function MemoryPanel() {
   /** Navigate to the page containing `rawAddr`, keeping paragraph alignment. */
   const navigateTo = useCallback(
     (rawAddr: number) => {
-      const aligned = (rawAddr & 0xff00) >>> 0;
+      const aligned = (rawAddr & PARAGRAPH_MASK) >>> 0;
       fetchPage(aligned);
     },
     [fetchPage],
@@ -84,7 +90,7 @@ export default function MemoryPanel() {
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === "Enter") {
         const addr = parseAddress(inputValue);
-        if (!isNaN(addr) && addr >= 0 && addr <= 0xffff) {
+        if (!isNaN(addr) && addr >= 0 && addr <= (MEMORY_SIZE - 1)) {
           navigateTo(addr);
         }
       }
@@ -104,7 +110,7 @@ export default function MemoryPanel() {
       else if (e.key === "PageUp") delta = -PAGE;
       else return;
       e.preventDefault();
-      const next = ((pageAddrRef.current + delta + 0x10000) & 0xff00) & 0xffff;
+      const next = (pageAddrRef.current + delta + MEMORY_SIZE) & PARAGRAPH_MASK;
       fetchPage(next);
     };
     window.addEventListener("keydown", handler);
@@ -116,7 +122,7 @@ export default function MemoryPanel() {
     (e: React.WheelEvent) => {
       e.preventDefault();
       const delta = e.deltaY > 0 ? BYTES_PER_ROW : -BYTES_PER_ROW;
-      const next = ((pageAddrRef.current + delta + 0x10000) & 0xff00) & 0xffff;
+      const next = (pageAddrRef.current + delta + MEMORY_SIZE) & PARAGRAPH_MASK;
       fetchPage(next);
     },
     [fetchPage],
@@ -124,7 +130,7 @@ export default function MemoryPanel() {
 
   const rows: React.ReactNode[] = [];
   for (let row = 0; row < ROWS_PER_PAGE; row++) {
-    const rowAddr = (pageAddr + row * BYTES_PER_ROW) & 0xffff;
+    const rowAddr = (pageAddr + row * BYTES_PER_ROW) & (MEMORY_SIZE - 1);
     const slice = bytes.slice(row * BYTES_PER_ROW, (row + 1) * BYTES_PER_ROW);
 
     const hexLow = Array.from(slice.slice(0, 8))

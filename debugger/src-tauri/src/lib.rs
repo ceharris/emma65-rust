@@ -205,14 +205,14 @@ fn get_registers(
     })
 }
 
-/// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xff00 for page alignment).
+/// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xfff0 for paragraph alignment).
 ///
 /// Reads are performed via `Bus::peek_range` so no device side effects occur.
 #[tauri::command]
 fn get_memory(addr: u16, cpu_state: State<CpuState>) -> Result<Vec<u8>, String> {
     let guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_ref().ok_or("CPU not ready")?;
-    let page_start = addr & 0xff00;
+    let page_start = addr & 0xfff0;
     let mut buf = vec![0u8; 256];
     cpu.bus()
         .peek_range(page_start, &mut buf)
