@@ -69,13 +69,15 @@
 }
 
 .mem-hex-group {
-  flex: 0 0 23ch;
+  flex: 0 0 calc(23ch + 0.5em);
   color: #569cd6;
   letter-spacing: 0.02em;
+  padding-left: 0.5em;
 }
 
 .mem-ascii-group {
-  flex: 0 0 8ch;
+  flex: 0 0 calc(9ch + 0.5em);
   color: #ce9178;
   letter-spacing: 0.04em;
+  padding-left: 0.5em;
 }
