@@ -127,16 +127,19 @@ The user can inspect memory contents at any address.
 **Scope:**
 - Left column: memory view displaying 16 rows × 16 bytes (one
   256-byte page) in the format specified (address, hex bytes grouped
-  8+8, ASCII decode).
+  8+8, ASCII decode grouped 8+8).
 - Address input field accepting hex (`$` or `0x` prefix) or decimal.
-  Enter navigates to the page containing that address.
+  Enter navigates to the page containing that address. The specified 
+  address is AND'ed with 0xfff0 to keep the display paragraph-aligned.
 - Scrolling: line-by-line and page-by-page via scroll wheel, arrow
   keys, Page Up/Down.
 - All reads use `Bus::peek_range`.
 
 **Acceptance criteria:**
 - Entering an address in the input field displays the 256-byte page
-  containing that address.
+  containing that address. The display remains paragraph-aligned when an 
+  address such as 0x4005 is entered (i.e. the displayed row containing that 
+  address starts at 0x4000).
 - Scrolling moves the view by lines or pages as expected.
 - The ASCII column shows printable characters and `.` for
   non-printable bytes.
@@ -150,7 +153,8 @@ The user can observe the current stack state.
 **Scope:**
 - Right column (middle): stack view showing word pairs aligned to the
   current stack pointer, as specified (chevron marker, `--`
-  placeholder, ~8 visible word pairs).
+  placeholder, ~8 visible word pairs) -- see `doc/debugger-ui-spec.md` for 
+  the detailed design example.
 - Alignment toggle (even/odd).
 - View updates on each step.
 
@@ -158,6 +162,9 @@ The user can observe the current stack state.
 - After pushing values onto the stack (via stepping through PHA/JSR
   instructions), the stack view shows the pushed values with correct
   alignment and the chevron tracking the stack pointer.
+- When popping values from the stack, the chevron pointer remains 
+  stationary the stack of values is scrolled up such that the chevron is 
+  pointing at the new top of stack, a placeholder is introduced if needed.
 - The `--` placeholder correctly indicates the next write position.
 
 ---
@@ -169,8 +176,11 @@ The user can watch execution proceed at a controlled pace.
 **Scope:**
 - An "Auto-Step" toggle button (Ctrl+Shift+F5) starts/stops timed
   single-stepping.
-- A speed control (slider or numeric input) sets the interval in
-  milliseconds between steps.
+- A speed control (slider or numeric input) sets the interval in milliseconds 
+  between steps. The allowed range for the interval is 50 ms to 5000 ms 
+  (inclusive). The default value is 500 ms. The slider uses tiered step sizes:
+  25 ms (50–500 ms), 50 ms (500–1000 ms), 100 ms (1000–2000 ms), 250 ms
+  (2000–5000 ms).
 - All views (disassembly, registers, memory, stack) update after each
   step.
 - Execution halts on STP.
@@ -178,7 +188,9 @@ The user can watch execution proceed at a controlled pace.
 **Acceptance criteria:**
 - Pressing Auto-Step begins stepping at the configured interval; the
   user can observe the program executing in slow motion.
-- Changing the interval immediately affects step timing.
+- Changing the interval immediately affects step timing. The control allows 
+  selection of an interval between 50 ms and 5000 ms, and the slider 
+  proceeds smoothly in each tier of step sizes.
 - Pressing Auto-Step again (or Stop) halts execution.
 
 ---
@@ -217,6 +229,16 @@ tests.
   current value (indicating the current subroutine has returned).
 - Unit tests validating both behaviors, including edge cases (nested
   calls, BRK, interrupts).
+
+**Implementation notes:**
+- Both operations fit naturally as free functions (or methods) alongside
+  `run()` in `exec/mod.rs`; no changes to `Cpu::step()` are needed.
+- Step Return uses the S-threshold approach: record `initial_s =
+  cpu.registers().s` before the loop, then step until `S > initial_s`
+  or a non-`Executed` result occurs. Reading the return address from
+  the stack is not reliable because the subroutine may have pushed
+  registers above it, making the return address hard to locate without
+  simulating the call frame.
 
 **Acceptance criteria:**
 - `cargo test` passes with new tests covering Step Over (JSR treated
@@ -331,6 +353,8 @@ The memory view can automatically track PC or a zero-page pointer.
   page containing the current PC.
 - Follow Zero-Page Pointer: a configurable zero-page offset (user
   input); the view tracks the 16-bit address stored at that location.
+- When auto-navigating, the memory view remains paragraph-aligned; i.e. the 
+  address at the start of each line is evenly divisible by 16.
 - Manual navigation disengages follow mode; a toggle re-engages it.
 
 **Acceptance criteria:**
@@ -339,6 +363,8 @@ The memory view can automatically track PC or a zero-page pointer.
 - With Follow ZP enabled and a pointer at 0x10 pointing to 0x0400,
   the memory view shows the page at 0x0400. When the pointer changes,
   the view follows.
+- After any change in the followed pointer, the memory view remains 
+  paragraph-aligned.
 - Scrolling manually disengages follow; clicking the follow toggle
   re-engages.
 
