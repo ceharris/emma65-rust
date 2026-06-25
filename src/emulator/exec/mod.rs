@@ -161,7 +161,8 @@ pub fn step_over(cpu: &mut Cpu) -> StepResult {
 
 /// Runs until the stack pointer rises above its value at the time of the call.
 ///
-/// This detects subroutine return: once `S` exceeds `initial_s`, the
+/// This detects subroutine return: once `S` exceeds `initial_s` (using
+/// wrapping 8-bit arithmetic to handle stack pointer wraparound), the
 /// subroutine's stack frame has been unwound by `RTS` or `RTI`. Execution also
 /// halts on any non-[`StepResult::Executed`] result (breakpoint, watch trigger,
 /// error, STP, WAI stall).
@@ -173,7 +174,9 @@ pub fn step_return(cpu: &mut Cpu) -> StepResult {
     let initial_s = cpu.registers().s;
     loop {
         match cpu.step() {
-            StepResult::Executed(op) if cpu.registers().s > initial_s => {
+            StepResult::Executed(op)
+                if (cpu.registers().s.wrapping_sub(initial_s) as i8) > 0 =>
+            {
                 return StepResult::Executed(op);
             }
             StepResult::Executed(_) => {}
@@ -525,6 +528,31 @@ mod tests {
         let result = step_return(&mut cpu);
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0300);
+    }
+
+    #[test]
+    fn step_return_handles_stack_pointer_wraparound() {
+        // Place initial_s at 0x01 so RTS (which pops 2) wraps S through 0xFF
+        // to 0x03. A naive `s > initial_s` would see 0x03 > 0x01 == true, but
+        // a naive `0xFF > 0x01` (the intermediate value after the first pop)
+        // would also be true, which is correct — the wrapping comparison
+        // (s.wrapping_sub(initial_s) as i8) > 0 must also give the right answer.
+        //
+        // Set up: manually put S at 0x01, push a return address of $0203 so
+        // that RTS pops 2 bytes (S: 0x01 → 0xFF → 0x03), and verify step_return
+        // halts correctly.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x60]); // RTS at $0200 (acts as the subroutine body)
+        // Lay the return address ($0202) on the stack with S = 0x01.
+        // RTS pops lo then hi: stack[S+1]=lo=$02, stack[S+2]=hi=$02; RTS adds 1 → PC=$0203.
+        cpu.bus_mut().write(0x0102, 0x02).unwrap(); // PC hi
+        cpu.bus_mut().write(0x0101, 0x02).unwrap(); // PC lo
+        cpu.registers_mut().s = 0x00;               // so S+1=0x01, S+2=0x02
+        // initial_s for step_return will be 0x00; after RTS, S = 0x02 (wrapped).
+        // (0x02_u8.wrapping_sub(0x00) as i8) = 2 > 0 ✓
+        let result = step_return(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
     }
 
     #[test]
