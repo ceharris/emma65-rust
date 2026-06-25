@@ -301,9 +301,9 @@ The user can view watchpoint expressions and their evaluated values.
   `~/.emma/debugger/default/watchpoints.emw`.
 - Compile all expressions via `WatchCompiler`. On error, print
   diagnostics to stderr and exit with non-zero code.
-- Right column (bottom): watchpoint view showing each expression
-  (truncated with ellipsis control for long expressions), its current
-  value, and a status indicator (true/false/error).
+- Left column (bottom, below Memory view): watchpoint view showing each
+  expression (truncated with ellipsis control for long expressions), its
+  current value, and a status indicator (true/false/error).
 - Values update after each step, auto-step tick, or halt from
   free-run.
 - Value radix cycle control (hex, unsigned decimal, signed decimal,
