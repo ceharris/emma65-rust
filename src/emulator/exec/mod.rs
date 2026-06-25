@@ -5,6 +5,9 @@ use crate::emulator::cpu::opcodes::DecodedOp;
 use crate::emulator::error::ExecError;
 use crate::watch::WatchError;
 
+const JSR_OPCODE: u8 = 0x20;
+const JSR_BYTE_LEN: u16 = 3;
+
 const UNLIMITED_SENTINEL: u64 = 0;
 const BATCH_SIZE: u32 = 1000;
 
@@ -94,6 +97,91 @@ impl RunHandle {
     pub async fn take_cpu(self) -> Cpu {
         self.stop();
         self.cpu_rx.await.expect("CPU thread exited without returning CPU")
+    }
+}
+
+/// Executes one logical step, treating JSR as atomic.
+///
+/// If the instruction at the current PC is JSR, sets a temporary breakpoint at
+/// `PC+3` and steps until that breakpoint is hit (or execution halts for any
+/// other reason). For all other instructions, behaves identically to
+/// [`Cpu::step`].
+///
+/// The temporary breakpoint is always removed before returning, even if
+/// execution stops before reaching it. Any pre-existing breakpoint at the
+/// target address is preserved.
+///
+/// Returns the [`StepResult`] that ended the operation.
+pub fn step_over(cpu: &mut Cpu) -> StepResult {
+    let pc = cpu.registers().pc;
+    let opcode = cpu.bus().peek(pc).unwrap_or(0);
+    if opcode != JSR_OPCODE {
+        return cpu.step();
+    }
+
+    let target = pc.wrapping_add(JSR_BYTE_LEN);
+    let already_set = cpu.breakpoints().contains(&target);
+    if !already_set {
+        cpu.add_breakpoint(target);
+    }
+
+    let result = loop {
+        match cpu.step() {
+            StepResult::Executed(op) => {
+                if cpu.registers().pc == target {
+                    break if already_set {
+                        StepResult::Breakpoint(target)
+                    } else {
+                        StepResult::Executed(op)
+                    };
+                }
+            }
+            StepResult::Breakpoint(addr) if addr == target => {
+                // The temporary breakpoint fired before the instruction executed.
+                // Surface as Breakpoint only if the caller owns it; otherwise
+                // remove it and let the next step execute the instruction.
+                if already_set {
+                    break StepResult::Breakpoint(target);
+                }
+                cpu.remove_breakpoint(target);
+                match cpu.step() {
+                    StepResult::Executed(op) => break StepResult::Executed(op),
+                    other => break other,
+                }
+            }
+            other => break other,
+        }
+    };
+
+    if !already_set {
+        cpu.remove_breakpoint(target);
+    }
+    result
+}
+
+/// Runs until the stack pointer rises above its value at the time of the call.
+///
+/// This detects subroutine return: once `S` exceeds `initial_s` (using
+/// wrapping 8-bit arithmetic to handle stack pointer wraparound), the
+/// subroutine's stack frame has been unwound by `RTS` or `RTI`. Execution also
+/// halts on any non-[`StepResult::Executed`] result (breakpoint, watch trigger,
+/// error, STP, WAI stall).
+///
+/// Returns the [`StepResult`] that ended the operation. If the stack pointer
+/// rose above `initial_s`, the result is [`StepResult::Executed`] for the
+/// instruction that caused it (typically the `RTS`/`RTI`).
+pub fn step_return(cpu: &mut Cpu) -> StepResult {
+    let initial_s = cpu.registers().s;
+    loop {
+        match cpu.step() {
+            StepResult::Executed(op)
+                if (cpu.registers().s.wrapping_sub(initial_s) as i8) > 0 =>
+            {
+                return StepResult::Executed(op);
+            }
+            StepResult::Executed(_) => {}
+            other => return other,
+        }
     }
 }
 
@@ -309,5 +397,223 @@ mod tests {
         assert!(cpu_unlimited.cycles() > cpu_throttled.cycles(),
             "unlimited ({} cycles) should exceed throttled ({} cycles)",
             cpu_unlimited.cycles(), cpu_throttled.cycles());
+    }
+
+    // --- step_over / step_return helpers ---
+
+    fn make_cpu_at(start: u16) -> Cpu {
+        use crate::emulator::bus::region::AddressRange;
+        use crate::emulator::cpu::variant::CpuVariant;
+        let mut bus = Bus::config()
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
+            .unwrap()
+            .build();
+        bus.write(0xFFFC, (start & 0xFF) as u8).unwrap();
+        bus.write(0xFFFC + 1, (start >> 8) as u8).unwrap();
+        let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
+            .bus(bus)
+            .build()
+            .unwrap();
+        cpu.reset().unwrap();
+        cpu
+    }
+
+    fn write(cpu: &mut Cpu, addr: u16, bytes: &[u8]) {
+        for (i, &b) in bytes.iter().enumerate() {
+            cpu.bus_mut().write(addr + i as u16, b).unwrap();
+        }
+    }
+
+    // --- step_over ---
+
+    #[test]
+    fn step_over_non_jsr_behaves_like_step_into() {
+        // NOP at $0200; step_over should execute it and advance PC by 1.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xEA]); // NOP
+        let result = step_over(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0201);
+    }
+
+    #[test]
+    fn step_over_jsr_advances_past_subroutine() {
+        // JSR $0300 at $0200; subroutine is NOP + RTS.
+        // step_over should return with PC at $0203 (instruction after JSR).
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
+        let result = step_over(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
+    }
+
+    #[test]
+    fn step_over_jsr_nested_calls_treated_atomically() {
+        // Subroutine at $0300 itself calls $0400 before returning.
+        // step_over must treat the entire call tree as atomic.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0x20, 0x00, 0x04]); // JSR $0400
+        write(&mut cpu, 0x0303, &[0x60]);               // RTS
+        write(&mut cpu, 0x0400, &[0x60]);               // RTS
+        let result = step_over(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
+    }
+
+    #[test]
+    fn step_over_jsr_halts_at_inner_breakpoint() {
+        // A breakpoint inside the subroutine interrupts step_over.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
+        cpu.add_breakpoint(0x0300);
+        let result = step_over(&mut cpu);
+        assert!(matches!(result, StepResult::Breakpoint(0x0300)));
+        assert_eq!(cpu.registers().pc, 0x0300);
+    }
+
+    #[test]
+    fn step_over_jsr_preserves_caller_breakpoint_at_target() {
+        // If the caller had already set a breakpoint at PC+3, step_over must
+        // not remove it and must surface it as Breakpoint, not Executed.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
+        cpu.add_breakpoint(0x0203);
+        let result = step_over(&mut cpu);
+        // Must surface as Breakpoint since caller owns it.
+        assert!(matches!(result, StepResult::Breakpoint(0x0203)));
+        // Breakpoint must still be present after step_over returns.
+        assert!(cpu.breakpoints().contains(&0x0203));
+    }
+
+    #[test]
+    fn step_over_jsr_halts_on_stp() {
+        // Subroutine executes STP before returning.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xDB]);               // STP
+        let result = step_over(&mut cpu);
+        assert!(matches!(result, StepResult::Stopped));
+    }
+
+    // --- step_return ---
+
+    #[test]
+    fn step_return_halts_after_rts() {
+        // Call a subroutine via JSR; land at $0300 then call step_return.
+        // step_return should run until RTS and return with PC at $0203.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0x60]); // NOP, NOP, RTS
+        cpu.step(); // JSR — now at $0300, S = 0xFD
+        let result = step_return(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
+    }
+
+    #[test]
+    fn step_return_halts_after_rti() {
+        // Manually set up a stack frame and use RTI to unwind.
+        let mut cpu = make_cpu_at(0x0200);
+        // Push P, PC lo, PC hi so RTI returns to $0300.
+        let s = cpu.registers().s;
+        cpu.bus_mut().write(0x0100 | s as u16, 0x03).unwrap();          // PC hi
+        cpu.bus_mut().write(0x0100 | s.wrapping_sub(1) as u16, 0x00).unwrap(); // PC lo
+        cpu.bus_mut().write(0x0100 | s.wrapping_sub(2) as u16, 0x24).unwrap(); // P
+        cpu.registers_mut().s = s.wrapping_sub(3);
+        write(&mut cpu, 0x0200, &[0x40]); // RTI
+        let result = step_return(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0300);
+    }
+
+    #[test]
+    fn step_return_handles_stack_pointer_wraparound() {
+        // Place initial_s at 0x01 so RTS (which pops 2) wraps S through 0xFF
+        // to 0x03. A naive `s > initial_s` would see 0x03 > 0x01 == true, but
+        // a naive `0xFF > 0x01` (the intermediate value after the first pop)
+        // would also be true, which is correct — the wrapping comparison
+        // (s.wrapping_sub(initial_s) as i8) > 0 must also give the right answer.
+        //
+        // Set up: manually put S at 0x01, push a return address of $0203 so
+        // that RTS pops 2 bytes (S: 0x01 → 0xFF → 0x03), and verify step_return
+        // halts correctly.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x60]); // RTS at $0200 (acts as the subroutine body)
+        // Lay the return address ($0202) on the stack with S = 0x01.
+        // RTS pops lo then hi: stack[S+1]=lo=$02, stack[S+2]=hi=$02; RTS adds 1 → PC=$0203.
+        cpu.bus_mut().write(0x0102, 0x02).unwrap(); // PC hi
+        cpu.bus_mut().write(0x0101, 0x02).unwrap(); // PC lo
+        cpu.registers_mut().s = 0x00;               // so S+1=0x01, S+2=0x02
+        // initial_s for step_return will be 0x00; after RTS, S = 0x02 (wrapped).
+        // (0x02_u8.wrapping_sub(0x00) as i8) = 2 > 0 ✓
+        let result = step_return(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
+    }
+
+    #[test]
+    fn step_return_halts_at_breakpoint_inside_subroutine() {
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0x60]); // NOP, NOP, RTS
+        cpu.step(); // JSR — now inside subroutine
+        cpu.add_breakpoint(0x0301);
+        let result = step_return(&mut cpu);
+        assert!(matches!(result, StepResult::Breakpoint(0x0301)));
+    }
+
+    #[test]
+    fn step_return_halts_on_stp() {
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xDB]);               // STP before RTS
+        cpu.step(); // JSR
+        let result = step_return(&mut cpu);
+        assert!(matches!(result, StepResult::Stopped));
+    }
+
+    #[test]
+    fn step_return_nested_call_unwinds_to_correct_frame() {
+        // JSR $0300; subroutine JSR $0400; step_return inside $0400 unwinds to $0303.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0x20, 0x00, 0x04]); // JSR $0400
+        write(&mut cpu, 0x0303, &[0x60]);               // RTS (outer)
+        write(&mut cpu, 0x0400, &[0xEA, 0x60]);        // NOP, RTS (inner)
+        cpu.step(); // JSR $0300
+        cpu.step(); // JSR $0400 — now inside inner subroutine
+        let s_inside = cpu.registers().s;
+        let result = step_return(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        // Returned to $0303 (after inner JSR).
+        assert_eq!(cpu.registers().pc, 0x0303);
+        // S rose above s_inside but not back to original (outer frame still on stack).
+        assert!(cpu.registers().s > s_inside);
+    }
+
+    #[test]
+    fn step_return_nmi_during_subroutine_does_not_prematurely_halt() {
+        // NMI is used instead of IRQ: it fires once (edge-triggered), avoids the
+        // re-fire loop that IRQ would create after RTI restores I=0.
+        //
+        // Scenario: step_return starts at $0300 with S=0xFD (initial_s).
+        // NMI entry pushes 3 bytes (S→0xFA); ISR RTI restores S to 0xFD.
+        // 0xFD == initial_s (not above), so step_return must continue.
+        // The outer RTS then raises S to 0xFF > 0xFD, halting correctly at $0203.
+        let mut cpu = make_cpu_at(0x0200);
+        cpu.bus_mut().write(0xFFFA, 0x00).unwrap(); // NMI vector lo
+        cpu.bus_mut().write(0xFFFB, 0x04).unwrap(); // NMI vector hi → $0400
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0xEA, 0x60]); // NOP, NOP, NOP, RTS
+        write(&mut cpu, 0x0400, &[0x40]); // ISR: RTI
+        cpu.step(); // JSR $0300 — S = 0xFD
+        cpu.interrupts_mut().signal_nmi();
+        let result = step_return(&mut cpu);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
     }
 }

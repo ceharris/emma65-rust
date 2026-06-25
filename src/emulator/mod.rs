@@ -29,7 +29,7 @@ pub use device::{Acia6551, Console, Mc6850, Via6522};
 pub use device::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
 pub use disasm::{Disassembler, DisassembledLine};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
-pub use exec::{ClockSpeed, RunHandle, StepResult, run};
+pub use exec::{ClockSpeed, RunHandle, StepResult, run, step_over, step_return};
 pub use interrupt::{InterruptController, IrqSource};
 pub use transport::{Transport, TransportError, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport};
 pub use session::{EmulatorSession};
