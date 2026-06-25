@@ -64,19 +64,20 @@ advantage of this:
 ```
 ┌─────────────────┬───────────────────┬──────────────┐
 │                 │                   │  Registers   │
+│   Memory View   │                   │              │
+│                 │  Disassembly View ├──────────────┤
+├─────────────────┤                   │    Stack     │
 │                 │                   │              │
-│   Memory View   │  Disassembly View ├──────────────┤
-│                 │                   │    Stack     │
-│                 │                   │              │
-│                 │                   ├──────────────┤
-│                 │                   │ Watchpoints  │
+│  Watchpoints    │                   │              │
 └─────────────────┴───────────────────┴──────────────┘
 ```
 
-- **Left column:** Memory view (widest — approximately 80 character
-  columns to accommodate 16 bytes/row with hex and ASCII).
+- **Left column:** Memory view (top, widest — approximately 80 character
+  columns to accommodate 16 bytes/row with hex and ASCII) and Watchpoints
+  (bottom). The wider column gives watchpoint expressions more horizontal
+  space than the right column would allow.
 - **Center column:** Disassembly view with integrated execution controls.
-- **Right column:** Registers (top), Stack (middle), Watchpoints (bottom).
+- **Right column:** Registers (top), Stack (bottom).
 
 Panels are resizable at their borders. Each panel may be collapsed to
 give more space to adjacent panels.

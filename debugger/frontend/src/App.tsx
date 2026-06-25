@@ -48,6 +48,7 @@ export default function App() {
     <div className="app-layout">
       <div className="col col-left">
         <MemoryPanel />
+        {/* Watchpoints — story 12 */}
       </div>
       <div className="col col-center">
         <DisassemblyPanel onStep={handleStep} />
@@ -55,7 +56,6 @@ export default function App() {
       <div className="col col-right">
         <RegisterPanel snapshot={lastSnapshot} />
         {/* Stack view — story 6 */}
-        {/* Watchpoints — story 12 */}
       </div>
     </div>
   );
