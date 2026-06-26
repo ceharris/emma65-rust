@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import DisassemblyPanel from "./DisassemblyPanel";
 import MemoryPanel from "./MemoryPanel";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
+import StackPanel from "./StackPanel";
 
 interface SessionStatus {
   message: string;
@@ -55,7 +56,7 @@ export default function App() {
       </div>
       <div className="col col-right">
         <RegisterPanel snapshot={lastSnapshot} />
-        {/* Stack view — story 6 */}
+        <StackPanel />
       </div>
     </div>
   );

@@ -1,0 +1,88 @@
+.stack-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.stack-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background-color: #252526;
+  border-bottom: 1px solid #3a3a3a;
+  flex-shrink: 0;
+
+  .panel-title {
+    padding: 0;
+    border-bottom: none;
+    background: none;
+  }
+}
+
+.stack-empty {
+  display: block;
+  padding: 16px;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.stack-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 2px 0;
+}
+
+.stack-row {
+  display: flex;
+  align-items: baseline;
+  padding: 0 6px;
+  gap: 6px;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  white-space: nowrap;
+
+  &.stack-row-active {
+    background-color: #2a2d2e;
+  }
+}
+
+.stack-chevron {
+  flex: 0 0 1ch;
+  color: #9cdcfe;
+  font-weight: bold;
+}
+
+.stack-addr {
+  flex: 0 0 4ch;
+  color: #858585;
+}
+
+.stack-lo,
+.stack-hi {
+  flex: 0 0 2ch;
+  color: #b5cea8;
+  font-variant-numeric: tabular-nums;
+
+  &.stack-placeholder {
+    color: #555;
+  }
+}
+
+.align-btn {
+  background: none;
+  border: 1px solid #555;
+  color: #858585;
+  font-family: monospace;
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1.4;
+
+  &:hover {
+    border-color: #9cdcfe;
+    color: #9cdcfe;
+  }
+}

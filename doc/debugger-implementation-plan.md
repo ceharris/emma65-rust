@@ -484,6 +484,27 @@ The user can manually change a watch variable's value.
 - The change persists until overwritten by a `:=` expression or
   another manual edit.
 
+### 21. Stack View — Value Radix Cycling
+
+The user can view stack cell values in their preferred numeric base.
+
+**Scope:**
+- Add a radix-cycling control to the stack view header (similar to the
+  register radix controls).
+- Clicking the control cycles through: hex → unsigned decimal → signed
+  decimal → octal → hex.
+- The default radix is hexadecimal.
+- The address column always displays in hexadecimal regardless of the
+  selected radix.
+- The `--` placeholder is unaffected by radix selection.
+
+**Acceptance criteria:**
+- Clicking the radix control cycles through all four radices in order
+  and wraps back to hex.
+- All byte values in the stack view render correctly in each radix.
+- The address column always shows hex addresses.
+- The `--` placeholder always displays as `--`.
+
 ---
 
 Story Dependency Notes
@@ -528,3 +549,4 @@ GitHub Issues
 | 18    | Watchpoints — Enable/Disable                       | #73   |
 | 19    | Watchpoints — View Variables                       | #74   |
 | 20    | Watchpoints — Edit Variable Values                 | #75   |
+| 21    | Stack View — Value Radix Cycling                   | #82   |
