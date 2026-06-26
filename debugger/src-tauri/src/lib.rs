@@ -205,6 +205,32 @@ fn get_registers(
     })
 }
 
+/// Stack snapshot returned to the frontend.
+///
+/// Covers the full stack page so the frontend can render any window within it.
+#[derive(Clone, serde::Serialize)]
+pub struct StackSnapshot {
+    /// Current stack pointer (0x00–0xFF, page 1 offset).
+    pub s: u8,
+    /// All 256 bytes of the stack page (0x0100–0x01FF).
+    pub page: Vec<u8>,
+}
+
+/// Returns the current stack pointer and the full stack page (0x0100–0x01FF).
+///
+/// Reads are performed via `Bus::peek_range` so no device side effects occur.
+#[tauri::command]
+fn get_stack(cpu_state: State<CpuState>) -> Result<StackSnapshot, String> {
+    let guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_ref().ok_or("CPU not ready")?;
+    let s = cpu.registers().s;
+    let mut page = vec![0u8; 256];
+    cpu.bus()
+        .peek_range(0x0100, &mut page)
+        .map_err(|e| e.to_string())?;
+    Ok(StackSnapshot { s, page })
+}
+
 /// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xfff0 for paragraph alignment).
 ///
 /// Reads are performed via `Bus::peek_range` so no device side effects occur.
@@ -277,6 +303,7 @@ pub fn run() {
             get_registers,
             get_disassembly,
             get_memory,
+            get_stack,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
