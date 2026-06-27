@@ -191,6 +191,39 @@ fn step_into(
     Ok(snapshot)
 }
 
+/// Resets the CPU (reads reset vector, reinitializes registers) and returns the
+/// post-reset register snapshot.
+///
+/// Resets `ChangedFlagsState` to 0 and emits `debugger-halted` with the new PC.
+#[tauri::command]
+fn reset_cpu(
+    app: AppHandle,
+    cpu_state: State<CpuState>,
+    changed_flags_state: State<ChangedFlagsState>,
+) -> Result<RegisterSnapshot, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+
+    cpu.reset().map_err(|e| e.to_string())?;
+    let regs = *cpu.registers();
+
+    *changed_flags_state.0.lock().unwrap() = 0;
+
+    let snapshot = RegisterSnapshot {
+        a: regs.a,
+        x: regs.x,
+        y: regs.y,
+        s: regs.s,
+        pc: regs.pc,
+        p: regs.p.to_byte(),
+        changed_flags: 0,
+        cpu_stopped: false,
+    };
+
+    let _ = app.emit("debugger-halted", regs.pc);
+    Ok(snapshot)
+}
+
 /// Returns a register snapshot of the current CPU state without stepping.
 ///
 /// `changed_flags` reflects what changed on the most recent `step_into` call, or 0 on
@@ -312,6 +345,7 @@ pub fn run() {
             write_terminal,
             terminal_ready,
             step_into,
+            reset_cpu,
             get_registers,
             get_disassembly,
             get_memory,
