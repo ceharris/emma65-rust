@@ -33,27 +33,28 @@ const INTERVAL_MAX = 5000;
 const INTERVAL_DEFAULT = 500;
 
 /**
- * Map a slider integer position (0–100) to a millisecond interval using
- * tiered step sizes: 25 ms (50–500 ms), 50 ms (500–1000 ms),
- * 100 ms (1000–2000 ms), 250 ms (2000–5000 ms).
+ * Tier definitions for the speed slider: [lo, hi, step_size].
  *
- * Each tier occupies a proportional share of the slider range so that
- * moving the thumb by one "tick" advances by the tier's step size.
+ * Each tier covers a sub-range of the interval domain. Moving the slider
+ * thumb by one tick advances the interval by that tier's step size.
  */
-function sliderToInterval(pos: number): number {
-  // Tier definitions: [lo, hi, step]
-  const tiers: [number, number, number][] = [
-    [INTERVAL_MIN, 500, 25],    // 19 steps
-    [500, 1000, 50],             // 10 steps
-    [1000, 2000, 100],           // 10 steps
-    [2000, INTERVAL_MAX, 250],   // 12 steps
-  ];
-  // Total discrete steps across all tiers
-  const totalSteps = tiers.reduce((sum, [lo, hi, step]) => sum + (hi - lo) / step, 0);
-  const sliderSteps = 100;
+const INTERVAL_TIERS: [number, number, number][] = [
+  [INTERVAL_MIN, 500, 25],   // 19 steps
+  [500, 1000, 50],            // 10 steps
+  [1000, 2000, 100],          // 10 steps
+  [2000, INTERVAL_MAX, 250],  // 12 steps
+];
 
-  let remaining = Math.round((pos / sliderSteps) * totalSteps);
-  for (const [lo, hi, step] of tiers) {
+const INTERVAL_TOTAL_STEPS = INTERVAL_TIERS.reduce(
+  (sum, [lo, hi, step]) => sum + (hi - lo) / step, 0
+);
+
+const SLIDER_STEPS = 100;
+
+/** Map a slider integer position (0–100) to a millisecond interval. */
+function sliderToInterval(pos: number): number {
+  let remaining = Math.round((pos / SLIDER_STEPS) * INTERVAL_TOTAL_STEPS);
+  for (const [lo, hi, step] of INTERVAL_TIERS) {
     const tierSteps = (hi - lo) / step;
     if (remaining <= tierSteps) {
       return Math.min(hi, lo + remaining * step);
@@ -65,17 +66,11 @@ function sliderToInterval(pos: number): number {
 
 /** Map a millisecond interval back to a slider integer position (0–100). */
 function intervalToSlider(ms: number): number {
-  const tiers: [number, number, number][] = [
-    [INTERVAL_MIN, 500, 25],
-    [500, 1000, 50],
-    [1000, 2000, 100],
-    [2000, INTERVAL_MAX, 250],
-  ];
-  const totalSteps = tiers.reduce((sum, [lo, hi, step]) => sum + (hi - lo) / step, 0);
-  const sliderSteps = 100;
+  const totalSteps = INTERVAL_TOTAL_STEPS;
+  const sliderSteps = SLIDER_STEPS;
 
   let stepsBelow = 0;
-  for (const [lo, hi, step] of tiers) {
+  for (const [lo, hi, step] of INTERVAL_TIERS) {
     if (ms <= hi) {
       const offset = Math.round((ms - lo) / step);
       return Math.round(((stepsBelow + offset) / totalSteps) * sliderSteps);
