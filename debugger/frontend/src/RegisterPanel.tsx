@@ -12,6 +12,8 @@ export interface RegisterSnapshot {
   p: number;
   /** Bitmask of P-register bits that changed on the most recent step (0 on initial load). */
   changed_flags: number;
+  /** True when the CPU executed STP and is now halted. */
+  cpu_stopped: boolean;
 }
 
 // --- radix cycling ---

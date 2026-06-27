@@ -176,11 +176,13 @@ The user can watch execution proceed at a controlled pace.
 **Scope:**
 - An "Auto-Step" toggle button (Ctrl+Shift+F5) starts/stops timed
   single-stepping.
-- A speed control (slider or numeric input) sets the interval in milliseconds 
-  between steps. The allowed range for the interval is 50 ms to 5000 ms 
+- A speed control (slider + numeric input) sets the interval in milliseconds
+  between steps. The allowed range for the interval is 25 ms to 5000 ms
   (inclusive). The default value is 500 ms. The slider uses tiered step sizes:
-  25 ms (50–500 ms), 50 ms (500–1000 ms), 100 ms (1000–2000 ms), 250 ms
-  (2000–5000 ms).
+  25 ms (25–500 ms), 50 ms (500–1000 ms), 100 ms (1000–2000 ms), 250 ms
+  (2000–5000 ms). The numeric input accepts a raw millisecond value; on
+  commit (Enter or blur) it clamps to [25, 5000] and snaps to the nearest
+  tier step. Slider and input stay in sync.
 - All views (disassembly, registers, memory, stack) update after each
   step.
 - Execution halts on STP.
@@ -188,9 +190,11 @@ The user can watch execution proceed at a controlled pace.
 **Acceptance criteria:**
 - Pressing Auto-Step begins stepping at the configured interval; the
   user can observe the program executing in slow motion.
-- Changing the interval immediately affects step timing. The control allows 
-  selection of an interval between 50 ms and 5000 ms, and the slider 
-  proceeds smoothly in each tier of step sizes.
+- Changing the interval immediately affects step timing. The slider allows
+  selection of an interval between 25 ms and 5000 ms and proceeds smoothly
+  in each tier of step sizes. The numeric input accepts a raw millisecond
+  value; committing it clamps and snaps to the nearest tier step, and both
+  controls stay in sync.
 - Pressing Auto-Step again (or Stop) halts execution.
 
 ---
