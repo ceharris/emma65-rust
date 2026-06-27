@@ -28,7 +28,7 @@ const FETCH_ROWS = 48;
 const SCROLL_EDGE = 6;
 
 /** Auto-step interval bounds in milliseconds. */
-const INTERVAL_MIN = 25;
+const INTERVAL_MIN = 10;
 const INTERVAL_MAX = 5000;
 const INTERVAL_DEFAULT = 500;
 
@@ -240,6 +240,22 @@ export default function DisassemblyPanel({ onStep }: Props) {
     });
   }, [scheduleNextTick, clearAutoStepTimer]);
 
+  /** Reset the CPU, stopping auto-step first if active (Shift+F5). */
+  const resetCpu = useCallback(async () => {
+    if (steppingRef.current) return;
+    if (isAutoSteppingRef.current) {
+      isAutoSteppingRef.current = false;
+      setIsAutoStepping(false);
+      clearAutoStepTimer();
+    }
+    try {
+      const snap = await invoke<RegisterSnapshot>("reset_cpu");
+      onStep(snap);
+    } catch (e) {
+      console.error("reset_cpu failed:", e);
+    }
+  }, [onStep, clearAutoStepTimer]);
+
   // Clean up timer on unmount.
   useEffect(() => {
     return () => clearAutoStepTimer();
@@ -251,6 +267,10 @@ export default function DisassemblyPanel({ onStep }: Props) {
         e.preventDefault();
         stepInto();
       }
+      if (e.key === "F5" && e.shiftKey && !e.ctrlKey) {
+        e.preventDefault();
+        resetCpu();
+      }
       if (e.key === "F5" && e.ctrlKey && e.shiftKey) {
         e.preventDefault();
         toggleAutoStep();
@@ -258,7 +278,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [stepInto, toggleAutoStep]);
+  }, [stepInto, resetCpu, toggleAutoStep]);
 
   const handleSliderChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const pos = parseInt(e.target.value, 10);
@@ -310,6 +330,13 @@ export default function DisassemblyPanel({ onStep }: Props) {
               title="Step Into (F11)"
             >
               Step Into
+            </button>
+            <button
+              className="exec-btn reset-btn"
+              onClick={resetCpu}
+              title="Reset CPU (Shift+F5)"
+            >
+              Reset
             </button>
           </div>
         </div>
