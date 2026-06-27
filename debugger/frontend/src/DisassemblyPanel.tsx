@@ -334,7 +334,6 @@ export default function DisassemblyPanel({ onStep }: Props) {
             <button
               className="exec-btn reset-btn"
               onClick={resetCpu}
-              disabled={stepping}
               title="Reset CPU (Shift+F5)"
             >
               Reset
