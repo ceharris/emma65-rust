@@ -91,6 +91,12 @@ pub trait Transport: Send {
     fn send(&mut self, byte: u8) -> Result<(), TransportError>;
     /// Returns `true` if the transport is currently connected.
     fn is_connected(&self) -> bool;
+    /// Returns a monotonically increasing ID that increments each time a new client connects.
+    ///
+    /// Callers that need to detect reconnection can compare this value between polls;
+    /// a change means a new session has begun and any per-connection state should be reset.
+    /// Transports that do not support reconnection (e.g. [`PipeTransport`]) always return 0.
+    fn connection_id(&self) -> u64;
     /// Initiates a graceful shutdown of the transport.
     fn shutdown(&mut self);
 }

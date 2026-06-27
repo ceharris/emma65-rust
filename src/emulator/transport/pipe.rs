@@ -103,6 +103,10 @@ impl Transport for PipeTransport {
         self.connected
     }
 
+    fn connection_id(&self) -> u64 {
+        0
+    }
+
     fn shutdown(&mut self) {
         self.connected = false;
     }

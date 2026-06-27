@@ -4,7 +4,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
@@ -32,6 +32,8 @@ pub struct PtyTransport {
     _slave: OwnedFd,
     /// Reflects whether an external process is currently connected; shared with the Tokio task.
     client_connected: Arc<AtomicBool>,
+    /// Incremented each time an external process opens the slave; shared with the Tokio task.
+    connection_counter: Arc<AtomicU64>,
     /// Optional stable symlink pointing to the slave device node.
     symlink_path: Option<PathBuf>,
 }
@@ -72,6 +74,7 @@ impl PtyTransport {
 
         let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::new();
         let client_connected = Arc::new(AtomicBool::new(false));
+        let connection_counter = Arc::new(AtomicU64::new(0));
 
         // SAFETY: we own master; forget prevents double-close.
         let master_std = unsafe { File::from_raw_fd(raw) };
@@ -84,9 +87,10 @@ impl PtyTransport {
             out_rx,
             shutdown_rx,
             Arc::clone(&client_connected),
+            Arc::clone(&connection_counter),
         ));
 
-        Ok(Self { bridge, slave_path, _slave: slave, client_connected, symlink_path })
+        Ok(Self { bridge, slave_path, _slave: slave, client_connected, connection_counter, symlink_path })
     }
 
     /// Returns the path of the slave PTY device (e.g. `/dev/pts/3`), if available.
@@ -108,6 +112,10 @@ impl Transport for PtyTransport {
 
     fn is_connected(&self) -> bool {
         self.client_connected.load(Ordering::Acquire)
+    }
+
+    fn connection_id(&self) -> u64 {
+        self.connection_counter.load(Ordering::Acquire)
     }
 
     fn shutdown(&mut self) {
@@ -137,6 +145,7 @@ async fn run_pty_task(
     out_rx: Receiver<u8>,
     mut shutdown_rx: oneshot::Receiver<()>,
     client_connected: Arc<AtomicBool>,
+    connection_counter: Arc<AtomicU64>,
 ) {
     let mut buf = [0u8; 1];
     loop {
@@ -147,7 +156,10 @@ async fn run_pty_task(
                 let mut guard = match result { Ok(g) => g, Err(_) => break };
                 match guard.try_io(|inner| inner.get_ref().read(&mut buf)) {
                     Ok(Ok(1)) => {
-                        client_connected.store(true, Ordering::Release);
+                        if !client_connected.load(Ordering::Acquire) {
+                            connection_counter.fetch_add(1, Ordering::Release);
+                            client_connected.store(true, Ordering::Release);
+                        }
                         if in_tx.send(buf[0]).is_err() {
                             break;
                         }
