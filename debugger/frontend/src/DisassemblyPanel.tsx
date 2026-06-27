@@ -28,6 +28,7 @@ const FETCH_ROWS = 48;
 const SCROLL_EDGE = 6;
 
 /** Auto-step interval bounds in milliseconds. */
+const INTERVAL_MIN = 25;
 const INTERVAL_MAX = 5000;
 const INTERVAL_DEFAULT = 500;
 
@@ -42,10 +43,10 @@ const INTERVAL_DEFAULT = 500;
 function sliderToInterval(pos: number): number {
   // Tier definitions: [lo, hi, step]
   const tiers: [number, number, number][] = [
-    [25, 500, 25],    // 19 steps
-    [500, 1000, 50],  // 10 steps
-    [1000, 2000, 100], // 10 steps
-    [2000, 5000, 250], // 12 steps
+    [INTERVAL_MIN, 500, 25],    // 19 steps
+    [500, 1000, 50],             // 10 steps
+    [1000, 2000, 100],           // 10 steps
+    [2000, INTERVAL_MAX, 250],   // 12 steps
   ];
   // Total discrete steps across all tiers
   const totalSteps = tiers.reduce((sum, [lo, hi, step]) => sum + (hi - lo) / step, 0);
@@ -65,10 +66,10 @@ function sliderToInterval(pos: number): number {
 /** Map a millisecond interval back to a slider integer position (0–100). */
 function intervalToSlider(ms: number): number {
   const tiers: [number, number, number][] = [
-    [25, 500, 25],
+    [INTERVAL_MIN, 500, 25],
     [500, 1000, 50],
     [1000, 2000, 100],
-    [2000, 5000, 250],
+    [2000, INTERVAL_MAX, 250],
   ];
   const totalSteps = tiers.reduce((sum, [lo, hi, step]) => sum + (hi - lo) / step, 0);
   const sliderSteps = 100;
@@ -273,7 +274,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
 
   const commitIntervalInput = useCallback((raw: string) => {
     const parsed = parseInt(raw, 10);
-    const clamped = isNaN(parsed) ? INTERVAL_DEFAULT : Math.min(5000, Math.max(25, parsed));
+    const clamped = isNaN(parsed) ? INTERVAL_DEFAULT : Math.min(INTERVAL_MAX, Math.max(INTERVAL_MIN, parsed));
     // Snap to the nearest tier step by round-tripping through the slider mapping.
     const snapped = sliderToInterval(intervalToSlider(clamped));
     setIntervalMs(snapped);
@@ -344,7 +345,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
               onChange={handleIntervalInputChange}
               onBlur={handleIntervalInputBlur}
               onKeyDown={handleIntervalInputKeyDown}
-              title="Step interval in ms (50–5000)"
+              title={`Step interval in ms (${INTERVAL_MIN}–${INTERVAL_MAX})`}
             />
             <span className="speed-unit">ms</span>
           </div>
