@@ -96,6 +96,13 @@ export default function DisassemblyPanel({ onStep }: Props) {
     const unlistenPromise = listen<number>("debugger-halted", (event) => {
       handleHalted(event.payload);
     });
+
+    // Proactively fetch on mount: the initial `debugger-halted` event can fire
+    // before our listener is registered (listen() is async), leaving rows empty.
+    invoke<RegisterSnapshot>("get_registers")
+      .then((snap) => { if (rowsRef.current.length === 0) handleHalted(snap.pc); })
+      .catch(() => {});
+
     return () => { unlistenPromise.then((f) => f()); };
   }, [handleHalted]);
 
