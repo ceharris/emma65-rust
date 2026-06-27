@@ -160,8 +160,9 @@ fn load_motorola_srec(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Opti
             }
             SREC_DATA => {
                 let index = addr as usize;
-                if index < offset || index + (rec_len as usize) - offset > mem.len() {
-                    return Err(LoadError::OutOfBounds { address: index as u32, size: rec_len as usize });
+                let data_len = rec_len as usize - 2 - 1;
+                if index < offset || index + data_len - offset > mem.len() {
+                    return Err(LoadError::OutOfBounds { address: index as u32, size: data_len });
                 }
                 parse_data(&mut record, rec_len - 3, addr, mem, offset, &mut checksum)?;
             }
@@ -440,6 +441,15 @@ S9030000FC
     }
 
     #[test]
+    fn load_index_hex_can_write_to_end_of_segment() {
+        // this record writes 6 bytes at 0xfffa (the 6502 reset vectors)
+        let hex_data = ":06FFFA0000F000F000F031\n:00000001FF\n".as_bytes();
+        let mut mem: [u8; 16] = [0; 16];
+        let start_addr = load_intel_hex(hex_data, &mut mem, 0xfff0).unwrap();
+        assert!(matches!(start_addr, None));
+    }
+
+    #[test]
     fn load_motorola_srec_success() {
         let hex_data = SREC_EXAMPLE.as_bytes();
         let mut mem: [u8; 1024] = [0; 1024];
@@ -487,6 +497,15 @@ S9030000FC
         let mut mem: [u8; 16] = [0; 16];
         let err = load_motorola_srec(hex_data, &mut mem, 0x100).unwrap_err();
         assert!(matches!(err, LoadError::OutOfBounds { address: _, size: _ }));
+    }
+
+    #[test]
+    fn load_motorola_srec_can_write_to_end_of_segment() {
+        // this record writes 6 bytes at 0xfffa (the 6502 reset vectors)
+        let hex_data = "S109FFFA00F000F000F02D\nS9030000FC\n".as_bytes();
+        let mut mem: [u8; 16] = [0; 16];
+        let start_addr = load_motorola_srec(hex_data, &mut mem, 0xfff0).unwrap();
+        assert!(matches!(start_addr, Some(0)));
     }
 
     #[test]
