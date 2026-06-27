@@ -142,6 +142,12 @@ fn write_terminal(bytes: Vec<u8>, state: State<TerminalTx>) -> Result<(), String
     tx.write_all(&bytes).map_err(|e| e.to_string())
 }
 
+/// Exits the application cleanly.
+#[tauri::command]
+fn quit(app: AppHandle) {
+    app.exit(0);
+}
+
 /// Returns the current session status, or `None` if not yet determined.
 #[tauri::command]
 fn get_session_status(state: State<SessionStatusState>) -> Option<SessionStatus> {
@@ -296,6 +302,7 @@ pub fn run() {
         .manage(DisassemblerState(Mutex::new(None)))
         .manage(ChangedFlagsState(Mutex::new(0)))
         .invoke_handler(tauri::generate_handler![
+            quit,
             get_session_status,
             write_terminal,
             terminal_ready,

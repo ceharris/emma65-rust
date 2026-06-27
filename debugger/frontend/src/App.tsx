@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import DisassemblyPanel from "./DisassemblyPanel";
 import MemoryPanel from "./MemoryPanel";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
@@ -20,7 +19,7 @@ export default function App() {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "q" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        getCurrentWindow().close();
+        invoke("quit");
       }
     };
     window.addEventListener("keydown", handler);
