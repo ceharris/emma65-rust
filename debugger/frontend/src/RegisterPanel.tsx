@@ -16,18 +16,18 @@ export interface RegisterSnapshot {
 
 // --- radix cycling ---
 
-type DataRadix = "hex" | "udec" | "sdec" | "bin" | "oct";
+type DataRadix = "hex" | "udec" | "sdec" | "oct" | "bin" ;
 type AddrRadix = "hex" | "udec" | "oct";
 
-const DATA_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "sdec", "bin", "oct"];
+const DATA_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "sdec", "oct", "bin"];
 const ADDR_RADIX_CYCLE: AddrRadix[] = ["hex", "udec", "oct"];
 
 const DATA_RADIX_LABEL: Record<DataRadix, string> = {
   hex:  "HEX",
   udec: "DEC",
   sdec: "±DEC",
-  bin:  "BIN",
   oct:  "OCT",
+  bin:  "BIN",
 };
 
 const ADDR_RADIX_LABEL: Record<AddrRadix, string> = {
@@ -38,11 +38,11 @@ const ADDR_RADIX_LABEL: Record<AddrRadix, string> = {
 
 function formatData(value: number, radix: DataRadix): string {
   switch (radix) {
-    case "hex":  return "$" + value.toString(16).toUpperCase().padStart(2, "0");
+    case "hex":  return value.toString(16).toUpperCase().padStart(2, "0");
     case "udec": return value.toString(10);
     case "sdec": return ((value << 24) >> 24).toString(10);
-    case "bin":  return "%" + value.toString(2).padStart(8, "0");
-    case "oct":  return "0" + value.toString(8).padStart(3, "0");
+    case "oct":  return value.toString(8).padStart(3, "0");
+    case "bin":  return value.toString(2).padStart(8, "0");
   }
 }
 
@@ -53,9 +53,9 @@ function printableAscii(value: number): string | null {
 
 function formatAddr(value: number, radix: AddrRadix, byteWidth: number): string {
   switch (radix) {
-    case "hex":  return "$" + value.toString(16).toUpperCase().padStart(byteWidth * 2, "0");
+    case "hex":  return value.toString(16).toUpperCase().padStart(byteWidth * 2, "0");
     case "udec": return value.toString(10);
-    case "oct":  return "0" + value.toString(8).padStart(byteWidth === 2 ? 6 : 3, "0");
+    case "oct":  return value.toString(8).padStart(byteWidth === 2 ? 6 : 3, "0");
   }
 }
 

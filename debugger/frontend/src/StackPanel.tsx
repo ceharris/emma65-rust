@@ -11,13 +11,50 @@ interface StackSnapshot {
 /** Number of word-pair rows visible in the panel. */
 const VISIBLE_PAIRS = 8;
 
-/** Returns a two-digit uppercase hex string or "--" for the placeholder. */
-function fmtByte(value: number | null): string {
-  return value === null ? "--" : value.toString(16).toUpperCase().padStart(2, "0");
+// --- radix cycling ---
+
+type DataRadix = "hex" | "udec" | "sdec" | "oct";
+
+const DATA_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "sdec", "oct"];
+
+const DATA_RADIX_LABEL: Record<DataRadix, string> = {
+  hex:  "HEX",
+  udec: "DEC",
+  sdec: "±DEC",
+  oct:  "OCT",
+};
+
+
+function formatData(value: number | null, radix: DataRadix): string {
+  if (value !== null) {
+    switch (radix) {
+      case "hex":  return value.toString(16).toUpperCase().padStart(2, "0");
+      case "udec": return value.toString(10);
+      case "sdec": return ((value << 24) >> 24).toString(10);
+      case "oct":  return value.toString(8).padStart(3, "0");
+    }
+  }
+  else {
+    switch (radix) {
+      case "hex": return "--";
+      case "udec": return "---";
+      case "sdec": return "----";
+      case "oct": return "---";
+    }
+  }
+}
+
+function radixDataWidth(radix: DataRadix): number {
+  switch (radix) {
+    case "hex": return 50;
+    case "udec": return 60;
+    case "sdec": return 65;
+    case "oct": return 60;
+  }
 }
 
 /** Returns a 4-digit uppercase hex address string (page-1 address). */
-function fmtAddr(pageOffset: number): string {
+function formatAddr(pageOffset: number): string {
   return (0x0100 + pageOffset).toString(16).toUpperCase().padStart(4, "0");
 }
 
@@ -78,7 +115,9 @@ function buildRows(s: number, page: number[], alignOdd: boolean): StackRow[] {
 
 export default function StackPanel() {
   const [snap, setSnap] = useState<StackSnapshot | null>(null);
+  const [dataRadix, setDataRadix] = useState<DataRadix>("hex");
   const [alignOdd, setAlignOdd] = useState(false);
+  const [dataWidth, setDataWidth] = useState(50);
 
   const fetchStack = useCallback(async () => {
     try {
@@ -100,6 +139,15 @@ export default function StackPanel() {
     return () => { unlistenPromise.then((f) => f()); };
   }, [fetchStack]);
 
+  const cycleDataRadix = useCallback(() => {
+    setDataRadix((prevRadix) => {
+      const i = DATA_RADIX_CYCLE.indexOf(prevRadix);
+      const nextRadix = DATA_RADIX_CYCLE[(i + 1) % DATA_RADIX_CYCLE.length];
+      setDataWidth(radixDataWidth(nextRadix));
+      return nextRadix;
+    });
+  }, []);
+
   const toggleAlign = useCallback(() => {
     setAlignOdd((v) => !v);
   }, []);
@@ -108,6 +156,9 @@ export default function StackPanel() {
     <div className="stack-panel">
       <div className="stack-header">
         <span className="panel-title">Stack</span>
+        <button className="radix-btn" onClick={cycleDataRadix} title="Cycle radix">
+          {DATA_RADIX_LABEL[dataRadix]}
+        </button>
         <button
           className="align-btn"
           onClick={toggleAlign}
@@ -119,13 +170,13 @@ export default function StackPanel() {
       {snap === null ? (
         <span className="stack-empty">Waiting…</span>
       ) : (
-        <div className="stack-body">
+        <div className="stack-body" style={{width: `${dataWidth}%`}}>
           {buildRows(snap.s, snap.page, alignOdd).map((row) => (
             <div key={row.offset} className={`stack-row${row.isActive ? " stack-row-active" : ""}`}>
               <span className="stack-chevron">{row.isActive ? ">" : " "}</span>
-              <span className="stack-addr">{fmtAddr(row.offset)}</span>
-              <span className={`stack-lo${row.lo === null ? " stack-placeholder" : ""}`}>{fmtByte(row.lo)}</span>
-              <span className={`stack-hi${row.hi === null ? " stack-placeholder" : ""}`}>{fmtByte(row.hi)}</span>
+              <span className="stack-addr">{formatAddr(row.offset)}</span>
+              <span className={`stack-lo${row.lo === null ? " stack-placeholder" : ""}`}>{formatData(row.lo, dataRadix)}</span>
+              <span className={`stack-hi${row.hi === null ? " stack-placeholder" : ""}`}>{formatData(row.hi, dataRadix)}</span>
             </div>
           ))}
         </div>

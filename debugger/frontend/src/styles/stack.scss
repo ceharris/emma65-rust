@@ -61,16 +61,17 @@
 
 .stack-lo,
 .stack-hi {
-  flex: 0 0 2ch;
+  flex: 1 1 3ch;
   color: #b5cea8;
   font-variant-numeric: tabular-nums;
+  text-align: right;
 
   &.stack-placeholder {
     color: #555;
   }
 }
 
-.align-btn {
+.align-btn, .radix-btn {
   background: none;
   border: 1px solid #555;
   color: #858585;
