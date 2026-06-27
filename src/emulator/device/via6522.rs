@@ -24,7 +24,8 @@
 //! **ACR bit layout:**
 //! - Bit 0: T1 latch enable for PB7
 //! - Bit 1: T1 PB7 output enable
-//! - Bits 4–2: Shift register mode
+//! - Bits 4–2: Shift register mode (000=off, 001=in/T2, 010=in/PHI2, 011=in/ext,
+//!   100=out free/T2, 101=out/T2, 110=out/PHI2, 111=out/ext)
 //! - Bit 5: T2 timer mode (0=timed, 1=count PB6)
 //! - Bits 7–6: T1 mode (00/01=one-shot, 10/11=free-run)
 //!
@@ -91,14 +92,14 @@ const IRQ_ANY: u8 = 0x80;
 const ACR_T1_PB7_LATCH:  u8 = 0x01; // reserved for future latch-enable use
 const ACR_T1_PB7_OUTPUT: u8 = 0x02;
 const ACR_SR_MODE_MASK:     u8 = 0x1C;
-const SR_MODE_DISABLED:     u8 = 0x00;
-const SR_MODE_IN_T2:        u8 = 0x04;
-const SR_MODE_IN_T1:        u8 = 0x08;
-const SR_MODE_IN_EXT:       u8 = 0x0C;
-const SR_MODE_OUT_FREE_T2:  u8 = 0x10;
-const SR_MODE_OUT_T2:       u8 = 0x14;
-const SR_MODE_OUT_T1:       u8 = 0x18;
-const SR_MODE_OUT_EXT:      u8 = 0x1C;
+const SR_MODE_DISABLED:     u8 = 0x00; // ACR bits 4–2 = 000
+const SR_MODE_IN_T2:        u8 = 0x04; // 001: shift in under T2
+const SR_MODE_IN_PHI2:      u8 = 0x08; // 010: shift in under PHI2
+const SR_MODE_IN_EXT:       u8 = 0x0C; // 011: shift in under CB1 (external)
+const SR_MODE_OUT_FREE_T2:  u8 = 0x10; // 100: shift out free-running at T2 rate
+const SR_MODE_OUT_T2:       u8 = 0x14; // 101: shift out under T2
+const SR_MODE_OUT_PHI2:     u8 = 0x18; // 110: shift out under PHI2
+const SR_MODE_OUT_EXT:      u8 = 0x1C; // 111: shift out under CB1 (external)
 const ACR_T2_COUNT_PB6:  u8 = 0x20;
 const ACR_T1_MODE_MASK:  u8 = 0xC0;
 #[allow(dead_code)]
@@ -486,10 +487,7 @@ impl Via6522 {
         if self.sr_count >= 8 {
             self.sr_count = 0;
             self.set_ifr(IRQ_SR);
-            let self_terminating = matches!(
-                self.sr_mode(),
-                SR_MODE_IN_T2 | SR_MODE_OUT_T2 | SR_MODE_IN_EXT | SR_MODE_OUT_EXT
-            );
+            let self_terminating = !matches!(self.sr_mode(), SR_MODE_OUT_FREE_T2);
             if self_terminating {
                 self.sr_running = false;
             }
@@ -504,9 +502,6 @@ impl Via6522 {
             let (new_counter, wrapped) = self.t1_counter.overflowing_sub(cycles as u16);
             if wrapped || new_counter == 0 {
                 self.set_ifr(IRQ_T1);
-                if matches!(self.sr_mode(), SR_MODE_IN_T1 | SR_MODE_OUT_T1) {
-                    self.sr_clock();
-                }
                 if self.acr & ACR_T1_PB7_OUTPUT != 0 {
                     self.t1_pb7 = !self.t1_pb7;
                     if !self.suppress_t1_pb7_messages {
@@ -527,6 +522,11 @@ impl Via6522 {
             }
         }
 
+        // PHI2 SR modes: clock the shift register once per tick.
+        if self.sr_running && matches!(self.sr_mode(), SR_MODE_IN_PHI2 | SR_MODE_OUT_PHI2) {
+            self.sr_clock();
+        }
+
         // Timer 2 (timed mode only; PB6 pulse-counting handled in apply_message).
         if self.t2_running && self.acr & ACR_T2_COUNT_PB6 == 0 {
             let (new_counter, wrapped) = self.t2_counter.overflowing_sub(cycles as u16);
@@ -534,12 +534,12 @@ impl Via6522 {
                 if matches!(self.sr_mode(), SR_MODE_IN_T2 | SR_MODE_OUT_T2 | SR_MODE_OUT_FREE_T2) {
                     self.sr_clock();
                     // T2 reloads for the next SR clock unless the SR just finished.
-                    // For OUT_FREE_T2, sr_running stays true indefinitely.
+                    // For OUT_FREE_T2 (free-running), sr_running stays true indefinitely.
                     if self.sr_running {
                         self.t2_counter = ((self.t2_latch_hi as u16) << 8) | self.t2_latch_lo as u16;
                         return; // keep T2 running; no IRQ_T2
                     }
-                    // SR complete (self-terminating modes): fall through to stop T2.
+                    // SR complete (IN_T2 / OUT_T2 self-terminating): fall through to stop T2.
                 }
                 self.set_ifr(IRQ_T2);
                 self.t2_running = false;
@@ -1441,14 +1441,49 @@ mod tests {
     }
 
     #[test]
-    fn sr_shift_in_t1_sets_ifr_after_8_clocks() {
+    fn sr_shift_in_phi2_sets_ifr_after_8_ticks() {
         let mut via = device();
-        via.write(0xB, SR_MODE_IN_T1 | T1_MODE_FREE_RUN);
-        via.write(0x4, 5u8);
-        via.write(0x5, 0x00); // T1 start
-        via.write(0xA, 0x00); // SR shift-in start
-        for _ in 0..8 { via.tick(5); }
-        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 T1 underflows");
+        via.write(0xB, SR_MODE_IN_PHI2);
+        via.write(0xA, 0x00); // start SR shift-in
+        for _ in 0..8 { via.tick(1); }
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
+    }
+
+    #[test]
+    fn sr_shift_out_phi2_sends_cb1_cb2_messages() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_PHI2);
+        handshake(&mut via, &mut remote);
+
+        via.write(0xA, 0b10110100); // write SR to start shifting out
+
+        for _ in 0..8 { via.tick(1); }
+
+        std::thread::sleep(Duration::from_millis(1));
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+
+        let cb1_low_count = s.match_indices("CB10").count();
+        let cb1_high_count = s.match_indices("CB11").count();
+        assert_eq!(cb1_low_count, 8, "expected 8 CB10 messages, got {cb1_low_count}; output: {s}");
+        assert_eq!(cb1_high_count, 8, "expected 8 CB11 messages, got {cb1_high_count}; output: {s}");
+    }
+
+    #[test]
+    fn sr_shift_out_phi2_sets_ifr_after_8_ticks() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_PHI2);
+        via.write(0xA, 0xAA);
+        for _ in 0..8 { via.tick(1); }
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
+    }
+
+    #[test]
+    fn sr_shift_out_phi2_stops_after_8_bits() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_PHI2);
+        via.write(0xA, 0xFF);
+        for _ in 0..8 { via.tick(1); }
+        assert!(!via.sr_running, "sr_running must be false after PHI2 shift-out completes");
     }
 
     // --- T2 pulse-counting ---
