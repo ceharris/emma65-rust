@@ -126,16 +126,27 @@ struct TransportSlot {
     decoder: ViaProtocolDecoder,
     /// True once the format-negotiation handshake has completed.
     handshake_done: bool,
+    /// Last `Transport::connection_id()` value seen; used to detect reconnection.
+    last_connection_id: u64,
 }
 
 impl TransportSlot {
     fn new(transport: Box<dyn Transport>) -> Self {
+        let last_connection_id = transport.connection_id();
         Self {
             transport,
             encoder: ViaProtocolEncoder::new(),
             decoder: ViaProtocolDecoder::new(),
             handshake_done: false,
+            last_connection_id,
         }
+    }
+
+    /// Resets handshake and codec state for a new client session.
+    fn reset(&mut self) {
+        self.encoder = ViaProtocolEncoder::new();
+        self.decoder = ViaProtocolDecoder::new();
+        self.handshake_done = false;
     }
 }
 
@@ -349,6 +360,13 @@ impl Via6522 {
     /// Polls all transport connections for incoming bytes and processes decoded messages.
     fn poll_transports(&mut self) {
         for i in 0..self.transports.len() {
+            // Detect reconnection: a new client session began since the last poll.
+            let current_id = self.transports[i].transport.connection_id();
+            if current_id != self.transports[i].last_connection_id {
+                self.transports[i].last_connection_id = current_id;
+                self.transports[i].reset();
+            }
+
             while let Some(byte) = self.transports[i].transport.try_recv() {
                 let msg = self.transports[i].decoder.feed(byte);
 
@@ -1583,5 +1601,78 @@ mod tests {
             "transport 1 missing A01: {:?}", String::from_utf8_lossy(&r1));
         assert!(r2.windows(3).any(|w| w == b"A01"),
             "transport 2 missing A01: {:?}", String::from_utf8_lossy(&r2));
+    }
+
+    // --- Reconnection resets handshake ---
+
+    /// A `PipeTransport` wrapper that exposes a `reconnect()` method for testing.
+    ///
+    /// Swaps in a fresh pipe pair and bumps the `connection_id` counter so that
+    /// `poll_transports` detects a new client session and resets the protocol state.
+    struct ReconnectablePipe {
+        inner: PipeTransport,
+        id: u64,
+    }
+
+    impl ReconnectablePipe {
+        fn new(inner: PipeTransport) -> Self {
+            Self { inner, id: 0 }
+        }
+
+        fn reconnect(&mut self, new_pipe: PipeTransport) {
+            self.inner = new_pipe;
+            self.id += 1;
+        }
+    }
+
+    impl Transport for ReconnectablePipe {
+        fn try_recv(&mut self) -> Option<u8> { self.inner.try_recv() }
+        fn send(&mut self, byte: u8) -> Result<(), crate::emulator::transport::TransportError> { self.inner.send(byte) }
+        fn is_connected(&self) -> bool { self.inner.is_connected() }
+        fn connection_id(&self) -> u64 { self.id }
+        fn shutdown(&mut self) { self.inner.shutdown() }
+    }
+
+    #[test]
+    fn reconnection_resets_handshake_and_sends_state_dump() {
+        // First connection: complete the handshake.
+        let (local1, mut remote1) = PipeTransport::pair().unwrap();
+        let pipe = ReconnectablePipe::new(local1);
+        let mut via = Via6522::new();
+        via.attach_transport(Box::new(pipe));
+
+        remote1.send(0x20).unwrap(); // ASCII selector
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1); // handshake completes
+        assert!(via.transports[0].handshake_done, "first handshake must complete");
+        std::thread::sleep(Duration::from_millis(1));
+        collect_bytes(&mut remote1); // drain first state dump
+
+        // Simulate disconnect + reconnect: swap in a fresh pipe and bump the connection ID.
+        let (local2, mut remote2) = PipeTransport::pair().unwrap();
+        // SAFETY: downcast — we know slot 0 holds a ReconnectablePipe.
+        let slot_transport = via.transports[0].transport.as_mut();
+        let reconnectable = unsafe {
+            &mut *(slot_transport as *mut dyn Transport as *mut ReconnectablePipe)
+        };
+        reconnectable.reconnect(local2);
+
+        // Tick once without sending a format selector — the reconnect detection should
+        // fire but the handshake should not yet be marked done (awaiting format byte).
+        via.tick(1);
+        assert!(!via.transports[0].handshake_done,
+            "handshake_done must be false after reconnect and before new format byte");
+
+        // New client sends format selector; handshake should re-complete and new state dump sent.
+        remote2.send(0xFF).unwrap(); // binary selector
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1);
+        assert!(via.transports[0].handshake_done,
+            "handshake_done must be true after new client sends format byte");
+
+        std::thread::sleep(Duration::from_millis(1));
+        let received = collect_bytes(&mut remote2);
+        assert!(!received.is_empty(),
+            "new client must receive a state dump after reconnect handshake");
     }
 }

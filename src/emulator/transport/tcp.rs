@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,6 +18,8 @@ pub struct TcpTransport {
     bridge: ChannelBridge,
     /// Reflects whether a client is currently connected; shared with the Tokio task.
     client_connected: Arc<AtomicBool>,
+    /// Incremented each time a new client connects; shared with the Tokio task.
+    connection_counter: Arc<AtomicU64>,
     local_addr: SocketAddr,
 }
 
@@ -28,14 +30,16 @@ impl TcpTransport {
         let local_addr = listener.local_addr()?;
         let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::new();
         let client_connected = Arc::new(AtomicBool::new(false));
+        let connection_counter = Arc::new(AtomicU64::new(0));
         tokio::spawn(run_tcp_task(
             listener,
             in_tx,
             out_rx,
             shutdown_rx,
             Arc::clone(&client_connected),
+            Arc::clone(&connection_counter),
         ));
-        Ok(Self { bridge, client_connected, local_addr })
+        Ok(Self { bridge, client_connected, connection_counter, local_addr })
     }
 
     /// Returns the local address this transport is listening on.
@@ -61,6 +65,10 @@ impl Transport for TcpTransport {
         self.client_connected.load(Ordering::Acquire)
     }
 
+    fn connection_id(&self) -> u64 {
+        self.connection_counter.load(Ordering::Acquire)
+    }
+
     fn shutdown(&mut self) {
         self.bridge.shutdown();
         self.client_connected.store(false, Ordering::Release);
@@ -74,6 +82,7 @@ async fn run_tcp_task(
     out_rx: Receiver<u8>,
     mut shutdown_rx: oneshot::Receiver<()>,
     client_connected: Arc<AtomicBool>,
+    connection_counter: Arc<AtomicU64>,
 ) {
     'outer: loop {
         // Phase 1: waiting for a client
@@ -87,6 +96,7 @@ async fn run_tcp_task(
 
         // Drain any stale outbound bytes before the new client sees them.
         while out_rx.try_recv().is_ok() {}
+        connection_counter.fetch_add(1, Ordering::Release);
         client_connected.store(true, Ordering::Release);
 
         // Phase 2: connected I/O
