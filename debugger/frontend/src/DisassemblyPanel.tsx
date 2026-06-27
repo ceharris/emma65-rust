@@ -28,7 +28,7 @@ const FETCH_ROWS = 48;
 const SCROLL_EDGE = 6;
 
 /** Auto-step interval bounds in milliseconds. */
-const INTERVAL_MIN = 25;
+const INTERVAL_MIN = 10;
 const INTERVAL_MAX = 5000;
 const INTERVAL_DEFAULT = 500;
 
