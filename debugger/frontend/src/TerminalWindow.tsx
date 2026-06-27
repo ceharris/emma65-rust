@@ -9,6 +9,17 @@ export default function TerminalWindow() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "q" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        invoke("quit");
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  useEffect(() => {
     const term = new Terminal({
       cols: 80,
       rows: 24,

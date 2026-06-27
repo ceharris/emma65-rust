@@ -16,6 +16,17 @@ export default function App() {
   const [lastSnapshot, setLastSnapshot] = useState<RegisterSnapshot | null>(null);
 
   useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "q" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        invoke("quit");
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  useEffect(() => {
     const unlistenPromise = listen<SessionStatus>("session-status", (event) => {
       setStatus(event.payload);
     });
