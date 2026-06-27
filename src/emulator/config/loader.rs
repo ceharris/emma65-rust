@@ -128,7 +128,7 @@ fn load_intel_hex(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Option<u
             },
             _ => return Err(LoadError::Format(format!("Unsupported record type {}", rec_type))),
         }
-        let expected_ck = !checksum.sum() + 1;
+        let expected_ck = (!checksum.sum()).wrapping_add(1);
         let actual_ck = parse_hex_u8(&mut record)?;
         checksum.add_u8(actual_ck);
         if checksum.sum() != 0 {
