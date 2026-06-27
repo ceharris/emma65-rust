@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 
 use emma65::emulator::{
     Config, Cpu, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext,
-    PipeTransport, TransportSlot,
+    PipeTransport, StepResult, TransportSlot,
 };
 
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
@@ -70,6 +70,8 @@ pub struct RegisterSnapshot {
     pub p: u8,
     /// Bitmask of P-register bits that changed on the most recent step (0 on initial load).
     pub changed_flags: u8,
+    /// True when the CPU executed STP and is now halted; auto-step should stop.
+    pub cpu_stopped: bool,
 }
 
 /// Loads emulator config from `~/.emma/debugger/default/emulator.toml`,
@@ -167,12 +169,13 @@ fn step_into(
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
 
     let p_before = cpu.registers().p.to_byte();
-    cpu.step();
+    let result = cpu.step();
     let regs = *cpu.registers();
     let changed = p_before ^ regs.p.to_byte();
 
     *changed_flags_state.0.lock().unwrap() = changed;
 
+    let cpu_stopped = matches!(result, StepResult::Stopped);
     let snapshot = RegisterSnapshot {
         a: regs.a,
         x: regs.x,
@@ -181,6 +184,7 @@ fn step_into(
         pc: regs.pc,
         p: regs.p.to_byte(),
         changed_flags: changed,
+        cpu_stopped,
     };
 
     let _ = app.emit("debugger-halted", regs.pc);
@@ -208,6 +212,7 @@ fn get_registers(
         pc: regs.pc,
         p: regs.p.to_byte(),
         changed_flags,
+        cpu_stopped: false,
     })
 }
 
