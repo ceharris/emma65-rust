@@ -436,30 +436,32 @@ impl Via6522 {
             ViaProtocolMessage::ControlSignalChange { signals, state } => {
                 if signals & 0x02 != 0 { // CA1
                     let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
-                    if state == pos_edge { self.set_ifr(IRQ_CA1); }
+                    if self.ca1 != state && state == pos_edge { self.set_ifr(IRQ_CA1); }
                     self.ca1 = state;
                 }
                 if signals & 0x01 != 0 { // CA2 (when configured as input)
                     let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
                     if ca2_mode < 4 { // input modes
                         let pos_edge = ca2_mode & 0x02 != 0;
-                        if state == pos_edge { self.set_ifr(IRQ_CA2); }
+                        if self.ca2 != state && state == pos_edge { self.set_ifr(IRQ_CA2); }
                         self.ca2 = state;
                     }
                 }
                 if signals & 0x08 != 0 { // CB1
                     let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
-                    if state == pos_edge { self.set_ifr(IRQ_CB1); }
-                    self.cb1 = state;
-                    if state && matches!(self.sr_mode(), SR_MODE_IN_EXT | SR_MODE_OUT_EXT) {
-                        self.sr_clock();
+                    if self.cb1 != state {
+                        if state == pos_edge { self.set_ifr(IRQ_CB1); }
+                        self.cb1 = state;
+                        if state && matches!(self.sr_mode(), SR_MODE_IN_EXT | SR_MODE_OUT_EXT) {
+                            self.sr_clock();
+                        }
                     }
                 }
                 if signals & 0x04 != 0 { // CB2 (when configured as input)
                     let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
                     if cb2_mode < 4 { // input modes
                         let pos_edge = cb2_mode & 0x02 != 0;
-                        if state == pos_edge { self.set_ifr(IRQ_CB2); }
+                        if self.cb2 != state && state == pos_edge { self.set_ifr(IRQ_CB2); }
                         self.cb2 = state;
                     }
                 }
@@ -1331,6 +1333,210 @@ mod tests {
             "transport 1 missing state dump: {:?}", String::from_utf8_lossy(&r1));
         assert!(r2.windows(3).any(|w| w == b"A00"),
             "transport 2 missing state dump: {:?}", String::from_utf8_lossy(&r2));
+    }
+
+    // --- Interrupts for CA1, CA2, CB1, CB2  ---
+
+    const PCR_CB1_INPUT_NEGATIVE_EDGE: u8 = 0;
+    const PCR_CB1_INPUT_POSITIVE_EDGE: u8 = PCR_CB1_EDGE;
+    const PCR_CA1_INPUT_NEGATIVE_EDGE: u8 = 0;
+    const PCR_CA1_INPUT_POSITIVE_EDGE: u8 = PCR_CA1_EDGE;
+
+    const PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE: u8 = 0b00100000;
+    const PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE: u8 = 0b01100000;
+    const PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE: u8 = 0b00000010;
+    const PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE: u8 = 0b00000110;
+
+    #[test]
+    fn ca1_negative_edge_triggers_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca1 = true;
+        via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_ne!(int_flags & IRQ_CA1, 0);
+    }
+
+    #[test]
+    fn ca1_negative_edge_does_not_trigger_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca1 = false;
+        via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_eq!(int_flags & IRQ_CA1, 0);
+    }
+
+    #[test]
+    fn ca1_positive_edge_triggers_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca1 = false;
+        via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: true });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_ne!(int_flags & IRQ_CA1, 0);
+    }
+
+    #[test]
+    fn ca1_positive_edge_does_not_trigger_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca1 = true;
+        via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: true });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_eq!(int_flags & IRQ_CA1, 0);
+    }
+
+    #[test]
+    fn cb1_negative_edge_triggers_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb1 = true;
+        via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_ne!(int_flags & IRQ_CB1, 0);
+    }
+
+    #[test]
+    fn cb1_negative_edge_does_not_trigger_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb1 = false;
+        via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_eq!(int_flags & IRQ_CB1, 0);
+    }
+
+    #[test]
+    fn cb1_positive_edge_triggers_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb1 = false;
+        via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_ne!(int_flags & IRQ_CB1, 0);
+    }
+
+    #[test]
+    fn cb1_positive_edge_does_not_trigger_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb1 = true;
+        via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_eq!(int_flags & IRQ_CB1, 0);
+    }
+
+    #[test]
+    fn ca2_negative_edge_triggers_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_ne!(int_flags & IRQ_CA2, 0);
+    }
+
+    #[test]
+    fn ca2_negative_edge_does_not_trigger_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = false;
+        via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_eq!(int_flags & IRQ_CA2, 0);
+    }
+
+    #[test]
+    fn ca2_positive_edge_triggers_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = false;
+        via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_ne!(int_flags & IRQ_CA2, 0);
+    }
+
+    #[test]
+    fn ca2_positive_edge_does_not_trigger_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_eq!(int_flags & IRQ_CA2, 0);
+    }
+
+    #[test]
+    fn cb2_negative_edge_triggers_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = true;
+        via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_ne!(int_flags & IRQ_CB2, 0);
+    }
+
+    #[test]
+    fn cb2_negative_edge_does_not_trigger_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = false;
+        via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_eq!(int_flags & IRQ_CB2, 0);
+    }
+
+    #[test]
+    fn cb2_positive_edge_triggers_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = false;
+        via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_ne!(int_flags & IRQ_CB2, 0);
+    }
+
+    #[test]
+    fn cb2_positive_edge_does_not_trigger_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = true;
+        via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
+        via.tick(2);
+        let int_flags = via.read(0xd);
+        assert_eq!(int_flags & IRQ_CB2, 0);
     }
 
     // --- Shift register ---
