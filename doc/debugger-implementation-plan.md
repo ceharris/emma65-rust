@@ -207,7 +207,8 @@ Auto-step halts when a breakpoint is reached.
 **Scope:**
 - Gutter column in the disassembly view; clicking toggles a
   breakpoint at that address.
-- Active breakpoints display a filled circle (●).
+- Active breakpoints display a filled circle (●). The filled circle is 
+  displayed with dark red foreground color.
 - The backend checks breakpoints after each auto-step tick.
   Execution halts when a breakpoint address is reached.
 - Minimal UI: toggle only (no disable, no context menu yet).
