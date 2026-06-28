@@ -8,14 +8,12 @@ pub mod status;
 pub mod variant;
 
 use std::collections::HashSet;
-use crate::emulator::bus::Bus;
+use crate::emulator::bus::{Bus, BusOp, InterruptController};
 use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use crate::emulator::cpu::status::StatusRegister;
 use crate::emulator::cpu::variant::{CpuVariant, InvalidOpcodePolicy};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::{ClockSpeed, StepResult};
-use crate::emulator::bus::region::BusOp;
-use crate::emulator::interrupt::InterruptController;
 use crate::watch::{Operand, WatchContext, WatchEvaluator};
 
 const STACK_BASE: u16 = 0x0100;
@@ -1078,7 +1076,7 @@ impl CpuBuilder {
 mod tests {
     use super::*;
     use crate::emulator::bus::Bus;
-    use crate::emulator::bus::region::AddressRange;
+    use crate::emulator::bus::AddressRange;
 
     // Build a CPU with 64KB RAM and a reset vector pointing to `start`.
     fn make_cpu(start: u16) -> Cpu {
@@ -1675,7 +1673,7 @@ mod tests {
         cpu.bus.write(IRQ_VECTOR, 0x00).unwrap();
         cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
         cpu.regs.p.remove(StatusRegister::I);
-        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
         cpu.step();
         assert_eq!(cpu.regs.pc, 0x0400);
         assert!(cpu.regs.p.contains(StatusRegister::I));
@@ -1686,7 +1684,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
         cpu.regs.p.insert(StatusRegister::I);
-        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
         cpu.step();
         // NOP executes normally; PC advances past it
         assert_eq!(cpu.regs.pc, 0x0201);
@@ -1699,7 +1697,7 @@ mod tests {
         cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
         cpu.regs.p = StatusRegister::UNUSED | StatusRegister::C; // I clear, C set
         let s_before = cpu.regs.s;
-        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
         cpu.step();
         // 3 bytes pushed: PC hi, PC lo, P
         assert_eq!(cpu.regs.s, s_before.wrapping_sub(3));
@@ -1715,7 +1713,7 @@ mod tests {
     #[test]
     fn multi_source_irq_stays_active_after_partial_release() {
         let mut cpu = make_cpu(0x0200);
-        use crate::emulator::interrupt::IrqSource;
+        use crate::emulator::bus::IrqSource;
         cpu.interrupts_mut().assert_irq(IrqSource(1));
         cpu.interrupts_mut().assert_irq(IrqSource(2));
         cpu.interrupts_mut().release_irq(IrqSource(1));
@@ -1762,7 +1760,7 @@ mod tests {
         cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
         cpu.regs.p.remove(StatusRegister::I);
         cpu.interrupts_mut().signal_nmi();
-        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
         cpu.step();
         // Should vector through NMI, not IRQ
         assert_eq!(cpu.regs.pc, 0x0300);
@@ -1779,7 +1777,7 @@ mod tests {
         write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
         cpu.step(); // execute WAI — sets waiting=true
         assert!(matches!(cpu.step(), StepResult::Waiting)); // no interrupt yet
-        cpu.interrupts_mut().assert_irq(crate::emulator::interrupt::IrqSource(1));
+        cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
         cpu.step(); // wakes and services IRQ
         assert_eq!(cpu.regs.pc, 0x0400);
         assert!(!cpu.is_waiting());

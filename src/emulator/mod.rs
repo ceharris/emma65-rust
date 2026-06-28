@@ -10,27 +10,23 @@ pub mod device;
 pub mod error;
 /// Execution model: clock speed, step results, and free-running run handle.
 pub mod exec;
-/// IRQ and NMI interrupt controller.
-pub mod interrupt;
 /// Transport abstraction and implementations for device IO.
 pub mod transport;
 mod config;
 mod session;
 
-pub use bus::region::{AddressRange, BusOp};
-pub use bus::{Bus, BusConfig, RomWritePolicy, UnmappedPolicy};
+pub use bus::{AddressRange, Bus, BusOp, BusConfig, InterruptController, IrqSource, RomWritePolicy, UnmappedPolicy};
 pub use bus::trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
-pub use cpu::{Cpu, CpuBuilder, Registers, map_register_name, map_flag_name};
+pub use cpu::{map_flag_name, map_register_name, Cpu, CpuBuilder, Registers};
 pub use cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
 pub use cpu::status::StatusRegister;
 pub use cpu::variant::{CpuVariant, InvalidOpcodePolicy};
-pub use device::{DeviceId, DeviceEvent, ErrorSender, ErrorReceiver, IoDevice, device_event_channel};
+pub use device::{device_event_channel, DeviceEvent, DeviceId, ErrorReceiver, ErrorSender, IoDevice};
 pub use device::{Acia6551, Console, Mc6850, Via6522};
 pub use device::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
-pub use disasm::{Disassembler, DisassembledLine};
+pub use disasm::{DisassembledLine, Disassembler};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
-pub use exec::{ClockSpeed, RunHandle, StepResult, run, step_over, step_return};
-pub use interrupt::{InterruptController, IrqSource};
-pub use transport::{Transport, TransportError, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport};
-pub use session::{EmulatorSession};
-pub use config::{Config, BuildError, CpuVariantSpec, DeviceSpec, DeviceModule, DeviceModuleError, InstantiationContext, DeviceRegistry, RamModule, RomModule, TransportSpec, TransportSpecFormat, TransportSlot};
+pub use exec::{run, step_over, step_return, ClockSpeed, RunHandle, StepResult};
+pub use transport::{PipeTransport, PtyTransport, TcpTransport, Transport, TransportError, UnixSocketTransport};
+pub use session::EmulatorSession;
+pub use config::{BuildError, Config, CpuVariantSpec, DeviceModule, DeviceModuleError, DeviceRegistry, DeviceSpec, InstantiationContext, RamModule, RomModule, TransportSlot, TransportSpec, TransportSpecFormat};

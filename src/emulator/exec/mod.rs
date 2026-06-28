@@ -291,8 +291,7 @@ mod tests {
 
     // --- free-run tests ---
 
-    use crate::emulator::bus::Bus;
-    use crate::emulator::bus::region::AddressRange;
+    use crate::emulator::bus::{AddressRange, Bus};
     use crate::emulator::cpu::{Cpu, CpuBuilder};
     use crate::emulator::cpu::variant::CpuVariant;
 
@@ -402,7 +401,7 @@ mod tests {
     // --- step_over / step_return helpers ---
 
     fn make_cpu_at(start: u16) -> Cpu {
-        use crate::emulator::bus::region::AddressRange;
+        use crate::emulator::bus::AddressRange;
         use crate::emulator::cpu::variant::CpuVariant;
         let mut bus = Bus::config()
             .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)

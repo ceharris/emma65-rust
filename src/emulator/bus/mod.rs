@@ -1,9 +1,12 @@
+/// IRQ and NMI interrupt controller.
+mod interrupt;
 /// Address ranges and bus operation types.
-pub mod region;
+mod region;
 /// Bus tracing: callback trait, record type, and binary trace writer.
 pub mod trace;
 
 use rand::RngExt;
+pub use interrupt::{InterruptController, IrqSource};
 pub use region::{AddressRange, BusOp};
 pub use trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
 

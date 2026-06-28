@@ -33,13 +33,12 @@ src/
     config.rs             — AppConfig, CliArgs, apply_default_if_unconfigured
   emulator/
     mod.rs                — re-exports public API surface
-    bus/                  — Bus, BusConfig, address regions, bus tracing
+    bus/                  — Bus, BusConfig, address regions, bus tracing, Interrupt controller, IrqSource
     cpu/                  — Cpu, Registers, opcode decode, status register, variant
     device/               — IoDevice trait, built-in devices (Console, Acia6551, Mc6850, Via6522)
     disasm/               — Disassembler
     error.rs              — BusConfigError, BusError, CpuBuildError, ExecError
     exec/                 — ClockSpeed, StepResult, RunHandle, run()
-    interrupt.rs          — InterruptController, IrqSource
     transport/            — Transport trait, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport
     session.rs            — EmulatorSession (owns Cpu + ErrorReceiver)
     config/               — configuration loading and device module registry (see below)

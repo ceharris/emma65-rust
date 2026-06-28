@@ -102,7 +102,7 @@ fn format_operand(decoded: &DecodedOp, raw: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::emulator::bus::{Bus, BusConfig};
-    use crate::emulator::bus::region::AddressRange;
+    use crate::emulator::bus::AddressRange;
 
     fn make_bus(start: u16, bytes: &[u8]) -> Bus {
         let mut bus = BusConfig::new()

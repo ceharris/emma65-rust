@@ -1,5 +1,5 @@
 use thiserror::Error;
-use crate::emulator::bus::region::{AddressRange, BusOp};
+use crate::emulator::bus::{AddressRange, BusOp};
 use crate::emulator::device::DeviceId;
 
 /// A fatal error that halts CPU execution and is returned via `StepResult::Error`.
