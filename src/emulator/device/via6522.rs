@@ -88,9 +88,6 @@ const IRQ_T1:  u8 = 0x40;
 const IRQ_ANY: u8 = 0x80;
 
 // --- ACR masks ---
-#[allow(dead_code)]
-const ACR_T1_PB7_LATCH:  u8 = 0x01; // reserved for future latch-enable use
-const ACR_T1_PB7_OUTPUT: u8 = 0x02;
 const ACR_SR_MODE_MASK:     u8 = 0x1C;
 const SR_MODE_DISABLED:     u8 = 0x00; // ACR bits 4–2 = 000
 const SR_MODE_IN_T2:        u8 = 0x04; // 001: shift in under T2
@@ -100,10 +97,8 @@ const SR_MODE_OUT_FREE_T2:  u8 = 0x10; // 100: shift out free-running at T2 rate
 const SR_MODE_OUT_T2:       u8 = 0x14; // 101: shift out under T2
 const SR_MODE_OUT_PHI2:     u8 = 0x18; // 110: shift out under PHI2
 const SR_MODE_OUT_EXT:      u8 = 0x1C; // 111: shift out under CB1 (external)
-const ACR_T2_COUNT_PB6:  u8 = 0x20;
-const ACR_T1_MODE_MASK:  u8 = 0xC0;
-#[allow(dead_code)]
-const ACR_T1_FREE_RUN:   u8 = 0x40; // reserved: use ACR_T1_MODE_MASK comparison instead
+const ACR_T1_PB7_OUTPUT:    u8 = 0x80; // Timer 1 square wave output mode
+const ACR_T2_PB6_COUNT:     u8 = 0x20; // Timer 2 pulse count mode
 
 // --- PCR masks ---
 const PCR_CA1_EDGE:  u8 = 0x01;
@@ -418,7 +413,7 @@ impl Via6522 {
                     if triggered { self.set_ifr(IRQ_CB1); }
                 }
                 // T2 pulse-counting mode: count negative PB6 transitions.
-                if self.acr & ACR_T2_COUNT_PB6 != 0 && self.t2_running {
+                if self.acr & ACR_T2_PB6_COUNT != 0 && self.t2_running {
                     let old_pb6 = (old >> 6) & 1 != 0;
                     let new_pb6 = (value >> 6) & 1 != 0;
                     if old_pb6 && !new_pb6 {
@@ -548,7 +543,7 @@ impl Via6522 {
         }
 
         // Timer 2 (timed mode only; PB6 pulse-counting handled in apply_message).
-        if self.t2_running && self.acr & ACR_T2_COUNT_PB6 == 0 {
+        if self.t2_running && self.acr & ACR_T2_PB6_COUNT == 0 {
             let (new_counter, wrapped) = self.t2_counter.overflowing_sub(cycles as u16);
             if wrapped || new_counter == 0 {
                 if matches!(self.sr_mode(), SR_MODE_IN_T2 | SR_MODE_OUT_T2 | SR_MODE_OUT_FREE_T2) {
@@ -1715,7 +1710,7 @@ mod tests {
     #[test]
     fn t2_pulse_count_pb6_neg_transition_decrements_counter() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 5u8);
         via.write(0x9, 0x00); // T2 = 5, starts
         handshake(&mut via, &mut remote);
@@ -1731,7 +1726,7 @@ mod tests {
     fn t2_pulse_count_fires_irq_on_underflow() {
         let (mut via, mut remote) = device_with_pipe();
         via.write(0xE, 0xA0); // enable T2 IRQ
-        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 3u8);
         via.write(0x9, 0x00); // T2 = 3
         handshake(&mut via, &mut remote);
@@ -1749,7 +1744,7 @@ mod tests {
     #[test]
     fn t2_pulse_count_ignores_positive_transitions() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 5u8);
         via.write(0x9, 0x00);
         handshake(&mut via, &mut remote);
