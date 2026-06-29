@@ -88,9 +88,6 @@ const IRQ_T1:  u8 = 0x40;
 const IRQ_ANY: u8 = 0x80;
 
 // --- ACR masks ---
-#[allow(dead_code)]
-const ACR_T1_PB7_LATCH:  u8 = 0x01; // reserved for future latch-enable use
-const ACR_T1_PB7_OUTPUT: u8 = 0x02;
 const ACR_SR_MODE_MASK:     u8 = 0x1C;
 const SR_MODE_DISABLED:     u8 = 0x00; // ACR bits 4–2 = 000
 const SR_MODE_IN_T2:        u8 = 0x04; // 001: shift in under T2
@@ -100,10 +97,8 @@ const SR_MODE_OUT_FREE_T2:  u8 = 0x10; // 100: shift out free-running at T2 rate
 const SR_MODE_OUT_T2:       u8 = 0x14; // 101: shift out under T2
 const SR_MODE_OUT_PHI2:     u8 = 0x18; // 110: shift out under PHI2
 const SR_MODE_OUT_EXT:      u8 = 0x1C; // 111: shift out under CB1 (external)
-const ACR_T2_COUNT_PB6:  u8 = 0x20;
-const ACR_T1_MODE_MASK:  u8 = 0xC0;
-#[allow(dead_code)]
-const ACR_T1_FREE_RUN:   u8 = 0x40; // reserved: use ACR_T1_MODE_MASK comparison instead
+const ACR_T1_PB7_OUTPUT:    u8 = 0x80; // Timer 1 square wave output mode
+const ACR_T2_PB6_COUNT:     u8 = 0x20; // Timer 2 pulse count mode
 
 // --- PCR masks ---
 const PCR_CA1_EDGE:  u8 = 0x01;
@@ -297,12 +292,13 @@ impl Via6522 {
     /// Reads the effective state of port B: output pins from ORB, input pins from input_b.
     /// PB7 reflects the T1 toggle state when ACR enables T1 PB7 output.
     fn read_port_b(&self) -> u8 {
-        let orb = if self.acr & ACR_T1_PB7_OUTPUT != 0 {
-            (self.orb & 0x7F) | if self.t1_pb7 { 0x80 } else { 0 }
-        } else {
-            self.orb
-        };
-        (orb & self.ddrb) | (self.input_b & !self.ddrb)
+        // Fix (issue #99): square wave output mode takes priority over input/output mode
+        // selected by DDRB bit 7.
+        let mut orb = (self.orb & self.ddrb) | (self.input_b & !self.ddrb);
+        if self.acr & ACR_T1_PB7_OUTPUT != 0 {
+            orb = (orb & 0x7f) | if self.t1_pb7 { 0x80 } else { 0 };
+        }
+        orb
     }
 
     /// Reads the effective state of port A: output pins from ORA, input pins from input_a.
@@ -418,7 +414,7 @@ impl Via6522 {
                     if triggered { self.set_ifr(IRQ_CB1); }
                 }
                 // T2 pulse-counting mode: count negative PB6 transitions.
-                if self.acr & ACR_T2_COUNT_PB6 != 0 && self.t2_running {
+                if self.acr & ACR_T2_PB6_COUNT != 0 && self.t2_running {
                     let old_pb6 = (old >> 6) & 1 != 0;
                     let new_pb6 = (value >> 6) & 1 != 0;
                     if old_pb6 && !new_pb6 {
@@ -530,7 +526,7 @@ impl Via6522 {
                         self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: pb });
                     }
                 }
-                if self.acr & ACR_T1_MODE_MASK == T1_MODE_FREE_RUN {
+                if self.acr & T1_MODE_FREE_RUN != 0 {
                     // Reload from latch; account for any cycles past zero.
                     self.t1_counter = self.t1_latch;
                 } else {
@@ -548,7 +544,7 @@ impl Via6522 {
         }
 
         // Timer 2 (timed mode only; PB6 pulse-counting handled in apply_message).
-        if self.t2_running && self.acr & ACR_T2_COUNT_PB6 == 0 {
+        if self.t2_running && self.acr & ACR_T2_PB6_COUNT == 0 {
             let (new_counter, wrapped) = self.t2_counter.overflowing_sub(cycles as u16);
             if wrapped || new_counter == 0 {
                 if matches!(self.sr_mode(), SR_MODE_IN_T2 | SR_MODE_OUT_T2 | SR_MODE_OUT_FREE_T2) {
@@ -1083,13 +1079,42 @@ mod tests {
     fn t1_pb7_toggles_on_underflow_when_enabled() {
         let mut via = device();
         via.write(0xB, ACR_T1_PB7_OUTPUT | T1_MODE_FREE_RUN);
-        via.write(0x2, 0x80); // PB7 = output
-        via.write(0x4, 5u8);
-        via.write(0x5, 0x00);
+        via.write(0x4, 5);
+        via.write(0x5, 0);
         let before = via.read_port_b() & 0x80;
         via.tick(5);
         let after = via.read_port_b() & 0x80;
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn t1_pb7_overrides_orb7() {
+        let (mut via, mut remote) = device_with_pipe();
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1); // process handshake
+
+        let received = collect_bytes(&mut remote);
+        // The state dump sends initial state; ORB write sends "B00".
+        assert!(received.windows(3).any(|w| w == b"B00"),
+                "expected B00 in {:?}", String::from_utf8_lossy(&received));
+
+        via.write(0xB, ACR_T1_PB7_OUTPUT | T1_MODE_FREE_RUN);
+        via.write(0x4, 5);
+        via.write(0x5, 0);
+
+        via.tick(5);
+        let received = collect_bytes(&mut remote);
+        // When the timer reaches zero, port B output should be emitted with PB7 = 1
+        assert!(received.windows(3).any(|w| w == b"B80"),
+                "expected B80 in {:?}", String::from_utf8_lossy(&received));
+
+        via.tick(5);
+        let received = collect_bytes(&mut remote);
+        // When the timer reaches zero again, port B output should be emitted with PB7 = 0
+        assert!(received.windows(3).any(|w| w == b"B00"),
+                "expected B80 in {:?}", String::from_utf8_lossy(&received));
+
     }
 
     // --- Port output sends protocol message ---
@@ -1715,7 +1740,7 @@ mod tests {
     #[test]
     fn t2_pulse_count_pb6_neg_transition_decrements_counter() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 5u8);
         via.write(0x9, 0x00); // T2 = 5, starts
         handshake(&mut via, &mut remote);
@@ -1731,7 +1756,7 @@ mod tests {
     fn t2_pulse_count_fires_irq_on_underflow() {
         let (mut via, mut remote) = device_with_pipe();
         via.write(0xE, 0xA0); // enable T2 IRQ
-        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 3u8);
         via.write(0x9, 0x00); // T2 = 3
         handshake(&mut via, &mut remote);
@@ -1749,7 +1774,7 @@ mod tests {
     #[test]
     fn t2_pulse_count_ignores_positive_transitions() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write(0xB, ACR_T2_COUNT_PB6);
+        via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 5u8);
         via.write(0x9, 0x00);
         handshake(&mut via, &mut remote);
