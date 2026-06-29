@@ -292,12 +292,13 @@ impl Via6522 {
     /// Reads the effective state of port B: output pins from ORB, input pins from input_b.
     /// PB7 reflects the T1 toggle state when ACR enables T1 PB7 output.
     fn read_port_b(&self) -> u8 {
-        let orb = if self.acr & ACR_T1_PB7_OUTPUT != 0 {
-            (self.orb & 0x7F) | if self.t1_pb7 { 0x80 } else { 0 }
-        } else {
-            self.orb
-        };
-        (orb & self.ddrb) | (self.input_b & !self.ddrb)
+        // Fix (issue #99): square wave output mode takes priority over input/output mode
+        // selected by DDRB bit 7.
+        let mut orb = (self.orb & self.ddrb) | (self.input_b & !self.ddrb);
+        if self.acr & ACR_T1_PB7_OUTPUT != 0 {
+            orb = (orb & 0x7f) | if self.t1_pb7 { 0x80 } else { 0 };
+        }
+        orb
     }
 
     /// Reads the effective state of port A: output pins from ORA, input pins from input_a.
@@ -525,7 +526,7 @@ impl Via6522 {
                         self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: pb });
                     }
                 }
-                if self.acr & ACR_T1_MODE_MASK == T1_MODE_FREE_RUN {
+                if self.acr & T1_MODE_FREE_RUN != 0 {
                     // Reload from latch; account for any cycles past zero.
                     self.t1_counter = self.t1_latch;
                 } else {
@@ -1078,14 +1079,45 @@ mod tests {
     fn t1_pb7_toggles_on_underflow_when_enabled() {
         let mut via = device();
         via.write(0xB, ACR_T1_PB7_OUTPUT | T1_MODE_FREE_RUN);
-        via.write(0x2, 0x80); // PB7 = output
-        via.write(0x4, 5u8);
-        via.write(0x5, 0x00);
+        via.write(0x4, 5);
+        via.write(0x5, 0);
         let before = via.read_port_b() & 0x80;
         via.tick(5);
         let after = via.read_port_b() & 0x80;
         assert_ne!(before, after);
     }
+
+    #[test]
+    fn t1_pb7_overrides_orb7() {
+        let (mut via, mut remote) = device_with_pipe();
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1); // process handshake
+
+        let received = collect_bytes(&mut remote);
+        // The state dump sends initial state; ORB write sends "B00".
+        assert!(received.windows(3).any(|w| w == b"B00"),
+                "expected B00 in {:?}", String::from_utf8_lossy(&received));
+
+        via.write(0xB, ACR_T1_PB7_OUTPUT | T1_MODE_FREE_RUN);
+        via.write(0x4, 5);
+        via.write(0x5, 0);
+
+        via.tick(5);
+        let received = collect_bytes(&mut remote);
+        // When the timer reaches zero, port B output should be emitted with PB7 = 1
+        assert!(received.windows(3).any(|w| w == b"B80"),
+                "expected B80 in {:?}", String::from_utf8_lossy(&received));
+
+        via.tick(5);
+        let received = collect_bytes(&mut remote);
+        // When the timer reaches zero again, port B output should be emitted with PB7 = 0
+        assert!(received.windows(3).any(|w| w == b"B00"),
+                "expected B80 in {:?}", String::from_utf8_lossy(&received));
+
+    }
+
+
 
     // --- Port output sends protocol message ---
 
