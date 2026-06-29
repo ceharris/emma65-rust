@@ -625,6 +625,29 @@ whenever the CPU is not in free-running mode.
 
 --- 
 
+### 25. Toggle Terminal Visibility Using Key Binding
+
+A user can toggle the visibility of the terminal window using a
+VSCode-compatible key binding. When the emulator is a launched, the terminal
+is hidden until made visible by the user.
+
+**Scope**:
+
+- Add a VSCode-compatible key binding (`` Ctrl+Shift+` ``) that toggles
+  visibility of the terminal window. The key binding should be effective no
+  matter which window of the debugger application has focus.
+- Configure the terminal window such that it is hidden upon creation.
+
+**Acceptance Criteria**:
+
+- On launch of the debugger app, the terminal window is not visible
+- Pressing `` Ctrl+Shift+` `` displays and hides the terminal window when the
+  main debugger window has focus
+- Pressing `` Ctrl+Shift+` `` hides the terminal window when the terminal
+  window has focus
+
+---
+
 Story Dependency Notes
 ----------------------
 
@@ -671,3 +694,4 @@ GitHub Issues
 | 22    | Reset CPU                                          | #91   |
 | 23    | CPU and Bus View                                   | #97   |
 | 24    | Trigger NMI and Assert/Release IRQ from the UI     | #98   | 
+| 25    | Toggle Terminal Visibility Using Key Binding       | #101  |
