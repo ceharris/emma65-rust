@@ -67,8 +67,9 @@ advantage of this:
 │   Memory View   │                   │              │
 │                 │  Disassembly View ├──────────────┤
 ├─────────────────┤                   │    Stack     │
-│                 │                   │              │
-│  Watchpoints    │                   │              │
+│                 │                   │              │ 
+│  Watchpoints    │                   ├──────────────┤
+│                 │                   │ CPU and Bus  │
 └─────────────────┴───────────────────┴──────────────┘
 ```
 
@@ -77,7 +78,8 @@ advantage of this:
   (bottom). The wider column gives watchpoint expressions more horizontal
   space than the right column would allow.
 - **Center column:** Disassembly view with integrated execution controls.
-- **Right column:** Registers (top), Stack (bottom).
+- **Right column:** Registers (top), Stack (middle), CPU and Bus status 
+  (bottom)
 
 Panels are resizable at their borders. Each panel may be collapsed to
 give more space to adjacent panels.
@@ -251,6 +253,20 @@ the chevron following the new SP position.
 
 Approximately 8 word pairs (16 bytes) are visible, centered on the
 current stack pointer.
+
+CPU and Bus View
+----------------
+
+Three labeled indicator icons, a cycle counter field, and a row for control 
+buttons.
+
+┌──────────────────┐
+│ ● Run/Stop       │
+│ ● NMI   ● IRO    │
+│ 1,999,999 cycles │
+│          {Reset} │
+└──────────────────┘
+
 
 Watchpoint View
 ---------------

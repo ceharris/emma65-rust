@@ -512,6 +512,119 @@ The user can view stack cell values in their preferred numeric base.
 
 ---
 
+### 22. Reset CPU
+
+As a developer debugging 6502 code, I want a **Reset CPU** button in the 
+Disassembly view header and a corresponding key binding, so that I can restart
+execution from the reset vector without closing and reopening the debugger.
+
+**Acceptance Criteria**:
+- A **Reset** button appears in the Disassembly view header, alongside the 
+  existing Step Into button.
+- Clicking Reset calls a new `reset_cpu` Tauri command that invokes 
+  `cpu.reset()` on the backend.
+- The key binding **Shift+F5** triggers the same reset action.
+- After reset, the disassembly view scrolls to the new PC (the reset vector 
+  target) and the register panel updates to reflect post-reset state.
+- While auto-step is running, clicking Reset (or pressing Shift+F5) stops 
+  auto-step and then resets.
+- The Reset button and key binding are disabled while a single step is in
+  progress.
+
+**Implementation Notes**:
+- Backend: add a `reset_cpu` Tauri command in `debugger/src-tauri/src/lib.rs`
+  that locks `CpuState`, calls `cpu.reset()`, resets `ChangedFlagsState` to 
+  0, emits `debugger-halted` with the new PC, and returns a `RegisterSnapshot`.
+- Frontend: add the button to the first toolbar row in `DisassemblyPanel.tsx`,
+  next to Step Into; register Shift+F5 in the existing keydown handler; 
+  stop auto-step before resetting.
+
+---
+
+### 23. CPU and Bus View
+
+The user can view the state of the CPU and key bus signals.
+
+**Scope**:
+
+- Right column (bottom) of the debugger layout: CPU and Bus view showing:
+  - A labeled CPU run/stop/step indicator; a filled circle with green, red, or
+    blue foreground color respectively.
+  - An NMI triggered indicator; an open circle (when not triggered) or filled
+    circle (when triggered). Yellow foreground color.
+  - An IRQ asserted indicator; an open circle (when not asserted) or filled
+    circle (when one or more devices are asserting IRQ). Yellow foreground
+    color.
+  - The current count of CPU cycles executed since the last reset, displayed
+    with thousands separators (e.g. commas)
+- See `doc/debugger-ui-spec.md` for position in the overall layout, and the
+  detailed design for the view panel
+
+**Acceptance Criteria**:
+
+- View updates on each step, and refreshes periodically when the CPU is
+  free-running
+- While a step is executing (including while in Auto-Step mode), the CPU
+  Run/Stop/Step indicator displays the Step indicator; filled circle, blue
+  color. When a step is completed, the indicator displays the Stop indicator;
+  filled circle, red color. Thus, the indicator cycles between the two
+  different indicator states at each step.
+- The Reset button added in Story 22 (Reset CPU) is relocated to the CPU and
+  Bus view. The button is positioned at the bottom right of the view panel
+  layout
+- NMI indicator displays the "not triggered" status -- at this point in the
+  development project, there is no means for the user to trigger NMI.
+- A test program that causes IRQ to be asserted (e.g. via an I/O device)
+  causes the indicator to be illuminated. When the test program executes an
+  instruction that causes IRQ to be released, the indicator is no longer
+  illuminated.
+
+**Implementation Notes**:
+
+- NMI status indicator reflects the status returned by
+  `InterruptController::nmi_pending`.
+- IRQ indicator reflects the status returned by
+  `InterruptController::irq_active`.
+- The view panel should be implemented with placeholders in the layout for
+  button controls that will allow the user to trigger NMI or assert/release
+  IRQ. These buttons will be positioned in a row with the Reset button. A
+  subsequent story will add the NMI and IRQ buttons and underlying support.
+
+---
+
+### 24. Trigger NMI and Assert/Release IRQ from the UI
+
+The user can trigger NMI or assert/release IRQ using button controls in the UI
+whenever the CPU is not in free-running mode.
+
+**Scope**:
+
+- Two additional buttons in the button row of the CPU and Bus view.
+- NMI button acts a simple momentary trigger control.
+- IRQ button acts a push-button toggle
+- Both buttons are disabled when the CPU is in free-running mode.
+
+**Acceptance Criteria**:
+
+- `NMI` and `IRQ` buttons appear in the bottom row of the CPU and Bus view
+  panel.
+- Clicking the `NMI` button causes the CPU to begin execution at the NMI
+  vector address in a subsequent step. When NMI has been triggered, the NMI
+  status indicator illuminates, and subsequently clears when the CPU
+  services/acknowledges the pending NMI
+- Activating the `IRQ` toggle causes the CPU to begin execution at the IRQ
+  vector address in a subsequent step. The IRQ status indicator tracks the
+  toggled state of the UI control correctly, even a device concurrently
+  asserts or releases IRQ.
+
+**Implementation Notes**:
+
+- The NMI trigger control calls `signal_nmi` on the `InterruptController`.
+- The IRQ toggle control calls `assert_irq` on the `InterruptController` when
+  activated. When deactivated, it calls `release_irq`.
+
+--- 
+
 Story Dependency Notes
 ----------------------
 
@@ -555,3 +668,6 @@ GitHub Issues
 | 19    | Watchpoints — View Variables                       | #74   |
 | 20    | Watchpoints — Edit Variable Values                 | #75   |
 | 21    | Stack View — Value Radix Cycling                   | #82   |
+| 22    | Reset CPU                                          | #91   |
+| 23    | CPU and Bus View                                   | #97   |
+| 24    | Trigger NMI and Assert/Release IRQ from the UI     | #98   | 
