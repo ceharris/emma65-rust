@@ -1117,8 +1117,6 @@ mod tests {
 
     }
 
-
-
     // --- Port output sends protocol message ---
 
     #[test]
