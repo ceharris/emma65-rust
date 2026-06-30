@@ -675,15 +675,16 @@ impl IoDevice for Via6522 {
                 self.t1_counter = self.t1_latch;
                 self.t1_running = true;
                 self.clear_ifr(IRQ_T1);
-                // Reset PB7 low when timer starts (per datasheet).
+                // Drive PB7 low when timer starts (per datasheet).
                 if self.acr & ACR_T1_PB7_OUTPUT != 0 {
                     // Get current PB7 state without considering DDRB
                     let prev_pb7 = self.orb & 0x80 != 0;
                     // Drive PB7 low
+                    let prev_t1_pb7 = self.t1_pb7;
                     self.t1_pb7 = false;
                     let new_pb = self.read_port_b();
-                    // Send a message only if PB7 was previously high
-                    if prev_pb7 {
+                    // Send a message only if PB7 was previously high or Timer 1 was holding PB7 high
+                    if prev_pb7 || prev_t1_pb7  {
                         self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_pb });
                     }
                 }
@@ -1074,7 +1075,8 @@ mod tests {
         assert!(received.windows(3).any(|w| w == b"B80"),
                 "expected B80 in {:?}", String::from_utf8_lossy(&received));
 
-        via.orb = 0x0;     // set PB7 low
+        via.orb = 0x0;          // set PB7 low
+        via.t1_pb7 = false;     // Timer 1 PB7 is driving PB7 low
         via.write(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
         via.write(0x4, 10);
         via.write(0x5, 0);
