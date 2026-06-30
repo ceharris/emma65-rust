@@ -677,7 +677,15 @@ impl IoDevice for Via6522 {
                 self.clear_ifr(IRQ_T1);
                 // Reset PB7 low when timer starts (per datasheet).
                 if self.acr & ACR_T1_PB7_OUTPUT != 0 {
+                    // Get current PB7 state without considering DDRB
+                    let prev_pb7 = self.orb & 0x80 != 0;
+                    // Drive PB7 low
                     self.t1_pb7 = false;
+                    let new_pb = self.read_port_b();
+                    // Send a message only if PB7 was previously high
+                    if prev_pb7 {
+                        self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_pb });
+                    }
                 }
             }
             0x6 => {
@@ -1041,6 +1049,42 @@ mod tests {
         via.set_ifr(IRQ_T1);
         via.write(0x7, 0x00); // write latch high
         assert_eq!(via.peek(0xD) & IRQ_T1, 0);
+    }
+
+    #[test]
+    fn t1_one_shot_with_pb7_output_sends_pb7_low_at_start_when_needed() {
+        let (mut via, mut remote) = device_with_pipe();
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1); // process handshake
+
+        via.orb = 0x80;     // set PB7 high
+        via.write(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
+        via.write(0x4, 10);
+        via.write(0x5, 0);
+        via.tick(5);
+
+        let received = collect_bytes(&mut remote);
+        assert!(received.windows(3).any(|w| w == b"B00"),
+                "expected B00 in {:?}", String::from_utf8_lossy(&received));
+
+        via.tick(5);
+
+        let received = collect_bytes(&mut remote);
+        assert!(received.windows(3).any(|w| w == b"B80"),
+                "expected B80 in {:?}", String::from_utf8_lossy(&received));
+
+        via.orb = 0x0;     // set PB7 low
+        via.write(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
+        via.write(0x4, 10);
+        via.write(0x5, 0);
+        via.tick(10);
+
+        let received = collect_bytes(&mut remote);
+        assert!(!received.windows(3).any(|w| w == b"B00"),
+                "didn't expect B00 in {:?}", String::from_utf8_lossy(&received));
+        assert!(received.windows(3).any(|w| w == b"B80"),
+                "expected B80 in {:?}", String::from_utf8_lossy(&received));
     }
 
     // --- Timer 2 ---
