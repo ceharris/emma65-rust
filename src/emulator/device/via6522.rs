@@ -675,16 +675,17 @@ impl IoDevice for Via6522 {
                 self.t1_counter = self.t1_latch;
                 self.t1_running = true;
                 self.clear_ifr(IRQ_T1);
-                // Reset PB7 low when timer starts (per datasheet).
+                // Drive PB7 low when timer starts (per datasheet).
                 if self.acr & ACR_T1_PB7_OUTPUT != 0 {
                     // Get current PB7 state without considering DDRB
                     let prev_pb7 = self.orb & 0x80 != 0;
                     // Drive PB7 low
+                    let prev_t1_pb7 = self.t1_pb7;
                     self.t1_pb7 = false;
-                    let new_pb = self.read_port_b();
-                    // Send a message only if PB7 was previously high
-                    if prev_pb7 {
-                        self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_pb });
+                    // Send a message only if PB7 was previously high or Timer 1 was holding PB7 high
+                    if prev_pb7 || prev_t1_pb7  {
+                        let pb = self.read_port_b();
+                        self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: pb });
                     }
                 }
             }
@@ -717,7 +718,16 @@ impl IoDevice for Via6522 {
                 }
             }
             0xB => {
+                let prev_acr = self.acr;
                 self.acr = value;
+                // If PB7 output mode is disabled while Timer 1 is holding PB7 high, and if
+                // PB7 is configured as an output and is being driven low, we must signal
+                // PB7's transition to the low state.
+                let pb7_output_disabled = (prev_acr & ACR_T1_PB7_OUTPUT) != 0 && (self.acr & ACR_T1_PB7_OUTPUT) == 0;
+                let pb7_output_low = (self.ddrb & 0x80) != 0 && (self.orb & 0x80) == 0;
+                if pb7_output_disabled && self.t1_pb7 && pb7_output_low {
+                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: self.orb });
+                }
             }
             0xC => {
                 self.pcr = value;
@@ -1074,7 +1084,8 @@ mod tests {
         assert!(received.windows(3).any(|w| w == b"B80"),
                 "expected B80 in {:?}", String::from_utf8_lossy(&received));
 
-        via.orb = 0x0;     // set PB7 low
+        via.orb = 0x0;          // set PB7 low
+        via.t1_pb7 = false;     // Timer 1 PB7 is driving PB7 low
         via.write(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
         via.write(0x4, 10);
         via.write(0x5, 0);
@@ -1085,6 +1096,32 @@ mod tests {
                 "didn't expect B00 in {:?}", String::from_utf8_lossy(&received));
         assert!(received.windows(3).any(|w| w == b"B80"),
                 "expected B80 in {:?}", String::from_utf8_lossy(&received));
+    }
+
+    #[test]
+    fn t1_pb7_output_mode_sends_pb7_low_if_needed_when_pb7_output_mode_disabled() {
+        let (mut via, mut remote) = device_with_pipe();
+        remote.send(0x20).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        via.tick(1); // process handshake
+
+        via.ddrb = 0x80;    // PB7 is an output
+        via.orb = 0x00;     // set PB7 low
+        via.write(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
+        via.write(0x4, 5);
+        via.write(0x5, 0);
+        via.tick(5);
+
+        let received = collect_bytes(&mut remote);
+        assert!(received.windows(3).any(|w| w == b"B80"),
+                "expected B80 in {:?}", String::from_utf8_lossy(&received));
+
+        via.write(0xB, 0);      // disable PB7 output mode
+
+        let received = collect_bytes(&mut remote);
+        assert!(received.windows(3).any(|w| w == b"B00"),
+                "expected B00 in {:?}", String::from_utf8_lossy(&received));
+
     }
 
     // --- Timer 2 ---
