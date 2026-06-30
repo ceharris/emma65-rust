@@ -682,10 +682,10 @@ impl IoDevice for Via6522 {
                     // Drive PB7 low
                     let prev_t1_pb7 = self.t1_pb7;
                     self.t1_pb7 = false;
-                    let new_pb = self.read_port_b();
                     // Send a message only if PB7 was previously high or Timer 1 was holding PB7 high
                     if prev_pb7 || prev_t1_pb7  {
-                        self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_pb });
+                        let pb = self.read_port_b();
+                        self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: pb });
                     }
                 }
             }
