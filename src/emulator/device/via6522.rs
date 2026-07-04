@@ -22,8 +22,8 @@
 //! | 0xF    | ORA_NH| Output Register A (no handshake)       |
 //!
 //! **ACR bit layout:**
-//! - Bit 0: T1 latch enable for PB7
-//! - Bit 1: T1 PB7 output enable
+//! - Bit 0: PA latch enable (latch IRA on CA1 active edge)
+//! - Bit 1: PB latch enable (latch IRB on CB1 active edge)
 //! - Bits 4–2: Shift register mode (000=off, 001=in/T2, 010=in/PHI2, 011=in/ext,
 //!   100=out free/T2, 101=out/T2, 110=out/PHI2, 111=out/ext)
 //! - Bit 5: T2 timer mode (0=timed, 1=count PB6)
@@ -100,6 +100,8 @@ const SR_MODE_OUT_PHI2:     u8 = 0x18; // 110: shift out under PHI2
 const SR_MODE_OUT_EXT:      u8 = 0x1C; // 111: shift out under CB1 (external)
 const ACR_T1_PB7_OUTPUT:    u8 = 0x80; // Timer 1 square wave output mode
 const ACR_T2_PB6_COUNT:     u8 = 0x20; // Timer 2 pulse count mode
+const ACR_PA_LATCH_ENABLE:  u8 = 0x01; // bit 0: latch IRA on CA1 active edge
+const ACR_PB_LATCH_ENABLE:  u8 = 0x02; // bit 1: latch IRB on CB1 active edge
 
 // --- PCR masks ---
 const PCR_CA1_EDGE:  u8 = 0x01;
@@ -157,10 +159,14 @@ pub struct Via6522 {
     ddrb: u8,
     /// Data direction register A — 1=output, 0=input.
     ddra: u8,
-    /// Latched input state of port B pins (updated by peripheral messages).
+    /// Live input state of port B pins (updated by peripheral messages).
     input_b: u8,
-    /// Latched input state of port A pins (updated by peripheral messages).
+    /// Live input state of port A pins (updated by peripheral messages).
     input_a: u8,
+    /// IRA latch: port A value captured at the last CA1 active edge (used when ACR bit 0 set).
+    ira_latch: u8,
+    /// IRB latch: port B value captured at the last CB1 active edge (used when ACR bit 1 set).
+    irb_latch: u8,
 
     // --- Timer 1 ---
     /// Timer 1 counter (16-bit, decrements each cycle).
@@ -233,7 +239,7 @@ impl Via6522 {
     pub fn new() -> Self {
         Self {
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
-            input_b: 0, input_a: 0,
+            input_b: 0, input_a: 0, ira_latch: 0, irb_latch: 0,
             t1_counter: 0, t1_latch: 0, t1_running: false, t1_pb7: false,
             t2_counter: 0, t2_latch_lo: 0, t2_latch_hi: 0, t2_running: false,
             sr: 0, sr_count: 0, sr_shifting_out: false, sr_t2_restart: false, sr_external: false,
@@ -290,21 +296,25 @@ impl Via6522 {
 
     // --- Port read helpers ---
 
-    /// Reads the effective state of port B: output pins from ORB, input pins from input_b.
-    /// PB7 reflects the T1 toggle state when ACR enables T1 PB7 output.
+    /// Reads the effective state of port B: output pins from ORB, input pins from input_b or
+    /// irb_latch when PB latch enable (ACR bit 1) is set. PB7 reflects the T1 toggle state
+    /// when ACR enables T1 PB7 output.
     fn read_port_b(&self) -> u8 {
         // Fix (issue #99): square wave output mode takes priority over input/output mode
         // selected by DDRB bit 7.
-        let mut orb = (self.orb & self.ddrb) | (self.input_b & !self.ddrb);
+        let input = if self.acr & ACR_PB_LATCH_ENABLE != 0 { self.irb_latch } else { self.input_b };
+        let mut orb = (self.orb & self.ddrb) | (input & !self.ddrb);
         if self.acr & ACR_T1_PB7_OUTPUT != 0 {
             orb = (orb & 0x7f) | if self.t1_pb7 { 0x80 } else { 0 };
         }
         orb
     }
 
-    /// Reads the effective state of port A: output pins from ORA, input pins from input_a.
+    /// Reads the effective state of port A: output pins from ORA, input pins from input_a or
+    /// ira_latch when PA latch enable (ACR bit 0) is set.
     fn read_port_a(&self) -> u8 {
-        (self.ora & self.ddra) | (self.input_a & !self.ddra)
+        let input = if self.acr & ACR_PA_LATCH_ENABLE != 0 { self.ira_latch } else { self.input_a };
+        (self.ora & self.ddra) | (input & !self.ddra)
     }
 
     // --- Protocol transmission helpers ---
@@ -435,6 +445,10 @@ impl Via6522 {
                     let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
                     if self.ca1 != state && state == pos_edge {
                         self.set_ifr(IRQ_CA1);
+                        // Capture IRA latch on CA1 active edge when PA latch enable is set.
+                        if self.acr & ACR_PA_LATCH_ENABLE != 0 {
+                            self.ira_latch = self.input_a;
+                        }
                         // CA1 active edge releases CA2 handshake output.
                         let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
                         if ca2_mode == 4 && !self.ca2 {
@@ -460,6 +474,10 @@ impl Via6522 {
                         let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
                         if state == pos_edge {
                             self.set_ifr(IRQ_CB1);
+                            // Capture IRB latch on CB1 active edge when PB latch enable is set.
+                            if self.acr & ACR_PB_LATCH_ENABLE != 0 {
+                                self.irb_latch = self.input_b;
+                            }
                             // CB1 active edge releases CB2 handshake output.
                             let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
                             if cb2_mode == 4 && !self.cb2 {
@@ -2195,6 +2213,84 @@ mod tests {
         let low_pos  = s.find("CB20").expect("expected CB20 in pulse output");
         let high_pos = s.find("CB21").expect("expected CB21 in pulse output");
         assert!(low_pos < high_pos, "CB20 must precede CB21 in pulse sequence");
+    }
+
+    // --- PA/PB input latching ---
+
+    #[test]
+    fn pa_latch_disabled_reads_live_input() {
+        let mut via = device();
+        // ACR bit 0 clear — live input_a is returned.
+        via.input_a = 0xAB;
+        assert_eq!(via.read(0x1), 0xAB);
+    }
+
+    #[test]
+    fn pa_latch_enabled_reads_captured_value_not_live_input() {
+        let mut via = device();
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.input_a = 0xAB;
+        via.ira_latch = 0x55;
+        assert_eq!(via.read(0x1), 0x55, "latch value must be returned, not live input");
+    }
+
+    #[test]
+    fn pa_latch_captures_on_ca1_active_edge() {
+        let mut via = device();
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xC, PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.ca1 = true;
+        via.input_a = 0xCD;
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
+        assert_eq!(via.ira_latch, 0xCD, "ira_latch must capture input_a on CA1 active edge");
+    }
+
+    #[test]
+    fn pa_latch_does_not_capture_on_inactive_ca1_edge() {
+        let mut via = device();
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xC, PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.ca1 = false; // already low — no edge when we send low again
+        via.input_a = 0xCD;
+        via.ira_latch = 0x11; // sentinel
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
+        assert_eq!(via.ira_latch, 0x11, "ira_latch must not change when CA1 level does not change");
+    }
+
+    #[test]
+    fn pa_latch_enabled_ora_nh_also_reads_latch() {
+        let mut via = device();
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.input_a = 0xAB;
+        via.ira_latch = 0x55;
+        assert_eq!(via.read(0xF), 0x55, "ORA_NH must also return latch value when latch is enabled");
+    }
+
+    #[test]
+    fn pb_latch_disabled_reads_live_input() {
+        let mut via = device();
+        via.input_b = 0xAB;
+        assert_eq!(via.read(0x0), 0xAB);
+    }
+
+    #[test]
+    fn pb_latch_enabled_reads_captured_value_not_live_input() {
+        let mut via = device();
+        via.write(0xB, ACR_PB_LATCH_ENABLE);
+        via.input_b = 0xAB;
+        via.irb_latch = 0x55;
+        assert_eq!(via.read(0x0), 0x55, "latch value must be returned, not live input");
+    }
+
+    #[test]
+    fn pb_latch_captures_on_cb1_active_edge() {
+        let mut via = device();
+        via.write(0xB, ACR_PB_LATCH_ENABLE);
+        via.write(0xC, PCR_CB1_INPUT_NEGATIVE_EDGE);
+        via.cb1 = true;
+        via.input_b = 0xCD;
+        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+        assert_eq!(via.irb_latch, 0xCD, "irb_latch must capture input_b on CB1 active edge");
     }
 
     // --- Shift register ---
