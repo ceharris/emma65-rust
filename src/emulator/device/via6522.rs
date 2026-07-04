@@ -187,6 +187,8 @@ pub struct Via6522 {
     t2_latch_hi: u8,
     /// True when timer 2 is actively counting.
     t2_running: bool,
+    /// True when T2 will fire IRQ on its next underflow; cleared on underflow, re-armed on T2CH write.
+    t2_irq_armed: bool,
 
     // --- Shift register ---
     /// Shift register data byte.
@@ -241,7 +243,7 @@ impl Via6522 {
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
             input_b: 0, input_a: 0, ira_latch: 0, irb_latch: 0,
             t1_counter: 0, t1_latch: 0, t1_running: false, t1_pb7: false,
-            t2_counter: 0, t2_latch_lo: 0, t2_latch_hi: 0, t2_running: false,
+            t2_counter: 0, t2_latch_lo: 0, t2_latch_hi: 0, t2_running: false, t2_irq_armed: false,
             sr: 0, sr_count: 0, sr_shifting_out: false, sr_t2_restart: false, sr_external: false,
             acr: 0, pcr: 0, ifr: 0, ier: 0,
             ca1: false, ca2: false, cb1: false, cb2: false,
@@ -431,9 +433,11 @@ impl Via6522 {
                     if old_pb6 && !new_pb6 {
                         let (new_counter, wrapped) = self.t2_counter.overflowing_sub(1);
                         if wrapped || new_counter == 0 {
-                            self.set_ifr(IRQ_T2);
-                            self.t2_running = false;
-                            self.t2_counter = 0xFFFF;
+                            if self.t2_irq_armed {
+                                self.set_ifr(IRQ_T2);
+                                self.t2_irq_armed = false;
+                            }
+                            self.t2_counter = new_counter; // wraps naturally to 0xFFFF; counter keeps running
                         } else {
                             self.t2_counter = new_counter;
                         }
@@ -639,9 +643,11 @@ impl Via6522 {
                 if matches!(self.sr_mode(), SR_MODE_IN_T2 | SR_MODE_OUT_T2 | SR_MODE_OUT_FREE_T2) {
                     self.sr_update(true);
                 } else {
-                    self.set_ifr(IRQ_T2);
-                    self.t2_running = false;
-                    self.t2_counter = 0xFFFF;
+                    if self.t2_irq_armed {
+                        self.set_ifr(IRQ_T2);
+                        self.t2_irq_armed = false;
+                    }
+                    self.t2_counter = new_counter; // wraps naturally to 0xFFFF; counter keeps running
                 }
             } else {
                 self.t2_counter = new_counter;
@@ -807,6 +813,7 @@ impl IoDevice for Via6522 {
                 self.t2_latch_hi = value;
                 self.t2_counter = ((value as u16) << 8) | self.t2_latch_lo as u16;
                 self.t2_running = true;
+                self.t2_irq_armed = true;
                 self.clear_ifr(IRQ_T2);
             }
             0xA => {
@@ -1283,12 +1290,107 @@ mod tests {
     }
 
     #[test]
-    fn t2_stops_after_underflow() {
+    fn t2_disarms_irq_after_underflow() {
         let mut via = device();
         via.write(0x8, 5u8);
         via.write(0x9, 0x00);
         via.tick(10);
-        assert!(!via.t2_running);
+        assert!(!via.t2_irq_armed, "IRQ arm must be cleared after underflow");
+        assert!(via.t2_running, "counter must keep running after underflow");
+    }
+
+    #[test]
+    fn t2_counter_continues_after_underflow() {
+        let mut via = device();
+        via.write(0x8, 5u8);
+        via.write(0x9, 0x00);
+        via.tick(5); // 5th tick_timers call: counter reaches 0 → underflow, counter = 0
+        // Next tick immediately underflows again (0 - 1 wraps to 0xFFFF), then keeps decrementing.
+        via.tick(3); // 3 more tick_timers calls: 0→0xFFFF, 0xFFFF→0xFFFE, 0xFFFE→0xFFFD
+        assert!(via.t2_counter < 0xFFFF, "counter must keep decrementing after underflow, got 0x{:04X}", via.t2_counter);
+    }
+
+    #[test]
+    fn t2_does_not_fire_irq_again_after_underflow_without_reload() {
+        let mut via = device();
+        via.write(0x8, 3u8);
+        via.write(0x9, 0x00);
+        via.tick(3); // underflow → IRQ fires
+        via.write(0xD, IRQ_T2); // clear IRQ_T2
+        // Tick enough for counter to wrap from 0xFFFF back to near 0 and underflow again.
+        via.tick(0xFFFF);
+        assert_eq!(via.peek(0xD) & IRQ_T2, 0, "IRQ_T2 must not fire again without reloading T2CH");
+    }
+
+    // --- Timer 1 additional coverage ---
+
+    #[test]
+    fn t1_latch_low_read_returns_latch_not_counter() {
+        let mut via = device();
+        via.write(0x4, 0x10u8); // latch low = 0x10
+        via.write(0x5, 0x00);   // start timer, period = 0x0010
+        via.tick(8);             // counter now 0x0008
+        assert_eq!(via.read(0x6), 0x10, "T1L-L read must return latch, not counter");
+    }
+
+    #[test]
+    fn t1_latch_low_read_does_not_clear_irq() {
+        let mut via = device();
+        via.set_ifr(IRQ_T1);
+        via.read(0x6); // T1L-L read must not clear IRQ_T1
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must not be cleared by T1L-L read");
+    }
+
+    #[test]
+    fn t1_latch_high_write_does_not_reload_counter() {
+        let mut via = device();
+        via.write(0x4, 20u8);
+        via.write(0x5, 0x00); // start, period = 20
+        via.tick(8);           // counter ≈ 12
+        let counter_before = via.t1_counter;
+        via.write(0x7, 0x00); // write T1L-H — clears IRQ but must not reload counter
+        assert_eq!(via.t1_counter, counter_before, "T1L-H write must not reload the running counter");
+    }
+
+    #[test]
+    fn t1_retrigger_restarts_countdown_from_new_latch() {
+        let mut via = device();
+        via.write(0x4, 20u8);
+        via.write(0x5, 0x00); // start, period = 20
+        via.tick(5);           // mid-countdown
+        via.write(0x4, 0x0Au8); // new latch low = 10
+        via.write(0x5, 0x00);   // write T1CH — re-triggers with new period 10
+        assert_eq!(via.t1_counter, 10, "re-trigger must load new latch value into counter");
+        assert!(via.t1_running);
+        assert_eq!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must be cleared on re-trigger");
+    }
+
+    #[test]
+    fn t1_free_run_fires_irq_on_consecutive_underflows() {
+        let mut via = device();
+        via.write(0xB, T1_MODE_FREE_RUN);
+        via.write(0x4, 5u8);
+        via.write(0x5, 0x00); // period = 5
+        via.tick(5);           // first underflow
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must be set after first underflow");
+        via.read(0x4);         // clear IRQ_T1 by reading T1CL
+        via.tick(5);           // second underflow
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must fire again after second underflow");
+    }
+
+    #[test]
+    fn t1_latch_update_while_running_takes_effect_on_next_reload() {
+        let mut via = device();
+        via.write(0xB, T1_MODE_FREE_RUN);
+        via.write(0x4, 20u8);
+        via.write(0x5, 0x00); // period = 20, timer running
+        // Update latch only while running (offsets 0x4 and 0x7 — no counter reload).
+        via.write(0x4, 0x0Au8); // new latch low = 10
+        via.write(0x7, 0x00);   // new latch high = 0; IRQ cleared, counter not reloaded
+        via.tick(20);            // first underflow: reloads from new latch (10)
+        via.read(0x4);           // clear IRQ_T1
+        via.tick(10);            // second period of 10
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must fire with the new latch period after reload");
     }
 
     // --- Timer 1 PB7 toggle ---
@@ -2826,7 +2928,8 @@ mod tests {
 
         assert_ne!(via.peek(0xD) & IRQ_T2, 0, "IRQ_T2 must fire after 3 PB6 neg transitions");
         assert!(via.irq_active());
-        assert!(!via.t2_running);
+        assert!(!via.t2_irq_armed, "IRQ arm must be cleared after pulse-count underflow");
+        assert!(via.t2_running, "counter must keep running after pulse-count underflow");
     }
 
     #[test]
