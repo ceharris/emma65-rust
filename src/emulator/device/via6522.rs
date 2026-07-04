@@ -461,12 +461,14 @@ impl Via6522 {
                         if matches!(mode, SR_MODE_IN_T2 | SR_MODE_IN_PHI2 | SR_MODE_IN_EXT) {
                             self.cb2 = state;
                         }
-                    } else if self.cb2 != state {
-                        self.cb2 = state;
+                    } else {
                         let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
-                        let pos_edge = cb2_mode & 0x02 != 0;
-                        if state == pos_edge {
-                            self.set_ifr(IRQ_CB2);
+                        if cb2_mode < 4 && self.cb2 != state { // input modes only
+                            self.cb2 = state;
+                            let pos_edge = cb2_mode & 0x02 != 0;
+                            if state == pos_edge {
+                                self.set_ifr(IRQ_CB2);
+                            }
                         }
                     }
                 }
@@ -1486,6 +1488,14 @@ mod tests {
     const PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE: u8 = 0b00000010;
     const PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE: u8 = 0b00000110;
 
+    // CA2 bits 3:1 / CB2 bits 7:5: non-independent input modes and output mode
+    const PCR_CA2_INPUT_NEGATIVE_EDGE: u8 = 0b00000000; // bits 3:1 = 000
+    const PCR_CA2_INPUT_POSITIVE_EDGE: u8 = 0b00000100; // bits 3:1 = 010
+    const PCR_CA2_OUTPUT_LOW:          u8 = 0b00001100; // bits 3:1 = 110
+    const PCR_CB2_INPUT_NEGATIVE_EDGE: u8 = 0b00000000; // bits 7:5 = 000
+    const PCR_CB2_INPUT_POSITIVE_EDGE: u8 = 0b01000000; // bits 7:5 = 010
+    const PCR_CB2_OUTPUT_LOW:          u8 = 0b11000000; // bits 7:5 = 110
+
     #[test]
     fn ca1_negative_edge_triggers_irq_when_level_high() {
         let (mut via, mut remote) = device_with_pipe();
@@ -1676,6 +1686,94 @@ mod tests {
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB2, 0);
+    }
+
+    #[test]
+    fn ca2_non_independent_negative_edge_triggers_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
+        send_bytes(&mut remote, "CA20");
+        via.tick(1);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
+    }
+
+    #[test]
+    fn ca2_non_independent_positive_edge_triggers_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = false;
+        via.write(0xC, PCR_CA2_INPUT_POSITIVE_EDGE);
+        send_bytes(&mut remote, "CA21");
+        via.tick(1);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
+    }
+
+    #[test]
+    fn ca2_output_mode_does_not_trigger_irq() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xC, PCR_CA2_OUTPUT_LOW);
+        send_bytes(&mut remote, "CA20");
+        via.tick(1);
+        assert_eq!(via.peek(0xD) & IRQ_CA2, 0);
+    }
+
+    #[test]
+    fn ca2_output_mode_does_not_update_ca2_state() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xC, PCR_CA2_OUTPUT_LOW);
+        send_bytes(&mut remote, "CA20");
+        via.tick(1);
+        assert!(via.ca2, "ca2 must not be overwritten in output mode");
+    }
+
+    #[test]
+    fn cb2_non_independent_negative_edge_triggers_irq_when_level_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = true;
+        via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
+        send_bytes(&mut remote, "CB20");
+        via.tick(1);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
+    }
+
+    #[test]
+    fn cb2_non_independent_positive_edge_triggers_irq_when_level_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = false;
+        via.write(0xC, PCR_CB2_INPUT_POSITIVE_EDGE);
+        send_bytes(&mut remote, "CB21");
+        via.tick(1);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
+    }
+
+    #[test]
+    fn cb2_output_mode_does_not_trigger_irq() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = true;
+        via.write(0xC, PCR_CB2_OUTPUT_LOW);
+        send_bytes(&mut remote, "CB20");
+        via.tick(1);
+        assert_eq!(via.peek(0xD) & IRQ_CB2, 0);
+    }
+
+    #[test]
+    fn cb2_output_mode_does_not_update_cb2_state() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = true;
+        via.write(0xC, PCR_CB2_OUTPUT_LOW);
+        send_bytes(&mut remote, "CB20");
+        via.tick(1);
+        assert!(via.cb2, "cb2 must not be overwritten in output mode");
     }
 
     // --- Shift register ---
