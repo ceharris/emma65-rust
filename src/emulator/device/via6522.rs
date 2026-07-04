@@ -503,7 +503,10 @@ impl Via6522 {
             self.sr_count -= 1;
             let t2_ctrl = matches!(self.sr_mode(), SR_MODE_IN_T2 | SR_MODE_OUT_T2 | SR_MODE_OUT_FREE_T2);
             if self.sr_count == 0 {
-                self.set_ifr(IRQ_SR);
+                // Free-running mode never asserts IRQ (per datasheet).
+                if !matches!(self.sr_mode(), SR_MODE_OUT_FREE_T2) {
+                    self.set_ifr(IRQ_SR);
+                }
                 if t2_ctrl {
                     self.t2_running = false;
                     self.t2_counter = 0xffff;
@@ -1772,6 +1775,20 @@ mod tests {
     }
 
     #[test]
+    fn sr_shift_out_free_t2_never_sets_ifr() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_FREE_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xAA);
+        // Run for two full 8-bit cycles.
+        for _ in 0..8 { via.tick(2); }
+        via.tick(1); // trigger restart
+        for _ in 0..8 { via.tick(2); }
+        assert_eq!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must never be set in free-running OUT_FREE_T2 mode");
+    }
+
+    #[test]
     fn sr_shift_out_free_t2_sends_cb1_cb2_messages() {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_FREE_T2);
         handshake(&mut via, &mut remote);
@@ -1879,6 +1896,230 @@ mod tests {
         via.write(0xA, 0xFF);
         for _ in 0..9 { via.tick(1); }
         assert_eq!(via.sr_count, 0, "sr_count must be zero after PHI2 shift-out completes");
+    }
+
+    #[test]
+    fn sr_in_ext_data_captured_via_transport() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
+        handshake(&mut via, &mut remote);
+
+        via.write(0xA, 0x00); // start shift-in
+        collect_bytes(&mut remote);
+
+        let data = 0b10110100u8;
+        for i in 0..8 {
+            let bit = (data >> (7 - i)) & 1;
+            send_bytes(&mut remote, " CB10");
+            send_bytes(&mut remote, if bit != 0 { " CB21" } else { " CB20" });
+            send_bytes(&mut remote, " CB11");
+            via.tick(1); // poll processes CB10, CB2x, CB11 in order
+        }
+
+        assert_eq!(via.peek(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek(0xA));
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
+    }
+
+    #[test]
+    fn sr_in_t2_data_captured_via_transport() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_T2);
+        handshake(&mut via, &mut remote);
+
+        via.write(0x8, 2u8); // T2 period = 2 cycles
+        via.read(0xA);        // sr_start → CB10 sent, T2 begins counting
+        collect_bytes(&mut remote); // drain CB10
+
+        let data = 0b10110100u8;
+        for i in 0..8 {
+            let bit = (data >> (7 - i)) & 1;
+            // Pre-send CB2x so poll_transports at the top of tick captures it
+            // before T2 underflows and calls sr_update(true).
+            send_bytes(&mut remote, if bit != 0 { " CB21" } else { " CB20" });
+            via.tick(2); // T2 counts 2→0 → captures cb2, sends CB11 + CB10 (if not last)
+            collect_bytes(&mut remote);
+        }
+
+        assert_eq!(via.peek(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek(0xA));
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 T2 clocks");
+    }
+
+    #[test]
+    fn sr_in_t2_sends_cb1_clock_to_peripheral() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_T2);
+        handshake(&mut via, &mut remote);
+
+        via.write(0x8, 2u8);
+        via.read(0xA); // sr_start → sr_update(false) → CB10 sent
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CB10"), "expected CB10 after SR start, got: {s}");
+
+        for _ in 0..7 {
+            via.tick(2);
+            let received = collect_bytes(&mut remote);
+            let s = String::from_utf8_lossy(&received);
+            assert!(s.contains("CB11"), "expected CB11 (rising) in: {s}");
+            assert!(s.contains("CB10"), "expected CB10 (falling for next bit) in: {s}");
+        }
+
+        via.tick(2); // 8th bit: rising edge only, no next falling
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CB11"), "expected CB11 for last bit in: {s}");
+        assert!(!s.contains("CB10"), "unexpected CB10 after last bit in: {s}");
+    }
+
+    #[test]
+    fn sr_in_phi2_data_captured_via_transport() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_PHI2);
+        handshake(&mut via, &mut remote);
+
+        via.read(0xA); // start shift-in
+        collect_bytes(&mut remote);
+
+        let data = 0b10110100u8;
+        for i in 0..8 {
+            let bit = (data >> (7 - i)) & 1;
+            // Pre-send CB2x so poll_transports at the top of tick captures it
+            // before the PHI2 rising edge calls sr_update(true).
+            send_bytes(&mut remote, if bit != 0 { " CB21" } else { " CB20" });
+            via.tick(1); // falling edge (i=0) → CB10; rising edge (i=1) → captures cb2, CB11
+            collect_bytes(&mut remote);
+        }
+
+        assert_eq!(via.peek(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek(0xA));
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
+    }
+
+    #[test]
+    fn sr_in_phi2_sends_cb1_clock_to_peripheral() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_PHI2);
+        handshake(&mut via, &mut remote);
+
+        via.read(0xA); // start shift-in
+        collect_bytes(&mut remote);
+
+        for _ in 0..8 {
+            via.tick(1); // falling edge (i=0) → CB10; rising edge (i=1) → CB11
+            let received = collect_bytes(&mut remote);
+            let s = String::from_utf8_lossy(&received);
+            assert!(s.contains("CB10"), "expected CB10 in: {s}");
+            assert!(s.contains("CB11"), "expected CB11 in: {s}");
+        }
+    }
+
+    #[test]
+    fn sr_out_ext_sets_ifr_after_8_clocks() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
+        handshake(&mut via, &mut remote);
+
+        via.write(0xA, 0xAA); // start shift-out
+        collect_bytes(&mut remote);
+
+        for _ in 0..8 {
+            send_bytes(&mut remote, " CB10 CB11");
+            via.tick(1); // poll processes falling then rising edge; sr_count decrements
+        }
+
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
+    }
+
+    // --- SR does not set T2/CB1/CB2 IFR bits ---
+
+    #[test]
+    fn sr_in_t2_does_not_set_t2_cb1_cb2_ifr_bits() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_IN_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.read(0xA);
+        for _ in 0..8 { via.tick(2); }
+        let ifr = via.peek(0xD);
+        assert_eq!(ifr & IRQ_T2,  0, "IRQ_T2  must not be set during IN_T2 shift");
+        assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during IN_T2 shift");
+        assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during IN_T2 shift");
+    }
+
+    #[test]
+    fn sr_out_t2_does_not_set_t2_cb1_cb2_ifr_bits() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xAA);
+        for _ in 0..8 { via.tick(2); }
+        let ifr = via.peek(0xD);
+        assert_eq!(ifr & IRQ_T2,  0, "IRQ_T2  must not be set during OUT_T2 shift");
+        assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during OUT_T2 shift");
+        assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during OUT_T2 shift");
+    }
+
+    #[test]
+    fn sr_out_free_t2_does_not_set_t2_cb1_cb2_ifr_bits() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_FREE_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xAA);
+        for _ in 0..8 { via.tick(2); }
+        via.tick(1); // trigger restart
+        for _ in 0..8 { via.tick(2); }
+        let ifr = via.peek(0xD);
+        assert_eq!(ifr & IRQ_T2,  0, "IRQ_T2  must not be set during OUT_FREE_T2 shift");
+        assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during OUT_FREE_T2 shift");
+        assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during OUT_FREE_T2 shift");
+    }
+
+    #[test]
+    fn sr_in_phi2_does_not_set_cb1_cb2_ifr_bits() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_IN_PHI2);
+        via.read(0xA);
+        via.cb2 = true;
+        for _ in 0..8 { via.tick(1); }
+        let ifr = via.peek(0xD);
+        assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during IN_PHI2 shift");
+        assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during IN_PHI2 shift");
+    }
+
+    #[test]
+    fn sr_out_phi2_does_not_set_cb1_cb2_ifr_bits() {
+        let mut via = device();
+        via.write(0xB, SR_MODE_OUT_PHI2);
+        via.write(0xA, 0xAA);
+        for _ in 0..8 { via.tick(1); }
+        let ifr = via.peek(0xD);
+        assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during OUT_PHI2 shift");
+        assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during OUT_PHI2 shift");
+    }
+
+    #[test]
+    fn sr_in_ext_does_not_set_cb1_cb2_ifr_bits() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
+        handshake(&mut via, &mut remote);
+        via.write(0xA, 0x00);
+        collect_bytes(&mut remote);
+        for _ in 0..8 {
+            send_bytes(&mut remote, " CB10 CB21 CB11");
+            via.tick(1);
+        }
+        let ifr = via.peek(0xD);
+        assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during IN_EXT shift");
+        assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during IN_EXT shift");
+    }
+
+    #[test]
+    fn sr_out_ext_does_not_set_cb1_cb2_ifr_bits() {
+        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
+        handshake(&mut via, &mut remote);
+        via.write(0xA, 0xAA);
+        collect_bytes(&mut remote);
+        for _ in 0..8 {
+            send_bytes(&mut remote, " CB10 CB11");
+            via.tick(1);
+        }
+        let ifr = via.peek(0xD);
+        assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during OUT_EXT shift");
+        assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during OUT_EXT shift");
     }
 
     // --- T2 pulse-counting ---
