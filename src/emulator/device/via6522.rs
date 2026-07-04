@@ -2293,6 +2293,62 @@ mod tests {
         assert_eq!(via.irb_latch, 0xCD, "irb_latch must capture input_b on CB1 active edge");
     }
 
+    #[test]
+    fn pa_latch_captures_via_transport_in_same_tick() {
+        // Validates the full protocol path: port state and CA1 edge arriving via transport
+        // in the same tick — port update must precede the capture.
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xC, PCR_CA1_INPUT_POSITIVE_EDGE); // positive edge
+        // Send port A update then CA1 rising edge in a single burst.
+        send_bytes(&mut remote, "A3F CA11");
+        via.tick(1); // poll_transports processes both messages in order
+        assert_eq!(via.ira_latch, 0x3F, "ira_latch must capture the value from the same-tick port update");
+        assert_eq!(via.read(0x1), 0x3F, "ORA read must return latched value");
+    }
+
+    #[test]
+    fn pa_latch_holds_value_after_subsequent_port_update() {
+        // Validates that the latch retains its captured value when input_a changes afterwards.
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xC, PCR_CA1_INPUT_POSITIVE_EDGE);
+        // Capture 0x3F via CA1 rising edge.
+        send_bytes(&mut remote, "A3F CA11");
+        via.tick(1);
+        // Port A changes after the latch was captured.
+        send_bytes(&mut remote, "AFF");
+        via.tick(1);
+        assert_eq!(via.read(0x1), 0x3F, "latched value must be held despite subsequent port update");
+    }
+
+    #[test]
+    fn pb_latch_captures_via_transport_in_same_tick() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.write(0xB, ACR_PB_LATCH_ENABLE);
+        via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
+        send_bytes(&mut remote, "B5A CB11");
+        via.tick(1);
+        assert_eq!(via.irb_latch, 0x5A, "irb_latch must capture the value from the same-tick port update");
+        assert_eq!(via.read(0x0), 0x5A, "ORB read must return latched value");
+    }
+
+    #[test]
+    fn pb_latch_holds_value_after_subsequent_port_update() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.write(0xB, ACR_PB_LATCH_ENABLE);
+        via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
+        send_bytes(&mut remote, "B5A CB11");
+        via.tick(1);
+        send_bytes(&mut remote, "BFF");
+        via.tick(1);
+        assert_eq!(via.read(0x0), 0x5A, "latched value must be held despite subsequent port update");
+    }
+
     // --- Shift register ---
 
     fn sr_device_with_pipe_and_mode(acr: u8) -> (Via6522, PipeTransport) {
