@@ -166,6 +166,15 @@ impl Bus {
             }
         }
     }
+    
+    /// Calls `reset()` on every IO device mapped on the bus
+    pub fn reset_devices(&mut self) {
+        for region in &mut self.regions {
+            if let Region::Device { device, .. } = region {
+                device.reset();
+            }
+        }
+    }
 
     /// Returns the IRQ state of every device as `(DeviceId, irq_active)` pairs.
     pub fn device_irq_states(&self) -> Vec<(crate::emulator::device::DeviceId, bool)> {

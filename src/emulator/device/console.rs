@@ -1,3 +1,4 @@
+use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
 
@@ -119,6 +120,11 @@ impl IoDevice for Console {
             1 => self.latch,
             _ => 0,
         }
+    }
+
+    fn reset(&mut self) {
+        self.latch = 0;
+        debug!("console reset")
     }
 
     fn name(&self) -> &str {

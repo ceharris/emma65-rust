@@ -72,6 +72,7 @@
 //! configuration, the corresponding IFR bit is set and an IRQ may be asserted.
 
 use std::time::Duration;
+use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::device::via_protocol::{
     ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage,
@@ -352,6 +353,16 @@ impl Via6522 {
                     self.report_error(e);
                     return;
                 }
+            }
+        }
+    }
+
+    /// Sends the full port and control-signal state dump to all connected
+    /// peripherals that have completed the handshake.
+    fn send_state_to_all(&mut self) {
+        for i in 0..self.transports.len() {
+            if self.transports[i].handshake_done {
+                self.send_state_dump(i);
             }
         }
     }
@@ -923,6 +934,41 @@ impl IoDevice for Via6522 {
                 self.tick_timers(1);
             }
         }
+    }
+
+    fn reset(&mut self) {
+        self.orb = 0;
+        self.ora = 0;
+        self.ddrb = 0;
+        self.ddra = 0;
+        self.input_b = 0;
+        self.input_a = 0;
+        self.irb_latch = 0;
+        self.ira_latch = 0;
+        self.t1_counter = 0;
+        self.t1_latch = 0;
+        self.t1_running = false;
+        self.t1_pb7 = false;
+        self.t2_counter = 0;
+        self.t2_latch_lo = 0;
+        self.t2_latch_hi = 0;
+        self.t2_running = false;
+        self.t2_irq_armed = false;
+        self.sr = 0;
+        self.sr_count = 0;
+        self.sr_shifting_out = false;
+        self.sr_t2_restart = false;
+        self.sr_external = false;
+        self.acr = 0;
+        self.pcr = 0;
+        self.ifr = 0;
+        self.ier = 0;
+        self.ca1 = false;
+        self.ca2 = false;
+        self.cb1 = false;
+        self.cb2 = false;
+        debug!("6522 VIA reset");
+        self.send_state_to_all();
     }
 
     /// Returns `true` when any enabled interrupt flag is set.

@@ -100,6 +100,8 @@ pub trait IoDevice: Send {
     fn peek(&self, offset: u16) -> u8;
     /// Advances device state by `cycles` clock cycles. Called after each CPU instruction.
     fn tick(&mut self, _cycles: u32) {}
+    /// Resets the state of the device in a manner comparable to a hardware reset
+    fn reset(&mut self) {}
     /// Returns `true` if this device is currently asserting an IRQ.
     fn irq_active(&self) -> bool { false }
     /// Consumes a pending NMI edge event from this device, returning `true` if one was pending.

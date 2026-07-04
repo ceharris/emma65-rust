@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 use figment::{Figment, providers::{Format, Toml, Env}};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_log::{Target, TargetKind};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
@@ -332,6 +333,15 @@ pub fn run() {
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    Target::new(TargetKind::Stdout),
+                    Target::new(TargetKind::LogDir { file_name: None }),
+                    Target::new(TargetKind::Webview),
+                ])
+                .build(),
+        )
         .manage(SessionStatusState(Mutex::new(None)))
         .manage(TerminalReadyTx(Mutex::new(Some(ready_tx))))
         // TerminalTx is registered after setup; commands are only called after the

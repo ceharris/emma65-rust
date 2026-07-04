@@ -8,6 +8,7 @@ pub mod status;
 pub mod variant;
 
 use std::collections::HashSet;
+use log::debug;
 use crate::emulator::bus::{Bus, BusOp, InterruptController};
 use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use crate::emulator::cpu::status::StatusRegister;
@@ -180,6 +181,8 @@ impl Cpu {
         self.cycles = 0;
         self.waiting = false;
         self.stopped = false;
+        debug!("6502 CPU reset");
+        self.bus_reset();
         Ok(())
     }
 
@@ -872,6 +875,10 @@ impl Cpu {
             BusError::Unmapped { addr } => ExecError::UnmappedAddress { addr, op: BusOp::Write },
             BusError::RomWrite { addr } => ExecError::RomWrite { addr, value },
         })
+    }
+
+    fn bus_reset(&mut self) {
+        self.bus.reset_devices();
     }
 
     // --- stack helpers ---
