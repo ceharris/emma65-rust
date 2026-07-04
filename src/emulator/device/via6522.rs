@@ -433,7 +433,15 @@ impl Via6522 {
             ViaProtocolMessage::ControlSignalChange { signals, state } => {
                 if signals & 0x02 != 0 { // CA1
                     let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
-                    if self.ca1 != state && state == pos_edge { self.set_ifr(IRQ_CA1); }
+                    if self.ca1 != state && state == pos_edge {
+                        self.set_ifr(IRQ_CA1);
+                        // CA1 active edge releases CA2 handshake output.
+                        let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
+                        if ca2_mode == 4 && !self.ca2 {
+                            self.ca2 = true;
+                            self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+                        }
+                    }
                     self.ca1 = state;
                 }
                 if signals & 0x01 != 0 { // CA2 (when configured as input)
@@ -449,10 +457,16 @@ impl Via6522 {
                         self.sr_update(state);
                     } else if self.cb1 != state {
                         self.cb1 = state;
-                            let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
-                            if state == pos_edge {
-                                self.set_ifr(IRQ_CB1);
+                        let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
+                        if state == pos_edge {
+                            self.set_ifr(IRQ_CB1);
+                            // CB1 active edge releases CB2 handshake output.
+                            let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
+                            if cb2_mode == 4 && !self.cb2 {
+                                self.cb2 = true;
+                                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
                             }
+                        }
                     }
                 }
                 if signals & 0x04 != 0 { // CB2 (when configured as input)
@@ -479,6 +493,40 @@ impl Via6522 {
 
     fn sr_mode(&self) -> u8 {
         self.acr & ACR_SR_MODE_MASK
+    }
+
+    /// Asserts CA2 low (handshake) or pulses it low then high (pulse) after an ORA access.
+    /// Does nothing if CA2 is not in an output mode that responds to ORA access (modes 100/101).
+    fn assert_ca2_handshake_or_pulse(&mut self) {
+        let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
+        match ca2_mode {
+            4 if self.ca2 => { // handshake: assert low; released by CA1 active edge
+                self.ca2 = false;
+                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+            }
+            5 => { // pulse: low then immediately high
+                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+            }
+            _ => {}
+        }
+    }
+
+    /// Asserts CB2 low (handshake) or pulses it low then high (pulse) after an ORB write.
+    /// Does nothing if CB2 is not in an output mode that responds to ORB write (modes 100/101).
+    fn assert_cb2_handshake_or_pulse(&mut self) {
+        let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
+        match cb2_mode {
+            4 if self.cb2 => { // handshake: assert low; released by CB1 active edge
+                self.cb2 = false;
+                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+            }
+            5 => { // pulse: low then immediately high
+                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
+            }
+            _ => {}
+        }
     }
 
     fn sr_update(&mut self, rising: bool) {
@@ -604,13 +652,18 @@ impl IoDevice for Via6522 {
     fn read(&mut self, offset: u16) -> u8 {
         match offset {
             0x0 => {
-                // Reading ORB clears CB1 and CB2 interrupt flags.
-                self.clear_ifr(IRQ_CB1 | IRQ_CB2);
+                // Reading ORB clears CB1 flag and CB2 flag (only in non-independent input modes).
+                self.clear_ifr(IRQ_CB1);
+                let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
+                if cb2_mode != 1 && cb2_mode != 3 { self.clear_ifr(IRQ_CB2); }
                 self.read_port_b()
             }
             0x1 => {
-                // Reading ORA clears CA1 and CA2 interrupt flags; triggers CA2 handshake pulse.
-                self.clear_ifr(IRQ_CA1 | IRQ_CA2);
+                // Reading ORA clears CA1 flag and CA2 flag (only in non-independent input modes).
+                self.clear_ifr(IRQ_CA1);
+                let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
+                if ca2_mode != 1 && ca2_mode != 3 { self.clear_ifr(IRQ_CA2); }
+                self.assert_ca2_handshake_or_pulse();
                 self.read_port_a()
             }
             0x2 => self.ddrb,
@@ -649,27 +702,33 @@ impl IoDevice for Via6522 {
     fn write(&mut self, offset: u16, value: u8) {
         match offset {
             0x0 => {
-                // Writing ORB: update output register, clear CB1/CB2 flags.
+                // Writing ORB: update output register, clear CB1/CB2 flags (CB2 only in non-independent modes).
                 let old_orb = self.orb;
                 self.orb = value;
-                self.clear_ifr(IRQ_CB1 | IRQ_CB2);
+                self.clear_ifr(IRQ_CB1);
+                let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
+                if cb2_mode != 1 && cb2_mode != 3 { self.clear_ifr(IRQ_CB2); }
                 // Send port B state if any output pins changed.
                 let old_b = (old_orb & self.ddrb) | (self.input_b & !self.ddrb);
                 let new_b = self.read_port_b();
                 if old_b != new_b {
                     self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_b });
                 }
+                self.assert_cb2_handshake_or_pulse();
             }
             0x1 => {
-                // Writing ORA: update output register, clear CA1/CA2 flags.
+                // Writing ORA: update output register, clear CA1/CA2 flags (CA2 only in non-independent modes).
                 let old_ora = self.ora;
                 self.ora = value;
-                self.clear_ifr(IRQ_CA1 | IRQ_CA2);
+                self.clear_ifr(IRQ_CA1);
+                let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
+                if ca2_mode != 1 && ca2_mode != 3 { self.clear_ifr(IRQ_CA2); }
                 let old_a = (old_ora & self.ddra) | (self.input_a & !self.ddra);
                 let new_a = self.read_port_a();
                 if old_a != new_a {
                     self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
                 }
+                self.assert_ca2_handshake_or_pulse();
             }
             0x2 => {
                 let old_ddrb = self.ddrb;
@@ -750,6 +809,31 @@ impl IoDevice for Via6522 {
             }
             0xC => {
                 self.pcr = value;
+                // Manual output modes take effect immediately on PCR write.
+                let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
+                match ca2_mode {
+                    6 if self.ca2 => { // manual low
+                        self.ca2 = false;
+                        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+                    }
+                    7 if !self.ca2 => { // manual high
+                        self.ca2 = true;
+                        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+                    }
+                    _ => {}
+                }
+                let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
+                match cb2_mode {
+                    6 if self.cb2 => { // manual low
+                        self.cb2 = false;
+                        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+                    }
+                    7 if !self.cb2 => { // manual high
+                        self.cb2 = true;
+                        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
+                    }
+                    _ => {}
+                }
             }
             0xD => {
                 // Writing IFR clears the specified bits.
@@ -1725,11 +1809,12 @@ mod tests {
     fn ca2_output_mode_does_not_update_ca2_state() {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.ca2 = true;
+        // Write PCR first (ca2 is false by default so no immediate transition).
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
-        send_bytes(&mut remote, "CA20");
+        // A peripheral message asserting CA2 high must not overwrite the driven-low state.
+        send_bytes(&mut remote, "CA21");
         via.tick(1);
-        assert!(via.ca2, "ca2 must not be overwritten in output mode");
+        assert!(!via.ca2, "ca2 must not be overwritten by peripheral message in output mode");
     }
 
     #[test]
@@ -1769,11 +1854,347 @@ mod tests {
     fn cb2_output_mode_does_not_update_cb2_state() {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
+        // Write PCR first (cb2 is false by default so no immediate transition).
+        via.write(0xC, PCR_CB2_OUTPUT_LOW);
+        // A peripheral message asserting CB2 high must not overwrite the driven-low state.
+        send_bytes(&mut remote, "CB21");
+        via.tick(1);
+        assert!(!via.cb2, "cb2 must not be overwritten by peripheral message in output mode");
+    }
+
+    // --- Handshake/pulse output modes ---
+
+    const PCR_CA2_HANDSHAKE_OUTPUT:   u8 = 0b00001000; // bits 3:1 = 100
+    const PCR_CA2_PULSE_OUTPUT:       u8 = 0b00001010; // bits 3:1 = 101
+    const PCR_CA2_MANUAL_HIGH_OUTPUT: u8 = 0b00001110; // bits 3:1 = 111
+    const PCR_CB2_HANDSHAKE_OUTPUT:   u8 = 0b10000000; // bits 7:5 = 100
+    const PCR_CB2_PULSE_OUTPUT:       u8 = 0b10100000; // bits 7:5 = 101
+    const PCR_CB2_MANUAL_HIGH_OUTPUT: u8 = 0b11100000; // bits 7:5 = 111
+
+    // --- IFR clearing with independent input modes ---
+
+    #[test]
+    fn ca2_independent_input_ifr_not_cleared_by_ora_read() {
+        let mut via = device();
+        via.set_ifr(IRQ_CA2);
+        via.write(0xC, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.read(0x1);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0, "IRQ_CA2 must not be cleared by ORA read in independent mode");
+    }
+
+    #[test]
+    fn ca2_independent_input_ifr_not_cleared_by_ora_write() {
+        let mut via = device();
+        via.set_ifr(IRQ_CA2);
+        via.write(0xC, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.write(0x1, 0x00);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0, "IRQ_CA2 must not be cleared by ORA write in independent mode");
+    }
+
+    #[test]
+    fn ca2_non_independent_input_ifr_cleared_by_ora_read() {
+        let mut via = device();
+        via.set_ifr(IRQ_CA2);
+        via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
+        via.read(0x1);
+        assert_eq!(via.peek(0xD) & IRQ_CA2, 0, "IRQ_CA2 must be cleared by ORA read in non-independent mode");
+    }
+
+    #[test]
+    fn ca2_non_independent_input_ifr_cleared_by_ora_write() {
+        let mut via = device();
+        via.set_ifr(IRQ_CA2);
+        via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
+        via.write(0x1, 0x00);
+        assert_eq!(via.peek(0xD) & IRQ_CA2, 0, "IRQ_CA2 must be cleared by ORA write in non-independent mode");
+    }
+
+    #[test]
+    fn cb2_independent_input_ifr_not_cleared_by_orb_read() {
+        let mut via = device();
+        via.set_ifr(IRQ_CB2);
+        via.write(0xC, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.read(0x0);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0, "IRQ_CB2 must not be cleared by ORB read in independent mode");
+    }
+
+    #[test]
+    fn cb2_independent_input_ifr_not_cleared_by_orb_write() {
+        let mut via = device();
+        via.set_ifr(IRQ_CB2);
+        via.write(0xC, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.write(0x0, 0x00);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0, "IRQ_CB2 must not be cleared by ORB write in independent mode");
+    }
+
+    #[test]
+    fn cb2_non_independent_input_ifr_cleared_by_orb_read() {
+        let mut via = device();
+        via.set_ifr(IRQ_CB2);
+        via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
+        via.read(0x0);
+        assert_eq!(via.peek(0xD) & IRQ_CB2, 0, "IRQ_CB2 must be cleared by ORB read in non-independent mode");
+    }
+
+    #[test]
+    fn cb2_non_independent_input_ifr_cleared_by_orb_write() {
+        let mut via = device();
+        via.set_ifr(IRQ_CB2);
+        via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
+        via.write(0x0, 0x00);
+        assert_eq!(via.peek(0xD) & IRQ_CB2, 0, "IRQ_CB2 must be cleared by ORB write in non-independent mode");
+    }
+
+    // --- Manual output modes ---
+
+    #[test]
+    fn ca2_manual_low_sends_ca2_low_message_on_pcr_write() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xC, PCR_CA2_OUTPUT_LOW);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CA20"), "expected CA20 after PCR manual-low write, got: {s}");
+        assert!(!via.ca2);
+    }
+
+    #[test]
+    fn ca2_manual_high_sends_ca2_high_message_on_pcr_write() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        // ca2 starts false by default
+        via.write(0xC, PCR_CA2_MANUAL_HIGH_OUTPUT);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CA21"), "expected CA21 after PCR manual-high write, got: {s}");
+        assert!(via.ca2);
+    }
+
+    #[test]
+    fn cb2_manual_low_sends_cb2_low_message_on_pcr_write() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
-        send_bytes(&mut remote, "CB20");
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CB20"), "expected CB20 after PCR manual-low write, got: {s}");
+        assert!(!via.cb2);
+    }
+
+    #[test]
+    fn cb2_manual_high_sends_cb2_high_message_on_pcr_write() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        // cb2 starts false by default
+        via.write(0xC, PCR_CB2_MANUAL_HIGH_OUTPUT);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CB21"), "expected CB21 after PCR manual-high write, got: {s}");
+        assert!(via.cb2);
+    }
+
+    // --- CA2 read handshake ---
+
+    #[test]
+    fn ca2_handshake_output_asserts_on_ora_read() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
+        collect_bytes(&mut remote); // drain any PCR-triggered messages
+        via.read(0x1);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CA20"), "expected CA20 after ORA read in handshake mode, got: {s}");
+        assert!(!via.ca2);
+    }
+
+    #[test]
+    fn ca2_handshake_output_releases_on_ca1_active_edge() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.ca1 = true; // start high so falling edge triggers
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT | PCR_CA1_INPUT_NEGATIVE_EDGE);
+        collect_bytes(&mut remote);
+        via.read(0x1); // assert CA2 low
+        collect_bytes(&mut remote); // drain CA20
+        send_bytes(&mut remote, "CA10"); // CA1 falling edge — active edge in neg-edge mode
         via.tick(1);
-        assert!(via.cb2, "cb2 must not be overwritten in output mode");
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CA21"), "expected CA21 after CA1 active edge releases handshake, got: {s}");
+        assert!(via.ca2);
+    }
+
+    #[test]
+    fn ca2_handshake_not_triggered_by_ora_nh_read() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.read(0xF); // ORA no-handshake
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(!s.contains("CA20"), "CA20 must not be sent on ORA_NH read, got: {s}");
+        assert!(via.ca2, "ca2 must remain high after ORA_NH read");
+    }
+
+    #[test]
+    fn ca2_handshake_output_not_asserted_when_already_low() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = false; // already asserted
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.read(0x1);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(!s.contains("CA20"), "CA20 must not be sent redundantly when already low, got: {s}");
+    }
+
+    // --- CA2 write handshake ---
+
+    #[test]
+    fn ca2_handshake_output_asserts_on_ora_write() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.write(0x1, 0x00);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CA20"), "expected CA20 after ORA write in handshake mode, got: {s}");
+        assert!(!via.ca2);
+    }
+
+    #[test]
+    fn ca2_write_handshake_releases_on_ca1_active_edge() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.ca2 = true;
+        via.ca1 = true;
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT | PCR_CA1_INPUT_NEGATIVE_EDGE);
+        collect_bytes(&mut remote);
+        via.write(0x1, 0x00); // assert CA2 low
+        collect_bytes(&mut remote);
+        send_bytes(&mut remote, "CA10");
+        via.tick(1);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CA21"), "expected CA21 after CA1 active edge, got: {s}");
+        assert!(via.ca2);
+    }
+
+    // --- CA2 pulse mode ---
+
+    #[test]
+    fn ca2_pulse_output_on_ora_read_sends_low_then_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.write(0xC, PCR_CA2_PULSE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.read(0x1);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        let low_pos  = s.find("CA20").expect("expected CA20 in pulse output");
+        let high_pos = s.find("CA21").expect("expected CA21 in pulse output");
+        assert!(low_pos < high_pos, "CA20 must precede CA21 in pulse sequence");
+    }
+
+    #[test]
+    fn ca2_pulse_output_on_ora_write_sends_low_then_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.write(0xC, PCR_CA2_PULSE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.write(0x1, 0x00);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        let low_pos  = s.find("CA20").expect("expected CA20 in pulse output");
+        let high_pos = s.find("CA21").expect("expected CA21 in pulse output");
+        assert!(low_pos < high_pos, "CA20 must precede CA21 in pulse sequence");
+    }
+
+    #[test]
+    fn ca2_pulse_output_not_triggered_by_ora_nh() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.write(0xC, PCR_CA2_PULSE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.read(0xF); // ORA no-handshake
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(!s.contains("CA20"), "CA20 must not be sent on ORA_NH read, got: {s}");
+        assert!(!s.contains("CA21"), "CA21 must not be sent on ORA_NH read, got: {s}");
+    }
+
+    // --- CB2 write handshake ---
+
+    #[test]
+    fn cb2_handshake_output_asserts_on_orb_write() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = true;
+        via.write(0xC, PCR_CB2_HANDSHAKE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.write(0x0, 0x00);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CB20"), "expected CB20 after ORB write in handshake mode, got: {s}");
+        assert!(!via.cb2);
+    }
+
+    #[test]
+    fn cb2_handshake_output_releases_on_cb1_active_edge() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = true;
+        via.cb1 = true;
+        via.write(0xC, PCR_CB2_HANDSHAKE_OUTPUT | PCR_CB1_INPUT_NEGATIVE_EDGE);
+        collect_bytes(&mut remote);
+        via.write(0x0, 0x00); // assert CB2 low
+        collect_bytes(&mut remote);
+        send_bytes(&mut remote, "CB10"); // CB1 falling edge — active in neg-edge mode
+        via.tick(1);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(s.contains("CB21"), "expected CB21 after CB1 active edge releases handshake, got: {s}");
+        assert!(via.cb2);
+    }
+
+    #[test]
+    fn cb2_handshake_output_not_triggered_by_orb_read() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.cb2 = true;
+        via.write(0xC, PCR_CB2_HANDSHAKE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.read(0x0); // ORB read — must NOT trigger CB2
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        assert!(!s.contains("CB20"), "CB20 must not be sent on ORB read, got: {s}");
+        assert!(via.cb2, "cb2 must remain high after ORB read");
+    }
+
+    // --- CB2 pulse mode ---
+
+    #[test]
+    fn cb2_pulse_output_on_orb_write_sends_low_then_high() {
+        let (mut via, mut remote) = device_with_pipe();
+        handshake(&mut via, &mut remote);
+        via.write(0xC, PCR_CB2_PULSE_OUTPUT);
+        collect_bytes(&mut remote);
+        via.write(0x0, 0x00);
+        let received = collect_bytes(&mut remote);
+        let s = String::from_utf8_lossy(&received);
+        let low_pos  = s.find("CB20").expect("expected CB20 in pulse output");
+        let high_pos = s.find("CB21").expect("expected CB21 in pulse output");
+        assert!(low_pos < high_pos, "CB20 must precede CB21 in pulse sequence");
     }
 
     // --- Shift register ---
