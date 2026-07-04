@@ -610,6 +610,10 @@ impl Via6522 {
         }
     }
 
+    // NOTE: Correct underflow behavior requires cycles == 1. When cycles > 1,
+    // overflowing_sub may skip past zero without triggering the underflow condition
+    // if the decrement exceeds the remaining count. IoDevice::tick() always passes
+    // cycles = 1 in practice, but callers must not pass larger values.
     fn tick_timer_1(&mut self, cycles: u32) {
         if self.t1_running {
             let (new_counter, wrapped) = self.t1_counter.overflowing_sub(cycles as u16);
@@ -636,6 +640,7 @@ impl Via6522 {
         }
     }
 
+    // NOTE: Same cycles == 1 constraint as tick_timer_1; see comment there.
     fn tick_timer_2(&mut self, cycles: u32) {
         if self.t2_running && self.acr & ACR_T2_PB6_COUNT == 0 {
             let (new_counter, wrapped) = self.t2_counter.overflowing_sub(cycles as u16);
@@ -821,6 +826,12 @@ impl IoDevice for Via6522 {
                 self.sr_start();
             }
             0xB => {
+                // NOTE: Changing SR mode bits or timer-control bits while a shift register
+                // operation or timer is actively running produces undefined behavior. The
+                // datasheet does not specify mid-operation ACR writes and this implementation
+                // makes no attempt to handle them (a running SR continues with its existing
+                // sr_count/sr_shifting_out/sr_external state). Real software should stop any
+                // active operation before reconfiguring the ACR.
                 let prev_acr = self.acr;
                 self.acr = value;
                 // If PB7 output mode is disabled while Timer 1 is holding PB7 high, and if
