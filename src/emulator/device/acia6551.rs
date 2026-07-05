@@ -330,10 +330,16 @@ impl IoDevice for Acia6551 {
         let transport = std::mem::take(&mut self.transport);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
+        let clock_hz = self.clock_hz;
+        let tdre_bug_compatible = self.tdre_bug_compatible;
+        let overrun_enabled = self.overrun_enabled;
         *self = Self::new();
         self.transport = transport;
         self.error_sender = error_sender;
         self.device_id = device_id;
+        self.clock_hz = clock_hz;
+        self.tdre_bug_compatible = tdre_bug_compatible;
+        self.overrun_enabled = overrun_enabled;
         debug!("{} {} reset", self.name(), self.device_id.unwrap());
     }
 
@@ -627,6 +633,18 @@ mod tests {
         assert!(device.irq_active(), "expected IRQ active");
         device.reset();
         assert!(!device.irq_active(), "IRQ must not be active after reset");
+    }
+
+    #[test]
+    fn reset_preserves_configuration_attributes() {
+        let mut device = Acia6551::new()
+            .with_clock_hz(1_843_200)
+            .with_tdre_bug(true)
+            .with_overrun(true);
+        device.reset();
+        assert_eq!(device.clock_hz, 1_843_200, "clock_hz must be preserved after reset");
+        assert!(device.tdre_bug_compatible, "tdre_bug_compatible must be preserved after reset");
+        assert!(device.overrun_enabled, "overrun_enabled must be preserved after reset");
     }
 
 }
