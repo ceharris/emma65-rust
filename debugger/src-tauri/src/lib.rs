@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::Mutex;
@@ -32,9 +31,6 @@ pub struct DisassemblerState(pub Mutex<Option<Disassembler>>);
 ///
 /// Reset to 0 on session start; updated by `step_into` and read by `get_registers`.
 pub struct ChangedFlagsState(pub Mutex<u8>);
-
-/// Set of addresses at which execution should halt during auto-step.
-pub struct BreakpointState(pub Mutex<HashSet<u16>>);
 
 /// Payload emitted to the frontend on the `session-status` event.
 #[derive(Clone, serde::Serialize)]
@@ -171,7 +167,6 @@ fn step_into(
     app: AppHandle,
     cpu_state: State<CpuState>,
     changed_flags_state: State<ChangedFlagsState>,
-    breakpoint_state: State<BreakpointState>,
 ) -> Result<RegisterSnapshot, String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
@@ -184,7 +179,7 @@ fn step_into(
     *changed_flags_state.0.lock().unwrap() = changed;
 
     let cpu_stopped = matches!(result, StepResult::Stopped);
-    let breakpoint_hit = breakpoint_state.0.lock().unwrap().contains(&regs.pc);
+    let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
     let snapshot = RegisterSnapshot {
         a: regs.a,
         x: regs.x,
@@ -287,27 +282,29 @@ fn get_stack(cpu_state: State<CpuState>) -> Result<StackSnapshot, String> {
     Ok(StackSnapshot { s, page })
 }
 
-/// Toggles a breakpoint at `addr`: adds it if not present, removes it if present.
+/// Toggles a breakpoint at `addr` on the CPU: adds it if not present, removes it if present.
 ///
-/// Returns the updated breakpoint list.
+/// Returns the updated breakpoint list, sorted ascending.
 #[tauri::command]
-fn toggle_breakpoint(addr: u16, breakpoint_state: State<BreakpointState>) -> Vec<u16> {
-    let mut bps = breakpoint_state.0.lock().unwrap();
-    if !bps.remove(&addr) {
-        bps.insert(addr);
+fn toggle_breakpoint(addr: u16, cpu_state: State<CpuState>) -> Result<Vec<u16>, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    if !cpu.remove_breakpoint(addr) {
+        cpu.add_breakpoint(addr);
     }
-    let mut list: Vec<u16> = bps.iter().copied().collect();
+    let mut list: Vec<u16> = cpu.breakpoints().iter().copied().collect();
     list.sort_unstable();
-    list
+    Ok(list)
 }
 
-/// Returns the current breakpoint address list, sorted ascending.
+/// Returns the CPU's current breakpoint address list, sorted ascending.
 #[tauri::command]
-fn get_breakpoints(breakpoint_state: State<BreakpointState>) -> Vec<u16> {
-    let bps = breakpoint_state.0.lock().unwrap();
-    let mut list: Vec<u16> = bps.iter().copied().collect();
+fn get_breakpoints(cpu_state: State<CpuState>) -> Result<Vec<u16>, String> {
+    let guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_ref().ok_or("CPU not ready")?;
+    let mut list: Vec<u16> = cpu.breakpoints().iter().copied().collect();
     list.sort_unstable();
-    list
+    Ok(list)
 }
 
 /// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xfff0 for paragraph alignment).
@@ -383,7 +380,6 @@ pub fn run() {
         .manage(CpuState(Mutex::new(None)))
         .manage(DisassemblerState(Mutex::new(None)))
         .manage(ChangedFlagsState(Mutex::new(0)))
-        .manage(BreakpointState(Mutex::new(HashSet::new())))
         .invoke_handler(tauri::generate_handler![
             quit,
             get_session_status,
