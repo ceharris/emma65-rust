@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import DisassemblyPanel from "./DisassemblyPanel";
+import CpuBusPanel from "./CpuBusPanel";
+import DisassemblyPanel, { ExecState } from "./DisassemblyPanel";
 import MemoryPanel from "./MemoryPanel";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
 import StackPanel from "./StackPanel";
@@ -14,6 +15,7 @@ interface SessionStatus {
 export default function App() {
   const [status, setStatus] = useState<SessionStatus | null>(null);
   const [lastSnapshot, setLastSnapshot] = useState<RegisterSnapshot | null>(null);
+  const [execState, setExecState] = useState<ExecState>("stopped");
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -44,6 +46,14 @@ export default function App() {
     setLastSnapshot(snap);
   }, []);
 
+  const handleExecStateChange = useCallback((state: ExecState) => {
+    setExecState(state);
+  }, []);
+
+  const handleReset = useCallback((snap: RegisterSnapshot) => {
+    setLastSnapshot(snap);
+  }, []);
+
   if (status === null || !status.ok) {
     return (
       <div className="app-splash">
@@ -63,11 +73,12 @@ export default function App() {
         {/* Watchpoints — story 12 */}
       </div>
       <div className="col col-center">
-        <DisassemblyPanel onStep={handleStep} />
+        <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} />
       </div>
       <div className="col col-right">
         <RegisterPanel snapshot={lastSnapshot} />
         <StackPanel />
+        <CpuBusPanel execState={execState} onReset={handleReset} />
       </div>
     </div>
   );
