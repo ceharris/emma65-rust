@@ -9,8 +9,9 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
 use emma65::emulator::{
-    Config, Cpu, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext,
-    PipeTransport, StepResult, TransportSlot,
+    run as exec_run, step_over as exec_step_over, step_return as exec_step_return,
+    Config, Cpu, DeviceRegistry, Disassembler, EmulatorSession,
+    InstantiationContext, PipeTransport, RunStopper, StepResult, TransportSlot,
 };
 
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
@@ -43,6 +44,9 @@ pub struct SessionStatus {
 
 /// Holds the last emitted session status so late-connecting frontends can retrieve it.
 pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
+
+/// Holds the stopper handle while the CPU is free-running; `None` when halted.
+pub struct RunStopperState(pub Mutex<Option<RunStopper>>);
 
 /// A single disassembled line returned to the frontend.
 #[derive(Clone, serde::Serialize)]
@@ -347,6 +351,149 @@ fn get_disassembly(
     Ok(rows)
 }
 
+/// Starts free-run execution on a dedicated OS thread.
+///
+/// Takes the CPU out of `CpuState` and passes it to `exec::run`. Spawns a
+/// background task that awaits the run completing, then restores the CPU to
+/// `CpuState`, emits `debugger-halted` with the final PC, and emits
+/// `debugger-run-stopped` with a full register snapshot.
+#[tauri::command]
+fn run_cpu(
+    app: AppHandle,
+    cpu_state: State<CpuState>,
+    run_stopper_state: State<RunStopperState>,
+) -> Result<(), String> {
+    let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
+    let handle = exec_run(cpu);
+    let stopper = handle.stopper();
+    *run_stopper_state.0.lock().unwrap() = Some(stopper);
+
+    tauri::async_runtime::spawn(async move {
+        let (result, cpu) = handle.take_cpu_with_result().await;
+        let regs = *cpu.registers();
+        let cpu_stopped = matches!(result, StepResult::Stopped);
+        let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
+
+        *app.state::<ChangedFlagsState>().0.lock().unwrap() = 0;
+        *app.state::<RunStopperState>().0.lock().unwrap() = None;
+        *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
+
+        let snapshot = RegisterSnapshot {
+            a: regs.a, x: regs.x, y: regs.y, s: regs.s,
+            pc: regs.pc, p: regs.p.to_byte(),
+            changed_flags: 0,
+            cpu_stopped,
+            breakpoint_hit,
+        };
+        let _ = app.emit("debugger-halted", regs.pc);
+        let _ = app.emit("debugger-run-stopped", snapshot);
+    });
+
+    Ok(())
+}
+
+/// Signals the free-running CPU thread to stop.
+///
+/// Non-blocking. The background task spawned by `run_cpu` handles CPU recovery
+/// and emits `debugger-run-stopped` when the thread exits.
+#[tauri::command]
+fn stop_cpu(run_stopper_state: State<RunStopperState>) -> Result<(), String> {
+    let guard = run_stopper_state.0.lock().unwrap();
+    let stopper = guard.as_ref().ok_or("CPU is not running")?;
+    stopper.stop();
+    Ok(())
+}
+
+/// Executes one step treating JSR as atomic, then emits the result as an event.
+///
+/// Returns immediately; the blocking work runs on a dedicated thread. The Stop
+/// button (via `stop_cpu`) can interrupt the operation mid-subroutine. Emits
+/// `debugger-run-stopped` with the final snapshot when done.
+#[tauri::command]
+fn step_over(
+    app: AppHandle,
+    cpu_state: State<CpuState>,
+    run_stopper_state: State<RunStopperState>,
+) -> Result<(), String> {
+    let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
+    let p_before = cpu.registers().p.to_byte();
+    let (stopper, stop_rx) = RunStopper::channel();
+    *run_stopper_state.0.lock().unwrap() = Some(stopper);
+
+    std::thread::spawn(move || {
+        let mut cpu = cpu;
+        let result = exec_step_over(&mut cpu, &stop_rx);
+        let regs = *cpu.registers();
+        let changed = p_before ^ regs.p.to_byte();
+
+        let (cpu_stopped, breakpoint_hit) = match &result {
+            Some(r) => (matches!(r, StepResult::Stopped), matches!(r, StepResult::Breakpoint(_))),
+            None => (false, false),
+        };
+
+        *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed;
+        *app.state::<RunStopperState>().0.lock().unwrap() = None;
+        *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
+
+        let snapshot = RegisterSnapshot {
+            a: regs.a, x: regs.x, y: regs.y, s: regs.s,
+            pc: regs.pc, p: regs.p.to_byte(),
+            changed_flags: changed,
+            cpu_stopped,
+            breakpoint_hit,
+        };
+        let _ = app.emit("debugger-halted", regs.pc);
+        let _ = app.emit("debugger-run-stopped", snapshot);
+    });
+
+    Ok(())
+}
+
+/// Runs until the current subroutine returns, then emits the result as an event.
+///
+/// Returns immediately; the blocking work runs on a dedicated thread. The Stop
+/// button (via `stop_cpu`) can interrupt the operation before the return. Emits
+/// `debugger-run-stopped` with the final snapshot when done.
+#[tauri::command]
+fn step_return(
+    app: AppHandle,
+    cpu_state: State<CpuState>,
+    run_stopper_state: State<RunStopperState>,
+) -> Result<(), String> {
+    let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
+    let p_before = cpu.registers().p.to_byte();
+    let (stopper, stop_rx) = RunStopper::channel();
+    *run_stopper_state.0.lock().unwrap() = Some(stopper);
+
+    std::thread::spawn(move || {
+        let mut cpu = cpu;
+        let result = exec_step_return(&mut cpu, &stop_rx);
+        let regs = *cpu.registers();
+        let changed = p_before ^ regs.p.to_byte();
+
+        let (cpu_stopped, breakpoint_hit) = match &result {
+            Some(r) => (matches!(r, StepResult::Stopped), matches!(r, StepResult::Breakpoint(_))),
+            None => (false, false),
+        };
+
+        *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed;
+        *app.state::<RunStopperState>().0.lock().unwrap() = None;
+        *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
+
+        let snapshot = RegisterSnapshot {
+            a: regs.a, x: regs.x, y: regs.y, s: regs.s,
+            pc: regs.pc, p: regs.p.to_byte(),
+            changed_flags: changed,
+            cpu_stopped,
+            breakpoint_hit,
+        };
+        let _ = app.emit("debugger-halted", regs.pc);
+        let _ = app.emit("debugger-run-stopped", snapshot);
+    });
+
+    Ok(())
+}
+
 fn emit_status(app: &AppHandle, status: SessionStatus) {
     app.state::<SessionStatusState>().0.lock().unwrap().replace(status.clone());
     let _ = app.emit("session-status", status);
@@ -380,12 +527,17 @@ pub fn run() {
         .manage(CpuState(Mutex::new(None)))
         .manage(DisassemblerState(Mutex::new(None)))
         .manage(ChangedFlagsState(Mutex::new(0)))
+        .manage(RunStopperState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             quit,
             get_session_status,
             write_terminal,
             terminal_ready,
+            run_cpu,
+            stop_cpu,
             step_into,
+            step_over,
+            step_return,
             reset_cpu,
             get_registers,
             get_disassembly,
