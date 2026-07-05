@@ -73,6 +73,8 @@ pub struct RegisterSnapshot {
     pub changed_flags: u8,
     /// True when the CPU executed STP and is now halted; auto-step should stop.
     pub cpu_stopped: bool,
+    /// True when the post-step PC matches a breakpoint address; auto-step should stop.
+    pub breakpoint_hit: bool,
 }
 
 /// Loads emulator config from `~/.emma/debugger/default/emulator.toml`,
@@ -177,6 +179,7 @@ fn step_into(
     *changed_flags_state.0.lock().unwrap() = changed;
 
     let cpu_stopped = matches!(result, StepResult::Stopped);
+    let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
     let snapshot = RegisterSnapshot {
         a: regs.a,
         x: regs.x,
@@ -186,6 +189,7 @@ fn step_into(
         p: regs.p.to_byte(),
         changed_flags: changed,
         cpu_stopped,
+        breakpoint_hit,
     };
 
     let _ = app.emit("debugger-halted", regs.pc);
@@ -219,6 +223,7 @@ fn reset_cpu(
         p: regs.p.to_byte(),
         changed_flags: 0,
         cpu_stopped: false,
+        breakpoint_hit: false,
     };
 
     let _ = app.emit("debugger-halted", regs.pc);
@@ -247,6 +252,7 @@ fn get_registers(
         p: regs.p.to_byte(),
         changed_flags,
         cpu_stopped: false,
+        breakpoint_hit: false,
     })
 }
 
@@ -274,6 +280,31 @@ fn get_stack(cpu_state: State<CpuState>) -> Result<StackSnapshot, String> {
         .peek_range(0x0100, &mut page)
         .map_err(|e| e.to_string())?;
     Ok(StackSnapshot { s, page })
+}
+
+/// Toggles a breakpoint at `addr` on the CPU: adds it if not present, removes it if present.
+///
+/// Returns the updated breakpoint list, sorted ascending.
+#[tauri::command]
+fn toggle_breakpoint(addr: u16, cpu_state: State<CpuState>) -> Result<Vec<u16>, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    if !cpu.remove_breakpoint(addr) {
+        cpu.add_breakpoint(addr);
+    }
+    let mut list: Vec<u16> = cpu.breakpoints().iter().copied().collect();
+    list.sort_unstable();
+    Ok(list)
+}
+
+/// Returns the CPU's current breakpoint address list, sorted ascending.
+#[tauri::command]
+fn get_breakpoints(cpu_state: State<CpuState>) -> Result<Vec<u16>, String> {
+    let guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_ref().ok_or("CPU not ready")?;
+    let mut list: Vec<u16> = cpu.breakpoints().iter().copied().collect();
+    list.sort_unstable();
+    Ok(list)
 }
 
 /// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xfff0 for paragraph alignment).
@@ -360,6 +391,8 @@ pub fn run() {
             get_disassembly,
             get_memory,
             get_stack,
+            toggle_breakpoint,
+            get_breakpoints,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

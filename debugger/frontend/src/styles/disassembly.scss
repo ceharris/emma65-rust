@@ -154,8 +154,18 @@
 
 .disasm-gutter {
   flex: 0 0 14px;
-  color: #c94040;
+  color: transparent;
   text-align: center;
+  cursor: pointer;
+  user-select: none;
+
+  &:hover {
+    color: #7a2020;
+  }
+
+  &.breakpoint {
+    color: #c94040;
+  }
 }
 
 .disasm-addr {
