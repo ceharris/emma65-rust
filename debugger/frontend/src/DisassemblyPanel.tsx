@@ -86,6 +86,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
   const [currentPc, setCurrentPc] = useState<number | null>(null);
   const [stepping, setStepping] = useState(false);
   const [isAutoStepping, setIsAutoStepping] = useState(false);
+  const [isFreeRunning, setIsFreeRunning] = useState(false);
   const [intervalMs, setIntervalMs] = useState(INTERVAL_DEFAULT);
   const [intervalInputValue, setIntervalInputValue] = useState(String(INTERVAL_DEFAULT));
   const [breakpoints, setBreakpoints] = useState<Set<number>>(new Set());
@@ -95,6 +96,8 @@ export default function DisassemblyPanel({ onStep }: Props) {
   const pcRef = useRef<number | null>(null);
   const steppingRef = useRef(false);
   const isAutoSteppingRef = useRef(false);
+  const isFreeRunningRef = useRef(false);
+  const stoppingRef = useRef(false);
   const intervalMsRef = useRef(INTERVAL_DEFAULT);
   const autoStepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -102,6 +105,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
   pcRef.current = currentPc;
   steppingRef.current = stepping;
   isAutoSteppingRef.current = isAutoStepping;
+  isFreeRunningRef.current = isFreeRunning;
   intervalMsRef.current = intervalMs;
 
   const handleToggleBreakpoint = useCallback(async (addr: number) => {
@@ -169,8 +173,15 @@ export default function DisassemblyPanel({ onStep }: Props) {
   }, [fetchFrom, extendFrom]);
 
   useEffect(() => {
-    const unlistenPromise = listen<number>("debugger-halted", (event) => {
+    const unlistenHaltedPromise = listen<number>("debugger-halted", (event) => {
       handleHalted(event.payload);
+    });
+
+    const unlistenRunStoppedPromise = listen<RegisterSnapshot>("debugger-run-stopped", (event) => {
+      setIsFreeRunning(false);
+      isFreeRunningRef.current = false;
+      stoppingRef.current = false;
+      onStep(event.payload);
     });
 
     // Proactively fetch on mount: the initial `debugger-halted` event can fire
@@ -183,8 +194,11 @@ export default function DisassemblyPanel({ onStep }: Props) {
       .then((list) => setBreakpoints(new Set(list)))
       .catch(() => {});
 
-    return () => { unlistenPromise.then((f) => f()); };
-  }, [handleHalted]);
+    return () => {
+      unlistenHaltedPromise.then((f) => f());
+      unlistenRunStoppedPromise.then((f) => f());
+    };
+  }, [handleHalted, onStep]);
 
   // Scroll the current-PC row into view whenever it changes.
   const pcRowRef = useRef<HTMLDivElement | null>(null);
@@ -192,16 +206,16 @@ export default function DisassemblyPanel({ onStep }: Props) {
     pcRowRef.current?.scrollIntoView({ block: "nearest" });
   }, [currentPc]);
 
-  /** Execute one step and return the snapshot. Clears stepping lock on completion. */
-  const doStep = useCallback(async (): Promise<RegisterSnapshot | null> => {
+  /** Execute one step using the named command and return the snapshot. Clears stepping lock on completion. */
+  const doStep = useCallback(async (command: string = "step_into"): Promise<RegisterSnapshot | null> => {
     if (steppingRef.current) return null;
     setStepping(true);
     try {
-      const snap = await invoke<RegisterSnapshot>("step_into");
+      const snap = await invoke<RegisterSnapshot>(command);
       onStep(snap);
       return snap;
     } catch (e) {
-      console.error("step_into failed:", e);
+      console.error(`${command} failed:`, e);
       return null;
     } finally {
       setStepping(false);
@@ -210,9 +224,33 @@ export default function DisassemblyPanel({ onStep }: Props) {
 
   /** Single manual step (F11). */
   const stepInto = useCallback(async () => {
-    if (isAutoSteppingRef.current) return;
-    await doStep();
+    if (isAutoSteppingRef.current || isFreeRunningRef.current) return;
+    await doStep("step_into");
   }, [doStep]);
+
+  /** Step over the current instruction, treating JSR as atomic (F10). */
+  const stepOver = useCallback(async () => {
+    if (isAutoSteppingRef.current || isFreeRunningRef.current || steppingRef.current) return;
+    try {
+      await invoke("step_over");
+      setIsFreeRunning(true);
+      isFreeRunningRef.current = true;
+    } catch (e) {
+      console.error("step_over failed:", e);
+    }
+  }, []);
+
+  /** Run until the current subroutine returns (Shift+F11). */
+  const stepReturn = useCallback(async () => {
+    if (isAutoSteppingRef.current || isFreeRunningRef.current || steppingRef.current) return;
+    try {
+      await invoke("step_return");
+      setIsFreeRunning(true);
+      isFreeRunningRef.current = true;
+    } catch (e) {
+      console.error("step_return failed:", e);
+    }
+  }, []);
 
   /** Cancel any pending auto-step timer. */
   const clearAutoStepTimer = useCallback(() => {
@@ -227,7 +265,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
     clearAutoStepTimer();
     autoStepTimerRef.current = setTimeout(async () => {
       if (!isAutoSteppingRef.current) return;
-      const snap = await doStep();
+      const snap = await doStep("step_into");
       if (snap?.cpu_stopped || snap?.breakpoint_hit) {
         setIsAutoStepping(false);
         return;
@@ -240,6 +278,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
 
   /** Toggle auto-step on/off. */
   const toggleAutoStep = useCallback(() => {
+    if (isFreeRunningRef.current) return;
     setIsAutoStepping((prev) => {
       const next = !prev;
       if (next) {
@@ -254,9 +293,36 @@ export default function DisassemblyPanel({ onStep }: Props) {
     });
   }, [scheduleNextTick, clearAutoStepTimer]);
 
-  /** Reset the CPU, stopping auto-step first if active (Shift+F5). */
+  /** Start free-run execution (F5). Stops auto-step first if active. */
+  const runCpu = useCallback(async () => {
+    if (isFreeRunningRef.current || steppingRef.current) return;
+    if (isAutoSteppingRef.current) {
+      isAutoSteppingRef.current = false;
+      setIsAutoStepping(false);
+      clearAutoStepTimer();
+    }
+    try {
+      await invoke("run_cpu");
+      setIsFreeRunning(true);
+      isFreeRunningRef.current = true;
+    } catch (e) {
+      console.error("run_cpu failed:", e);
+    }
+  }, [clearAutoStepTimer]);
+
+  /** Signal the free-running CPU to stop (Shift+F5). */
+  const stopCpu = useCallback(() => {
+    if (!isFreeRunningRef.current || stoppingRef.current) return;
+    stoppingRef.current = true;
+    invoke("stop_cpu").catch((e) => {
+      console.error("stop_cpu failed:", e);
+      stoppingRef.current = false;
+    });
+  }, []);
+
+  /** Reset the CPU (no keyboard shortcut; button only). */
   const resetCpu = useCallback(async () => {
-    if (steppingRef.current) return;
+    if (steppingRef.current || isFreeRunningRef.current) return;
     if (isAutoSteppingRef.current) {
       isAutoSteppingRef.current = false;
       setIsAutoStepping(false);
@@ -277,22 +343,34 @@ export default function DisassemblyPanel({ onStep }: Props) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "F11" && !e.shiftKey) {
+      if (e.key === "F5" && !e.shiftKey && !e.ctrlKey) {
         e.preventDefault();
-        stepInto();
+        runCpu();
       }
       if (e.key === "F5" && e.shiftKey && !e.ctrlKey) {
         e.preventDefault();
-        resetCpu();
+        stopCpu();
       }
       if (e.key === "F5" && e.ctrlKey && e.shiftKey) {
         e.preventDefault();
         toggleAutoStep();
       }
+      if (e.key === "F10" && !e.shiftKey) {
+        e.preventDefault();
+        stepOver();
+      }
+      if (e.key === "F11" && !e.shiftKey) {
+        e.preventDefault();
+        stepInto();
+      }
+      if (e.key === "F11" && e.shiftKey) {
+        e.preventDefault();
+        stepReturn();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [stepInto, resetCpu, toggleAutoStep]);
+  }, [runCpu, stopCpu, stepInto, stepOver, stepReturn, toggleAutoStep]);
 
   const handleSliderChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const pos = parseInt(e.target.value, 10);
@@ -340,26 +418,61 @@ export default function DisassemblyPanel({ onStep }: Props) {
             <button
               className="exec-btn step-into-btn"
               onClick={stepInto}
-              disabled={stepping || isAutoStepping}
+              disabled={stepping || isAutoStepping || isFreeRunning}
               title="Step Into (F11)"
             >
               Step Into
             </button>
             <button
+              className="exec-btn step-over-btn"
+              onClick={stepOver}
+              disabled={stepping || isAutoStepping || isFreeRunning}
+              title="Step Over (F10)"
+            >
+              Step Over
+            </button>
+            <button
+              className="exec-btn step-return-btn"
+              onClick={stepReturn}
+              disabled={stepping || isAutoStepping || isFreeRunning}
+              title="Step Return (Shift+F11)"
+            >
+              Step Return
+            </button>
+            <button
               className="exec-btn reset-btn"
               onClick={resetCpu}
-              title="Reset CPU (Shift+F5)"
+              disabled={stepping || isFreeRunning}
+              title="Reset CPU"
             >
               Reset
             </button>
           </div>
         </div>
         <div className="disassembly-toolbar">
+          <div className="run-controls">
+            <button
+              className="exec-btn run-btn"
+              onClick={runCpu}
+              disabled={isFreeRunning || isAutoStepping || stepping}
+              title="Run (F5)"
+            >
+              Run
+            </button>
+            <button
+              className="exec-btn stop-btn"
+              onClick={stopCpu}
+              disabled={!isFreeRunning}
+              title="Stop (Shift+F5)"
+            >
+              Stop
+            </button>
+          </div>
           <div className="auto-step-control">
             <button
               className={`exec-btn auto-step-btn${isAutoStepping ? " active" : ""}`}
               onClick={toggleAutoStep}
-              disabled={stepping && !isAutoStepping}
+              disabled={isFreeRunning || (stepping && !isAutoStepping)}
               title="Auto-Step (Ctrl+Shift+F5)"
             >
               {isAutoStepping ? "Stop" : "Auto-Step"}

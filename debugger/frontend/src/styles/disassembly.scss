@@ -36,6 +36,12 @@
   gap: 6px;
 }
 
+.run-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .auto-step-control {
   display: flex;
   align-items: center;
@@ -92,7 +98,23 @@
     cursor: default;
   }
 
+  &.run-btn {
+    color: #6abe6a;
+  }
+
+  &.stop-btn {
+    color: #f48771;
+  }
+
   &.step-into-btn {
+    color: #9cdcfe;
+  }
+
+  &.step-over-btn {
+    color: #9cdcfe;
+  }
+
+  &.step-return-btn {
     color: #9cdcfe;
   }
 
