@@ -173,6 +173,7 @@ impl Cpu {
 
     /// Reads the reset vector and initializes registers. Clears WAI/STP state.
     pub fn reset(&mut self) -> Result<(), ExecError> {
+        self.bus_reset();
         let lo = self.bus_read(RESET_VECTOR)?;
         let hi = self.bus_read(RESET_VECTOR + 1)?;
         self.regs.pc = u16::from_le_bytes([lo, hi]);
@@ -182,7 +183,6 @@ impl Cpu {
         self.waiting = false;
         self.stopped = false;
         debug!("6502 CPU reset");
-        self.bus_reset();
         Ok(())
     }
 

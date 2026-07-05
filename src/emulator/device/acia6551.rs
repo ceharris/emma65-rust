@@ -1,3 +1,4 @@
+use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
 
@@ -320,6 +321,18 @@ impl IoDevice for Acia6551 {
         }
     }
 
+    /// Resets the command, control, and status registers as if a hardware reset has occurred.
+    fn reset(&mut self) {
+        let transport = std::mem::take(&mut self.transport);
+        let error_sender = self.error_sender.take();
+        let device_id = self.device_id;
+        *self = Self::new();
+        self.transport = transport;
+        self.error_sender = error_sender;
+        self.device_id = device_id;
+        debug!("{} {} reset", self.name(), self.device_id.unwrap());
+    }
+
     /// Returns `true` when IRQ is asserted:
     /// RDRF with RX interrupt enabled, or TDRE with TX interrupt enabled.
     fn irq_active(&self) -> bool {
@@ -327,7 +340,7 @@ impl IoDevice for Acia6551 {
     }
 
     fn name(&self) -> &str {
-        "acia6551"
+        "acia/6551"
     }
 }
 
@@ -577,4 +590,16 @@ mod tests {
         assert_eq!(device.peek(0), 0x77);
         assert_eq!(device.read(0), 0x77); // still available
     }
+
+    #[test]
+    fn reset_clears_command_control_and_status_registers() {
+        let mut device = Acia6551::new();
+        device.reset();
+        assert_eq!(device.command, 0, "command register must be zero after reset");
+        assert_eq!(device.control, 0, "command register must be zero after reset");
+        assert!(device.tdre, "TRDE must be set after reset");
+        assert!(!device.rdrf, "RDRF must be clear after reset");
+    }
+
+
 }

@@ -10,11 +10,21 @@ pub use self::mc6850::Mc6850;
 pub use self::via6522::Via6522;
 pub use self::via_protocol::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
 
+use std::fmt::{Display, Formatter, Result};
 use tokio::sync::mpsc;
 
 /// Uniquely identifies a device registered on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub u32);
+
+impl Display for DeviceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let addr = match self {
+            DeviceId(addr) => addr
+        };
+        write!(f, "@{:04x}", addr)
+    }
+}
 
 /// Asynchronous event emitted by a device to notify the host application of transport state changes.
 #[derive(Debug)]

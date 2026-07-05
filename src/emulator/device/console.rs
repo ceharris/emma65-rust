@@ -122,9 +122,16 @@ impl IoDevice for Console {
         }
     }
 
+    /// Resets the console by clearing the latch register.
     fn reset(&mut self) {
-        self.latch = 0;
-        debug!("console reset")
+        let transport = std::mem::take(&mut self.transport);
+        let error_sender = self.error_sender.take();
+        let device_id = self.device_id;
+        *self = Self::new();
+        self.transport = transport;
+        self.error_sender = error_sender;
+        self.device_id = device_id;
+        debug!("{} {} reset", self.name(), self.device_id.unwrap())
     }
 
     fn name(&self) -> &str {
@@ -366,4 +373,13 @@ mod tests {
 
         assert_eq!(cpu.bus_mut().read(0x0300).unwrap(), 0x5A);
     }
+
+    #[test]
+    fn reset_clears_latch() {
+        let mut console = Console::new();
+        console.latch = 0xff;
+        console.reset();
+        assert_eq!(console.latch, 0, "reset must clear the latch");
+    }
+
 }

@@ -937,37 +937,26 @@ impl IoDevice for Via6522 {
     }
 
     fn reset(&mut self) {
-        self.orb = 0;
-        self.ora = 0;
-        self.ddrb = 0;
-        self.ddra = 0;
-        self.input_b = 0;
-        self.input_a = 0;
-        self.irb_latch = 0;
-        self.ira_latch = 0;
-        self.t1_counter = 0;
-        self.t1_latch = 0;
-        self.t1_running = false;
-        self.t1_pb7 = false;
-        self.t2_counter = 0;
-        self.t2_latch_lo = 0;
-        self.t2_latch_hi = 0;
-        self.t2_running = false;
-        self.t2_irq_armed = false;
-        self.sr = 0;
-        self.sr_count = 0;
-        self.sr_shifting_out = false;
-        self.sr_t2_restart = false;
-        self.sr_external = false;
-        self.acr = 0;
-        self.pcr = 0;
-        self.ifr = 0;
-        self.ier = 0;
-        self.ca1 = false;
-        self.ca2 = false;
-        self.cb1 = false;
-        self.cb2 = false;
-        debug!("6522 VIA reset");
+        let transports = std::mem::take(&mut self.transports);
+        let error_sender = self.error_sender.take();
+        let device_id = self.device_id;
+        let input_b = self.input_b;
+        let input_a = self.input_a;
+        let ca1 = self.ca1;
+        let ca2 = self.ca2;
+        let cb1 = self.cb1;
+        let cb2 = self.cb2;
+        *self = Self::new();
+        self.transports = transports;
+        self.error_sender = error_sender;
+        self.device_id = device_id;
+        self.input_b = input_b;
+        self.input_a = input_a;
+        self.ca1 = ca1;
+        self.ca2 = ca2;
+        self.cb1 = cb1;
+        self.cb2 = cb2;
+        debug!("{} {} reset", self.name(), device_id.unwrap());
         self.send_state_to_all();
     }
 
@@ -977,7 +966,7 @@ impl IoDevice for Via6522 {
     }
 
     fn name(&self) -> &str {
-        "via6522"
+        "via/6522"
     }
 }
 
