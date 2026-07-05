@@ -19,9 +19,7 @@ pub struct DeviceId(pub u32);
 
 impl Display for DeviceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let addr = match self {
-            DeviceId(addr) => addr
-        };
+        let DeviceId(addr) = self;
         write!(f, "@{:04x}", addr)
     }
 }
