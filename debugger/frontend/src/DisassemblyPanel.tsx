@@ -18,9 +18,14 @@ interface RegisterSnapshot {
   breakpoint_hit: boolean;
 }
 
+/** CPU execution state, used by CpuBusPanel to display the Run/Stop/Step indicator. */
+export type ExecState = "stopped" | "stepping" | "running";
+
 interface Props {
   /** Called with the post-step register snapshot so RegisterPanel can update immediately. */
   onStep: (snap: RegisterSnapshot) => void;
+  /** Called whenever the execution state changes. */
+  onExecStateChange: (state: ExecState) => void;
 }
 
 /** Rows to pre-fetch beyond the visible window so scrolling has buffer. */
@@ -81,7 +86,7 @@ function intervalToSlider(ms: number): number {
   return sliderSteps;
 }
 
-export default function DisassemblyPanel({ onStep }: Props) {
+export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
   const [rows, setRows] = useState<DisassembledRow[]>([]);
   const [currentPc, setCurrentPc] = useState<number | null>(null);
   const [stepping, setStepping] = useState(false);
@@ -231,11 +236,13 @@ export default function DisassemblyPanel({ onStep }: Props) {
   /** Step over the current instruction, treating JSR as atomic (F10). */
   const stepOver = useCallback(async () => {
     if (isAutoSteppingRef.current || isFreeRunningRef.current || steppingRef.current) return;
+    setIsFreeRunning(true);
+    isFreeRunningRef.current = true;
     try {
       await invoke("step_over");
-      setIsFreeRunning(true);
-      isFreeRunningRef.current = true;
     } catch (e) {
+      setIsFreeRunning(false);
+      isFreeRunningRef.current = false;
       console.error("step_over failed:", e);
     }
   }, []);
@@ -243,11 +250,13 @@ export default function DisassemblyPanel({ onStep }: Props) {
   /** Run until the current subroutine returns (Shift+F11). */
   const stepReturn = useCallback(async () => {
     if (isAutoSteppingRef.current || isFreeRunningRef.current || steppingRef.current) return;
+    setIsFreeRunning(true);
+    isFreeRunningRef.current = true;
     try {
       await invoke("step_return");
-      setIsFreeRunning(true);
-      isFreeRunningRef.current = true;
     } catch (e) {
+      setIsFreeRunning(false);
+      isFreeRunningRef.current = false;
       console.error("step_return failed:", e);
     }
   }, []);
@@ -301,11 +310,13 @@ export default function DisassemblyPanel({ onStep }: Props) {
       setIsAutoStepping(false);
       clearAutoStepTimer();
     }
+    setIsFreeRunning(true);
+    isFreeRunningRef.current = true;
     try {
       await invoke("run_cpu");
-      setIsFreeRunning(true);
-      isFreeRunningRef.current = true;
     } catch (e) {
+      setIsFreeRunning(false);
+      isFreeRunningRef.current = false;
       console.error("run_cpu failed:", e);
     }
   }, [clearAutoStepTimer]);
@@ -320,25 +331,32 @@ export default function DisassemblyPanel({ onStep }: Props) {
     });
   }, []);
 
-  /** Reset the CPU (no keyboard shortcut; button only). */
-  const resetCpu = useCallback(async () => {
-    if (steppingRef.current || isFreeRunningRef.current) return;
-    if (isAutoSteppingRef.current) {
-      isAutoSteppingRef.current = false;
-      setIsAutoStepping(false);
-      clearAutoStepTimer();
-    }
-    try {
-      const snap = await invoke<RegisterSnapshot>("reset_cpu");
-      onStep(snap);
-    } catch (e) {
-      console.error("reset_cpu failed:", e);
-    }
-  }, [onStep, clearAutoStepTimer]);
-
   // Clean up timer on unmount.
   useEffect(() => {
     return () => clearAutoStepTimer();
+  }, [clearAutoStepTimer]);
+
+  // Notify parent of execution state changes so CpuBusPanel can update its indicator.
+  useEffect(() => {
+    if (stepping || isAutoStepping) {
+      onExecStateChange("stepping");
+    } else if (isFreeRunning) {
+      onExecStateChange("running");
+    } else {
+      onExecStateChange("stopped");
+    }
+  }, [stepping, isAutoStepping, isFreeRunning, onExecStateChange]);
+
+  // Stop auto-step when the CPU is reset from CpuBusPanel.
+  useEffect(() => {
+    const unlistenPromise = listen("debugger-cpu-reset", () => {
+      if (isAutoSteppingRef.current) {
+        isAutoSteppingRef.current = false;
+        setIsAutoStepping(false);
+        clearAutoStepTimer();
+      }
+    });
+    return () => { unlistenPromise.then((f) => f()); };
   }, [clearAutoStepTimer]);
 
   useEffect(() => {
@@ -438,14 +456,6 @@ export default function DisassemblyPanel({ onStep }: Props) {
               title="Step Return (Shift+F11)"
             >
               Step Return
-            </button>
-            <button
-              className="exec-btn reset-btn"
-              onClick={resetCpu}
-              disabled={stepping || isFreeRunning}
-              title="Reset CPU"
-            >
-              Reset
             </button>
           </div>
         </div>

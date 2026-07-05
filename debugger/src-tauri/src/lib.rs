@@ -48,6 +48,35 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// Holds the stopper handle while the CPU is free-running; `None` when halted.
 pub struct RunStopperState(pub Mutex<Option<RunStopper>>);
 
+/// Cached CPU/bus state (IRQ, NMI, cycle count) for use when the CPU is free-running.
+///
+/// Updated every time the CPU is available: after each step, reset, or run completion.
+pub struct CpuBusCache(pub Mutex<CpuBusSnapshot>);
+
+/// Snapshot of CPU/bus signals and cycle counter.
+#[derive(Clone, serde::Serialize)]
+pub struct CpuBusSnapshot {
+    /// True if any device is currently asserting IRQ.
+    pub irq_active: bool,
+    /// True if an NMI is pending (latched but not yet serviced).
+    pub nmi_pending: bool,
+    /// Total CPU cycles executed since the last reset.
+    pub cycles: u64,
+}
+
+/// Combined CPU/bus state returned by `get_cpu_bus_state`.
+#[derive(Clone, serde::Serialize)]
+pub struct CpuBusState {
+    /// True if any device is currently asserting IRQ.
+    pub irq_active: bool,
+    /// True if an NMI is pending (latched but not yet serviced).
+    pub nmi_pending: bool,
+    /// Total CPU cycles executed since the last reset.
+    pub cycles: u64,
+    /// True while the CPU is free-running (run_cpu, step_over, or step_return in progress).
+    pub is_running: bool,
+}
+
 /// A single disassembled line returned to the frontend.
 #[derive(Clone, serde::Serialize)]
 pub struct DisassembledRow {
@@ -171,6 +200,7 @@ fn step_into(
     app: AppHandle,
     cpu_state: State<CpuState>,
     changed_flags_state: State<ChangedFlagsState>,
+    cpu_bus_cache: State<CpuBusCache>,
 ) -> Result<RegisterSnapshot, String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
@@ -181,6 +211,7 @@ fn step_into(
     let changed = p_before ^ regs.p.to_byte();
 
     *changed_flags_state.0.lock().unwrap() = changed;
+    *cpu_bus_cache.0.lock().unwrap() = snapshot_cpu_bus(cpu);
 
     let cpu_stopped = matches!(result, StepResult::Stopped);
     let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
@@ -203,12 +234,14 @@ fn step_into(
 /// Resets the CPU (reads reset vector, reinitializes registers) and returns the
 /// post-reset register snapshot.
 ///
-/// Resets `ChangedFlagsState` to 0 and emits `debugger-halted` with the new PC.
+/// Resets `ChangedFlagsState` to 0 and emits `debugger-halted` with the new PC,
+/// then emits `debugger-cpu-reset` so the frontend can stop auto-step if active.
 #[tauri::command]
 fn reset_cpu(
     app: AppHandle,
     cpu_state: State<CpuState>,
     changed_flags_state: State<ChangedFlagsState>,
+    cpu_bus_cache: State<CpuBusCache>,
 ) -> Result<RegisterSnapshot, String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
@@ -217,6 +250,7 @@ fn reset_cpu(
     let regs = *cpu.registers();
 
     *changed_flags_state.0.lock().unwrap() = 0;
+    *cpu_bus_cache.0.lock().unwrap() = snapshot_cpu_bus(cpu);
 
     let snapshot = RegisterSnapshot {
         a: regs.a,
@@ -231,6 +265,7 @@ fn reset_cpu(
     };
 
     let _ = app.emit("debugger-halted", regs.pc);
+    let _ = app.emit("debugger-cpu-reset", ());
     Ok(snapshot)
 }
 
@@ -375,6 +410,7 @@ fn run_cpu(
         let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
 
         *app.state::<ChangedFlagsState>().0.lock().unwrap() = 0;
+        *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
         *app.state::<RunStopperState>().0.lock().unwrap() = None;
         *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
@@ -432,6 +468,7 @@ fn step_over(
         };
 
         *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed;
+        *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
         *app.state::<RunStopperState>().0.lock().unwrap() = None;
         *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
@@ -477,6 +514,7 @@ fn step_return(
         };
 
         *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed;
+        *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
         *app.state::<RunStopperState>().0.lock().unwrap() = None;
         *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
@@ -492,6 +530,34 @@ fn step_return(
     });
 
     Ok(())
+}
+
+/// Snapshots the interrupt controller state and cycle count from a live CPU.
+fn snapshot_cpu_bus(cpu: &Cpu) -> CpuBusSnapshot {
+    CpuBusSnapshot {
+        irq_active: cpu.interrupts().irq_active(),
+        nmi_pending: cpu.interrupts().nmi_pending(),
+        cycles: cpu.cycles(),
+    }
+}
+
+/// Returns the current CPU/bus signals and cycle count, plus whether the CPU is free-running.
+///
+/// IRQ, NMI, and cycle values come from a cache updated after each step or run completion;
+/// `is_running` is derived from whether `RunStopperState` holds a stopper.
+#[tauri::command]
+fn get_cpu_bus_state(
+    cpu_bus_cache: State<CpuBusCache>,
+    run_stopper_state: State<RunStopperState>,
+) -> CpuBusState {
+    let snap = cpu_bus_cache.0.lock().unwrap().clone();
+    let is_running = run_stopper_state.0.lock().unwrap().is_some();
+    CpuBusState {
+        irq_active: snap.irq_active,
+        nmi_pending: snap.nmi_pending,
+        cycles: snap.cycles,
+        is_running,
+    }
 }
 
 fn emit_status(app: &AppHandle, status: SessionStatus) {
@@ -528,6 +594,11 @@ pub fn run() {
         .manage(DisassemblerState(Mutex::new(None)))
         .manage(ChangedFlagsState(Mutex::new(0)))
         .manage(RunStopperState(Mutex::new(None)))
+        .manage(CpuBusCache(Mutex::new(CpuBusSnapshot {
+            irq_active: false,
+            nmi_pending: false,
+            cycles: 0,
+        })))
         .invoke_handler(tauri::generate_handler![
             quit,
             get_session_status,
@@ -545,6 +616,7 @@ pub fn run() {
             get_stack,
             toggle_breakpoint,
             get_breakpoints,
+            get_cpu_bus_state,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -570,6 +642,7 @@ pub fn run() {
                         let initial_pc = cpu.registers().pc;
                         let disasm = Disassembler::new(variant);
                         *handle.state::<DisassemblerState>().0.lock().unwrap() = Some(disasm);
+                        *handle.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
                         *handle.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
                         emit_status(&handle, SessionStatus {
