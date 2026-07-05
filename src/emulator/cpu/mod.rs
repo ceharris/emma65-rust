@@ -187,7 +187,24 @@ impl Cpu {
     }
 
     /// Fetches, decodes, and executes one instruction. Returns the step result.
+    ///
+    /// Halts before executing if PC matches a breakpoint or a watch expression triggers.
+    /// Use [`step_over_breakpoint`](Self::step_over_breakpoint) to advance past the
+    /// breakpoint at the current PC without disabling it.
     pub fn step(&mut self) -> StepResult {
+        self.step_impl(None)
+    }
+
+    /// Like [`step`](Self::step), but skips the breakpoint and watch check at `skip_pc`.
+    ///
+    /// Use this when the debugger is already halted at `skip_pc` (due to a breakpoint or
+    /// watch trigger) and needs to advance past it without requiring the breakpoint to be
+    /// disabled first. All other addresses are checked normally.
+    pub fn step_over_breakpoint(&mut self, skip_pc: u16) -> StepResult {
+        self.step_impl(Some(skip_pc))
+    }
+
+    fn step_impl(&mut self, skip_pc: Option<u16>) -> StepResult {
         if self.stopped {
             return StepResult::Stopped;
         }
@@ -206,20 +223,22 @@ impl Cpu {
         self.bus.advance_trace_timestamp();
         let pc = self.regs.pc;
 
-        // Step 3: breakpoint check — before instruction execution.
-        if self.breakpoints.contains(&pc) {
-            return StepResult::Breakpoint(pc);
-        }
+        // Breakpoint and watch checks — skipped for skip_pc so the debugger can
+        // advance past an address it is already halted at.
+        if skip_pc != Some(pc) {
+            if self.breakpoints.contains(&pc) {
+                return StepResult::Breakpoint(pc);
+            }
 
-        // Step 4: watch expression evaluation — before instruction execution.
-        let watch_result = {
-            let ctx = CpuWatchContext { regs: &self.regs, bus: &self.bus };
-            self.evaluator.evaluate_all(&ctx)
-        };
-        match watch_result {
-            Ok(Some(index)) => return StepResult::WatchTriggered { watch_index: index, pc },
-            Err((index, error)) => return StepResult::WatchError { watch_index: index, pc, error },
-            Ok(None) => {}
+            let watch_result = {
+                let ctx = CpuWatchContext { regs: &self.regs, bus: &self.bus };
+                self.evaluator.evaluate_all(&ctx)
+            };
+            match watch_result {
+                Ok(Some(index)) => return StepResult::WatchTriggered { watch_index: index, pc },
+                Err((index, error)) => return StepResult::WatchError { watch_index: index, pc, error },
+                Ok(None) => {}
+            }
         }
 
         // NMI takes priority over IRQ.

@@ -160,7 +160,7 @@ pub fn step_over(cpu: &mut Cpu, stop_rx: &watch::Receiver<bool>) -> Option<StepR
     let pc = cpu.registers().pc;
     let opcode = cpu.bus().peek(pc).unwrap_or(0);
     if opcode != JSR_OPCODE {
-        return Some(cpu.step());
+        return Some(cpu.step_over_breakpoint(pc));
     }
 
     let target = pc.wrapping_add(JSR_BYTE_LEN);
@@ -169,12 +169,22 @@ pub fn step_over(cpu: &mut Cpu, stop_rx: &watch::Receiver<bool>) -> Option<StepR
         cpu.add_breakpoint(target);
     }
 
+    // The first iteration skips the breakpoint/watch check at the current PC so
+    // that a breakpoint there does not immediately re-fire before JSR executes.
+    // Subsequent iterations use the normal step() path.
+    let mut first = true;
     let result = loop {
         if *stop_rx.borrow() {
             if !already_set { cpu.remove_breakpoint(target); }
             return None;
         }
-        match cpu.step() {
+        let res = if first {
+            first = false;
+            cpu.step_over_breakpoint(pc)
+        } else {
+            cpu.step()
+        };
+        match res {
             StepResult::Executed(op) => {
                 if cpu.registers().pc == target {
                     break if already_set {
@@ -220,11 +230,21 @@ pub fn step_over(cpu: &mut Cpu, stop_rx: &watch::Receiver<bool>) -> Option<StepR
 /// current PC. Returns `Some(result)` on natural completion.
 pub fn step_return(cpu: &mut Cpu, stop_rx: &watch::Receiver<bool>) -> Option<StepResult> {
     let initial_s = cpu.registers().s;
+    // The first iteration skips the breakpoint/watch check at the current PC so
+    // that a breakpoint there does not immediately re-fire before the instruction executes.
+    let mut first = true;
     loop {
         if *stop_rx.borrow() {
             return None;
         }
-        match cpu.step() {
+        let pc = cpu.registers().pc;
+        let res = if first {
+            first = false;
+            cpu.step_over_breakpoint(pc)
+        } else {
+            cpu.step()
+        };
+        match res {
             StepResult::Executed(op)
                 if (cpu.registers().s.wrapping_sub(initial_s) as i8) > 0 =>
             {
@@ -248,12 +268,19 @@ pub fn step_return(cpu: &mut Cpu, stop_rx: &watch::Receiver<bool>) -> Option<Ste
 /// match the target frequency. Throttling is batched over ~1000 instructions
 /// to avoid per-instruction syscall overhead.
 pub fn run(cpu: Cpu) -> RunHandle {
+    run_from(cpu, None)
+}
+
+/// Like [`run`], but skips the breakpoint/watch check at `skip_pc` on the
+/// first instruction. Use this when the CPU is already halted at a breakpoint
+/// and the caller wants execution to continue past it without disabling it.
+pub fn run_from(cpu: Cpu, skip_pc: Option<u16>) -> RunHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
     let (result_tx, result_rx) = oneshot::channel();
     let (cpu_tx, cpu_rx) = oneshot::channel();
 
     std::thread::spawn(move || {
-        run_loop(cpu, stop_rx, result_tx, cpu_tx);
+        run_loop(cpu, skip_pc, stop_rx, result_tx, cpu_tx);
     });
 
     RunHandle { stop_tx, result_rx, cpu_rx }
@@ -261,6 +288,7 @@ pub fn run(cpu: Cpu) -> RunHandle {
 
 fn run_loop(
     mut cpu: Cpu,
+    skip_pc: Option<u16>,
     stop_rx: watch::Receiver<bool>,
     result_tx: oneshot::Sender<StepResult>,
     cpu_tx: oneshot::Sender<Cpu>,
@@ -269,12 +297,20 @@ fn run_loop(
     let start_cycles = cpu.cycles();
     let hz = cpu.clock_speed().hz_value();
 
+    let mut first = skip_pc.is_some();
+
     let final_result = 'outer: loop {
         for _ in 0..BATCH_SIZE {
             if *stop_rx.borrow() {
                 break 'outer None;
             }
-            match cpu.step() {
+            let res = if first {
+                first = false;
+                cpu.step_over_breakpoint(skip_pc.unwrap())
+            } else {
+                cpu.step()
+            };
+            match res {
                 StepResult::Executed(_) => {}
                 other => break 'outer Some(other),
             }
@@ -447,6 +483,38 @@ mod tests {
         assert!(cpu_unlimited.cycles() > cpu_throttled.cycles(),
             "unlimited ({} cycles) should exceed throttled ({} cycles)",
             cpu_unlimited.cycles(), cpu_throttled.cycles());
+    }
+
+    #[tokio::test]
+    async fn run_from_advances_past_breakpoint_at_initial_pc() {
+        // run_from(cpu, Some(pc)) must advance past a breakpoint at the initial PC
+        // rather than immediately halting before a single instruction executes.
+        let mut cpu = make_cpu_at(0x0200);
+        // NOP; NOP; STP — run should execute past the breakpoint at $0200 and halt at STP.
+        write(&mut cpu, 0x0200, &[0xEA, 0xEA, 0xDB]); // NOP, NOP, STP
+        cpu.add_breakpoint(0x0200);
+
+        let handle = run_from(cpu, Some(0x0200));
+        let (result, cpu) = handle.take_cpu_with_result().await;
+
+        assert!(matches!(result, StepResult::Stopped), "expected Stopped result");
+        assert!(cpu.registers().pc > 0x0200, "PC should have advanced past the breakpoint");
+        // Breakpoint must still be present after the run.
+        assert!(cpu.breakpoints().contains(&0x0200));
+    }
+
+    #[tokio::test]
+    async fn run_halts_at_breakpoint_when_no_skip() {
+        // Plain run() (no skip) must halt immediately at a breakpoint.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xEA]); // NOP
+        cpu.add_breakpoint(0x0200);
+
+        let handle = run(cpu);
+        let (result, cpu) = handle.take_cpu_with_result().await;
+
+        assert!(matches!(result, StepResult::Breakpoint(0x0200)), "expected Breakpoint");
+        assert_eq!(cpu.registers().pc, 0x0200);
     }
 
     // --- step_over / step_return helpers ---
@@ -670,5 +738,90 @@ mod tests {
         let result = step_return(&mut cpu, &no_stop()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
+    }
+
+    // --- step_over_breakpoint (skip-current-PC behaviour) ---
+
+    #[test]
+    fn step_into_at_breakpoint_advances_past_it() {
+        // A breakpoint at the current PC must not block step_over_breakpoint.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xEA]); // NOP
+        cpu.add_breakpoint(0x0200);
+        let result = cpu.step_over_breakpoint(0x0200);
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0201);
+        // Breakpoint must still be present after the skip.
+        assert!(cpu.breakpoints().contains(&0x0200));
+    }
+
+    #[test]
+    fn step_into_at_breakpoint_halts_at_next_breakpoint() {
+        // The skip applies only to the current PC; the next breakpoint fires normally.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xEA, 0xEA]); // NOP NOP
+        cpu.add_breakpoint(0x0200);
+        cpu.add_breakpoint(0x0201);
+        let result = cpu.step_over_breakpoint(0x0200);
+        // Should execute the NOP at $0200, then the next step_over_breakpoint/step
+        // call would halt at $0201 — but this single call returns Executed.
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0201);
+    }
+
+    #[test]
+    fn step_over_non_jsr_at_breakpoint_advances_past_it() {
+        // step_over on a non-JSR instruction with a breakpoint at the current PC
+        // must execute the instruction, not re-fire the breakpoint.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xEA]); // NOP
+        cpu.add_breakpoint(0x0200);
+        let result = step_over(&mut cpu, &no_stop()).unwrap();
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0201);
+        assert!(cpu.breakpoints().contains(&0x0200));
+    }
+
+    #[test]
+    fn step_over_jsr_at_breakpoint_advances_past_it() {
+        // step_over on a JSR with a breakpoint at the JSR address must execute
+        // the JSR and advance past the subroutine, not re-fire the breakpoint.
+        let mut cpu = make_cpu_at(0x0200);
+        // JSR $0300; NOP at $0203 (return target); RTS at $0300
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0203, &[0xEA]);              // NOP
+        write(&mut cpu, 0x0300, &[0x60]);              // RTS
+        cpu.add_breakpoint(0x0200);
+        let result = step_over(&mut cpu, &no_stop()).unwrap();
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
+        assert!(cpu.breakpoints().contains(&0x0200));
+    }
+
+    #[test]
+    fn step_return_at_breakpoint_advances_past_it() {
+        // step_return with a breakpoint at the current PC must execute the
+        // instruction rather than immediately re-firing the breakpoint.
+        // Setup: call a subroutine via JSR so the stack has a valid return address,
+        // then set a breakpoint at the subroutine entry and invoke step_return.
+        let mut cpu = make_cpu_at(0x0200);
+        // JSR $0300; NOP at $0203 (return site); RTS at $0300
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0203, &[0xEA]);              // NOP
+        write(&mut cpu, 0x0300, &[0x60]);              // RTS
+        // Execute the JSR so we are inside the subroutine with the return address
+        // already on the stack. PC is now $0300.
+        let r = cpu.step();
+        assert!(matches!(r, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0300);
+
+        // Place a breakpoint at the subroutine entry (current PC) and call step_return.
+        cpu.add_breakpoint(0x0300);
+        let result = step_return(&mut cpu, &no_stop()).unwrap();
+        // Should execute the RTS and return to $0203, not re-fire the breakpoint.
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
+        // Breakpoint must still be present after the skip.
+        assert!(cpu.breakpoints().contains(&0x0300));
     }
 }
