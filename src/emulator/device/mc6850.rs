@@ -390,9 +390,33 @@ mod tests {
         assert_eq!(device.read(1), 0x33); // still available
     }
 
+    // reset
+
     #[test]
-    fn reset_clears_control_and_status_registers() {
+    fn reset_preserves_bus_config() {
+        let (mut device, _) = device_with_pipe();
+        device.device_id = Some(DeviceId(0));
+        device.reset();
+        assert!(device.transport.is_some(), "expected transport to be preserved");
+        assert!(device.device_id.is_some(), "expected device ID to be preserved");
+    }
+
+    #[test]
+    fn reset_clears_irq() {
         let mut device = Mc6850::new();
+        device.rdrf = true;
+        device.tdre = true;
+        device.control = RIE_MASK | TC_TX_IRQ;
+        assert!(device.irq_active(), "expected IRQ active");
+        device.reset();
+        assert!(!device.irq_active(), "IRQ must not be active after reset");
+    }
+
+    #[test]
+    fn reset_clears_control_and_status_registers_and_pending_irq() {
+        let mut device = Mc6850::new();
+        device.rdrf = true;
+        device.tdre = true;
         device.reset();
         assert!(device.tdre, "TRDE must be set after reset");
         assert!(!device.rdrf, "RDRF must be clear after reset");

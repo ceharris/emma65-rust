@@ -82,6 +82,10 @@ pub struct Acia6551 {
 
 const DEFAULT_CLOCK_HZ: u64 = 1_000_000;
 
+const RX_IRQ_ENABLE: u8 = 0x2;
+const TX_IRQ_MASK: u8 = 0xC;
+const TX_IRQ_ENABLE: u8 = 0x4;
+
 impl Acia6551 {
     /// Creates a new `Acia6551` in correct (non-bug-compatible) mode with TDRE set.
     ///
@@ -171,11 +175,11 @@ impl Acia6551 {
     }
 
     fn rx_irq_enabled(&self) -> bool {
-        (self.command & 0x02) == 0
+        (self.command & RX_IRQ_ENABLE) == 0
     }
 
     fn tx_irq_enabled(&self) -> bool {
-        (self.command & 0x0C) == 0x04
+        (self.command & TX_IRQ_MASK) == TX_IRQ_ENABLE
     }
 
     fn poll_transport(&mut self, allow_overrun: bool) {
@@ -591,9 +595,22 @@ mod tests {
         assert_eq!(device.read(0), 0x77); // still available
     }
 
+    // reset
+
+    #[test]
+    fn reset_preserves_bus_config() {
+        let (mut device, _) = device_with_pipe();
+        device.device_id = Some(DeviceId(0));
+        device.reset();
+        assert!(device.transport.is_some(), "expected transport to be preserved");
+        assert!(device.device_id.is_some(), "expected device ID to be preserved");
+    }
+
     #[test]
     fn reset_clears_command_control_and_status_registers() {
         let mut device = Acia6551::new();
+        device.rdrf = true;
+        device.tdre = true;
         device.reset();
         assert_eq!(device.command, 0, "command register must be zero after reset");
         assert_eq!(device.control, 0, "command register must be zero after reset");
@@ -601,5 +618,15 @@ mod tests {
         assert!(!device.rdrf, "RDRF must be clear after reset");
     }
 
+    #[test]
+    fn reset_clears_irq() {
+        let mut device = Acia6551::new();
+        device.rdrf = true;
+        device.tdre = true;
+        device.command = RX_IRQ_ENABLE | TX_IRQ_ENABLE;
+        assert!(device.irq_active(), "expected IRQ active");
+        device.reset();
+        assert!(!device.irq_active(), "IRQ must not be active after reset");
+    }
 
 }
