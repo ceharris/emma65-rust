@@ -19,8 +19,8 @@ pub struct Acia6551Module;
 
 #[derive(Deserialize)]
 pub struct Acia6551Attributes {
-    with_tdre_bug: bool,
-    with_overrun: bool,
+    with_tdre_bug: Option <bool>,
+    with_overrun: Option<bool>,
     transport: Option<TransportSpecFormat>,
 }
 
@@ -48,8 +48,8 @@ impl DeviceModule for Acia6551Module {
         let device_id = DeviceId(address as u32);
         let device = {
             let mut dev = Acia6551::new()
-                .with_tdre_bug(config.with_tdre_bug)
-                .with_overrun(config.with_overrun);
+                .with_tdre_bug(config.with_tdre_bug.unwrap_or(false))
+                .with_overrun(config.with_overrun.unwrap_or(false));
             if let Some(hz) = context.clock_hz {
                 dev = dev.with_clock_hz(hz);
             }

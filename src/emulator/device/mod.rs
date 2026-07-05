@@ -10,11 +10,19 @@ pub use self::mc6850::Mc6850;
 pub use self::via6522::Via6522;
 pub use self::via_protocol::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
 
+use std::fmt::{Display, Formatter, Result};
 use tokio::sync::mpsc;
 
 /// Uniquely identifies a device registered on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub u32);
+
+impl Display for DeviceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let DeviceId(addr) = self;
+        write!(f, "@{:04x}", addr)
+    }
+}
 
 /// Asynchronous event emitted by a device to notify the host application of transport state changes.
 #[derive(Debug)]
@@ -100,6 +108,8 @@ pub trait IoDevice: Send {
     fn peek(&self, offset: u16) -> u8;
     /// Advances device state by `cycles` clock cycles. Called after each CPU instruction.
     fn tick(&mut self, _cycles: u32) {}
+    /// Resets the state of the device in a manner comparable to a hardware reset
+    fn reset(&mut self) {}
     /// Returns `true` if this device is currently asserting an IRQ.
     fn irq_active(&self) -> bool { false }
     /// Consumes a pending NMI edge event from this device, returning `true` if one was pending.

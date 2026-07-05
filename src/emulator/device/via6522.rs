@@ -72,6 +72,7 @@
 //! configuration, the corresponding IFR bit is set and an IRQ may be asserted.
 
 use std::time::Duration;
+use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::device::via_protocol::{
     ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage,
@@ -352,6 +353,16 @@ impl Via6522 {
                     self.report_error(e);
                     return;
                 }
+            }
+        }
+    }
+
+    /// Sends the full port and control-signal state dump to all connected
+    /// peripherals that have completed the handshake.
+    fn send_state_to_all(&mut self) {
+        for i in 0..self.transports.len() {
+            if self.transports[i].handshake_done {
+                self.send_state_dump(i);
             }
         }
     }
@@ -925,13 +936,54 @@ impl IoDevice for Via6522 {
         }
     }
 
+    /// Resets the device without disturbing state that is under peripheral control
+    fn reset(&mut self) {
+        let transports = std::mem::take(&mut self.transports);
+        let error_sender = self.error_sender.take();
+        let device_id = self.device_id;
+        // state that must be preserved because it is under peripheral control
+        let input_b = self.input_b;
+        let input_a = self.input_a;
+        let ca1 = self.ca1;
+        let ca2 = self.ca2;
+        let cb1 = self.cb1;
+        let cb2 = self.cb2;
+        // state that should be preserved for consistency with real hardware
+        let t1_latch = self.t1_latch;
+        let t1_counter = self.t1_counter;
+        let t2_latch_lo = self.t2_latch_lo;
+        let t2_latch_hi = self.t2_latch_hi;
+        let t2_counter = self.t2_counter;
+        let sr = self.sr;
+        *self = Self::new();
+        self.transports = transports;
+        self.error_sender = error_sender;
+        self.device_id = device_id;
+        // restore state under peripheral control
+        self.input_b = input_b;
+        self.input_a = input_a;
+        self.ca1 = ca1;
+        self.ca2 = ca2;
+        self.cb1 = cb1;
+        self.cb2 = cb2;
+        // restore state that should be unaffected by reset
+        self.t1_latch = t1_latch;
+        self.t1_counter = t1_counter;
+        self.t2_latch_lo = t2_latch_lo;
+        self.t2_latch_hi = t2_latch_hi;
+        self.t2_counter = t2_counter;
+        self.sr = sr;
+        debug!("{} {} reset", self.name(), device_id.unwrap());
+        self.send_state_to_all();
+    }
+
     /// Returns `true` when any enabled interrupt flag is set.
     fn irq_active(&self) -> bool {
         self.ifr & self.ier & 0x7F != 0
     }
 
     fn name(&self) -> &str {
-        "via6522"
+        "via/6522"
     }
 }
 
@@ -3068,4 +3120,62 @@ mod tests {
         assert!(!received.is_empty(),
             "new client must receive a state dump after reconnect handshake");
     }
+
+    #[test]
+    fn reset_preserves_bus_config() {
+        let (mut device, _) = device_with_pipe();
+        device.device_id = Some(DeviceId(0));
+        device.reset();
+        assert!(!device.transports.is_empty(), "expected transport to be preserved");
+        assert!(device.device_id.is_some(), "expected device ID to be preserved");
+    }
+
+    #[test]
+    fn reset_clears_irq() {
+        let mut device = device();
+        device.ier = IRQ_CB1;
+        device.ifr = IRQ_CB1;
+        assert!(device.irq_active(), "expected IRQ active");
+        device.reset();
+        assert!(!device.irq_active(), "expected IRQ inactive after reset");
+        assert_eq!(device.ifr_read(), 0);
+        assert_eq!(device.ier, 0);
+    }
+
+    #[test]
+    fn reset_preserves_peripheral_state() {
+        let mut device = device();
+        device.ca1 = true;
+        device.ca2 = true;
+        device.cb1 = true;
+        device.cb2 = true;
+        device.input_a = 0x55;
+        device.input_b = 0xaa;
+        device.reset();
+        assert!(device.ca1, "expected CA1 set");
+        assert!(device.ca2, "expected CA2 set");
+        assert!(device.cb1, "expected CB1 set");
+        assert!(device.cb2, "expected CB2 set");
+        assert_eq!(device.input_a, 0x55);
+        assert_eq!(device.input_b, 0xaa);
+    }
+
+    #[test]
+    fn reset_preserves_unaffected_registers() {
+        let mut device = device();
+        device.t1_counter = 0x55aa;
+        device.t1_latch = 0x55aa;
+        device.t2_counter = 0xaa55;
+        device.t2_latch_lo = 0x55;
+        device.t2_latch_hi = 0xaa;
+        device.sr = 0xd2;
+        device.reset();
+        assert_eq!(device.t1_counter, 0x55aa);
+        assert_eq!(device.t1_latch, 0x55aa);
+        assert_eq!(device.t2_counter, 0xaa55);
+        assert_eq!(device.t2_latch_lo, 0x55);
+        assert_eq!(device.t2_latch_hi, 0xaa);
+        assert_eq!(device.sr, 0xd2);
+    }
+
 }

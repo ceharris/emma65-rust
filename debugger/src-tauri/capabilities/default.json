@@ -4,6 +4,7 @@
   "description": "Permissions for all debugger windows",
   "windows": ["main", "terminal"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "log:default"
   ]
 }

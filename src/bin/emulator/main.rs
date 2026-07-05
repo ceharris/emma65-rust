@@ -7,6 +7,7 @@ const DEFAULT_ROM: &[u8] = include_bytes!("default.bin");
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     let mut config = AppConfig::load().unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);

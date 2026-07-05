@@ -1,3 +1,4 @@
+use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
 
@@ -80,6 +81,10 @@ pub struct Acia6551 {
 }
 
 const DEFAULT_CLOCK_HZ: u64 = 1_000_000;
+
+const RX_IRQ_ENABLE: u8 = 0x2;
+const TX_IRQ_MASK: u8 = 0xC;
+const TX_IRQ_ENABLE: u8 = 0x4;
 
 impl Acia6551 {
     /// Creates a new `Acia6551` in correct (non-bug-compatible) mode with TDRE set.
@@ -170,11 +175,11 @@ impl Acia6551 {
     }
 
     fn rx_irq_enabled(&self) -> bool {
-        (self.command & 0x02) == 0
+        (self.command & RX_IRQ_ENABLE) == 0
     }
 
     fn tx_irq_enabled(&self) -> bool {
-        (self.command & 0x0C) == 0x04
+        (self.command & TX_IRQ_MASK) == TX_IRQ_ENABLE
     }
 
     fn poll_transport(&mut self, allow_overrun: bool) {
@@ -320,6 +325,24 @@ impl IoDevice for Acia6551 {
         }
     }
 
+    /// Resets the command, control, and status registers as if a hardware reset has occurred.
+    fn reset(&mut self) {
+        let transport = std::mem::take(&mut self.transport);
+        let error_sender = self.error_sender.take();
+        let device_id = self.device_id;
+        let clock_hz = self.clock_hz;
+        let tdre_bug_compatible = self.tdre_bug_compatible;
+        let overrun_enabled = self.overrun_enabled;
+        *self = Self::new();
+        self.transport = transport;
+        self.error_sender = error_sender;
+        self.device_id = device_id;
+        self.clock_hz = clock_hz;
+        self.tdre_bug_compatible = tdre_bug_compatible;
+        self.overrun_enabled = overrun_enabled;
+        debug!("{} {} reset", self.name(), self.device_id.unwrap());
+    }
+
     /// Returns `true` when IRQ is asserted:
     /// RDRF with RX interrupt enabled, or TDRE with TX interrupt enabled.
     fn irq_active(&self) -> bool {
@@ -327,7 +350,7 @@ impl IoDevice for Acia6551 {
     }
 
     fn name(&self) -> &str {
-        "acia6551"
+        "acia/6551"
     }
 }
 
@@ -577,4 +600,51 @@ mod tests {
         assert_eq!(device.peek(0), 0x77);
         assert_eq!(device.read(0), 0x77); // still available
     }
+
+    // reset
+
+    #[test]
+    fn reset_preserves_bus_config() {
+        let (mut device, _) = device_with_pipe();
+        device.device_id = Some(DeviceId(0));
+        device.reset();
+        assert!(device.transport.is_some(), "expected transport to be preserved");
+        assert!(device.device_id.is_some(), "expected device ID to be preserved");
+    }
+
+    #[test]
+    fn reset_clears_command_control_and_status_registers() {
+        let mut device = Acia6551::new();
+        device.rdrf = true;
+        device.tdre = true;
+        device.reset();
+        assert_eq!(device.command, 0, "command register must be zero after reset");
+        assert_eq!(device.control, 0, "command register must be zero after reset");
+        assert!(device.tdre, "TRDE must be set after reset");
+        assert!(!device.rdrf, "RDRF must be clear after reset");
+    }
+
+    #[test]
+    fn reset_clears_irq() {
+        let mut device = Acia6551::new();
+        device.rdrf = true;
+        device.tdre = true;
+        device.command = RX_IRQ_ENABLE | TX_IRQ_ENABLE;
+        assert!(device.irq_active(), "expected IRQ active");
+        device.reset();
+        assert!(!device.irq_active(), "IRQ must not be active after reset");
+    }
+
+    #[test]
+    fn reset_preserves_configuration_attributes() {
+        let mut device = Acia6551::new()
+            .with_clock_hz(1_843_200)
+            .with_tdre_bug(true)
+            .with_overrun(true);
+        device.reset();
+        assert_eq!(device.clock_hz, 1_843_200, "clock_hz must be preserved after reset");
+        assert!(device.tdre_bug_compatible, "tdre_bug_compatible must be preserved after reset");
+        assert!(device.overrun_enabled, "overrun_enabled must be preserved after reset");
+    }
+
 }
