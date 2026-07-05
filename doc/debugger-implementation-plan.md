@@ -564,11 +564,15 @@ The user can view the state of the CPU and key bus signals.
 
 - View updates on each step, and refreshes periodically when the CPU is
   free-running
-- While a step is executing (including while in Auto-Step mode), the CPU
-  Run/Stop/Step indicator displays the Step indicator; filled circle, blue
-  color. When a step is completed, the indicator displays the Stop indicator;
-  filled circle, red color. Thus, the indicator cycles between the two
-  different indicator states at each step.
+- CPU Run/Stop/Step indicator:
+  - While a step is executing (including while in Auto-Step mode), the CPU
+    Run/Stop/Step indicator displays the Step indicator; filled circle, blue
+    color.
+  - While the CPU is free-running (Run, Step Over, Step Into), the CPU
+    Run/Stop/Step indicator displays the Run indicator; filled circle, green
+    color.
+  - When the CPU is stopped (not free running, not executing a single step)
+    the Stop indicator is displayed; filled circle, red color.
 - The Reset button added in Story 22 (Reset CPU) is relocated to the CPU and
   Bus view. The button is positioned at the bottom right of the view panel
   layout
