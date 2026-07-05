@@ -411,7 +411,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
                   onClick={() => handleToggleBreakpoint(row.addr)}
                   title={hasBreakpoint ? "Remove breakpoint" : "Set breakpoint"}
                 >
-                  {hasBreakpoint ? "●" : ""}
+                  ●
                 </span>
                 <span className="disasm-addr">{formatAddr(row.addr)}</span>
                 <span className="disasm-bytes">{formatBytes(row.bytes)}</span>
