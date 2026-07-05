@@ -15,6 +15,7 @@ interface RegisterSnapshot {
   a: number; x: number; y: number; s: number;
   pc: number; p: number; changed_flags: number;
   cpu_stopped: boolean;
+  breakpoint_hit: boolean;
 }
 
 interface Props {
@@ -87,6 +88,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
   const [isAutoStepping, setIsAutoStepping] = useState(false);
   const [intervalMs, setIntervalMs] = useState(INTERVAL_DEFAULT);
   const [intervalInputValue, setIntervalInputValue] = useState(String(INTERVAL_DEFAULT));
+  const [breakpoints, setBreakpoints] = useState<Set<number>>(new Set());
 
   // Keep refs so callbacks see the latest values without being re-created.
   const rowsRef = useRef<DisassembledRow[]>([]);
@@ -101,6 +103,15 @@ export default function DisassemblyPanel({ onStep }: Props) {
   steppingRef.current = stepping;
   isAutoSteppingRef.current = isAutoStepping;
   intervalMsRef.current = intervalMs;
+
+  const handleToggleBreakpoint = useCallback(async (addr: number) => {
+    try {
+      const updated = await invoke<number[]>("toggle_breakpoint", { addr });
+      setBreakpoints(new Set(updated));
+    } catch (e) {
+      console.error("toggle_breakpoint failed:", e);
+    }
+  }, []);
 
   /** Fetch `FETCH_ROWS` instructions starting at `addr` and replace the row list. */
   const fetchFrom = useCallback(async (addr: number) => {
@@ -168,6 +179,10 @@ export default function DisassemblyPanel({ onStep }: Props) {
       .then((snap) => { if (rowsRef.current.length === 0) handleHalted(snap.pc); })
       .catch(() => {});
 
+    invoke<number[]>("get_breakpoints")
+      .then((list) => setBreakpoints(new Set(list)))
+      .catch(() => {});
+
     return () => { unlistenPromise.then((f) => f()); };
   }, [handleHalted]);
 
@@ -213,8 +228,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
     autoStepTimerRef.current = setTimeout(async () => {
       if (!isAutoSteppingRef.current) return;
       const snap = await doStep();
-      if (snap?.cpu_stopped) {
-        // CPU executed STP — halt auto-step.
+      if (snap?.cpu_stopped || snap?.breakpoint_hit) {
         setIsAutoStepping(false);
         return;
       }
@@ -379,6 +393,7 @@ export default function DisassemblyPanel({ onStep }: Props) {
         ) : (
           rows.map((row) => {
             const isCurrent = row.addr === currentPc;
+            const hasBreakpoint = breakpoints.has(row.addr);
             return (
               <div
                 key={row.addr}
@@ -391,7 +406,13 @@ export default function DisassemblyPanel({ onStep }: Props) {
                   .filter(Boolean)
                   .join(" ")}
               >
-                <span className="disasm-gutter" />
+                <span
+                  className={`disasm-gutter${hasBreakpoint ? " breakpoint" : ""}`}
+                  onClick={() => handleToggleBreakpoint(row.addr)}
+                  title={hasBreakpoint ? "Remove breakpoint" : "Set breakpoint"}
+                >
+                  {hasBreakpoint ? "●" : ""}
+                </span>
                 <span className="disasm-addr">{formatAddr(row.addr)}</span>
                 <span className="disasm-bytes">{formatBytes(row.bytes)}</span>
                 <span className="disasm-mnemonic">{row.mnemonic}</span>

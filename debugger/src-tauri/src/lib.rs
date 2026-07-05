@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::Mutex;
@@ -31,6 +32,9 @@ pub struct DisassemblerState(pub Mutex<Option<Disassembler>>);
 ///
 /// Reset to 0 on session start; updated by `step_into` and read by `get_registers`.
 pub struct ChangedFlagsState(pub Mutex<u8>);
+
+/// Set of addresses at which execution should halt during auto-step.
+pub struct BreakpointState(pub Mutex<HashSet<u16>>);
 
 /// Payload emitted to the frontend on the `session-status` event.
 #[derive(Clone, serde::Serialize)]
@@ -73,6 +77,8 @@ pub struct RegisterSnapshot {
     pub changed_flags: u8,
     /// True when the CPU executed STP and is now halted; auto-step should stop.
     pub cpu_stopped: bool,
+    /// True when the post-step PC matches a breakpoint address; auto-step should stop.
+    pub breakpoint_hit: bool,
 }
 
 /// Loads emulator config from `~/.emma/debugger/default/emulator.toml`,
@@ -165,6 +171,7 @@ fn step_into(
     app: AppHandle,
     cpu_state: State<CpuState>,
     changed_flags_state: State<ChangedFlagsState>,
+    breakpoint_state: State<BreakpointState>,
 ) -> Result<RegisterSnapshot, String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
@@ -177,6 +184,7 @@ fn step_into(
     *changed_flags_state.0.lock().unwrap() = changed;
 
     let cpu_stopped = matches!(result, StepResult::Stopped);
+    let breakpoint_hit = breakpoint_state.0.lock().unwrap().contains(&regs.pc);
     let snapshot = RegisterSnapshot {
         a: regs.a,
         x: regs.x,
@@ -186,6 +194,7 @@ fn step_into(
         p: regs.p.to_byte(),
         changed_flags: changed,
         cpu_stopped,
+        breakpoint_hit,
     };
 
     let _ = app.emit("debugger-halted", regs.pc);
@@ -219,6 +228,7 @@ fn reset_cpu(
         p: regs.p.to_byte(),
         changed_flags: 0,
         cpu_stopped: false,
+        breakpoint_hit: false,
     };
 
     let _ = app.emit("debugger-halted", regs.pc);
@@ -247,6 +257,7 @@ fn get_registers(
         p: regs.p.to_byte(),
         changed_flags,
         cpu_stopped: false,
+        breakpoint_hit: false,
     })
 }
 
@@ -274,6 +285,29 @@ fn get_stack(cpu_state: State<CpuState>) -> Result<StackSnapshot, String> {
         .peek_range(0x0100, &mut page)
         .map_err(|e| e.to_string())?;
     Ok(StackSnapshot { s, page })
+}
+
+/// Toggles a breakpoint at `addr`: adds it if not present, removes it if present.
+///
+/// Returns the updated breakpoint list.
+#[tauri::command]
+fn toggle_breakpoint(addr: u16, breakpoint_state: State<BreakpointState>) -> Vec<u16> {
+    let mut bps = breakpoint_state.0.lock().unwrap();
+    if !bps.remove(&addr) {
+        bps.insert(addr);
+    }
+    let mut list: Vec<u16> = bps.iter().copied().collect();
+    list.sort_unstable();
+    list
+}
+
+/// Returns the current breakpoint address list, sorted ascending.
+#[tauri::command]
+fn get_breakpoints(breakpoint_state: State<BreakpointState>) -> Vec<u16> {
+    let bps = breakpoint_state.0.lock().unwrap();
+    let mut list: Vec<u16> = bps.iter().copied().collect();
+    list.sort_unstable();
+    list
 }
 
 /// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xfff0 for paragraph alignment).
@@ -349,6 +383,7 @@ pub fn run() {
         .manage(CpuState(Mutex::new(None)))
         .manage(DisassemblerState(Mutex::new(None)))
         .manage(ChangedFlagsState(Mutex::new(0)))
+        .manage(BreakpointState(Mutex::new(HashSet::new())))
         .invoke_handler(tauri::generate_handler![
             quit,
             get_session_status,
@@ -360,6 +395,8 @@ pub fn run() {
             get_disassembly,
             get_memory,
             get_stack,
+            toggle_breakpoint,
+            get_breakpoints,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
