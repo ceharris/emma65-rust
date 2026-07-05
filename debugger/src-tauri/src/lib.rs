@@ -9,7 +9,8 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
 use emma65::emulator::{
-    run as exec_run, step_over as exec_step_over, step_return as exec_step_return,
+    run_from as exec_run_from,
+    step_over as exec_step_over, step_return as exec_step_return,
     Config, Cpu, DeviceRegistry, Disassembler, EmulatorSession,
     InstantiationContext, PipeTransport, RunStopper, StepResult, TransportSlot,
 };
@@ -47,6 +48,10 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 
 /// Holds the stopper handle while the CPU is free-running; `None` when halted.
 pub struct RunStopperState(pub Mutex<Option<RunStopper>>);
+
+/// When the CPU is halted at a breakpoint or watch trigger, holds that PC so
+/// the next step command can skip past it. Cleared after each step or reset.
+pub struct SkipBreakpointPc(pub Mutex<Option<u16>>);
 
 /// Cached CPU/bus state (IRQ, NMI, cycle count) for use when the CPU is free-running.
 ///
@@ -201,12 +206,21 @@ fn step_into(
     cpu_state: State<CpuState>,
     changed_flags_state: State<ChangedFlagsState>,
     cpu_bus_cache: State<CpuBusCache>,
+    skip_breakpoint_pc: State<SkipBreakpointPc>,
 ) -> Result<RegisterSnapshot, String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
 
     let p_before = cpu.registers().p.to_byte();
-    let result = cpu.step();
+    let pc = cpu.registers().pc;
+    // Skip the breakpoint/watch check only if we are halted at that PC because
+    // of a prior breakpoint or watch trigger — not on every step.
+    let skip_pc = skip_breakpoint_pc.0.lock().unwrap().take();
+    let result = if skip_pc == Some(pc) {
+        cpu.step_over_breakpoint(pc)
+    } else {
+        cpu.step()
+    };
     let regs = *cpu.registers();
     let changed = p_before ^ regs.p.to_byte();
 
@@ -215,6 +229,16 @@ fn step_into(
 
     let cpu_stopped = matches!(result, StepResult::Stopped);
     let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
+    let watch_triggered = matches!(result, StepResult::WatchTriggered { .. } | StepResult::WatchError { .. });
+
+    // Record the halted PC if a breakpoint or watch triggered, so the next
+    // step_into call knows to skip the check there.
+    *skip_breakpoint_pc.0.lock().unwrap() = if breakpoint_hit || watch_triggered {
+        Some(regs.pc)
+    } else {
+        None
+    };
+
     let snapshot = RegisterSnapshot {
         a: regs.a,
         x: regs.x,
@@ -242,6 +266,7 @@ fn reset_cpu(
     cpu_state: State<CpuState>,
     changed_flags_state: State<ChangedFlagsState>,
     cpu_bus_cache: State<CpuBusCache>,
+    skip_breakpoint_pc: State<SkipBreakpointPc>,
 ) -> Result<RegisterSnapshot, String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
@@ -251,6 +276,7 @@ fn reset_cpu(
 
     *changed_flags_state.0.lock().unwrap() = 0;
     *cpu_bus_cache.0.lock().unwrap() = snapshot_cpu_bus(cpu);
+    *skip_breakpoint_pc.0.lock().unwrap() = None;
 
     let snapshot = RegisterSnapshot {
         a: regs.a,
@@ -388,7 +414,7 @@ fn get_disassembly(
 
 /// Starts free-run execution on a dedicated OS thread.
 ///
-/// Takes the CPU out of `CpuState` and passes it to `exec::run`. Spawns a
+/// Takes the CPU out of `CpuState` and passes it to `exec::run_from`. Spawns a
 /// background task that awaits the run completing, then restores the CPU to
 /// `CpuState`, emits `debugger-halted` with the final PC, and emits
 /// `debugger-run-stopped` with a full register snapshot.
@@ -397,9 +423,11 @@ fn run_cpu(
     app: AppHandle,
     cpu_state: State<CpuState>,
     run_stopper_state: State<RunStopperState>,
+    skip_breakpoint_pc: State<SkipBreakpointPc>,
 ) -> Result<(), String> {
     let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
-    let handle = exec_run(cpu);
+    let skip_pc = skip_breakpoint_pc.0.lock().unwrap().take();
+    let handle = exec_run_from(cpu, skip_pc);
     let stopper = handle.stopper();
     *run_stopper_state.0.lock().unwrap() = Some(stopper);
 
@@ -408,10 +436,16 @@ fn run_cpu(
         let regs = *cpu.registers();
         let cpu_stopped = matches!(result, StepResult::Stopped);
         let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
+        let watch_triggered = matches!(result, StepResult::WatchTriggered { .. } | StepResult::WatchError { .. });
 
         *app.state::<ChangedFlagsState>().0.lock().unwrap() = 0;
         *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
         *app.state::<RunStopperState>().0.lock().unwrap() = None;
+        *app.state::<SkipBreakpointPc>().0.lock().unwrap() = if breakpoint_hit || watch_triggered {
+            Some(regs.pc)
+        } else {
+            None
+        };
         *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
         let snapshot = RegisterSnapshot {
@@ -450,7 +484,10 @@ fn step_over(
     app: AppHandle,
     cpu_state: State<CpuState>,
     run_stopper_state: State<RunStopperState>,
+    skip_breakpoint_pc: State<SkipBreakpointPc>,
 ) -> Result<(), String> {
+    // Consume the skip state; exec_step_over handles the skip internally.
+    skip_breakpoint_pc.0.lock().unwrap().take();
     let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
     let p_before = cpu.registers().p.to_byte();
     let (stopper, stop_rx) = RunStopper::channel();
@@ -466,10 +503,16 @@ fn step_over(
             Some(r) => (matches!(r, StepResult::Stopped), matches!(r, StepResult::Breakpoint(_))),
             None => (false, false),
         };
+        let watch_triggered = matches!(result, Some(StepResult::WatchTriggered { .. } | StepResult::WatchError { .. }));
 
         *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed;
         *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
         *app.state::<RunStopperState>().0.lock().unwrap() = None;
+        *app.state::<SkipBreakpointPc>().0.lock().unwrap() = if breakpoint_hit || watch_triggered {
+            Some(regs.pc)
+        } else {
+            None
+        };
         *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
         let snapshot = RegisterSnapshot {
@@ -496,7 +539,10 @@ fn step_return(
     app: AppHandle,
     cpu_state: State<CpuState>,
     run_stopper_state: State<RunStopperState>,
+    skip_breakpoint_pc: State<SkipBreakpointPc>,
 ) -> Result<(), String> {
+    // Consume the skip state; exec_step_return handles the skip internally.
+    skip_breakpoint_pc.0.lock().unwrap().take();
     let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
     let p_before = cpu.registers().p.to_byte();
     let (stopper, stop_rx) = RunStopper::channel();
@@ -512,10 +558,16 @@ fn step_return(
             Some(r) => (matches!(r, StepResult::Stopped), matches!(r, StepResult::Breakpoint(_))),
             None => (false, false),
         };
+        let watch_triggered = matches!(result, Some(StepResult::WatchTriggered { .. } | StepResult::WatchError { .. }));
 
         *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed;
         *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
         *app.state::<RunStopperState>().0.lock().unwrap() = None;
+        *app.state::<SkipBreakpointPc>().0.lock().unwrap() = if breakpoint_hit || watch_triggered {
+            Some(regs.pc)
+        } else {
+            None
+        };
         *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
         let snapshot = RegisterSnapshot {
@@ -594,6 +646,7 @@ pub fn run() {
         .manage(DisassemblerState(Mutex::new(None)))
         .manage(ChangedFlagsState(Mutex::new(0)))
         .manage(RunStopperState(Mutex::new(None)))
+        .manage(SkipBreakpointPc(Mutex::new(None)))
         .manage(CpuBusCache(Mutex::new(CpuBusSnapshot {
             irq_active: false,
             nmi_pending: false,
