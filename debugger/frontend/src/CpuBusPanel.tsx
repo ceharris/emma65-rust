@@ -31,6 +31,9 @@ function formatCycles(n: number): string {
 
 export default function CpuBusPanel({ execState, onReset }: Props) {
   const [cpuBus, setCpuBus] = useState<CpuBusState | null>(null);
+  // Local toggle state for the IRQ button, independent of the aggregate
+  // cpuBus.irq_active indicator (which reflects all IRQ sources, including devices).
+  const [irqAsserted, setIrqAsserted] = useState(false);
 
   // Display state for the Run/Stop/Step indicator. When stepping, hold the
   // "stepping" state for at least STEP_INDICATOR_MIN_MS so the transition is
@@ -117,11 +120,31 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
   const handleReset = useCallback(async () => {
     try {
       const snap = await invoke<RegisterSnapshot>("reset_cpu");
+      setIrqAsserted(false);
       onReset(snap);
     } catch (e) {
       console.error("reset_cpu failed:", e);
     }
   }, [onReset]);
+
+  const handleTriggerNmi = useCallback(async () => {
+    try {
+      const result = await invoke<CpuBusState>("trigger_nmi");
+      setCpuBus(result);
+    } catch (e) {
+      console.error("trigger_nmi failed:", e);
+    }
+  }, []);
+
+  const handleToggleIrq = useCallback(async () => {
+    try {
+      const result = await invoke<CpuBusState>(irqAsserted ? "release_irq" : "assert_irq");
+      setCpuBus(result);
+      setIrqAsserted((prev) => !prev);
+    } catch (e) {
+      console.error("assert_irq/release_irq failed:", e);
+    }
+  }, [irqAsserted]);
 
   // Determine Run/Stop/Step/STP/WAI indicator label and color class.
   // STP and WAI override the normal "Stop" state when the CPU has halted
@@ -164,8 +187,22 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
           <span className="cycles-label">cycles</span>
         </div>
         <div className="cpu-bus-row cpu-bus-buttons">
-          <span className="btn-placeholder" />
-          <span className="btn-placeholder" />
+          <button
+            className="exec-btn nmi-btn"
+            onClick={handleTriggerNmi}
+            disabled={execState !== "stopped"}
+            title="Trigger NMI"
+          >
+            NMI
+          </button>
+          <button
+            className={`exec-btn irq-btn${irqAsserted ? " active" : ""}`}
+            onClick={handleToggleIrq}
+            disabled={execState !== "stopped"}
+            title="Assert/Release IRQ"
+          >
+            IRQ
+          </button>
           <button
             className="exec-btn reset-btn"
             onClick={handleReset}
