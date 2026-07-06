@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-interface AppKeyBinding {
+export interface AppKeyBinding {
   matches: (e: KeyboardEvent) => boolean;
   command: string;
 }
@@ -12,8 +12,13 @@ interface AppKeyBinding {
  * `Backquote` (rather than checking `e.key` for "`") is used for the terminal
  * toggle since `e.key` reports the shifted character (e.g. "~" on a US
  * layout) when Shift is held, but `e.code` is layout- and shift-independent.
+ *
+ * Exported so `TerminalWindow` can exclude these combos from xterm's own key
+ * handling via `attachCustomKeyEventHandler` — xterm otherwise treats
+ * Ctrl+letter combos as terminal control input (e.g. Ctrl+Q is XON) and
+ * stops them from ever bubbling to the window-level listener below.
  */
-const APP_KEY_BINDINGS: AppKeyBinding[] = [
+export const APP_KEY_BINDINGS: AppKeyBinding[] = [
   { matches: (e) => e.key === "q" && (e.ctrlKey || e.metaKey), command: "quit" },
   { matches: (e) => e.ctrlKey && e.shiftKey && e.code === "Backquote", command: "toggle_terminal_visibility" },
 ];
