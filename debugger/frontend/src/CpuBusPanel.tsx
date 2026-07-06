@@ -190,7 +190,7 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
           <button
             className="exec-btn nmi-btn"
             onClick={handleTriggerNmi}
-            disabled={execState !== "stopped"}
+            disabled={execState === "running"}
             title="Trigger NMI"
           >
             NMI
@@ -198,7 +198,7 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
           <button
             className={`exec-btn irq-btn${irqAsserted ? " active" : ""}`}
             onClick={handleToggleIrq}
-            disabled={execState !== "stopped"}
+            disabled={execState === "running"}
             title="Assert/Release IRQ"
           >
             IRQ
