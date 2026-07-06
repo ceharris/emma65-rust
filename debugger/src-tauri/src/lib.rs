@@ -752,11 +752,15 @@ fn emit_status(app: &AppHandle, status: SessionStatus) {
     let _ = app.emit("session-status", status);
 }
 
-fn show_terminal_window(app: &AppHandle) -> Result<(), String> {
-    app.get_webview_window(TERMINAL_WINDOW_LABEL)
-        .ok_or_else(|| "terminal window not found".to_string())?
-        .show()
-        .map_err(|e| e.to_string())
+/// Toggles the terminal window's visibility. Bound to Ctrl+Shift+` in both the
+/// main and terminal windows (see `useAppKeyBindings.ts`), so the frontend
+/// doesn't need to track visibility state itself.
+#[tauri::command]
+fn toggle_terminal_visibility(app: AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window(TERMINAL_WINDOW_LABEL)
+        .ok_or_else(|| "terminal window not found".to_string())?;
+    let visible = window.is_visible().map_err(|e| e.to_string())?;
+    if visible { window.hide() } else { window.show() }.map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -792,6 +796,7 @@ pub fn run() {
         })))
         .invoke_handler(tauri::generate_handler![
             quit,
+            toggle_terminal_visibility,
             get_session_status,
             write_terminal,
             terminal_ready,
@@ -844,12 +849,9 @@ pub fn run() {
                             ok: true,
                         });
 
-                        // Show the terminal window (created hidden at startup).
-                        if let Err(e) = show_terminal_window(&handle) {
-                            eprintln!("Failed to show terminal window: {e}");
-                            return;
-                        }
-
+                        // The terminal window stays hidden until the user toggles it
+                        // (Ctrl+Shift+`) — see `toggle_terminal_visibility`. Its webview
+                        // runs regardless of visibility, so this doesn't block on showing it.
                         // Wait for the terminal window to signal it is ready.
                         let _ = ready_rx.await;
 
