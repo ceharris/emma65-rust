@@ -12,7 +12,8 @@ use emma65::emulator::{
     run_from as exec_run_from,
     step_over as exec_step_over, step_return as exec_step_return,
     Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession,
-    InstantiationContext, IrqSource, PipeTransport, RunStopper, StepResult, TransportSlot,
+    InstantiationContext, IrqSource, PipeTransport, RunStopper, StatusRegister, StepResult,
+    TransportSlot,
 };
 
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
@@ -325,6 +326,77 @@ fn reset_cpu(
 
     let _ = app.emit("debugger-halted", regs.pc);
     let _ = app.emit("debugger-cpu-reset", ());
+    Ok(snapshot)
+}
+
+/// Identifies which CPU register a `set_register` call targets.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RegisterField {
+    A,
+    X,
+    Y,
+    S,
+    Pc,
+    P,
+}
+
+/// Validates that `value` fits in a `u8`, for the byte-sized register fields.
+fn single_byte(value: u32, field: RegisterField) -> Result<u8, String> {
+    value.try_into().map_err(|_| format!("{field:?} value out of range: must be 0-255"))
+}
+
+/// Sets a single CPU register to `value`, interpreted per `field`'s width.
+///
+/// Only callable while the CPU is stopped (not free-running). Emits
+/// `debugger-halted` with the (possibly unchanged) PC so the disassembly view
+/// re-centers and the stack view refreshes, covering PC/S edits.
+#[tauri::command]
+fn set_register(
+    app: AppHandle,
+    field: RegisterField,
+    value: u32,
+    cpu_state: State<CpuState>,
+    changed_flags_state: State<ChangedFlagsState>,
+    cpu_bus_cache: State<CpuBusCache>,
+) -> Result<RegisterSnapshot, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+
+    let p_before = cpu.registers().p.to_byte();
+
+    match field {
+        RegisterField::A => cpu.registers_mut().a = single_byte(value, field)?,
+        RegisterField::X => cpu.registers_mut().x = single_byte(value, field)?,
+        RegisterField::Y => cpu.registers_mut().y = single_byte(value, field)?,
+        RegisterField::S => cpu.registers_mut().s = single_byte(value, field)?,
+        RegisterField::P => {
+            cpu.registers_mut().p = StatusRegister::from_byte(single_byte(value, field)?) | StatusRegister::UNUSED;
+        }
+        RegisterField::Pc => {
+            cpu.registers_mut().pc = value.try_into().map_err(|_| "Pc value out of range: must be 0-65535".to_string())?;
+        }
+    }
+
+    let regs = *cpu.registers();
+    let changed = p_before ^ regs.p.to_byte();
+    *changed_flags_state.0.lock().unwrap() = changed;
+    *cpu_bus_cache.0.lock().unwrap() = snapshot_cpu_bus(cpu);
+
+    let snapshot = RegisterSnapshot {
+        a: regs.a,
+        x: regs.x,
+        y: regs.y,
+        s: regs.s,
+        pc: regs.pc,
+        p: regs.p.to_byte(),
+        changed_flags: changed,
+        cpu_stopped: cpu.is_stopped(),
+        cpu_waiting: cpu.is_waiting(),
+        breakpoint_hit: false,
+    };
+
+    let _ = app.emit("debugger-halted", regs.pc);
     Ok(snapshot)
 }
 
@@ -806,6 +878,7 @@ pub fn run() {
             step_over,
             step_return,
             reset_cpu,
+            set_register,
             trigger_nmi,
             assert_irq,
             release_irq,

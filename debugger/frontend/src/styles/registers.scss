@@ -85,4 +85,45 @@
   &.flag-changed {
     color: #f4d03f;
   }
+
+  &.flag-toggleable {
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+.reg-flags-edit {
+  display: inline-flex;
+  border: 1px dashed #9cdcfe;
+  border-radius: 2px;
+  padding: 0 3px;
+  outline: none;
+}
+
+.reg-editable {
+  cursor: pointer;
+  border-bottom: 1px dotted transparent;
+
+  &:hover {
+    border-bottom-color: #9cdcfe;
+  }
+}
+
+.reg-edit-input {
+  width: 8ch;
+  background: #1e1e1e;
+  border: 1px solid #9cdcfe;
+  border-radius: 2px;
+  color: #d4d4d4;
+  font-family: monospace;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0 3px;
+
+  &.invalid {
+    border-color: #f48771;
+  }
 }

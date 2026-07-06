@@ -51,7 +51,9 @@ export default function App() {
     setExecState(state);
   }, []);
 
-  const handleReset = useCallback((snap: RegisterSnapshot) => {
+  // Shared by Reset (CpuBusPanel) and register edits (RegisterPanel) — both
+  // just need lastSnapshot to reflect the command's returned snapshot.
+  const handleSnapshotUpdate = useCallback((snap: RegisterSnapshot) => {
     setLastSnapshot(snap);
   }, []);
 
@@ -82,9 +84,9 @@ export default function App() {
         <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
       </div>
       <div className="col col-right">
-        <RegisterPanel snapshot={lastSnapshot} />
+        <RegisterPanel snapshot={lastSnapshot} execState={execState} onEdit={handleSnapshotUpdate} />
         <StackPanel />
-        <CpuBusPanel execState={execState} onReset={handleReset} />
+        <CpuBusPanel execState={execState} onReset={handleSnapshotUpdate} />
       </div>
     </div>
   );
