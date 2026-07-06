@@ -909,6 +909,35 @@ pub fn run() {
             theme::set_theme,
         ])
         .setup(|app| {
+            if let Some(terminal_window) = app.get_webview_window(TERMINAL_WINDOW_LABEL) {
+                let window_for_events = terminal_window.clone();
+                terminal_window.on_window_event(move |event| match event {
+                    // The terminal window is a persistent, toggle-able auxiliary
+                    // window (see `toggle_terminal_visibility`), not a closable
+                    // one — closing it via native window chrome would otherwise
+                    // destroy it, after which the toggle command can never find
+                    // it again. Hide it instead so it can still be brought back.
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window_for_events.hide();
+                    }
+                    // Workaround for a Wayland/GTK bug (tauri-apps/tauri#11856,
+                    // tauri-apps/tao#1046): a window's title bar buttons stop
+                    // responding to clicks every time it transitions from hidden
+                    // to shown. Toggling `resizable` off and back on forces GTK
+                    // to recompute the decoration hit-test region. Since the
+                    // terminal window can be hidden/shown repeatedly (via the
+                    // toggle above, or this same close-to-hide behavior), apply
+                    // this on every focus, not just once at startup.
+                    #[cfg(target_os = "linux")]
+                    tauri::WindowEvent::Focused(true) => {
+                        let _ = window_for_events.set_resizable(false);
+                        let _ = window_for_events.set_resizable(true);
+                    }
+                    _ => {}
+                });
+            }
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 match load_session().await {
