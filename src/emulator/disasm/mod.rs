@@ -35,7 +35,7 @@ impl Disassembler {
         for i in 1..decoded.byte_len {
             raw_bytes.push(bus.peek(addr.wrapping_add(i as u16)).unwrap_or(0xFF));
         }
-        let operand_text = format_operand(&decoded, &raw_bytes);
+        let operand_text = format_operand(&decoded, &raw_bytes, addr);
         DisassembledLine {
             addr,
             raw_bytes,
@@ -73,10 +73,13 @@ impl Disassembler {
     }
 }
 
-fn format_operand(decoded: &DecodedOp, raw: &[u8]) -> String {
+fn format_operand(decoded: &DecodedOp, raw: &[u8], addr: u16) -> String {
     let b1 = raw.get(1).copied().unwrap_or(0);
     let b2 = raw.get(2).copied().unwrap_or(0);
     let abs = u16::from_le_bytes([b1, b2]);
+    // Branch target is relative to the PC immediately after the instruction,
+    // matching the CPU's own branch/bbr/bbs execution (see cpu/mod.rs).
+    let pc_after = addr.wrapping_add(decoded.byte_len as u16);
 
     match decoded.mode {
         AddressingMode::Implied => String::new(),
@@ -93,8 +96,14 @@ fn format_operand(decoded: &DecodedOp, raw: &[u8]) -> String {
         AddressingMode::IndirectY => format!("(${b1:02X}),Y"),
         AddressingMode::ZeroPageIndirect => format!("(${b1:02X})"),
         AddressingMode::AbsoluteIndirectX => format!("(${abs:04X},X)"),
-        AddressingMode::Relative => format!("${b1:02X}"),
-        AddressingMode::ZeroPageRelative => format!("${b1:02X},${b2:02X}"),
+        AddressingMode::Relative => {
+            let target = pc_after.wrapping_add(b1 as i8 as u16);
+            format!("${target:04X}")
+        }
+        AddressingMode::ZeroPageRelative => {
+            let target = pc_after.wrapping_add(b2 as i8 as u16);
+            format!("${b1:02X},${target:04X}")
+        }
     }
 }
 
@@ -215,11 +224,30 @@ mod tests {
     }
 
     #[test]
-    fn bra_relative() {
+    fn bra_relative_backward() {
+        // Displacement -2, from PC 0x0202 (after the 2-byte instruction) => target 0x0200.
         let bus = make_bus(0x0200, &[0x80, 0xFE]);
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert!(matches!(line.mnemonic, Mnemonic::Bra));
-        assert_eq!(line.operand_text, "$FE");
+        assert_eq!(line.operand_text, "$0200");
+    }
+
+    #[test]
+    fn beq_relative_forward() {
+        // Displacement +4, from PC 0x0202 (after the 2-byte instruction) => target 0x0206.
+        let bus = make_bus(0x0200, &[0xF0, 0x04]);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert!(matches!(line.mnemonic, Mnemonic::Beq));
+        assert_eq!(line.operand_text, "$0206");
+    }
+
+    #[test]
+    fn bra_relative_wraps_past_top_of_address_space() {
+        // Displacement +2, from PC 0xFFFF (after the 2-byte instruction) => wraps to 0x0001.
+        let bus = make_bus(0xFFFD, &[0x80, 0x02]);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0xFFFD);
+        assert!(matches!(line.mnemonic, Mnemonic::Bra));
+        assert_eq!(line.operand_text, "$0001");
     }
 
     #[test]
@@ -232,10 +260,11 @@ mod tests {
 
     #[test]
     fn bbr0_zeropage_relative() {
+        // Displacement +4, from PC 0x0203 (after the 3-byte instruction) => target 0x0207.
         let bus = make_bus(0x0200, &[0x0F, 0x50, 0x04]);
         let line = disasm(CpuVariant::Wdc65C02).disassemble_one(&bus, 0x0200);
         assert!(matches!(line.mnemonic, Mnemonic::Bbr0));
-        assert_eq!(line.operand_text, "$50,$04");
+        assert_eq!(line.operand_text, "$50,$0207");
         assert!(line.is_valid);
     }
 
