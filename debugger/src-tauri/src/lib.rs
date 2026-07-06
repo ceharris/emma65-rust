@@ -11,11 +11,14 @@ use tokio::sync::oneshot;
 use emma65::emulator::{
     run_from as exec_run_from,
     step_over as exec_step_over, step_return as exec_step_return,
-    Config, Cpu, DeviceRegistry, Disassembler, EmulatorSession,
+    Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession,
     InstantiationContext, PipeTransport, RunStopper, StepResult, TransportSlot,
 };
 
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
+
+/// Interval between `debugger-running-tick` events emitted during free-run.
+const RUNNING_TICK_INTERVAL_MS: u64 = 100;
 
 /// Holds the tx end of the remote pipe so `write_terminal` can send bytes to the console.
 pub struct TerminalTx(pub Mutex<File>);
@@ -52,6 +55,12 @@ pub struct RunStopperState(pub Mutex<Option<RunStopper>>);
 /// When the CPU is halted at a breakpoint or watch trigger, holds that PC so
 /// the next step command can skip past it. Cleared after each step or reset.
 pub struct SkipBreakpointPc(pub Mutex<Option<u16>>);
+
+/// Live CPU snapshot stream published by the run loop during free-run.
+///
+/// Set when `run_cpu` starts; cleared when the run completes. Commands that
+/// need CPU state while running read from this instead of `CpuState`.
+pub struct LiveSnapshotRx(pub Mutex<Option<tokio::sync::watch::Receiver<Option<CpuLiveSnapshot>>>>);
 
 /// Cached CPU/bus state (IRQ, NMI, cycle count) for use when the CPU is free-running.
 ///
@@ -310,17 +319,37 @@ fn reset_cpu(
 
 /// Returns a register snapshot of the current CPU state without stepping.
 ///
-/// `changed_flags` reflects what changed on the most recent `step_into` call, or 0 on
-/// initial load.
+/// Falls back to the live snapshot channel when the CPU is free-running
+/// (i.e. `CpuState` is `None`). `changed_flags` is 0 during free-run.
 #[tauri::command]
 fn get_registers(
     cpu_state: State<CpuState>,
     changed_flags_state: State<ChangedFlagsState>,
+    live_snapshot_rx: State<LiveSnapshotRx>,
 ) -> Result<RegisterSnapshot, String> {
     let guard = cpu_state.0.lock().unwrap();
-    let cpu = guard.as_ref().ok_or("CPU not ready")?;
-    let regs = cpu.registers();
-    let changed_flags = *changed_flags_state.0.lock().unwrap();
+    if let Some(cpu) = guard.as_ref() {
+        let regs = cpu.registers();
+        let changed_flags = *changed_flags_state.0.lock().unwrap();
+        return Ok(RegisterSnapshot {
+            a: regs.a,
+            x: regs.x,
+            y: regs.y,
+            s: regs.s,
+            pc: regs.pc,
+            p: regs.p.to_byte(),
+            changed_flags,
+            cpu_stopped: cpu.is_stopped(),
+            cpu_waiting: cpu.is_waiting(),
+            breakpoint_hit: false,
+        });
+    }
+    // CPU is free-running — read from the live snapshot channel.
+    let live = live_snapshot_rx.0.lock().unwrap()
+        .as_ref()
+        .and_then(|rx| rx.borrow().clone())
+        .ok_or("CPU not ready")?;
+    let regs = &live.registers;
     Ok(RegisterSnapshot {
         a: regs.a,
         x: regs.x,
@@ -328,9 +357,9 @@ fn get_registers(
         s: regs.s,
         pc: regs.pc,
         p: regs.p.to_byte(),
-        changed_flags,
-        cpu_stopped: cpu.is_stopped(),
-        cpu_waiting: cpu.is_waiting(),
+        changed_flags: 0,
+        cpu_stopped: false,
+        cpu_waiting: false,
         breakpoint_hit: false,
     })
 }
@@ -348,17 +377,26 @@ pub struct StackSnapshot {
 
 /// Returns the current stack pointer and the full stack page (0x0100–0x01FF).
 ///
+/// Falls back to the live snapshot channel when the CPU is free-running.
 /// Reads are performed via `Bus::peek_range` so no device side effects occur.
 #[tauri::command]
-fn get_stack(cpu_state: State<CpuState>) -> Result<StackSnapshot, String> {
+fn get_stack(
+    cpu_state: State<CpuState>,
+    live_snapshot_rx: State<LiveSnapshotRx>,
+) -> Result<StackSnapshot, String> {
     let guard = cpu_state.0.lock().unwrap();
-    let cpu = guard.as_ref().ok_or("CPU not ready")?;
-    let s = cpu.registers().s;
-    let mut page = vec![0u8; 256];
-    cpu.bus()
-        .peek_range(0x0100, &mut page)
-        .map_err(|e| e.to_string())?;
-    Ok(StackSnapshot { s, page })
+    if let Some(cpu) = guard.as_ref() {
+        let s = cpu.registers().s;
+        let mut page = vec![0u8; 256];
+        cpu.bus().peek_range(0x0100, &mut page).map_err(|e| e.to_string())?;
+        return Ok(StackSnapshot { s, page });
+    }
+    // CPU is free-running — read from the live snapshot channel.
+    let live = live_snapshot_rx.0.lock().unwrap()
+        .as_ref()
+        .and_then(|rx| rx.borrow().clone())
+        .ok_or("CPU not ready")?;
+    Ok(StackSnapshot { s: live.registers.s, page: live.stack_page })
 }
 
 /// Toggles a breakpoint at `addr` on the CPU: adds it if not present, removes it if present.
@@ -444,6 +482,22 @@ fn run_cpu(
     let handle = exec_run_from(cpu, skip_pc);
     let stopper = handle.stopper();
     *run_stopper_state.0.lock().unwrap() = Some(stopper);
+    *app.state::<LiveSnapshotRx>().0.lock().unwrap() =
+        Some(handle.subscribe_live());
+
+    // Periodic refresh: emit debugger-running-tick every 500ms while the CPU
+    // is free-running so all panels can update their display.
+    let tick_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(RUNNING_TICK_INTERVAL_MS)).await;
+            // Stop ticking once RunStopperState is cleared (run completed).
+            if tick_app.state::<RunStopperState>().0.lock().unwrap().is_none() {
+                break;
+            }
+            let _ = tick_app.emit("debugger-running-tick", ());
+        }
+    });
 
     tauri::async_runtime::spawn(async move {
         let (result, cpu) = handle.take_cpu_with_result().await;
@@ -570,6 +624,7 @@ fn finish_run(
     *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
     *app.state::<RunStopperState>().0.lock().unwrap() = None;
     *app.state::<SkipBreakpointPc>().0.lock().unwrap() = skip_pc;
+    *app.state::<LiveSnapshotRx>().0.lock().unwrap() = None;
     *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
     let snapshot = RegisterSnapshot {
@@ -597,19 +652,29 @@ fn snapshot_cpu_bus(cpu: &Cpu) -> CpuBusSnapshot {
 
 /// Returns the current CPU/bus signals and cycle count, plus whether the CPU is free-running.
 ///
-/// IRQ, NMI, and cycle values come from a cache updated after each step or run completion;
-/// `is_running` is derived from whether `RunStopperState` holds a stopper.
+/// IRQ, NMI, and cpu_stopped/waiting values come from the cache updated after each step or run
+/// completion. Cycles are read from the live snapshot channel during free-run so the counter
+/// updates at the tick rate rather than only at halt.
 #[tauri::command]
 fn get_cpu_bus_state(
     cpu_bus_cache: State<CpuBusCache>,
     run_stopper_state: State<RunStopperState>,
+    live_snapshot_rx: State<LiveSnapshotRx>,
 ) -> CpuBusState {
     let snap = cpu_bus_cache.0.lock().unwrap().clone();
     let is_running = run_stopper_state.0.lock().unwrap().is_some();
+    let cycles = if is_running {
+        live_snapshot_rx.0.lock().unwrap()
+            .as_ref()
+            .and_then(|rx| rx.borrow().as_ref().map(|s| s.cycles))
+            .unwrap_or(snap.cycles)
+    } else {
+        snap.cycles
+    };
     CpuBusState {
         irq_active: snap.irq_active,
         nmi_pending: snap.nmi_pending,
-        cycles: snap.cycles,
+        cycles,
         is_running,
         cpu_stopped: snap.cpu_stopped,
         cpu_waiting: snap.cpu_waiting,
@@ -651,6 +716,7 @@ pub fn run() {
         .manage(ChangedFlagsState(Mutex::new(0)))
         .manage(RunStopperState(Mutex::new(None)))
         .manage(SkipBreakpointPc(Mutex::new(None)))
+        .manage(LiveSnapshotRx(Mutex::new(None)))
         .manage(CpuBusCache(Mutex::new(CpuBusSnapshot {
             irq_active: false,
             nmi_pending: false,
