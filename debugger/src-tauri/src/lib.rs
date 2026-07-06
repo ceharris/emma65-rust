@@ -12,10 +12,17 @@ use emma65::emulator::{
     run_from as exec_run_from,
     step_over as exec_step_over, step_return as exec_step_return,
     Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession,
-    InstantiationContext, PipeTransport, RunStopper, StepResult, TransportSlot,
+    InstantiationContext, IrqSource, PipeTransport, RunStopper, StepResult, TransportSlot,
 };
 
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
+
+/// IRQ source identifying the debugger UI's own IRQ toggle control.
+///
+/// Chosen outside the address range any real device's `IrqSource` can take
+/// (`DeviceId`-derived sources are always `<= 0xFFFF`), so it never collides
+/// with — or gets silently cleared by — `InterruptController::poll_devices`.
+const UI_IRQ_SOURCE: IrqSource = IrqSource(u32::MAX);
 
 /// Interval between `debugger-running-tick` events emitted during free-run.
 const RUNNING_TICK_INTERVAL_MS: u64 = 100;
@@ -293,6 +300,10 @@ fn reset_cpu(
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
 
     cpu.reset().map_err(|e| e.to_string())?;
+    // Clear any NMI/IRQ state the debugger UI itself introduced, so the
+    // NMI/IRQ trigger controls stay in sync with a freshly reset CPU.
+    cpu.interrupts_mut().release_irq(UI_IRQ_SOURCE);
+    cpu.interrupts_mut().take_nmi();
     let regs = *cpu.registers();
 
     *changed_flags_state.0.lock().unwrap() = 0;
@@ -315,6 +326,61 @@ fn reset_cpu(
     let _ = app.emit("debugger-halted", regs.pc);
     let _ = app.emit("debugger-cpu-reset", ());
     Ok(snapshot)
+}
+
+/// Latches a pending NMI. Only callable while the CPU is stopped (not free-running).
+#[tauri::command]
+fn trigger_nmi(
+    cpu_state: State<CpuState>,
+    cpu_bus_cache: State<CpuBusCache>,
+) -> Result<CpuBusState, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    cpu.interrupts_mut().signal_nmi();
+    Ok(refresh_cpu_bus_cache(cpu, &cpu_bus_cache))
+}
+
+/// Asserts the IRQ line from the debugger UI's own IRQ source. Only callable
+/// while the CPU is stopped (not free-running).
+#[tauri::command]
+fn assert_irq(
+    cpu_state: State<CpuState>,
+    cpu_bus_cache: State<CpuBusCache>,
+) -> Result<CpuBusState, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    cpu.interrupts_mut().assert_irq(UI_IRQ_SOURCE);
+    Ok(refresh_cpu_bus_cache(cpu, &cpu_bus_cache))
+}
+
+/// Releases the IRQ line from the debugger UI's own IRQ source. Only callable
+/// while the CPU is stopped (not free-running).
+#[tauri::command]
+fn release_irq(
+    cpu_state: State<CpuState>,
+    cpu_bus_cache: State<CpuBusCache>,
+) -> Result<CpuBusState, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    cpu.interrupts_mut().release_irq(UI_IRQ_SOURCE);
+    Ok(refresh_cpu_bus_cache(cpu, &cpu_bus_cache))
+}
+
+/// Refreshes `CpuBusCache` from `cpu` and returns the corresponding `CpuBusState`.
+///
+/// `is_running` is always `false` here: `CpuState` only holds `Some(Cpu)` while
+/// the CPU is not free-running (it's taken by the run loop otherwise).
+fn refresh_cpu_bus_cache(cpu: &Cpu, cpu_bus_cache: &State<CpuBusCache>) -> CpuBusState {
+    let snap = snapshot_cpu_bus(cpu);
+    *cpu_bus_cache.0.lock().unwrap() = snap.clone();
+    CpuBusState {
+        irq_active: snap.irq_active,
+        nmi_pending: snap.nmi_pending,
+        cycles: snap.cycles,
+        is_running: false,
+        cpu_stopped: snap.cpu_stopped,
+        cpu_waiting: snap.cpu_waiting,
+    }
 }
 
 /// Returns a register snapshot of the current CPU state without stepping.
@@ -735,6 +801,9 @@ pub fn run() {
             step_over,
             step_return,
             reset_cpu,
+            trigger_nmi,
+            assert_irq,
+            release_irq,
             get_registers,
             get_disassembly,
             get_memory,
