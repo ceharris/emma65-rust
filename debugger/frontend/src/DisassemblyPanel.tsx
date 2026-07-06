@@ -35,8 +35,8 @@ const FETCH_ROWS = 48;
 const SCROLL_EDGE = 6;
 
 /** Auto-step interval bounds in milliseconds. */
-const INTERVAL_MIN = 10;
-const INTERVAL_MAX = 5000;
+const INTERVAL_MIN = 0;
+const INTERVAL_MAX = 1000;
 const INTERVAL_DEFAULT = 500;
 
 /**
@@ -46,21 +46,20 @@ const INTERVAL_DEFAULT = 500;
  * thumb by one tick advances the interval by that tier's step size.
  */
 const INTERVAL_TIERS: [number, number, number][] = [
-  [INTERVAL_MIN, 500, 25],   // 19 steps
-  [500, 1000, 50],            // 10 steps
-  [1000, 2000, 100],          // 10 steps
-  [2000, INTERVAL_MAX, 250],  // 12 steps
+  [INTERVAL_MIN, 100, 1],     // 100 steps
+  [100, 200, 5],              // 20 steps
+  [200, 500, 25],             // 12 steps
+  [500, INTERVAL_MAX, 50],    // 10 steps
 ];
-
 const INTERVAL_TOTAL_STEPS = INTERVAL_TIERS.reduce(
-  (sum, [lo, hi, step]) => sum + (hi - lo) / step, 0
-);
+    (sum, [lo, hi, step]) => sum + (hi - lo) / step, 0
+); // = 142
 
-const SLIDER_STEPS = 100;
+const SLIDER_STEPS = INTERVAL_TOTAL_STEPS; // 142 — 1:1 with raw steps
 
-/** Map a slider integer position (0–100) to a millisecond interval. */
+/** Map a slider integer position (0–142) to a millisecond interval. */
 function sliderToInterval(pos: number): number {
-  let remaining = Math.round((pos / SLIDER_STEPS) * INTERVAL_TOTAL_STEPS);
+  let remaining = pos;
   for (const [lo, hi, step] of INTERVAL_TIERS) {
     const tierSteps = (hi - lo) / step;
     if (remaining <= tierSteps) {
@@ -71,20 +70,16 @@ function sliderToInterval(pos: number): number {
   return INTERVAL_MAX;
 }
 
-/** Map a millisecond interval back to a slider integer position (0–100). */
+/** Map a millisecond interval back to a slider integer position (0–142). */
 function intervalToSlider(ms: number): number {
-  const totalSteps = INTERVAL_TOTAL_STEPS;
-  const sliderSteps = SLIDER_STEPS;
-
   let stepsBelow = 0;
   for (const [lo, hi, step] of INTERVAL_TIERS) {
     if (ms <= hi) {
-      const offset = Math.round((ms - lo) / step);
-      return Math.round(((stepsBelow + offset) / totalSteps) * sliderSteps);
+      return stepsBelow + Math.round((ms - lo) / step);
     }
     stepsBelow += (hi - lo) / step;
   }
-  return sliderSteps;
+  return SLIDER_STEPS;
 }
 
 export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
@@ -492,7 +487,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
               className="speed-slider"
               type="range"
               min={0}
-              max={100}
+              max={SLIDER_STEPS}
               value={intervalToSlider(intervalMs)}
               onChange={handleSliderChange}
               title="Step interval"
