@@ -837,6 +837,19 @@ fn toggle_terminal_visibility(app: AppHandle) -> Result<(), String> {
     if visible { window.hide() } else { window.show() }.map_err(|e| e.to_string())
 }
 
+/// Shows the terminal window (created hidden at startup, per `tauri.conf.json`).
+///
+/// On the webkit2gtk backend, a window's webview doesn't realize — and its JS
+/// never runs — until the window is actually mapped, so this must happen
+/// before awaiting the terminal's ready handshake. The window can still be
+/// hidden again afterward via `toggle_terminal_visibility`.
+fn show_terminal_window(app: &AppHandle) -> Result<(), String> {
+    app.get_webview_window(TERMINAL_WINDOW_LABEL)
+        .ok_or_else(|| "terminal window not found".to_string())?
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
@@ -927,9 +940,14 @@ pub fn run() {
                             ok: true,
                         });
 
-                        // The terminal window stays hidden until the user toggles it
-                        // (Ctrl+Shift+`) — see `toggle_terminal_visibility`. Its webview
-                        // runs regardless of visibility, so this doesn't block on showing it.
+                        // Show the terminal window (created hidden at startup) so its
+                        // webview realizes and runs; the user can hide it again afterward
+                        // with Ctrl+Shift+` (see `toggle_terminal_visibility`).
+                        if let Err(e) = show_terminal_window(&handle) {
+                            eprintln!("Failed to show terminal window: {e}");
+                            return;
+                        }
+
                         // Wait for the terminal window to signal it is ready.
                         let _ = ready_rx.await;
 
