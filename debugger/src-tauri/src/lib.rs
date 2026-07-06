@@ -604,6 +604,24 @@ fn get_disassembly(
     Ok(rows)
 }
 
+/// Spawns a task that emits `debugger-running-tick` every `RUNNING_TICK_INTERVAL_MS`
+/// while `RunStopperState` is set, so panels can refresh live state during any
+/// free-running mode (Run, Step Over, Step Return).
+///
+/// Stops ticking once `RunStopperState` is cleared, which every free-run
+/// command does via `finish_run` (or, for `run_cpu`, its completion task).
+fn spawn_running_tick(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(RUNNING_TICK_INTERVAL_MS)).await;
+            if app.state::<RunStopperState>().0.lock().unwrap().is_none() {
+                break;
+            }
+            let _ = app.emit("debugger-running-tick", ());
+        }
+    });
+}
+
 /// Starts free-run execution on a dedicated OS thread.
 ///
 /// Takes the CPU out of `CpuState` and passes it to `exec::run_from`. Spawns a
@@ -625,19 +643,7 @@ fn run_cpu(
     *app.state::<LiveSnapshotRx>().0.lock().unwrap() =
         Some(handle.subscribe_live());
 
-    // Periodic refresh: emit debugger-running-tick every 500ms while the CPU
-    // is free-running so all panels can update their display.
-    let tick_app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(RUNNING_TICK_INTERVAL_MS)).await;
-            // Stop ticking once RunStopperState is cleared (run completed).
-            if tick_app.state::<RunStopperState>().0.lock().unwrap().is_none() {
-                break;
-            }
-            let _ = tick_app.emit("debugger-running-tick", ());
-        }
-    });
+    spawn_running_tick(app.clone());
 
     tauri::async_runtime::spawn(async move {
         let (result, cpu) = handle.take_cpu_with_result().await;
@@ -681,9 +687,13 @@ fn step_over(
     let (stopper, stop_rx) = RunStopper::channel();
     *run_stopper_state.0.lock().unwrap() = Some(stopper);
 
+    let (live_tx, live_rx) = tokio::sync::watch::channel(None);
+    *app.state::<LiveSnapshotRx>().0.lock().unwrap() = Some(live_rx);
+    spawn_running_tick(app.clone());
+
     std::thread::spawn(move || {
         let mut cpu = cpu;
-        let result = exec_step_over(&mut cpu, &stop_rx);
+        let result = exec_step_over(&mut cpu, &stop_rx, Some(&live_tx));
         let pc = cpu.registers().pc;
         let changed = p_before ^ cpu.registers().p.to_byte();
         let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
@@ -712,9 +722,13 @@ fn step_return(
     let (stopper, stop_rx) = RunStopper::channel();
     *run_stopper_state.0.lock().unwrap() = Some(stopper);
 
+    let (live_tx, live_rx) = tokio::sync::watch::channel(None);
+    *app.state::<LiveSnapshotRx>().0.lock().unwrap() = Some(live_rx);
+    spawn_running_tick(app.clone());
+
     std::thread::spawn(move || {
         let mut cpu = cpu;
-        let result = exec_step_return(&mut cpu, &stop_rx);
+        let result = exec_step_return(&mut cpu, &stop_rx, Some(&live_tx));
         let pc = cpu.registers().pc;
         let changed = p_before ^ cpu.registers().p.to_byte();
         let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
@@ -792,9 +806,9 @@ fn snapshot_cpu_bus(cpu: &Cpu) -> CpuBusSnapshot {
 
 /// Returns the current CPU/bus signals and cycle count, plus whether the CPU is free-running.
 ///
-/// IRQ, NMI, and cpu_stopped/waiting values come from the cache updated after each step or run
-/// completion. Cycles are read from the live snapshot channel during free-run so the counter
-/// updates at the tick rate rather than only at halt.
+/// All signals come from the cache updated after each step or run completion, except while
+/// free-running (Run, Step Over, Step Return), when they're read from the live snapshot channel
+/// so the display updates at the tick rate rather than only at halt.
 #[tauri::command]
 fn get_cpu_bus_state(
     cpu_bus_cache: State<CpuBusCache>,
@@ -803,21 +817,18 @@ fn get_cpu_bus_state(
 ) -> CpuBusState {
     let snap = cpu_bus_cache.0.lock().unwrap().clone();
     let is_running = run_stopper_state.0.lock().unwrap().is_some();
-    let cycles = if is_running {
-        live_snapshot_rx.0.lock().unwrap()
-            .as_ref()
-            .and_then(|rx| rx.borrow().as_ref().map(|s| s.cycles))
-            .unwrap_or(snap.cycles)
+    let live = if is_running {
+        live_snapshot_rx.0.lock().unwrap().as_ref().and_then(|rx| rx.borrow().clone())
     } else {
-        snap.cycles
+        None
     };
     CpuBusState {
-        irq_active: snap.irq_active,
-        nmi_pending: snap.nmi_pending,
-        cycles,
+        irq_active: live.as_ref().map_or(snap.irq_active, |s| s.irq_active),
+        nmi_pending: live.as_ref().map_or(snap.nmi_pending, |s| s.nmi_pending),
+        cycles: live.as_ref().map_or(snap.cycles, |s| s.cycles),
         is_running,
-        cpu_stopped: snap.cpu_stopped,
-        cpu_waiting: snap.cpu_waiting,
+        cpu_stopped: live.as_ref().map_or(snap.cpu_stopped, |s| s.cpu_stopped),
+        cpu_waiting: live.as_ref().map_or(snap.cpu_waiting, |s| s.cpu_waiting),
     }
 }
 
