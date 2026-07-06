@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::Mutex;
@@ -66,6 +67,28 @@ pub struct RunStopperState(pub Mutex<Option<RunStopper>>);
 /// When the CPU is halted at a breakpoint or watch trigger, holds that PC so
 /// the next step command can skip past it. Cleared after each step or reset.
 pub struct SkipBreakpointPc(pub Mutex<Option<u16>>);
+
+/// Debugger-tracked breakpoint records (`addr -> enabled`).
+///
+/// Source of truth for the UI's breakpoint list. Only currently-enabled addresses are
+/// mirrored into the CPU's own breakpoint set via `Cpu::add_breakpoint`/`remove_breakpoint`,
+/// so disabling one just stops it from halting execution without any "disabled" concept
+/// in the emulator core itself.
+pub struct BreakpointState(pub Mutex<BTreeMap<u16, bool>>);
+
+/// A single breakpoint entry returned to the frontend.
+#[derive(Clone, serde::Serialize)]
+pub struct BreakpointInfo {
+    /// Address the breakpoint is set at.
+    pub addr: u16,
+    /// True if the breakpoint currently halts execution.
+    pub enabled: bool,
+}
+
+/// Converts the debugger's breakpoint records into the list returned to the frontend.
+fn breakpoint_list(bps: &BTreeMap<u16, bool>) -> Vec<BreakpointInfo> {
+    bps.iter().map(|(&addr, &enabled)| BreakpointInfo { addr, enabled }).collect()
+}
 
 /// Live CPU snapshot stream published by the run loop during free-run.
 ///
@@ -539,29 +562,103 @@ fn get_stack(
     Ok(StackSnapshot { s: live.registers.s, page: live.stack_page })
 }
 
-/// Toggles a breakpoint at `addr` on the CPU: adds it if not present, removes it if present.
+/// Toggles a breakpoint at `addr`: adds it (enabled) if not present, removes it entirely if present.
 ///
 /// Returns the updated breakpoint list, sorted ascending.
 #[tauri::command]
-fn toggle_breakpoint(addr: u16, cpu_state: State<CpuState>) -> Result<Vec<u16>, String> {
+fn toggle_breakpoint(
+    addr: u16,
+    cpu_state: State<CpuState>,
+    breakpoint_state: State<BreakpointState>,
+) -> Result<Vec<BreakpointInfo>, String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
-    if !cpu.remove_breakpoint(addr) {
+    let mut bps = breakpoint_state.0.lock().unwrap();
+    if bps.remove(&addr).is_some() {
+        cpu.remove_breakpoint(addr);
+    } else {
+        bps.insert(addr, true);
         cpu.add_breakpoint(addr);
     }
-    let mut list: Vec<u16> = cpu.breakpoints().iter().copied().collect();
-    list.sort_unstable();
-    Ok(list)
+    Ok(breakpoint_list(&bps))
 }
 
-/// Returns the CPU's current breakpoint address list, sorted ascending.
+/// Sets an enabled breakpoint at `addr`, re-enabling it if it already existed but was disabled.
+///
+/// Returns the updated breakpoint list, sorted ascending.
 #[tauri::command]
-fn get_breakpoints(cpu_state: State<CpuState>) -> Result<Vec<u16>, String> {
-    let guard = cpu_state.0.lock().unwrap();
-    let cpu = guard.as_ref().ok_or("CPU not ready")?;
-    let mut list: Vec<u16> = cpu.breakpoints().iter().copied().collect();
-    list.sort_unstable();
-    Ok(list)
+fn set_breakpoint(
+    addr: u16,
+    cpu_state: State<CpuState>,
+    breakpoint_state: State<BreakpointState>,
+) -> Result<Vec<BreakpointInfo>, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    let mut bps = breakpoint_state.0.lock().unwrap();
+    bps.insert(addr, true);
+    cpu.add_breakpoint(addr);
+    Ok(breakpoint_list(&bps))
+}
+
+/// Removes the breakpoint at `addr` entirely, if any.
+///
+/// Returns the updated breakpoint list, sorted ascending.
+#[tauri::command]
+fn remove_breakpoint(
+    addr: u16,
+    cpu_state: State<CpuState>,
+    breakpoint_state: State<BreakpointState>,
+) -> Result<Vec<BreakpointInfo>, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    let mut bps = breakpoint_state.0.lock().unwrap();
+    bps.remove(&addr);
+    cpu.remove_breakpoint(addr);
+    Ok(breakpoint_list(&bps))
+}
+
+/// Disables the breakpoint at `addr` without removing it; execution no longer halts there.
+///
+/// No-op if there is no breakpoint at `addr`. Returns the updated breakpoint list, sorted ascending.
+#[tauri::command]
+fn disable_breakpoint(
+    addr: u16,
+    cpu_state: State<CpuState>,
+    breakpoint_state: State<BreakpointState>,
+) -> Result<Vec<BreakpointInfo>, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    let mut bps = breakpoint_state.0.lock().unwrap();
+    if let Some(enabled) = bps.get_mut(&addr) {
+        *enabled = false;
+        cpu.remove_breakpoint(addr);
+    }
+    Ok(breakpoint_list(&bps))
+}
+
+/// Re-enables a previously disabled breakpoint at `addr`.
+///
+/// No-op if there is no breakpoint at `addr`. Returns the updated breakpoint list, sorted ascending.
+#[tauri::command]
+fn enable_breakpoint(
+    addr: u16,
+    cpu_state: State<CpuState>,
+    breakpoint_state: State<BreakpointState>,
+) -> Result<Vec<BreakpointInfo>, String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    let mut bps = breakpoint_state.0.lock().unwrap();
+    if let Some(enabled) = bps.get_mut(&addr) {
+        *enabled = true;
+        cpu.add_breakpoint(addr);
+    }
+    Ok(breakpoint_list(&bps))
+}
+
+/// Returns the debugger's tracked breakpoint list (including disabled ones), sorted ascending.
+#[tauri::command]
+fn get_breakpoints(breakpoint_state: State<BreakpointState>) -> Vec<BreakpointInfo> {
+    breakpoint_list(&breakpoint_state.0.lock().unwrap())
 }
 
 /// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xfff0 for paragraph alignment).
@@ -884,6 +981,7 @@ pub fn run() {
         .manage(ChangedFlagsState(Mutex::new(0)))
         .manage(RunStopperState(Mutex::new(None)))
         .manage(SkipBreakpointPc(Mutex::new(None)))
+        .manage(BreakpointState(Mutex::new(BTreeMap::new())))
         .manage(LiveSnapshotRx(Mutex::new(None)))
         .manage(CpuBusCache(Mutex::new(CpuBusSnapshot {
             irq_active: false,
@@ -914,6 +1012,10 @@ pub fn run() {
             get_memory,
             get_stack,
             toggle_breakpoint,
+            set_breakpoint,
+            remove_breakpoint,
+            disable_breakpoint,
+            enable_breakpoint,
             get_breakpoints,
             get_cpu_bus_state,
             theme::get_theme,
