@@ -132,7 +132,7 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
     runStopLabel = "Run";
     runStopClass = "indicator-run";
   } else if (displayExecState === "stepping") {
-    runStopLabel = "Step";
+    runStopLabel = "Stop";
     runStopClass = "indicator-step";
   } else if (cpuBus?.cpu_stopped) {
     runStopLabel = "STP Executed";
