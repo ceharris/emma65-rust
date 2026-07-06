@@ -148,29 +148,34 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
   isFreeRunningRef.current = isFreeRunning;
   intervalMsRef.current = intervalMs;
 
+  /** True only when the CPU is halted and idle; breakpoints can only be edited then. */
+  const isStopped = !stepping && !isAutoStepping && !isFreeRunning;
+
   /** Converts a sorted breakpoint list from the backend into the addr -> enabled map used for display. */
   const applyBreakpointList = useCallback((list: BreakpointInfo[]) => {
     setBreakpoints(new Map(list.map((b) => [b.addr, b.enabled])));
   }, []);
 
   const handleToggleBreakpoint = useCallback(async (addr: number) => {
+    if (!isStopped) return;
     try {
       const updated = await invoke<BreakpointInfo[]>("toggle_breakpoint", { addr });
       applyBreakpointList(updated);
     } catch (e) {
       console.error("toggle_breakpoint failed:", e);
     }
-  }, [applyBreakpointList]);
+  }, [applyBreakpointList, isStopped]);
 
   /** Runs a breakpoint command (set/remove/disable/enable) and applies the returned list. */
   const runBreakpointCommand = useCallback(async (command: string, addr: number) => {
+    if (!isStopped) return;
     try {
       const updated = await invoke<BreakpointInfo[]>(command, { addr });
       applyBreakpointList(updated);
     } catch (e) {
       console.error(`${command} failed:`, e);
     }
-  }, [applyBreakpointList]);
+  }, [applyBreakpointList, isStopped]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
@@ -187,12 +192,14 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
   }, []);
 
   const openAddressInput = useCallback(() => {
+    if (!isStopped) return;
     setAddressInputValue("");
     setAddressInputInvalid(false);
     setAddressInputOpen(true);
-  }, []);
+  }, [isStopped]);
 
   const commitAddressInput = useCallback(async () => {
+    if (!isStopped) return;
     const addr = parseAddressInput(addressInputValue);
     if (addr === null) {
       setAddressInputInvalid(true);
@@ -200,7 +207,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
     }
     await runBreakpointCommand("set_breakpoint", addr);
     closeContextMenu();
-  }, [addressInputValue, runBreakpointCommand, closeContextMenu]);
+  }, [addressInputValue, runBreakpointCommand, closeContextMenu, isStopped]);
 
   // Close the context menu on outside click or Escape.
   useEffect(() => {
@@ -630,9 +637,17 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
                 onContextMenu={(e) => handleRowContextMenu(e, row.addr)}
               >
                 <span
-                  className={`disasm-gutter${bpEnabled === true ? " breakpoint" : bpEnabled === false ? " breakpoint-disabled" : ""}`}
+                  className={[
+                    "disasm-gutter",
+                    bpEnabled === true ? "breakpoint" : bpEnabled === false ? "breakpoint-disabled" : "",
+                    isStopped ? "" : "locked",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   onClick={() => handleToggleBreakpoint(row.addr)}
-                  title={bpEnabled !== undefined ? "Remove breakpoint" : "Set breakpoint"}
+                  title={isStopped
+                    ? (bpEnabled !== undefined ? "Remove breakpoint" : "Set breakpoint")
+                    : "Stop the CPU to edit breakpoints"}
                 >
                   {bpEnabled === false ? "○" : "●"}
                 </span>
@@ -671,37 +686,45 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
             <>
               {breakpoints.get(contextMenu.addr) === undefined && (
                 <div
-                  className="disasm-context-menu-item"
-                  onClick={() => { runBreakpointCommand("set_breakpoint", contextMenu.addr); closeContextMenu(); }}
+                  className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                  title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
+                  onClick={isStopped ? () => { runBreakpointCommand("set_breakpoint", contextMenu.addr); closeContextMenu(); } : undefined}
                 >
                   Set Breakpoint
                 </div>
               )}
               {breakpoints.get(contextMenu.addr) === true && (
                 <div
-                  className="disasm-context-menu-item"
-                  onClick={() => { runBreakpointCommand("disable_breakpoint", contextMenu.addr); closeContextMenu(); }}
+                  className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                  title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
+                  onClick={isStopped ? () => { runBreakpointCommand("disable_breakpoint", contextMenu.addr); closeContextMenu(); } : undefined}
                 >
                   Disable Breakpoint
                 </div>
               )}
               {breakpoints.get(contextMenu.addr) === false && (
                 <div
-                  className="disasm-context-menu-item"
-                  onClick={() => { runBreakpointCommand("enable_breakpoint", contextMenu.addr); closeContextMenu(); }}
+                  className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                  title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
+                  onClick={isStopped ? () => { runBreakpointCommand("enable_breakpoint", contextMenu.addr); closeContextMenu(); } : undefined}
                 >
                   Enable Breakpoint
                 </div>
               )}
               {breakpoints.get(contextMenu.addr) !== undefined && (
                 <div
-                  className="disasm-context-menu-item"
-                  onClick={() => { runBreakpointCommand("remove_breakpoint", contextMenu.addr); closeContextMenu(); }}
+                  className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                  title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
+                  onClick={isStopped ? () => { runBreakpointCommand("remove_breakpoint", contextMenu.addr); closeContextMenu(); } : undefined}
                 >
                   Remove Breakpoint
                 </div>
               )}
-              <div className="disasm-context-menu-item" onClick={openAddressInput}>
+              <div
+                className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
+                onClick={isStopped ? openAddressInput : undefined}
+              >
                 Set Breakpoint at Address…
               </div>
             </>

@@ -192,6 +192,25 @@
   &.breakpoint-disabled {
     color: var(--color-muted);
   }
+
+  // While the CPU is running, breakpoints can't be edited: suppress the
+  // hover affordance and dim whatever marker (or lack of one) is showing.
+  &.locked {
+    cursor: default;
+    opacity: 0.5;
+
+    &:hover {
+      color: transparent;
+    }
+
+    &.breakpoint:hover {
+      color: var(--color-danger-strong);
+    }
+
+    &.breakpoint-disabled:hover {
+      color: var(--color-muted);
+    }
+  }
 }
 
 .disasm-context-menu {
@@ -212,6 +231,15 @@
 
   &:hover {
     background: var(--color-bg-hover);
+  }
+
+  &.disabled {
+    cursor: default;
+    opacity: 0.5;
+
+    &:hover {
+      background: none;
+    }
   }
 }
 
