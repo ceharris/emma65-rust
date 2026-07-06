@@ -38,9 +38,10 @@
 .indicator-stop { color: #f44336; }
 .indicator-step { color: #2196f3; }
 
-// NMI / IRQ indicator colors
+// NMI / IRQ / WAI indicator colors
 .indicator-nmi-active,
-.indicator-irq-active { color: #ffc107; }
+.indicator-irq-active,
+.indicator-wai { color: #ffc107; }
 
 .indicator-idle { color: #444; }
 

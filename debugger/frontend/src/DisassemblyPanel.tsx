@@ -15,6 +15,7 @@ interface RegisterSnapshot {
   a: number; x: number; y: number; s: number;
   pc: number; p: number; changed_flags: number;
   cpu_stopped: boolean;
+  cpu_waiting: boolean;
   breakpoint_hit: boolean;
 }
 
@@ -275,7 +276,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
     autoStepTimerRef.current = setTimeout(async () => {
       if (!isAutoSteppingRef.current) return;
       const snap = await doStep("step_into");
-      if (snap?.cpu_stopped || snap?.breakpoint_hit) {
+      if (snap?.cpu_stopped || snap?.cpu_waiting || snap?.breakpoint_hit) {
         setIsAutoStepping(false);
         return;
       }

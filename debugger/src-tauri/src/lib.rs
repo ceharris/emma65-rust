@@ -67,6 +67,10 @@ pub struct CpuBusSnapshot {
     pub nmi_pending: bool,
     /// Total CPU cycles executed since the last reset.
     pub cycles: u64,
+    /// True when the CPU executed STP and is halted until reset.
+    pub cpu_stopped: bool,
+    /// True when the CPU executed WAI and is waiting for an interrupt.
+    pub cpu_waiting: bool,
 }
 
 /// Combined CPU/bus state returned by `get_cpu_bus_state`.
@@ -80,6 +84,10 @@ pub struct CpuBusState {
     pub cycles: u64,
     /// True while the CPU is free-running (run_cpu, step_over, or step_return in progress).
     pub is_running: bool,
+    /// True when the CPU executed STP and is halted until reset.
+    pub cpu_stopped: bool,
+    /// True when the CPU executed WAI and is waiting for an interrupt.
+    pub cpu_waiting: bool,
 }
 
 /// A single disassembled line returned to the frontend.
@@ -111,6 +119,8 @@ pub struct RegisterSnapshot {
     pub changed_flags: u8,
     /// True when the CPU executed STP and is now halted; auto-step should stop.
     pub cpu_stopped: bool,
+    /// True when the CPU executed WAI and is waiting for an interrupt.
+    pub cpu_waiting: bool,
     /// True when the post-step PC matches a breakpoint address; auto-step should stop.
     pub breakpoint_hit: bool,
 }
@@ -228,6 +238,7 @@ fn step_into(
     *cpu_bus_cache.0.lock().unwrap() = snapshot_cpu_bus(cpu);
 
     let cpu_stopped = matches!(result, StepResult::Stopped);
+    let cpu_waiting = matches!(result, StepResult::Waiting);
     let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
     let watch_triggered = matches!(result, StepResult::WatchTriggered { .. } | StepResult::WatchError { .. });
 
@@ -248,6 +259,7 @@ fn step_into(
         p: regs.p.to_byte(),
         changed_flags: changed,
         cpu_stopped,
+        cpu_waiting,
         breakpoint_hit,
     };
 
@@ -287,6 +299,7 @@ fn reset_cpu(
         p: regs.p.to_byte(),
         changed_flags: 0,
         cpu_stopped: false,
+        cpu_waiting: false,
         breakpoint_hit: false,
     };
 
@@ -316,7 +329,8 @@ fn get_registers(
         pc: regs.pc,
         p: regs.p.to_byte(),
         changed_flags,
-        cpu_stopped: false,
+        cpu_stopped: cpu.is_stopped(),
+        cpu_waiting: cpu.is_waiting(),
         breakpoint_hit: false,
     })
 }
@@ -433,30 +447,10 @@ fn run_cpu(
 
     tauri::async_runtime::spawn(async move {
         let (result, cpu) = handle.take_cpu_with_result().await;
-        let regs = *cpu.registers();
-        let cpu_stopped = matches!(result, StepResult::Stopped);
-        let breakpoint_hit = matches!(result, StepResult::Breakpoint(_));
-        let watch_triggered = matches!(result, StepResult::WatchTriggered { .. } | StepResult::WatchError { .. });
-
-        *app.state::<ChangedFlagsState>().0.lock().unwrap() = 0;
-        *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
-        *app.state::<RunStopperState>().0.lock().unwrap() = None;
-        *app.state::<SkipBreakpointPc>().0.lock().unwrap() = if breakpoint_hit || watch_triggered {
-            Some(regs.pc)
-        } else {
-            None
-        };
-        *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
-
-        let snapshot = RegisterSnapshot {
-            a: regs.a, x: regs.x, y: regs.y, s: regs.s,
-            pc: regs.pc, p: regs.p.to_byte(),
-            changed_flags: 0,
-            cpu_stopped,
-            breakpoint_hit,
-        };
-        let _ = app.emit("debugger-halted", regs.pc);
-        let _ = app.emit("debugger-run-stopped", snapshot);
+        let pc = cpu.registers().pc;
+        let result = Some(result);
+        let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
+        finish_run(&app, cpu, 0, cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc);
     });
 
     Ok(())
@@ -496,34 +490,10 @@ fn step_over(
     std::thread::spawn(move || {
         let mut cpu = cpu;
         let result = exec_step_over(&mut cpu, &stop_rx);
-        let regs = *cpu.registers();
-        let changed = p_before ^ regs.p.to_byte();
-
-        let (cpu_stopped, breakpoint_hit) = match &result {
-            Some(r) => (matches!(r, StepResult::Stopped), matches!(r, StepResult::Breakpoint(_))),
-            None => (false, false),
-        };
-        let watch_triggered = matches!(result, Some(StepResult::WatchTriggered { .. } | StepResult::WatchError { .. }));
-
-        *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed;
-        *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
-        *app.state::<RunStopperState>().0.lock().unwrap() = None;
-        *app.state::<SkipBreakpointPc>().0.lock().unwrap() = if breakpoint_hit || watch_triggered {
-            Some(regs.pc)
-        } else {
-            None
-        };
-        *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
-
-        let snapshot = RegisterSnapshot {
-            a: regs.a, x: regs.x, y: regs.y, s: regs.s,
-            pc: regs.pc, p: regs.p.to_byte(),
-            changed_flags: changed,
-            cpu_stopped,
-            breakpoint_hit,
-        };
-        let _ = app.emit("debugger-halted", regs.pc);
-        let _ = app.emit("debugger-run-stopped", snapshot);
+        let pc = cpu.registers().pc;
+        let changed = p_before ^ cpu.registers().p.to_byte();
+        let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
+        finish_run(&app, cpu, changed, cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc);
     });
 
     Ok(())
@@ -551,37 +521,67 @@ fn step_return(
     std::thread::spawn(move || {
         let mut cpu = cpu;
         let result = exec_step_return(&mut cpu, &stop_rx);
-        let regs = *cpu.registers();
-        let changed = p_before ^ regs.p.to_byte();
-
-        let (cpu_stopped, breakpoint_hit) = match &result {
-            Some(r) => (matches!(r, StepResult::Stopped), matches!(r, StepResult::Breakpoint(_))),
-            None => (false, false),
-        };
-        let watch_triggered = matches!(result, Some(StepResult::WatchTriggered { .. } | StepResult::WatchError { .. }));
-
-        *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed;
-        *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
-        *app.state::<RunStopperState>().0.lock().unwrap() = None;
-        *app.state::<SkipBreakpointPc>().0.lock().unwrap() = if breakpoint_hit || watch_triggered {
-            Some(regs.pc)
-        } else {
-            None
-        };
-        *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
-
-        let snapshot = RegisterSnapshot {
-            a: regs.a, x: regs.x, y: regs.y, s: regs.s,
-            pc: regs.pc, p: regs.p.to_byte(),
-            changed_flags: changed,
-            cpu_stopped,
-            breakpoint_hit,
-        };
-        let _ = app.emit("debugger-halted", regs.pc);
-        let _ = app.emit("debugger-run-stopped", snapshot);
+        let pc = cpu.registers().pc;
+        let changed = p_before ^ cpu.registers().p.to_byte();
+        let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
+        finish_run(&app, cpu, changed, cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc);
     });
 
     Ok(())
+}
+
+/// Extracts the execution-result flags from an optional `StepResult`.
+///
+/// Returns `(cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc)` where
+/// `skip_pc` is `Some(pc)` when a breakpoint or watch triggered at `pc`.
+fn flags_from_result(result: &Option<StepResult>, pc: u16) -> (bool, bool, bool, Option<u16>) {
+    let (cpu_stopped, cpu_waiting, breakpoint_hit) = match result {
+        Some(r) => (
+            matches!(r, StepResult::Stopped),
+            matches!(r, StepResult::Waiting),
+            matches!(r, StepResult::Breakpoint(_)),
+        ),
+        None => (false, false, false),
+    };
+    let watch_triggered = matches!(
+        result,
+        Some(StepResult::WatchTriggered { .. } | StepResult::WatchError { .. })
+    );
+    let skip_pc = if breakpoint_hit || watch_triggered { Some(pc) } else { None };
+    (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc)
+}
+
+/// Restores CPU state after a threaded run completes and emits the halt events.
+///
+/// Writes `changed_flags`, the CPU-bus cache, clears the run-stopper, records the
+/// skip-breakpoint PC if applicable, restores the CPU into `CpuState`, then emits
+/// `debugger-halted` and `debugger-run-stopped`.
+fn finish_run(
+    app: &AppHandle,
+    cpu: Cpu,
+    changed_flags: u8,
+    cpu_stopped: bool,
+    cpu_waiting: bool,
+    breakpoint_hit: bool,
+    skip_pc: Option<u16>,
+) {
+    let regs = *cpu.registers();
+    *app.state::<ChangedFlagsState>().0.lock().unwrap() = changed_flags;
+    *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
+    *app.state::<RunStopperState>().0.lock().unwrap() = None;
+    *app.state::<SkipBreakpointPc>().0.lock().unwrap() = skip_pc;
+    *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
+
+    let snapshot = RegisterSnapshot {
+        a: regs.a, x: regs.x, y: regs.y, s: regs.s,
+        pc: regs.pc, p: regs.p.to_byte(),
+        changed_flags,
+        cpu_stopped,
+        cpu_waiting,
+        breakpoint_hit,
+    };
+    let _ = app.emit("debugger-halted", regs.pc);
+    let _ = app.emit("debugger-run-stopped", snapshot);
 }
 
 /// Snapshots the interrupt controller state and cycle count from a live CPU.
@@ -590,6 +590,8 @@ fn snapshot_cpu_bus(cpu: &Cpu) -> CpuBusSnapshot {
         irq_active: cpu.interrupts().irq_active(),
         nmi_pending: cpu.interrupts().nmi_pending(),
         cycles: cpu.cycles(),
+        cpu_stopped: cpu.is_stopped(),
+        cpu_waiting: cpu.is_waiting(),
     }
 }
 
@@ -609,6 +611,8 @@ fn get_cpu_bus_state(
         nmi_pending: snap.nmi_pending,
         cycles: snap.cycles,
         is_running,
+        cpu_stopped: snap.cpu_stopped,
+        cpu_waiting: snap.cpu_waiting,
     }
 }
 
@@ -651,6 +655,8 @@ pub fn run() {
             irq_active: false,
             nmi_pending: false,
             cycles: 0,
+            cpu_stopped: false,
+            cpu_waiting: false,
         })))
         .invoke_handler(tauri::generate_handler![
             quit,
