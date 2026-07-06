@@ -63,6 +63,9 @@ export default function App() {
     setLastSnapshot(snap);
   }, []);
 
+  // True once the CPU has halted on STP or WAI; cleared again on Reset.
+  const cpuHalted = Boolean(lastSnapshot?.cpu_stopped || lastSnapshot?.cpu_waiting);
+
   if (status === null || !status.ok) {
     return (
       <div className="app-splash">
@@ -82,7 +85,7 @@ export default function App() {
         {/* Watchpoints — story 12 */}
       </div>
       <div className="col col-center">
-        <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} />
+        <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuHalted={cpuHalted} />
       </div>
       <div className="col col-right">
         <RegisterPanel snapshot={lastSnapshot} />

@@ -14,6 +14,10 @@ export interface RegisterSnapshot {
   changed_flags: number;
   /** True when the CPU executed STP and is now halted. */
   cpu_stopped: boolean;
+  /** True when the CPU executed WAI and is now halted awaiting an interrupt. */
+  cpu_waiting: boolean;
+  /** True when this snapshot resulted from hitting a breakpoint. */
+  breakpoint_hit: boolean;
 }
 
 // --- radix cycling ---

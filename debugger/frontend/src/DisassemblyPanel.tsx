@@ -27,6 +27,8 @@ interface Props {
   onStep: (snap: RegisterSnapshot) => void;
   /** Called whenever the execution state changes. */
   onExecStateChange: (state: ExecState) => void;
+  /** True once the CPU has halted on STP or WAI; disables the execution controls. */
+  cpuHalted: boolean;
 }
 
 /** Rows to pre-fetch beyond the visible window so scrolling has buffer. */
@@ -82,7 +84,7 @@ function intervalToSlider(ms: number): number {
   return SLIDER_STEPS;
 }
 
-export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
+export default function DisassemblyPanel({ onStep, onExecStateChange, cpuHalted }: Props) {
   const [rows, setRows] = useState<DisassembledRow[]>([]);
   const [currentPc, setCurrentPc] = useState<number | null>(null);
   const [stepping, setStepping] = useState(false);
@@ -432,7 +434,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
             <button
               className="exec-btn step-into-btn"
               onClick={stepInto}
-              disabled={stepping || isAutoStepping || isFreeRunning}
+              disabled={stepping || isAutoStepping || isFreeRunning || cpuHalted}
               title="Step Into (F11)"
             >
               Step Into
@@ -440,7 +442,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
             <button
               className="exec-btn step-over-btn"
               onClick={stepOver}
-              disabled={stepping || isAutoStepping || isFreeRunning}
+              disabled={stepping || isAutoStepping || isFreeRunning || cpuHalted}
               title="Step Over (F10)"
             >
               Step Over
@@ -448,7 +450,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
             <button
               className="exec-btn step-return-btn"
               onClick={stepReturn}
-              disabled={stepping || isAutoStepping || isFreeRunning}
+              disabled={stepping || isAutoStepping || isFreeRunning || cpuHalted}
               title="Step Return (Shift+F11)"
             >
               Step Return
@@ -460,7 +462,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
             <button
               className="exec-btn run-btn"
               onClick={runCpu}
-              disabled={isFreeRunning || isAutoStepping || stepping}
+              disabled={isFreeRunning || isAutoStepping || stepping || cpuHalted}
               title="Run (F5)"
             >
               Run
@@ -468,7 +470,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
             <button
               className="exec-btn stop-btn"
               onClick={stopCpu}
-              disabled={!isFreeRunning}
+              disabled={!isFreeRunning || cpuHalted}
               title="Stop (Shift+F5)"
             >
               Stop
@@ -478,7 +480,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange }: Props) {
             <button
               className={`exec-btn auto-step-btn${isAutoStepping ? " active" : ""}`}
               onClick={toggleAutoStep}
-              disabled={isFreeRunning || (stepping && !isAutoStepping)}
+              disabled={isFreeRunning || (stepping && !isAutoStepping) || cpuHalted}
               title="Auto-Step (Ctrl+Shift+F5)"
             >
               {isAutoStepping ? "Stop" : "Auto-Step"}
