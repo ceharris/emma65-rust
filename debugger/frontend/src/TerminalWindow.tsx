@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { useAppKeyBindings } from "./useAppKeyBindings";
+import { useAppKeyBindings, APP_KEY_BINDINGS } from "./useAppKeyBindings";
 import { resolveTheme, ThemeMode } from "./ThemeContext";
 
 const XTERM_DARK_THEME: ITheme = {
@@ -66,6 +66,11 @@ export default function TerminalWindow() {
       fontSize: 14,
     });
     termRef.current = term;
+
+    // Let app-wide shortcuts (e.g. Ctrl+Q) bypass xterm's own key handling —
+    // otherwise xterm treats them as terminal control input (Ctrl+Q is XON)
+    // and stops the keydown from ever reaching the window-level listener.
+    term.attachCustomKeyEventHandler((e) => !APP_KEY_BINDINGS.some((b) => b.matches(e)));
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);

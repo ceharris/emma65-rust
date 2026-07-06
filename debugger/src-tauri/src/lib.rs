@@ -837,6 +837,19 @@ fn toggle_terminal_visibility(app: AppHandle) -> Result<(), String> {
     if visible { window.hide() } else { window.show() }.map_err(|e| e.to_string())
 }
 
+/// Shows the terminal window (created hidden at startup, per `tauri.conf.json`).
+///
+/// On the webkit2gtk backend, a window's webview doesn't realize — and its JS
+/// never runs — until the window is actually mapped, so this must happen
+/// before awaiting the terminal's ready handshake. The window can still be
+/// hidden again afterward via `toggle_terminal_visibility`.
+fn show_terminal_window(app: &AppHandle) -> Result<(), String> {
+    app.get_webview_window(TERMINAL_WINDOW_LABEL)
+        .ok_or_else(|| "terminal window not found".to_string())?
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
@@ -896,6 +909,35 @@ pub fn run() {
             theme::set_theme,
         ])
         .setup(|app| {
+            if let Some(terminal_window) = app.get_webview_window(TERMINAL_WINDOW_LABEL) {
+                let window_for_events = terminal_window.clone();
+                terminal_window.on_window_event(move |event| match event {
+                    // The terminal window is a persistent, toggle-able auxiliary
+                    // window (see `toggle_terminal_visibility`), not a closable
+                    // one — closing it via native window chrome would otherwise
+                    // destroy it, after which the toggle command can never find
+                    // it again. Hide it instead so it can still be brought back.
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window_for_events.hide();
+                    }
+                    // Workaround for a Wayland/GTK bug (tauri-apps/tauri#11856,
+                    // tauri-apps/tao#1046): a window's title bar buttons stop
+                    // responding to clicks every time it transitions from hidden
+                    // to shown. Toggling `resizable` off and back on forces GTK
+                    // to recompute the decoration hit-test region. Since the
+                    // terminal window can be hidden/shown repeatedly (via the
+                    // toggle above, or this same close-to-hide behavior), apply
+                    // this on every focus, not just once at startup.
+                    #[cfg(target_os = "linux")]
+                    tauri::WindowEvent::Focused(true) => {
+                        let _ = window_for_events.set_resizable(false);
+                        let _ = window_for_events.set_resizable(true);
+                    }
+                    _ => {}
+                });
+            }
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 match load_session().await {
@@ -927,9 +969,14 @@ pub fn run() {
                             ok: true,
                         });
 
-                        // The terminal window stays hidden until the user toggles it
-                        // (Ctrl+Shift+`) — see `toggle_terminal_visibility`. Its webview
-                        // runs regardless of visibility, so this doesn't block on showing it.
+                        // Show the terminal window (created hidden at startup) so its
+                        // webview realizes and runs; the user can hide it again afterward
+                        // with Ctrl+Shift+` (see `toggle_terminal_visibility`).
+                        if let Err(e) = show_terminal_window(&handle) {
+                            eprintln!("Failed to show terminal window: {e}");
+                            return;
+                        }
+
                         // Wait for the terminal window to signal it is ready.
                         let _ = ready_rx.await;
 
