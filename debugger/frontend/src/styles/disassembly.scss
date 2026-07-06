@@ -188,6 +188,74 @@
   &.breakpoint {
     color: var(--color-danger-strong);
   }
+
+  &.breakpoint-disabled {
+    color: var(--color-muted);
+  }
+
+  // While the CPU is running, breakpoints can't be edited: suppress the
+  // hover affordance and dim whatever marker (or lack of one) is showing.
+  &.locked {
+    cursor: default;
+    opacity: 0.5;
+
+    &:hover {
+      color: transparent;
+    }
+
+    &.breakpoint:hover {
+      color: var(--color-danger-strong);
+    }
+
+    &.breakpoint-disabled:hover {
+      color: var(--color-muted);
+    }
+  }
+}
+
+.disasm-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 4px 0;
+  min-width: 180px;
+}
+
+.disasm-context-menu-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--color-bg-hover);
+  }
+
+  &.disabled {
+    cursor: default;
+    opacity: 0.5;
+
+    &:hover {
+      background: none;
+    }
+  }
+}
+
+.disasm-context-menu-input {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 4px 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 3px;
+  color: var(--color-fg);
+  padding: 4px 6px;
+
+  &.invalid {
+    border-color: var(--color-danger-strong);
+  }
 }
 
 .disasm-addr {
