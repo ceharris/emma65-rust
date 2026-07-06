@@ -6,6 +6,7 @@ import DisassemblyPanel, { ExecState } from "./DisassemblyPanel";
 import MemoryPanel from "./MemoryPanel";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
 import StackPanel from "./StackPanel";
+import { useAppKeyBindings } from "./useAppKeyBindings";
 
 interface SessionStatus {
   message: string;
@@ -17,16 +18,7 @@ export default function App() {
   const [lastSnapshot, setLastSnapshot] = useState<RegisterSnapshot | null>(null);
   const [execState, setExecState] = useState<ExecState>("stopped");
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "q" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        invoke("quit");
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
+  useAppKeyBindings();
 
   useEffect(() => {
     const unlistenPromise = listen<SessionStatus>("session-status", (event) => {
