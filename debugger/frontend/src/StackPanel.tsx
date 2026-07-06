@@ -133,10 +133,12 @@ export default function StackPanel() {
   }, [fetchStack]);
 
   useEffect(() => {
-    const unlistenPromise = listen<number>("debugger-halted", () => {
-      fetchStack();
-    });
-    return () => { unlistenPromise.then((f) => f()); };
+    const unlistenHalted = listen("debugger-halted", () => { fetchStack(); });
+    const unlistenTick   = listen("debugger-running-tick", () => { fetchStack(); });
+    return () => {
+      unlistenHalted.then((f) => f());
+      unlistenTick.then((f) => f());
+    };
   }, [fetchStack]);
 
   const cycleDataRadix = useCallback(() => {

@@ -46,6 +46,15 @@ export default function App() {
     setLastSnapshot(snap);
   }, []);
 
+  useEffect(() => {
+    const unlistenTick = listen("debugger-running-tick", () => {
+      invoke<RegisterSnapshot>("get_registers")
+        .then((snap) => setLastSnapshot(snap))
+        .catch(() => {});
+    });
+    return () => { unlistenTick.then((f) => f()); };
+  }, []);
+
   const handleExecStateChange = useCallback((state: ExecState) => {
     setExecState(state);
   }, []);

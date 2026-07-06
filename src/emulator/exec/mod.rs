@@ -1,9 +1,21 @@
 use std::time::Instant;
 use tokio::sync::{oneshot, watch};
-use crate::emulator::cpu::Cpu;
+use crate::emulator::cpu::{Cpu, Registers};
 use crate::emulator::cpu::opcodes::DecodedOp;
 use crate::emulator::error::ExecError;
 use crate::watch::WatchError;
+
+/// A lightweight snapshot of CPU state published by the run loop after each
+/// instruction batch so callers can display live state without stopping the CPU.
+#[derive(Clone)]
+pub struct CpuLiveSnapshot {
+    /// Register state at the end of the most recent instruction batch.
+    pub registers: Registers,
+    /// Full stack page (0x0100–0x01FF).
+    pub stack_page: Vec<u8>,
+    /// Total cycles executed since the last reset.
+    pub cycles: u64,
+}
 
 const JSR_OPCODE: u8 = 0x20;
 const JSR_BYTE_LEN: u16 = 3;
@@ -98,6 +110,8 @@ pub struct RunHandle {
     result_rx: oneshot::Receiver<StepResult>,
     /// Receives ownership of the CPU after the thread exits.
     cpu_rx: oneshot::Receiver<Cpu>,
+    /// Receives live CPU snapshots published by the run loop after each batch.
+    live_rx: watch::Receiver<Option<CpuLiveSnapshot>>,
 }
 
 impl RunHandle {
@@ -139,6 +153,18 @@ impl RunHandle {
         let result = self.result_rx.await.expect("CPU thread exited without sending result");
         let cpu = self.cpu_rx.await.expect("CPU thread exited without returning CPU");
         (result, cpu)
+    }
+
+    /// Returns the most recent live snapshot published by the run loop, or
+    /// `None` if no batch has completed yet.
+    pub fn live_snapshot(&self) -> Option<CpuLiveSnapshot> {
+        self.live_rx.borrow().clone()
+    }
+
+    /// Returns a cloned receiver for the live snapshot channel so the caller
+    /// can poll it independently (e.g. from a background task).
+    pub fn subscribe_live(&self) -> watch::Receiver<Option<CpuLiveSnapshot>> {
+        self.live_rx.clone()
     }
 }
 
@@ -278,18 +304,20 @@ pub fn run_from(cpu: Cpu, skip_pc: Option<u16>) -> RunHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
     let (result_tx, result_rx) = oneshot::channel();
     let (cpu_tx, cpu_rx) = oneshot::channel();
+    let (live_tx, live_rx) = watch::channel(None);
 
     std::thread::spawn(move || {
-        run_loop(cpu, skip_pc, stop_rx, result_tx, cpu_tx);
+        run_loop(cpu, skip_pc, stop_rx, live_tx, result_tx, cpu_tx);
     });
 
-    RunHandle { stop_tx, result_rx, cpu_rx }
+    RunHandle { stop_tx, result_rx, cpu_rx, live_rx }
 }
 
 fn run_loop(
     mut cpu: Cpu,
     skip_pc: Option<u16>,
     stop_rx: watch::Receiver<bool>,
+    live_tx: watch::Sender<Option<CpuLiveSnapshot>>,
     result_tx: oneshot::Sender<StepResult>,
     cpu_tx: oneshot::Sender<Cpu>,
 ) {
@@ -315,6 +343,16 @@ fn run_loop(
                 other => break 'outer Some(other),
             }
         }
+
+        // Publish a live snapshot after each batch so the frontend can display
+        // current state without stopping the CPU.
+        let mut stack_page = vec![0u8; 256];
+        let _ = cpu.bus().peek_range(0x0100, &mut stack_page);
+        let _ = live_tx.send(Some(CpuLiveSnapshot {
+            registers: *cpu.registers(),
+            stack_page,
+            cycles: cpu.cycles(),
+        }));
 
         if let Some(hz) = hz {
             let elapsed_ns = start.elapsed().as_nanos() as u64;

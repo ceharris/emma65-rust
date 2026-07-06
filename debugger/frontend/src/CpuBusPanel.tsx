@@ -31,7 +31,6 @@ function formatCycles(n: number): string {
 
 export default function CpuBusPanel({ execState, onReset }: Props) {
   const [cpuBus, setCpuBus] = useState<CpuBusState | null>(null);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Display state for the Run/Stop/Step indicator. When stepping, hold the
   // "stepping" state for at least STEP_INDICATOR_MIN_MS so the transition is
@@ -100,36 +99,20 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
   // Re-fetch on halt/run-stopped events; also re-trigger the step flash on
   // each halt so auto-step produces a visible indicator pulse per tick.
   useEffect(() => {
-    const unlistenHaltedPromise = listen("debugger-halted", () => {
+    const unlistenHalted = listen("debugger-halted", () => {
       fetchCpuBus();
       if (execStateRef.current === "stepping") {
         triggerStepFlash();
       }
     });
-    const unlistenRunStoppedPromise = listen("debugger-run-stopped", () => { fetchCpuBus(); });
+    const unlistenRunStopped = listen("debugger-run-stopped", () => { fetchCpuBus(); });
+    const unlistenTick = listen("debugger-running-tick", () => { fetchCpuBus(); });
     return () => {
-      unlistenHaltedPromise.then((f) => f());
-      unlistenRunStoppedPromise.then((f) => f());
+      unlistenHalted.then((f) => f());
+      unlistenRunStopped.then((f) => f());
+      unlistenTick.then((f) => f());
     };
   }, [fetchCpuBus, triggerStepFlash]);
-
-  // Poll while free-running so cycle counter and IRQ/NMI status stay live.
-  useEffect(() => {
-    if (execState === "running") {
-      pollIntervalRef.current = setInterval(fetchCpuBus, 500);
-    } else {
-      if (pollIntervalRef.current !== null) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-    }
-    return () => {
-      if (pollIntervalRef.current !== null) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-    };
-  }, [execState, fetchCpuBus]);
 
   const handleReset = useCallback(async () => {
     try {

@@ -77,12 +77,11 @@ export default function MemoryPanel() {
   useEffect(() => {
     fetchPage(0x0000).then(() => setReady(true));
 
-    const unlistenPromise = listen<number>("debugger-halted", () => {
-      // Re-fetch the current page so values stay live after each step.
+    const unlistenHalted = listen("debugger-halted", () => {
       fetchPage(pageAddrRef.current);
     });
 
-    return () => { unlistenPromise.then((f) => f()); };
+    return () => { unlistenHalted.then((f) => f()); };
   }, [fetchPage]);
 
   /** Navigate on Enter in the address input. */
