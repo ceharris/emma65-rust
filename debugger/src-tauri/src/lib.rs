@@ -949,12 +949,25 @@ fn toggle_terminal_visibility(app: AppHandle) -> Result<(), String> {
 ///
 /// On the webkit2gtk backend, a window's webview doesn't realize — and its JS
 /// never runs — until the window is actually mapped, so this must happen
-/// before awaiting the terminal's ready handshake. The window can still be
-/// hidden again afterward via `toggle_terminal_visibility`.
+/// before awaiting the terminal's ready handshake. Callers should hide it
+/// again afterward (see `hide_terminal_window`) so the window stays hidden
+/// at launch as intended, until the user toggles it via `toggle_terminal_visibility`.
 fn show_terminal_window(app: &AppHandle) -> Result<(), String> {
     app.get_webview_window(TERMINAL_WINDOW_LABEL)
         .ok_or_else(|| "terminal window not found".to_string())?
         .show()
+        .map_err(|e| e.to_string())
+}
+
+/// Hides the terminal window.
+///
+/// Used to re-hide the window after the startup `show_terminal_window` call
+/// that works around webkit2gtk's hidden-webview bug, restoring the intended
+/// "hidden until the user toggles it" launch state.
+fn hide_terminal_window(app: &AppHandle) -> Result<(), String> {
+    app.get_webview_window(TERMINAL_WINDOW_LABEL)
+        .ok_or_else(|| "terminal window not found".to_string())?
+        .hide()
         .map_err(|e| e.to_string())
 }
 
@@ -1082,9 +1095,9 @@ pub fn run() {
                             ok: true,
                         });
 
-                        // Show the terminal window (created hidden at startup) so its
-                        // webview realizes and runs; the user can hide it again afterward
-                        // with Ctrl+Shift+` (see `toggle_terminal_visibility`).
+                        // Briefly show the terminal window (created hidden at startup) so
+                        // its webview realizes and runs on webkit2gtk; hidden windows never
+                        // fire their JS there, so terminal_ready would otherwise never arrive.
                         if let Err(e) = show_terminal_window(&handle) {
                             eprintln!("Failed to show terminal window: {e}");
                             return;
@@ -1092,6 +1105,10 @@ pub fn run() {
 
                         // Wait for the terminal window to signal it is ready.
                         let _ = ready_rx.await;
+
+                        // Hide it again so the window stays hidden at launch as intended;
+                        // the user reveals it with Ctrl+Shift+` (see `toggle_terminal_visibility`).
+                        let _ = hide_terminal_window(&handle);
 
                         // Start the terminal bridge.
                         let bridge_handle = handle.clone();
