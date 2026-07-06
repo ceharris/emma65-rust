@@ -63,8 +63,10 @@ export default function App() {
     setLastSnapshot(snap);
   }, []);
 
-  // True once the CPU has halted on STP or WAI; cleared again on Reset.
-  const cpuHalted = Boolean(lastSnapshot?.cpu_stopped || lastSnapshot?.cpu_waiting);
+  // True once the CPU has halted on STP; cleared again on Reset. WAI does NOT
+  // set this — unlike STP, WAI can be resumed by triggering NMI or asserting
+  // IRQ, so Run/Step/Auto-Step stay enabled to let the user continue from there.
+  const cpuStopped = Boolean(lastSnapshot?.cpu_stopped);
 
   if (status === null || !status.ok) {
     return (
@@ -85,7 +87,7 @@ export default function App() {
         {/* Watchpoints — story 12 */}
       </div>
       <div className="col col-center">
-        <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuHalted={cpuHalted} />
+        <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
       </div>
       <div className="col col-right">
         <RegisterPanel snapshot={lastSnapshot} />
