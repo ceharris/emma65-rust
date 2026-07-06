@@ -85,6 +85,22 @@
   &.flag-changed {
     color: #f4d03f;
   }
+
+  &.flag-toggleable {
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+.reg-flags-edit {
+  display: inline-flex;
+  border: 1px dashed #9cdcfe;
+  border-radius: 2px;
+  padding: 0 3px;
+  outline: none;
 }
 
 .reg-editable {

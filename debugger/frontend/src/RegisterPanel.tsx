@@ -191,9 +191,10 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
   const [snap, setSnap] = useState<RegisterSnapshot | null>(null);
   const [dataRadix, setDataRadix] = useState<DataRadix>("hex");
   const [addrRadix, setAddrRadix] = useState<AddrRadix>("hex");
-  const [editingField, setEditingField] = useState<RegisterField | null>(null);
+  const [editingTarget, setEditingTarget] = useState<RegisterField | "flags" | null>(null);
   const [editValue, setEditValue] = useState("");
   const [editInvalid, setEditInvalid] = useState(false);
+  const [editFlags, setEditFlags] = useState(0);
 
   const isEditable = execState === "stopped";
 
@@ -201,7 +202,7 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
     if (snapFromParent !== null) {
       setSnap(snapFromParent);
       // A fresh snapshot (e.g. from Reset) invalidates any in-progress edit.
-      setEditingField(null);
+      setEditingTarget(null);
       setEditInvalid(false);
     }
   }, [snapFromParent]);
@@ -235,13 +236,13 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
 
   const beginEdit = useCallback((field: RegisterField, currentText: string) => {
     if (!isEditable) return;
-    setEditingField(field);
+    setEditingTarget(field);
     setEditValue(currentText);
     setEditInvalid(false);
   }, [isEditable]);
 
   const cancelEdit = useCallback(() => {
-    setEditingField(null);
+    setEditingTarget(null);
     setEditInvalid(false);
   }, []);
 
@@ -260,13 +261,38 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
     try {
       const result = await invoke<RegisterSnapshot>("set_register", { field, value });
       onEdit(result);
-      setEditingField(null);
+      setEditingTarget(null);
       setEditInvalid(false);
     } catch (e) {
       console.error("set_register failed:", e);
       setEditInvalid(true);
     }
   }, [editValue, onEdit]);
+
+  const beginFlagsEdit = useCallback((currentP: number) => {
+    if (!isEditable) return;
+    setEditingTarget("flags");
+    setEditFlags(currentP);
+  }, [isEditable]);
+
+  const cancelFlagsEdit = useCallback(() => {
+    setEditingTarget(null);
+  }, []);
+
+  const toggleFlagBit = useCallback((bit: number) => {
+    setEditFlags((f) => f ^ bit);
+  }, []);
+
+  const commitFlagsEdit = useCallback(async () => {
+    try {
+      const result = await invoke<RegisterSnapshot>("set_register", { field: "p", value: editFlags });
+      onEdit(result);
+      setEditingTarget(null);
+    } catch (e) {
+      console.error("set_register failed:", e);
+      setEditingTarget(null);
+    }
+  }, [editFlags, onEdit]);
 
   /** Renders a register's value cell: an inline edit input when `field` is
    *  being edited, otherwise the formatted display text (double-clickable
@@ -278,7 +304,7 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
     widthBits: number,
     allowSigned: boolean,
   ) => {
-    if (editingField === field) {
+    if (editingTarget === field) {
       return (
         <input
           className={`reg-edit-input${editInvalid ? " invalid" : ""}`}
@@ -310,6 +336,61 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
     );
   };
 
+  /** Renders the P-register flag characters: individually toggleable (click
+   *  a flag to flip it, except the unused "-" position) while editing,
+   *  otherwise the plain display (double-clickable to start editing). */
+  const renderFlags = (p: number, changed: number) => {
+    if (editingTarget === "flags") {
+      return (
+        <div
+          className="reg-flags-edit"
+          tabIndex={0}
+          autoFocus
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitFlagsEdit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancelFlagsEdit();
+            }
+          }}
+          onBlur={cancelFlagsEdit}
+        >
+          {FLAG_CHARS.map(({ label, bit }) => {
+            const isSet = (editFlags & bit) !== 0;
+            const toggleable = label !== "-";
+            return (
+              <span
+                key={label}
+                className={[
+                  "flag-char",
+                  isSet ? "flag-set" : "flag-clear",
+                  toggleable ? "flag-toggleable" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onClick={toggleable ? () => toggleFlagBit(bit) : undefined}
+              >
+                {isSet ? label : "-"}
+              </span>
+            );
+          })}
+        </div>
+      );
+    }
+    return (
+      <span
+        className={isEditable ? "reg-editable" : ""}
+        onDoubleClick={() => beginFlagsEdit(p)}
+        title={isEditable ? "Double-click to edit flags" : undefined}
+      >
+        <FlagDisplay p={p} changed={changed} />
+      </span>
+    );
+  };
+
   return (
     <div className="register-panel">
       <div className="panel-title">Registers</div>
@@ -330,7 +411,7 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
               <td className="reg-name">A</td>
               <td className="reg-value">
                 {renderRegisterValue("a", formatData(snap.a, dataRadix), dataRadix, 8, true)}
-                {editingField !== "a" && printableAscii(snap.a) !== null && (
+                {editingTarget !== "a" && printableAscii(snap.a) !== null && (
                   <span className="reg-ascii">{printableAscii(snap.a)}</span>
                 )}
               </td>
@@ -367,7 +448,7 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
             <tr>
               <td className="reg-name" />
               <td className="reg-flags">
-                <FlagDisplay p={snap.p} changed={snap.changed_flags} />
+                {renderFlags(snap.p, snap.changed_flags)}
               </td>
             </tr>
           </tbody>
