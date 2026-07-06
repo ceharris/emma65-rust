@@ -16,6 +16,9 @@ use emma65::emulator::{
     TransportSlot,
 };
 
+/// Debugger UI theme selection: persisted preference and Tauri commands.
+mod theme;
+
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
 
 /// IRQ source identifying the debugger UI's own IRQ toggle control.
@@ -146,8 +149,7 @@ pub struct RegisterSnapshot {
 /// builds the session with an injected pipe transport for the console,
 /// and returns the session along with the remote end of the pipe.
 async fn load_session() -> Result<(EmulatorSession, PipeTransport), String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable is not set".to_string())?;
-    let config_path = std::path::Path::new(&home).join(".emma/debugger/default/emulator.toml");
+    let config_path = theme::debugger_config_dir()?.join("emulator.toml");
 
     let config: Config = Figment::new()
         .merge(Toml::file(&config_path))
@@ -866,6 +868,7 @@ pub fn run() {
             cpu_stopped: false,
             cpu_waiting: false,
         })))
+        .manage(theme::UiConfigState(Mutex::new(theme::load_ui_config())))
         .invoke_handler(tauri::generate_handler![
             quit,
             toggle_terminal_visibility,
@@ -889,6 +892,8 @@ pub fn run() {
             toggle_breakpoint,
             get_breakpoints,
             get_cpu_bus_state,
+            theme::get_theme,
+            theme::set_theme,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

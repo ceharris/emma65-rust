@@ -6,6 +6,7 @@ import DisassemblyPanel, { ExecState } from "./DisassemblyPanel";
 import MemoryPanel from "./MemoryPanel";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
 import StackPanel from "./StackPanel";
+import ThemeSelector from "./ThemeSelector";
 import { useAppKeyBindings } from "./useAppKeyBindings";
 
 interface SessionStatus {
@@ -75,18 +76,23 @@ export default function App() {
   }
 
   return (
-    <div className="app-layout">
-      <div className="col col-left">
-        <MemoryPanel />
-        {/* Watchpoints — story 12 */}
-      </div>
-      <div className="col col-center">
-        <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
-      </div>
-      <div className="col col-right">
-        <RegisterPanel snapshot={lastSnapshot} execState={execState} onEdit={handleSnapshotUpdate} />
-        <StackPanel />
-        <CpuBusPanel execState={execState} onReset={handleSnapshotUpdate} />
+    <div className="app-shell">
+      <header className="app-toolbar">
+        <ThemeSelector />
+      </header>
+      <div className="app-layout">
+        <div className="col col-left">
+          <MemoryPanel />
+          {/* Watchpoints — story 12 */}
+        </div>
+        <div className="col col-center">
+          <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
+        </div>
+        <div className="col col-right">
+          <RegisterPanel snapshot={lastSnapshot} execState={execState} onEdit={handleSnapshotUpdate} />
+          <StackPanel />
+          <CpuBusPanel execState={execState} onReset={handleSnapshotUpdate} />
+        </div>
       </div>
     </div>
   );

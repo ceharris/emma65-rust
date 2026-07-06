@@ -10,8 +10,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 4px 10px;
-  background-color: #252526;
-  border-bottom: 1px solid #3a3a3a;
+  background-color: var(--color-bg-alt);
+  border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
 
   .panel-title {
@@ -24,7 +24,7 @@
 .stack-empty {
   display: block;
   padding: 16px;
-  color: #666;
+  color: var(--color-muted-2);
   font-size: 0.85rem;
 }
 
@@ -44,37 +44,37 @@
   white-space: nowrap;
 
   &.stack-row-active {
-    background-color: #2a2d2e;
+    background-color: var(--color-bg-hover);
   }
 }
 
 .stack-chevron {
   flex: 0 0 1ch;
-  color: #9cdcfe;
+  color: var(--color-accent);
   font-weight: bold;
 }
 
 .stack-addr {
   flex: 0 0 4ch;
-  color: #858585;
+  color: var(--color-muted);
 }
 
 .stack-lo,
 .stack-hi {
   flex: 1 1 3ch;
-  color: #b5cea8;
+  color: var(--color-number);
   font-variant-numeric: tabular-nums;
   text-align: right;
 
   &.stack-placeholder {
-    color: #555;
+    color: var(--color-border-strong);
   }
 }
 
 .align-btn, .radix-btn {
   background: none;
-  border: 1px solid #555;
-  color: #858585;
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-muted);
   font-family: monospace;
   font-size: 0.7rem;
   padding: 1px 5px;
@@ -83,7 +83,7 @@
   line-height: 1.4;
 
   &:hover {
-    border-color: #9cdcfe;
-    color: #9cdcfe;
+    border-color: var(--color-accent);
+    color: var(--color-accent);
   }
 }
