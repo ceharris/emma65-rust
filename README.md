@@ -157,13 +157,21 @@ Adapter:
 
 A simple polling console device for byte-stream I/O:
 
-- 2 addressable registers: data output/availability (offset 0) and data
+- Input buffering via a 128-byte ring buffer
+- Two addressable registers: data input/output (offset 0) and data
   latch (offset 1)
 - The data latch register latches an incoming byte in a single read, providing
   a non-blocking one-byte look-ahead and making it easy to write polling loops
   without separate status and data registers
-- No IRQ — purely poll-based
-- Designed as the backend for a future built-in terminal emulator
+- Support for configuring a break key code (e.g. ASCII Ctrl+C) which, when
+  recognized in input from the transport, drains the input buffer, latches
+  the break key code, and asserts the CPU's IRQ signal
+- Reading the data or latch register clears interrupt status. Writing the
+  break key code simulates break key input under program control. Writing any
+  other value to the latch clears interrupt status, drains the input 
+  buffer, and stores the value in the latch register for subsequent read 
+  (useful for simulating input under program control).
+- Designed as the backend for the debugger's built-in terminal emulator
 
 ### Transport Options
 
@@ -292,7 +300,7 @@ EMMA65_CLOCK_SPEED_HZ=1843200
 |-------------|:---------:|-----------------------------------------------------------------------|
 | `ram`       |     —     | `size` (required), `fill` (optional byte), `image` (optional path)    |
 | `rom`       |     —     | `size` (required), `image` (required path), `fill` (optional byte)    |
-| `console`   |     2     | `transport` (optional)                                                |
+| `console`   |     2     | `transport` (optional), `break` (bool)                                |
 | `acia/6551` |     4     | `transport` (optional), `with_tdre_bug` (bool), `with_overrun` (bool) |
 | `acia/6850` |     2     | `transport` (optional)                                                |
 | `via/6522`  |    16     | `transport` (optional)                                                |
