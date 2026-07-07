@@ -364,4 +364,62 @@ mod tests {
         }
         assert!(device.ring.is_empty(), "expected empty ring");
     }
+
+    #[test]
+    fn integration_cpu_program_writes_appear_on_transport() {
+        use crate::emulator::{
+            AddressRange, BusConfig, CpuVariant, DeviceId, PipeTransport,
+        };
+        use crate::emulator::exec::StepResult;
+
+        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let mut console = Console::new();
+        console.attach_transport(Box::new(local));
+
+        // Map all of RAM (including reset vector region) plus console at 0xF000.
+        // Using RAM for 0xFF00–0xFFFF lets us write the reset vector after build().
+        let bus = BusConfig::new()
+            .ram_with_fill(AddressRange::new(0x0000, 0xEFFF), 0).unwrap()
+            .device(AddressRange::new(0xF000, 0xF001), DeviceId(1), Box::new(console)).unwrap()
+            .ram_with_fill(AddressRange::new(0xFF00, 0xFFFF), 0).unwrap()
+            .build();
+
+        let mut cpu = crate::emulator::Cpu::builder(CpuVariant::Wdc65C02)
+            .bus(bus)
+            .build()
+            .unwrap();
+
+        // Write program into RAM at 0x0200:
+        //   LDA #$41   ; A9 41
+        //   STA $F000  ; 8D 00 F0  -- write 'A' to console output
+        //   LDA #$42   ; A9 42
+        //   STA $F000  ; 8D 00 F0  -- write 'B'
+        //   STP        ; DB
+        let prog: &[u8] = &[
+            0xA9, 0x41,
+            0x8D, 0x00, 0xF0,
+            0xA9, 0x42,
+            0x8D, 0x00, 0xF0,
+            0xDB,
+        ];
+        for (i, &b) in prog.iter().enumerate() {
+            let _ = cpu.bus_mut().write(0x0200 + i as u16, b);
+        }
+        // Reset vector → 0x0200.
+        let _ = cpu.bus_mut().write(0xFFFC, 0x00);
+        let _ = cpu.bus_mut().write(0xFFFD, 0x02);
+
+        let _ = cpu.reset();
+        loop {
+            match cpu.step() {
+                StepResult::Stopped => break,
+                StepResult::Error(e) => panic!("CPU error: {:?}", e),
+                _ => {}
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert_eq!(remote.try_recv(), Some(0x41));
+        assert_eq!(remote.try_recv(), Some(0x42));
+    }
 }
