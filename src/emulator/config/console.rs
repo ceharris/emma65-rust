@@ -4,27 +4,28 @@ use figment::providers::Serialized;
 use serde::Deserialize;
 
 use crate::emulator::{AddressRange, BusConfig, Console, DeviceId};
+use crate::emulator::device::CONSOLE_NAME;
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
-
-// Type name used in registering the device
-const DEVICE_TYPE: &str = "console";
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 2;
 
-/// Console device module.
+/// Buffered console device module.
 #[derive(Clone)]
 pub struct ConsoleModule;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct ConsoleAttributes {
+    #[serde(rename = "break", skip_serializing_if = "Option::is_none")]
+    break_key: Option <u8>,
     transport: Option<TransportSpecFormat>,
 }
 
 impl DeviceModule for ConsoleModule {
 
-    fn name(&self) -> &'static str {
-        DEVICE_TYPE
+    fn name(&self) -> &'static str { 
+        CONSOLE_NAME
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16,
@@ -43,6 +44,7 @@ impl DeviceModule for ConsoleModule {
             .map_err(DeviceModuleError::Config)?;
 
         let device_id = DeviceId(address as u32);
+
         let console = {
             let mut dev = Console::new();
             let injected = context.console_transport.as_ref()
@@ -57,6 +59,9 @@ impl DeviceModule for ConsoleModule {
             }
             if let Some(sender) = &context.error_sender {
                 dev.set_error_sender(sender.clone(), device_id);
+            }
+            if let Some(break_key) = config.break_key {
+                dev.set_break_key(break_key);
             }
             dev
         };
@@ -125,4 +130,5 @@ mod tests {
         bus.write(0xFFF8, 0x42).unwrap();
         assert_eq!(bus.read(0xFFF9).unwrap(), 0);
     }
+
 }
