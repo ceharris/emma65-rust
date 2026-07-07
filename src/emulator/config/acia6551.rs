@@ -18,8 +18,9 @@ const BUS_SIZE: u16 = 4;
 pub struct Acia6551Module;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct Acia6551Attributes {
-    with_tdre_bug: Option <bool>,
+    with_tdre_bug: Option<bool>,
     with_overrun: Option<bool>,
     transport: Option<TransportSpecFormat>,
 }
