@@ -359,7 +359,7 @@ mod tests {
         for _ in 0..RING_CAPACITY {
             device.tick(1);
         }
-        for i in 0..(RING_CAPACITY - 1){
+        for i in 0..(RING_CAPACITY - 1) {
             assert_eq!(device.ring.get(), Some(i as u8));
         }
         assert!(device.ring.is_empty(), "expected empty ring");
@@ -422,4 +422,60 @@ mod tests {
         assert_eq!(remote.try_recv(), Some(0x41));
         assert_eq!(remote.try_recv(), Some(0x42));
     }
+
+    #[test]
+    fn integration_transport_input_readable_by_cpu() {
+        use crate::emulator::{
+            AddressRange, BusConfig, CpuVariant, DeviceId, PipeTransport,
+        };
+        use crate::emulator::exec::StepResult;
+
+        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let mut console = Console::new();
+        console.attach_transport(Box::new(local));
+
+        let bus = BusConfig::new()
+            .ram_with_fill(AddressRange::new(0x0000, 0xEFFF), 0).unwrap()
+            .device(AddressRange::new(0xF000, 0xF001), DeviceId(1), Box::new(console)).unwrap()
+            .ram_with_fill(AddressRange::new(0xFF00, 0xFFFF), 0).unwrap()
+            .build();
+
+        let mut cpu = crate::emulator::Cpu::builder(CpuVariant::Wdc65C02)
+            .bus(bus)
+            .build()
+            .unwrap();
+
+        // Program at 0x0200:
+        //   NOP        ; EA        -- tick the bus at least once
+        //   LDA $F001  ; AD 01 F0  -- latch a byte from transport (latch reg)
+        //   STA $0300  ; 8D 00 03  -- store it in RAM
+        //   STP        ; DB
+        let prog: &[u8] = &[
+            0xEA,
+            0xAD, 0x01, 0xF0,
+            0x8D, 0x00, 0x03,
+            0xDB,
+        ];
+        for (i, &b) in prog.iter().enumerate() {
+            let _ = cpu.bus_mut().write(0x0200 + i as u16, b);
+        }
+        let _ = cpu.bus_mut().write(0xFFFC, 0x00);
+        let _ = cpu.bus_mut().write(0xFFFD, 0x02);
+
+        let _ = cpu.reset();
+
+        // Send a byte from the remote end before the CPU starts.
+        remote.send(0x5A).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        loop {
+            match cpu.step() {
+                StepResult::Stopped => break,
+                StepResult::Error(e) => panic!("CPU error: {:?}", e),
+                _ => {}
+            }
+        }
+
+        assert_eq!(cpu.bus_mut().read(0x0300).unwrap(), 0x5A);
+    }
+
 }
