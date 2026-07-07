@@ -478,4 +478,21 @@ mod tests {
         assert_eq!(cpu.bus_mut().read(0x0300).unwrap(), 0x5A);
     }
 
+    #[test]
+    fn reset_preserves_bus_config() {
+        let (mut device, _) = device_with_pipe();
+        device.device_id = Some(DeviceId(0));
+        device.reset();
+        assert!(device.transport.is_some(), "expected transport to be preserved");
+        assert!(device.device_id.is_some(), "expected device ID to be preserved");
+    }
+
+    #[test]
+    fn reset_clears_latch() {
+        let mut console = Console::new();
+        console.latch = 0xff;
+        console.reset();
+        assert_eq!(console.latch, 0, "reset must clear the latch");
+    }
+
 }
