@@ -391,22 +391,20 @@ Add to `src/emulator/bus/mod.rs`'s `#[cfg(test)]` module:
 - No changes to `DeviceModule`, `DeviceRegistry`, or `DeviceSpec` beyond the constructor
   parameter changes above.
 
-## Follow-up: rename `read`/`write`/`peek` to `read_relative`/`write_relative`/`peek_relative`
+## Follow-up: rename `read`/`write`/`peek` to `read_relative`/`write_relative`/`peek_relative` — done
 
-Once `read_absolute`/`write_absolute`/`peek_absolute` exist, renaming the existing
-`read`/`write`/`peek` methods to `read_relative`/`write_relative`/`peek_relative` makes
-the two families of methods symmetric and self-explanatory for implementers deciding
-which pair to use.
+Once `read_absolute`/`write_absolute`/`peek_absolute` existed, the existing `read`/
+`write`/`peek` methods were renamed to `read_relative`/`write_relative`/`peek_relative`,
+making the two families of methods symmetric and self-explanatory for implementers
+deciding which pair to use.
 
-This is a large mechanical diff — existing unit tests call `.read(...)`/`.write(...)`/
-`.peek(...)` directly on the concrete device types by name (hundreds of call sites,
-mostly in `via6522.rs`'s test suite), and `console.rs` additionally mixes in
-`Bus::read`/`Bus::write` calls that must **not** be renamed. It's compile-error-safe
-(every stale or mis-renamed call site fails to build), but not worth doing by hand.
-
-Deferred until after the rest of this plan is implemented and merged. The user will
-perform this rename directly using their IDE's AST-based refactoring tool rather than
-scripted find/replace.
+This was a large mechanical diff — existing unit tests called `.read(...)`/
+`.write(...)`/`.peek(...)` directly on the concrete device types by name (hundreds of
+call sites, mostly in `via6522.rs`'s test suite), and `console.rs` additionally mixed in
+`Bus::read`/`Bus::write` calls that had to **not** be renamed. The user performed the
+rename using their IDE's AST-based refactoring tool rather than scripted find/replace,
+after the rest of this plan was implemented and merged as PR #140. All tests pass and a
+leftover clippy warning surfaced by the rename has been fixed.
 
 ## Out of scope
 
