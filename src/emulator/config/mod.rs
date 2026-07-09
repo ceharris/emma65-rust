@@ -9,6 +9,8 @@ mod emulator;
 mod registry;
 mod memory;
 mod loader;
+mod phoebe;
+mod write_policy;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
 pub use registry::{DeviceRegistry, InstantiationContext, TransportSlot};
@@ -19,6 +21,7 @@ pub use path::ExpandedPathBuf;
 pub use console::ConsoleModule;
 pub use acia6551::Acia6551Module;
 pub use mc6850::Mc6850Module;
+pub use phoebe::PhoebeModule;
 pub use via6522::Via6522Module;
 
 

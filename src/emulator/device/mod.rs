@@ -1,6 +1,7 @@
 pub mod acia6551;
 pub mod console;
 pub mod mc6850;
+pub mod phoebe;
 pub mod via6522;
 pub mod via_protocol;
 mod ring;
@@ -51,6 +52,11 @@ pub enum DeviceEvent {
         /// The message text.
         message: String,
     },
+    /// A report of an attempted write to a read-only register/location in a device
+    RejectedWrite {
+        device: DeviceId,
+        address: u16,
+    }
 }
 
 /// Sending half of a device event channel.

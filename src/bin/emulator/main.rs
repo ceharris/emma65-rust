@@ -45,6 +45,8 @@ async fn main() {
                     println!("device {} connected", device.0),
                 Some(DeviceEvent::DeviceInfo { device, message}) =>
                     eprintln!("device {}: {}", device.0, message),
+                Some(DeviceEvent::RejectedWrite { device, address }) =>
+                    eprintln!("device rejected write {}: at address {}", device.0, address),
                 None => events_open = false,      // all senders dropped
             },
 
