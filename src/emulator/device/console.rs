@@ -120,7 +120,7 @@ impl IoDevice for Console {
     }
 
     /// Read device register at `offset`.
-    fn read(&mut self, offset: u16) -> u8 {
+    fn read_relative(&mut self, offset: u16) -> u8 {
         match offset {
             0 => {          // data register
                 self.interrupt_flag = false;
@@ -145,7 +145,7 @@ impl IoDevice for Console {
     }
 
     /// Writes `value` to device register at `offset`.
-    fn write(&mut self, offset: u16, value: u8) {
+    fn write_relative(&mut self, offset: u16, value: u8) {
         match offset {
             0 => {          // data register
                 // send value to transport if we have one, otherwise write is a no-op
@@ -168,7 +168,7 @@ impl IoDevice for Console {
     }
 
     /// Reads device register at `offset` without side effects.
-    fn peek(&self, offset: u16) -> u8 {
+    fn peek_relative(&self, offset: u16) -> u8 {
         match offset {
             0 => if self.latch != 0 {
                 self.latch
@@ -226,21 +226,21 @@ mod tests {
     fn read_data_register_resets_interrupt_flag() {
         let mut device = Console::new();
         device.interrupt_flag = true;
-        device.read(0);
+        device.read_relative(0);
         assert!(!device.interrupt_flag, "expected interrupt flag reset")
     }
 
     #[test]
     fn read_data_register_zero_when_nothing_latched_or_buffered() {
         let mut device = Console::new();
-        assert_eq!(device.read(0), 0);
+        assert_eq!(device.read_relative(0), 0);
     }
 
     #[test]
     fn read_data_register_latched_value() {
         let mut device = Console::new();
         device.latch = 0x42;
-        assert_eq!(device.read(0), 0x42);
+        assert_eq!(device.read_relative(0), 0x42);
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
         let mut device = Console::new();
         device.latch = 0;
         device.ring.put(0x42);
-        assert_eq!(device.read(0), 0x42);
+        assert_eq!(device.read_relative(0), 0x42);
         assert_eq!(device.latch, 0);
     }
 
@@ -256,7 +256,7 @@ mod tests {
     fn read_latch_register_resets_interrupt_flag() {
         let mut device = Console::new();
         device.interrupt_flag = true;
-        device.read(1);
+        device.read_relative(1);
         assert!(!device.interrupt_flag, "expected interrupt flag reset")
     }
 
@@ -265,7 +265,7 @@ mod tests {
         let mut device = Console::new();
         device.latch = 0x42;
         device.ring.put(0x43);
-        assert_eq!(device.read(1), 0x42);
+        assert_eq!(device.read_relative(1), 0x42);
         assert_eq!(device.latch, 0x42);
         assert!(!device.ring.is_empty());
     }
@@ -275,20 +275,20 @@ mod tests {
         let mut device = Console::new();
         device.latch = 0;
         device.ring.put(0x42);
-        assert_eq!(device.read(1), 0x42);
+        assert_eq!(device.read_relative(1), 0x42);
         assert_eq!(device.latch, 0x42);
     }
 
     #[test]
     fn read_latch_register_zero_when_nothing_latched_or_buffered() {
         let mut device = Console::new();
-        assert_eq!(device.read(1), 0);
+        assert_eq!(device.read_relative(1), 0);
     }
 
     #[test]
     fn write_data_register_sends_byte_to_transport() {
         let (mut device, mut transport) = device_with_pipe();
-        device.write(0, 0x42);
+        device.write_relative(0, 0x42);
         std::thread::sleep(Duration::from_millis(1));
         assert_eq!(transport.try_recv(), Some(0x42));
     }
@@ -297,9 +297,9 @@ mod tests {
     fn write_latch_register_sets_latch() {
         let mut device = Console::new();
         assert_eq!(device.latch, 0);
-        device.write(1, 0x42);
+        device.write_relative(1, 0x42);
         assert_eq!(device.latch, 0x42);
-        device.write(1, 0);
+        device.write_relative(1, 0);
         assert_eq!(device.latch, 0);
     }
 
@@ -307,7 +307,7 @@ mod tests {
     fn write_latch_register_clears_ring() {
         let mut device = Console::new();
         device.ring.put(0x42);
-        device.write(1, 0);
+        device.write_relative(1, 0);
         assert_eq!(device.latch, 0);
         assert!(device.ring.is_empty(), "expected empty ring");
     }
@@ -317,7 +317,7 @@ mod tests {
         let mut device = Console::new();
         device.set_break_key(0x3);
         assert_eq!(device.latch, 0);
-        device.write(1, 0x3);
+        device.write_relative(1, 0x3);
         assert_eq!(device.latch, 0x3);
         assert!(device.interrupt_flag, "expected interrupt flag set");
     }
@@ -326,7 +326,7 @@ mod tests {
     fn write_latch_register_clears_interrupt_flag() {
         let mut device = Console::new();
         device.interrupt_flag = true;
-        device.write(1, 0x42);
+        device.write_relative(1, 0x42);
         assert_eq!(device.latch, 0x42);
         assert!(!device.interrupt_flag, "expected interrupt flag reset");
     }

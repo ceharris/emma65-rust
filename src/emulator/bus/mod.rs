@@ -486,14 +486,14 @@ mod tests {
         fn base_address(&self) -> u16 {
             self.address
         }
-        fn read(&mut self, offset: u16) -> u8 {
+        fn read_relative(&mut self, offset: u16) -> u8 {
             self.read_count += 1;
             self.data[offset as usize]
         }
-        fn write(&mut self, offset: u16, value: u8) {
+        fn write_relative(&mut self, offset: u16, value: u8) {
             self.data[offset as usize] = value;
         }
-        fn peek(&self, offset: u16) -> u8 {
+        fn peek_relative(&self, offset: u16) -> u8 {
             self.data[offset as usize]
         }
     }
@@ -719,13 +719,13 @@ mod tests {
         fn base_address(&self) -> u16 {
             self.window.start
         }
-        fn read(&mut self, _offset: u16) -> u8 {
+        fn read_relative(&mut self, _offset: u16) -> u8 {
             unreachable!("multi-region device is dispatched via read_absolute")
         }
-        fn write(&mut self, _offset: u16, _value: u8) {
+        fn write_relative(&mut self, _offset: u16, _value: u8) {
             unreachable!("multi-region device is dispatched via write_absolute")
         }
-        fn peek(&self, _offset: u16) -> u8 {
+        fn peek_relative(&self, _offset: u16) -> u8 {
             unreachable!("multi-region device is dispatched via peek_absolute")
         }
         fn read_absolute(&mut self, addr: u16) -> u8 {
@@ -806,13 +806,13 @@ mod tests {
         fn base_address(&self) -> u16 {
             self.address
         }
-        fn read(&mut self, _offset: u16) -> u8 {
+        fn read_relative(&mut self, _offset: u16) -> u8 {
             self.value
         }
-        fn write(&mut self, _offset: u16, value: u8) {
+        fn write_relative(&mut self, _offset: u16, value: u8) {
             self.value = value;
         }
-        fn peek(&self, _offset: u16) -> u8 {
+        fn peek_relative(&self, _offset: u16) -> u8 {
             self.value
         }
         fn claims(&self, _addr: u16) -> bool {
@@ -900,9 +900,9 @@ mod tests {
         fn base_address(&self) -> u16 {
             self.address
         }
-        fn read(&mut self, _offset: u16) -> u8 { 0 }
-        fn write(&mut self, _offset: u16, _value: u8) {}
-        fn peek(&self, _offset: u16) -> u8 { 0 }
+        fn read_relative(&mut self, _offset: u16) -> u8 { 0 }
+        fn write_relative(&mut self, _offset: u16, _value: u8) {}
+        fn peek_relative(&self, _offset: u16) -> u8 { 0 }
         fn tick(&mut self, _cycles: u32) {
             self.tick_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }

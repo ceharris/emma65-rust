@@ -250,7 +250,7 @@ impl IoDevice for Acia6551 {
     /// Reads the register at `offset`.
     ///
     /// Reading offset 0 (RX data) clears RDRF and overrun.
-    fn read(&mut self, offset: u16) -> u8 {
+    fn read_relative(&mut self, offset: u16) -> u8 {
         match offset {
             0 => {
                 let val = self.rx_data;
@@ -271,7 +271,7 @@ impl IoDevice for Acia6551 {
     /// until the byte period elapses. In bug-compatible mode, TDRE remains permanently set.
     /// Writing offset 1 is a programmed reset that clears the overrun flag. Offsets 2 and 3
     /// update command and control.
-    fn write(&mut self, offset: u16, value: u8) {
+    fn write_relative(&mut self, offset: u16, value: u8) {
         match offset {
             0 => {
                 if let Some(transport) = self.transport.as_mut()
@@ -305,7 +305,7 @@ impl IoDevice for Acia6551 {
     }
 
     /// Reads registers without side effects. Does not clear RDRF or overrun.
-    fn peek(&self, offset: u16) -> u8 {
+    fn peek_relative(&self, offset: u16) -> u8 {
         match offset {
             0 => self.rx_data,
             1 => self.status(),
@@ -387,13 +387,13 @@ mod tests {
     #[test]
     fn new_has_tdre_set() {
         let device = Acia6551::new();
-        assert_ne!(device.peek(1) & 0x10, 0);
+        assert_ne!(device.peek_relative(1) & 0x10, 0);
     }
 
     #[test]
     fn new_has_rdrf_clear() {
         let device = Acia6551::new();
-        assert_eq!(device.peek(1) & 0x08, 0);
+        assert_eq!(device.peek_relative(1) & 0x08, 0);
     }
 
     // --- Command and Control register read/write ---
@@ -401,15 +401,15 @@ mod tests {
     #[test]
     fn write_read_command_register() {
         let mut device = Acia6551::new();
-        device.write(2, 0x0A);
-        assert_eq!(device.read(2), 0x0A);
+        device.write_relative(2, 0x0A);
+        assert_eq!(device.read_relative(2), 0x0A);
     }
 
     #[test]
     fn write_read_control_register() {
         let mut device = Acia6551::new();
-        device.write(3, 0x1E); // 9600 baud, internal clock
-        assert_eq!(device.read(3), 0x1E);
+        device.write_relative(3, 0x1E); // 9600 baud, internal clock
+        assert_eq!(device.read_relative(3), 0x1E);
     }
 
     // --- TX ---
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn tx_sends_byte_to_transport() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write(0, 0x41);
+        device.write_relative(0, 0x41);
         std::thread::sleep(Duration::from_millis(1));
         assert_eq!(remote.try_recv(), Some(0x41));
     }
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn tx_no_transport_is_silent() {
         let mut device = Acia6551::new();
-        device.write(0, 0xFF); // should not panic
+        device.write_relative(0, 0xFF); // should not panic
     }
 
     // --- RX via tick() ---
@@ -436,7 +436,7 @@ mod tests {
         remote.send(0xBB).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // external clock: poll every tick
-        assert_ne!(device.peek(1) & 0x08, 0); // RDRF set
+        assert_ne!(device.peek_relative(1) & 0x08, 0); // RDRF set
     }
 
     #[test]
@@ -445,8 +445,8 @@ mod tests {
         remote.send(0x55).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
-        assert_eq!(device.read(0), 0x55);
-        assert_eq!(device.peek(1) & 0x08, 0); // RDRF cleared
+        assert_eq!(device.read_relative(0), 0x55);
+        assert_eq!(device.peek_relative(1) & 0x08, 0); // RDRF cleared
     }
 
     #[test]
@@ -457,9 +457,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // receives 0x01 → RDRF
         device.tick(1); // 0x02 stays in pipe (RDRF still set)
-        assert_eq!(device.read(0), 0x01);
+        assert_eq!(device.read_relative(0), 0x01);
         device.tick(1); // now receives 0x02
-        assert_eq!(device.read(0), 0x02);
+        assert_eq!(device.read_relative(0), 0x02);
     }
 
     // --- Overrun ---
@@ -472,14 +472,14 @@ mod tests {
             .with_overrun(true);
         device.attach_transport(Box::new(local));
         // 19200 baud internal clock: cycles_per_byte = 1_000_000 * 10 / 19200 = 520
-        device.write(3, 0x1F);
+        device.write_relative(3, 0x1F);
         remote.send(0x01).unwrap();
         remote.send(0x02).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(520); // receives 0x01 → RDRF
         device.tick(520); // receives 0x02 → OVRN (overwrites rx_data)
-        assert_ne!(device.peek(1) & 0x04, 0); // OVRN set
-        assert_eq!(device.read(0), 0x02); // second byte overwrote first
+        assert_ne!(device.peek_relative(1) & 0x04, 0); // OVRN set
+        assert_eq!(device.read_relative(0), 0x02); // second byte overwrote first
     }
 
     #[test]
@@ -494,10 +494,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // receives 0x01 → RDRF
         device.tick(1); // 0x02 stays in pipe (external clock ignores overrun flag)
-        assert_eq!(device.peek(1) & 0x04, 0); // OVRN not set
-        assert_eq!(device.read(0), 0x01);
+        assert_eq!(device.peek_relative(1) & 0x04, 0); // OVRN not set
+        assert_eq!(device.read_relative(0), 0x01);
         device.tick(1); // now receives 0x02
-        assert_eq!(device.read(0), 0x02);
+        assert_eq!(device.read_relative(0), 0x02);
     }
 
     // --- Baud rate timing ---
@@ -505,16 +505,16 @@ mod tests {
     #[test]
     fn baud_rate_setting_controls_poll_timing() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write(3, 0x1F); // 19200 baud, internal receiver clock
+        device.write_relative(3, 0x1F); // 19200 baud, internal receiver clock
         remote.send(0x42).unwrap();
         std::thread::sleep(Duration::from_millis(1));
 
         // One byte period at 19200 baud on a 1 MHz clock: 10/19200 * 1_000_000 = 520 cycles
         device.tick(519);
-        assert_eq!(device.peek(1) & 0x08, 0); // not yet
+        assert_eq!(device.peek_relative(1) & 0x08, 0); // not yet
 
         device.tick(1); // crosses threshold
-        assert_ne!(device.peek(1) & 0x08, 0); // RDRF set
+        assert_ne!(device.peek_relative(1) & 0x08, 0); // RDRF set
     }
 
     // --- IRQ ---
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn irq_active_on_rdrf_when_rx_irq_enabled() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write(2, 0x00); // IRD=0: RX IRQ enabled
+        device.write_relative(2, 0x00); // IRD=0: RX IRQ enabled
         remote.send(0x01).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn irq_inactive_when_rx_irq_disabled() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write(2, 0x02); // IRD=1: RX IRQ disabled
+        device.write_relative(2, 0x02); // IRD=1: RX IRQ disabled
         remote.send(0x01).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
@@ -542,14 +542,14 @@ mod tests {
     #[test]
     fn irq_active_on_tdre_when_tx_irq_enabled() {
         let mut device = Acia6551::new();
-        device.write(2, 0x04); // TIC=01: TX IRQ enabled
+        device.write_relative(2, 0x04); // TIC=01: TX IRQ enabled
         assert!(device.irq_active()); // TDRE is always set
     }
 
     #[test]
     fn irq_inactive_on_tdre_when_tx_irq_disabled() {
         let mut device = Acia6551::new();
-        device.write(2, 0x00); // TIC=00: TX IRQ disabled
+        device.write_relative(2, 0x00); // TIC=00: TX IRQ disabled
         assert!(!device.irq_active());
     }
 
@@ -558,17 +558,17 @@ mod tests {
     #[test]
     fn tdre_clears_on_tx_write_in_correct_mode() {
         let (mut device, _remote) = device_with_pipe();
-        assert_ne!(device.peek(1) & 0x10, 0); // TDRE set before write
-        device.write(0, 0x41);
-        assert_eq!(device.peek(1) & 0x10, 0); // TDRE cleared after TX write
+        assert_ne!(device.peek_relative(1) & 0x10, 0); // TDRE set before write
+        device.write_relative(0, 0x41);
+        assert_eq!(device.peek_relative(1) & 0x10, 0); // TDRE cleared after TX write
     }
 
     #[test]
     fn tdre_restores_after_tick_in_correct_mode() {
         let (mut device, _remote) = device_with_pipe();
-        device.write(0, 0x41); // clears TDRE; external clock sets tx_cycles_remaining = 1
+        device.write_relative(0, 0x41); // clears TDRE; external clock sets tx_cycles_remaining = 1
         device.tick(1);
-        assert_ne!(device.peek(1) & 0x10, 0); // TDRE restored
+        assert_ne!(device.peek_relative(1) & 0x10, 0); // TDRE restored
     }
 
     #[test]
@@ -576,22 +576,22 @@ mod tests {
         let (local, _remote) = PipeTransport::pair().unwrap();
         let mut device = Acia6551::new().with_tdre_bug(true);
         device.attach_transport(Box::new(local));
-        device.write(0, 0x41); // TX write — should NOT clear TDRE
-        assert_ne!(device.peek(1) & 0x10, 0);
+        device.write_relative(0, 0x41); // TX write — should NOT clear TDRE
+        assert_ne!(device.peek_relative(1) & 0x10, 0);
         device.tick(1000); // many ticks — TDRE must stay set
-        assert_ne!(device.peek(1) & 0x10, 0);
+        assert_ne!(device.peek_relative(1) & 0x10, 0);
     }
 
     #[test]
     fn tdre_restores_after_baud_rate_period_in_correct_mode() {
         let (mut device, _remote) = device_with_pipe();
-        device.write(3, 0x1F); // 19200 baud, internal clock → 520 cycles/byte
-        device.write(0, 0x41);
-        assert_eq!(device.peek(1) & 0x10, 0); // TDRE cleared
+        device.write_relative(3, 0x1F); // 19200 baud, internal clock → 520 cycles/byte
+        device.write_relative(0, 0x41);
+        assert_eq!(device.peek_relative(1) & 0x10, 0); // TDRE cleared
         device.tick(519);
-        assert_eq!(device.peek(1) & 0x10, 0); // still not restored
+        assert_eq!(device.peek_relative(1) & 0x10, 0); // still not restored
         device.tick(1);
-        assert_ne!(device.peek(1) & 0x10, 0); // TDRE restored after full period
+        assert_ne!(device.peek_relative(1) & 0x10, 0); // TDRE restored after full period
     }
 
     // --- Peek ---
@@ -602,8 +602,8 @@ mod tests {
         remote.send(0xCC).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
-        let _ = device.peek(0); // peek at data register
-        assert_ne!(device.peek(1) & 0x08, 0); // RDRF still set
+        let _ = device.peek_relative(0); // peek at data register
+        assert_ne!(device.peek_relative(1) & 0x08, 0); // RDRF still set
     }
 
     #[test]
@@ -612,8 +612,8 @@ mod tests {
         remote.send(0x77).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
-        assert_eq!(device.peek(0), 0x77);
-        assert_eq!(device.read(0), 0x77); // still available
+        assert_eq!(device.peek_relative(0), 0x77);
+        assert_eq!(device.read_relative(0), 0x77); // still available
     }
 
     // reset

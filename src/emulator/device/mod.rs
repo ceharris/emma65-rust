@@ -110,11 +110,11 @@ pub trait IoDevice: Send {
     fn base_address(&self) -> u16;
 
     /// Reads a byte from `offset` relative to `base_address()`, with side effects.
-    fn read(&mut self, offset: u16) -> u8;
+    fn read_relative(&mut self, offset: u16) -> u8;
     /// Writes `value` to `offset` relative to `base_address()`.
-    fn write(&mut self, offset: u16, value: u8);
+    fn write_relative(&mut self, offset: u16, value: u8);
     /// Reads a byte from `offset` relative to `base_address()`, without side effects.
-    fn peek(&self, offset: u16) -> u8;
+    fn peek_relative(&self, offset: u16) -> u8;
 
     /// Reads a byte at the absolute bus address `addr`, with side effects.
     ///
@@ -124,15 +124,15 @@ pub trait IoDevice: Send {
     /// classifying `addr` against whatever address information it retains for its own
     /// regions.
     fn read_absolute(&mut self, addr: u16) -> u8 {
-        self.read(addr - self.base_address())
+        self.read_relative(addr - self.base_address())
     }
     /// Writes `value` at the absolute bus address `addr`. See `read_absolute`.
     fn write_absolute(&mut self, addr: u16, value: u8) {
-        self.write(addr - self.base_address(), value)
+        self.write_relative(addr - self.base_address(), value)
     }
     /// Reads a byte at the absolute bus address `addr`, without side effects. See `read_absolute`.
     fn peek_absolute(&self, addr: u16) -> u8 {
-        self.peek(addr - self.base_address())
+        self.peek_relative(addr - self.base_address())
     }
 
     /// Returns `true` if this device currently responds to `addr`, the absolute bus
