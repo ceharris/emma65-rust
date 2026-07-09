@@ -41,6 +41,8 @@ pub const CONSOLE_NAME: &str = "console";
 /// key value, the input buffer is drained, and the CPU's IRQ signal is asserted.
 ///
 pub struct Console {
+    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
+    address: u16,
     /// Optional transport for byte-stream IO.
     transport: Option<Box<dyn Transport>>,
     /// Destination for async transport error events.
@@ -62,6 +64,7 @@ impl Console {
     /// Creates a new `BufferedConsole` with no transport attached.
     pub fn new() -> Self {
         Self {
+            address: 0,
             transport: None,
             error_sender: None,
             device_id: None,
@@ -70,6 +73,12 @@ impl Console {
             latch: 0,
             interrupt_flag: false,
         }
+    }
+
+    /// Sets the address at which this device is registered on the bus.
+    pub fn with_address(mut self, address: u16) -> Self {
+        self.address = address;
+        self
     }
 
     /// Attaches a transport for byte-stream IO.
@@ -106,8 +115,12 @@ impl Default for Console {
 
 impl IoDevice for Console {
 
+    fn base_address(&self) -> u16 {
+        self.address
+    }
+
     /// Read device register at `offset`.
-    fn read(&mut self, offset: u16) -> u8 {
+    fn read_relative(&mut self, offset: u16) -> u8 {
         match offset {
             0 => {          // data register
                 self.interrupt_flag = false;
@@ -132,7 +145,7 @@ impl IoDevice for Console {
     }
 
     /// Writes `value` to device register at `offset`.
-    fn write(&mut self, offset: u16, value: u8) {
+    fn write_relative(&mut self, offset: u16, value: u8) {
         match offset {
             0 => {          // data register
                 // send value to transport if we have one, otherwise write is a no-op
@@ -144,11 +157,10 @@ impl IoDevice for Console {
             1 => {          // latch register
                 self.latch = value;
                 self.ring.clear();
-                if self.break_key.is_none() {
-                    self.interrupt_flag = false;
-                } else {
-                    let break_key = self.break_key.unwrap();
+                if let Some(break_key) = self.break_key {
                     self.interrupt_flag = break_key == value;
+                } else {
+                    self.interrupt_flag = false;
                 }
             },
             _ => (),
@@ -156,7 +168,7 @@ impl IoDevice for Console {
     }
 
     /// Reads device register at `offset` without side effects.
-    fn peek(&self, offset: u16) -> u8 {
+    fn peek_relative(&self, offset: u16) -> u8 {
         match offset {
             0 => if self.latch != 0 {
                 self.latch
@@ -214,21 +226,21 @@ mod tests {
     fn read_data_register_resets_interrupt_flag() {
         let mut device = Console::new();
         device.interrupt_flag = true;
-        device.read(0);
+        device.read_relative(0);
         assert!(!device.interrupt_flag, "expected interrupt flag reset")
     }
 
     #[test]
     fn read_data_register_zero_when_nothing_latched_or_buffered() {
         let mut device = Console::new();
-        assert_eq!(device.read(0), 0);
+        assert_eq!(device.read_relative(0), 0);
     }
 
     #[test]
     fn read_data_register_latched_value() {
         let mut device = Console::new();
         device.latch = 0x42;
-        assert_eq!(device.read(0), 0x42);
+        assert_eq!(device.read_relative(0), 0x42);
     }
 
     #[test]
@@ -236,7 +248,7 @@ mod tests {
         let mut device = Console::new();
         device.latch = 0;
         device.ring.put(0x42);
-        assert_eq!(device.read(0), 0x42);
+        assert_eq!(device.read_relative(0), 0x42);
         assert_eq!(device.latch, 0);
     }
 
@@ -244,7 +256,7 @@ mod tests {
     fn read_latch_register_resets_interrupt_flag() {
         let mut device = Console::new();
         device.interrupt_flag = true;
-        device.read(1);
+        device.read_relative(1);
         assert!(!device.interrupt_flag, "expected interrupt flag reset")
     }
 
@@ -253,7 +265,7 @@ mod tests {
         let mut device = Console::new();
         device.latch = 0x42;
         device.ring.put(0x43);
-        assert_eq!(device.read(1), 0x42);
+        assert_eq!(device.read_relative(1), 0x42);
         assert_eq!(device.latch, 0x42);
         assert!(!device.ring.is_empty());
     }
@@ -263,20 +275,20 @@ mod tests {
         let mut device = Console::new();
         device.latch = 0;
         device.ring.put(0x42);
-        assert_eq!(device.read(1), 0x42);
+        assert_eq!(device.read_relative(1), 0x42);
         assert_eq!(device.latch, 0x42);
     }
 
     #[test]
     fn read_latch_register_zero_when_nothing_latched_or_buffered() {
         let mut device = Console::new();
-        assert_eq!(device.read(1), 0);
+        assert_eq!(device.read_relative(1), 0);
     }
 
     #[test]
     fn write_data_register_sends_byte_to_transport() {
         let (mut device, mut transport) = device_with_pipe();
-        device.write(0, 0x42);
+        device.write_relative(0, 0x42);
         std::thread::sleep(Duration::from_millis(1));
         assert_eq!(transport.try_recv(), Some(0x42));
     }
@@ -285,9 +297,9 @@ mod tests {
     fn write_latch_register_sets_latch() {
         let mut device = Console::new();
         assert_eq!(device.latch, 0);
-        device.write(1, 0x42);
+        device.write_relative(1, 0x42);
         assert_eq!(device.latch, 0x42);
-        device.write(1, 0);
+        device.write_relative(1, 0);
         assert_eq!(device.latch, 0);
     }
 
@@ -295,7 +307,7 @@ mod tests {
     fn write_latch_register_clears_ring() {
         let mut device = Console::new();
         device.ring.put(0x42);
-        device.write(1, 0);
+        device.write_relative(1, 0);
         assert_eq!(device.latch, 0);
         assert!(device.ring.is_empty(), "expected empty ring");
     }
@@ -305,7 +317,7 @@ mod tests {
         let mut device = Console::new();
         device.set_break_key(0x3);
         assert_eq!(device.latch, 0);
-        device.write(1, 0x3);
+        device.write_relative(1, 0x3);
         assert_eq!(device.latch, 0x3);
         assert!(device.interrupt_flag, "expected interrupt flag set");
     }
@@ -314,7 +326,7 @@ mod tests {
     fn write_latch_register_clears_interrupt_flag() {
         let mut device = Console::new();
         device.interrupt_flag = true;
-        device.write(1, 0x42);
+        device.write_relative(1, 0x42);
         assert_eq!(device.latch, 0x42);
         assert!(!device.interrupt_flag, "expected interrupt flag reset");
     }
@@ -373,7 +385,7 @@ mod tests {
         use crate::emulator::exec::StepResult;
 
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut console = Console::new();
+        let mut console = Console::new().with_address(0xF000);
         console.attach_transport(Box::new(local));
 
         // Map all of RAM (including reset vector region) plus console at 0xF000.
@@ -431,7 +443,7 @@ mod tests {
         use crate::emulator::exec::StepResult;
 
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut console = Console::new();
+        let mut console = Console::new().with_address(0xF000);
         console.attach_transport(Box::new(local));
 
         let bus = BusConfig::new()

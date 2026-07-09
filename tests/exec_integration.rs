@@ -27,7 +27,7 @@ async fn free_run_console_output() {
     use emma65::emulator::{Bus, Transport};
 
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut console = Console::new();
+    let mut console = Console::new().with_address(0xF000);
     console.attach_transport(Box::new(local));
 
     // 64 KB RAM; Console at $F000–$F001.
@@ -185,7 +185,7 @@ fn bus_trace_captures_reads_and_writes() {
 fn build_acia_cpu(acia: Acia6551, prog: &[u8]) -> emma65::emulator::Cpu {
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
-        .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia)).unwrap()
+        .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia.with_address(0xDF00))).unwrap()
         .ram_with_fill(AddressRange::new(0xDF04, 0xFFFF), 0).unwrap()
         .build();
     let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
@@ -362,7 +362,7 @@ async fn mc6850_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut mc = Mc6850::new();
+    let mut mc = Mc6850::new().with_address(0xDF00);
     mc.attach_transport(Box::new(local));
 
     let bus = Bus::config()

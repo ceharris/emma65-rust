@@ -101,12 +101,48 @@ mod tests {
 
 /// A device that can be mapped into the bus address space.
 pub trait IoDevice: Send {
-    /// Reads a byte from `offset` relative to the device's base address, with side effects.
-    fn read(&mut self, offset: u16) -> u8;
-    /// Writes `value` to `offset` relative to the device's base address.
-    fn write(&mut self, offset: u16, value: u8);
-    /// Reads a byte from `offset` relative to the device's base address, without side effects.
-    fn peek(&self, offset: u16) -> u8;
+    /// The address at which this device is registered via `BusConfig::device()`.
+    ///
+    /// Used by the default `*_absolute` methods to translate an absolute bus address
+    /// into a range-relative offset. A device that overrides all three `*_absolute`
+    /// methods (and `claims`) is free to return any value here, since nothing else
+    /// consults it.
+    fn base_address(&self) -> u16;
+
+    /// Reads a byte from `offset` relative to `base_address()`, with side effects.
+    fn read_relative(&mut self, offset: u16) -> u8;
+    /// Writes `value` to `offset` relative to `base_address()`.
+    fn write_relative(&mut self, offset: u16, value: u8);
+    /// Reads a byte from `offset` relative to `base_address()`, without side effects.
+    fn peek_relative(&self, offset: u16) -> u8;
+
+    /// Reads a byte at the absolute bus address `addr`, with side effects.
+    ///
+    /// Default implementation subtracts `base_address()` and delegates to `read()` —
+    /// correct for any device mapped at a single region. A device mapped at more than
+    /// one region (via `BusConfig::extend_device()`) overrides this directly,
+    /// classifying `addr` against whatever address information it retains for its own
+    /// regions.
+    fn read_absolute(&mut self, addr: u16) -> u8 {
+        self.read_relative(addr - self.base_address())
+    }
+    /// Writes `value` at the absolute bus address `addr`. See `read_absolute`.
+    fn write_absolute(&mut self, addr: u16, value: u8) {
+        self.write_relative(addr - self.base_address(), value)
+    }
+    /// Reads a byte at the absolute bus address `addr`, without side effects. See `read_absolute`.
+    fn peek_absolute(&self, addr: u16) -> u8 {
+        self.peek_relative(addr - self.base_address())
+    }
+
+    /// Returns `true` if this device currently responds to `addr`, the absolute bus
+    /// address. Consulted before dispatching `*_absolute`; declining causes the bus to
+    /// fall through to the next most-specific region containing `addr`, or to the
+    /// unmapped-address policy if none remain.
+    ///
+    /// Default implementation always claims (unconditional chip-select).
+    fn claims(&self, _addr: u16) -> bool { true }
+
     /// Advances device state by `cycles` clock cycles. Called after each CPU instruction.
     fn tick(&mut self, _cycles: u32) {}
     /// Resets the state of the device in a manner comparable to a hardware reset

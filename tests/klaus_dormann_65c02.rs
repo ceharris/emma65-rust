@@ -87,7 +87,11 @@ impl FeedbackRegister {
 }
 
 impl IoDevice for FeedbackRegister {
-    fn write(&mut self, _offset: u16, value: u8) {
+    fn base_address(&self) -> u16 {
+        0xBFFC
+    }
+
+    fn write_relative(&mut self, _offset: u16, value: u8) {
         let prev = self.last_value;
         self.last_value = value;
         // Bit 0: active-HIGH IRQ (1 = asserted, 0 = released).
@@ -98,11 +102,11 @@ impl IoDevice for FeedbackRegister {
         }
     }
 
-    fn read(&mut self, _offset: u16) -> u8 {
+    fn read_relative(&mut self, _offset: u16) -> u8 {
         self.last_value
     }
 
-    fn peek(&self, _offset: u16) -> u8 {
+    fn peek_relative(&self, _offset: u16) -> u8 {
         self.last_value
     }
 

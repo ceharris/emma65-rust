@@ -46,7 +46,7 @@ impl DeviceModule for ConsoleModule {
         let device_id = DeviceId(address as u32);
 
         let console = {
-            let mut dev = Console::new();
+            let mut dev = Console::new().with_address(address);
             let injected = context.console_transport.as_ref()
                 .and_then(|slot| slot.lock().ok()?.take());
             if let Some(transport) = injected {

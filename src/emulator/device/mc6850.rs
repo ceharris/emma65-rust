@@ -31,6 +31,8 @@ use crate::emulator::transport::{Transport, TransportError};
 /// next `tick()` call, reflecting the real hardware's transmit-busy signalling.
 /// RX is polled on every `tick()` call.
 pub struct Mc6850 {
+    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
+    address: u16,
     /// Optional transport for byte-stream IO.
     transport: Option<Box<dyn Transport>>,
     /// Destination for async transport error events.
@@ -62,6 +64,7 @@ impl Mc6850 {
     /// Creates a new `Mc6850` with no transport and master-reset state.
     pub fn new() -> Self {
         Self {
+            address: 0,
             transport: None,
             error_sender: None,
             device_id: None,
@@ -72,6 +75,12 @@ impl Mc6850 {
             overrun: false,
             tx_pending: false,
         }
+    }
+
+    /// Sets the address at which this device is registered on the bus.
+    pub fn with_address(mut self, address: u16) -> Self {
+        self.address = address;
+        self
     }
 
     /// Attaches a transport for byte-stream IO.
@@ -125,10 +134,14 @@ impl Default for Mc6850 {
 }
 
 impl IoDevice for Mc6850 {
+    fn base_address(&self) -> u16 {
+        self.address
+    }
+
     /// Reads the register at `offset`.
     ///
     /// Reading offset 1 (RX data) clears RDRF and overrun.
-    fn read(&mut self, offset: u16) -> u8 {
+    fn read_relative(&mut self, offset: u16) -> u8 {
         match offset {
             0 => self.status(),
             1 => {
@@ -145,7 +158,7 @@ impl IoDevice for Mc6850 {
     ///
     /// Writing offset 0 updates the control register; master reset (`CD=11`) resets device state.
     /// Writing offset 1 sends a byte to the transport.
-    fn write(&mut self, offset: u16, value: u8) {
+    fn write_relative(&mut self, offset: u16, value: u8) {
         match offset {
             0 => {
                 self.control = value;
@@ -166,7 +179,7 @@ impl IoDevice for Mc6850 {
     }
 
     /// Reads registers without side effects. Does not clear RDRF or overrun.
-    fn peek(&self, offset: u16) -> u8 {
+    fn peek_relative(&self, offset: u16) -> u8 {
         match offset {
             0 => self.status(),
             1 => self.rx_data,
@@ -190,10 +203,12 @@ impl IoDevice for Mc6850 {
 
     /// Resets the control and status registers as if a hardware reset has occurred.
     fn reset(&mut self) {
+        let address = self.address;
         let transport = std::mem::take(&mut self.transport);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
         *self = Self::new();
+        self.address = address;
         self.transport = transport;
         self.error_sender = error_sender;
         self.device_id = device_id;
@@ -229,13 +244,13 @@ mod tests {
     #[test]
     fn new_has_tdre_set() {
         let device = Mc6850::new();
-        assert_ne!(device.peek(0) & 0x02, 0);
+        assert_ne!(device.peek_relative(0) & 0x02, 0);
     }
 
     #[test]
     fn new_has_rdrf_clear() {
         let device = Mc6850::new();
-        assert_eq!(device.peek(0) & 0x01, 0);
+        assert_eq!(device.peek_relative(0) & 0x01, 0);
     }
 
     // --- Control register ---
@@ -243,7 +258,7 @@ mod tests {
     #[test]
     fn write_control_register_stores_value() {
         let mut device = Mc6850::new();
-        device.write(0, 0x56); // WS + TC bits, CD=10 (not master reset)
+        device.write_relative(0, 0x56); // WS + TC bits, CD=10 (not master reset)
         assert_eq!(device.control, 0x56);
     }
 
@@ -253,16 +268,16 @@ mod tests {
         remote.send(0xAA).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // RDRF
-        assert_ne!(device.peek(0) & 0x01, 0); // RDRF set
-        device.write(0, 0x03); // master reset
-        assert_eq!(device.peek(0) & 0x01, 0); // RDRF cleared
+        assert_ne!(device.peek_relative(0) & 0x01, 0); // RDRF set
+        device.write_relative(0, 0x03); // master reset
+        assert_eq!(device.peek_relative(0) & 0x01, 0); // RDRF cleared
     }
 
     #[test]
     fn master_reset_keeps_tdre_set() {
         let mut device = Mc6850::new();
-        device.write(0, 0x03); // master reset
-        assert_ne!(device.peek(0) & 0x02, 0);
+        device.write_relative(0, 0x03); // master reset
+        assert_ne!(device.peek_relative(0) & 0x02, 0);
     }
 
     // --- TX ---
@@ -270,7 +285,7 @@ mod tests {
     #[test]
     fn tx_sends_byte_to_transport() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write(1, 0x58);
+        device.write_relative(1, 0x58);
         std::thread::sleep(Duration::from_millis(1));
         assert_eq!(remote.try_recv(), Some(0x58));
     }
@@ -278,24 +293,24 @@ mod tests {
     #[test]
     fn tx_no_transport_is_silent() {
         let mut device = Mc6850::new();
-        device.write(1, 0xFF); // should not panic
+        device.write_relative(1, 0xFF); // should not panic
     }
 
     #[test]
     fn tdre_clears_on_tx_write() {
         let (mut device, _remote) = device_with_pipe();
-        assert_ne!(device.peek(0) & 0x02, 0); // TDRE set before write
-        device.write(1, 0x41);
-        assert_eq!(device.peek(0) & 0x02, 0); // TDRE cleared after TX write
+        assert_ne!(device.peek_relative(0) & 0x02, 0); // TDRE set before write
+        device.write_relative(1, 0x41);
+        assert_eq!(device.peek_relative(0) & 0x02, 0); // TDRE cleared after TX write
     }
 
     #[test]
     fn tdre_restores_after_tick() {
         let (mut device, _remote) = device_with_pipe();
-        device.write(1, 0x41);
-        assert_eq!(device.peek(0) & 0x02, 0); // TDRE cleared
+        device.write_relative(1, 0x41);
+        assert_eq!(device.peek_relative(0) & 0x02, 0); // TDRE cleared
         device.tick(1);
-        assert_ne!(device.peek(0) & 0x02, 0); // TDRE restored
+        assert_ne!(device.peek_relative(0) & 0x02, 0); // TDRE restored
     }
 
     // --- RX ---
@@ -306,7 +321,7 @@ mod tests {
         remote.send(0xBB).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
-        assert_ne!(device.peek(0) & 0x01, 0); // RDRF set
+        assert_ne!(device.peek_relative(0) & 0x01, 0); // RDRF set
     }
 
     #[test]
@@ -315,8 +330,8 @@ mod tests {
         remote.send(0x44).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
-        assert_eq!(device.read(1), 0x44);
-        assert_eq!(device.peek(0) & 0x01, 0); // RDRF cleared
+        assert_eq!(device.read_relative(1), 0x44);
+        assert_eq!(device.peek_relative(0) & 0x01, 0); // RDRF cleared
     }
 
     #[test]
@@ -327,9 +342,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // receives 0x01 → RDRF
         device.tick(1); // 0x02 stays in pipe (RDRF still set)
-        assert_eq!(device.read(1), 0x01);
+        assert_eq!(device.read_relative(1), 0x01);
         device.tick(1); // now receives 0x02
-        assert_eq!(device.read(1), 0x02);
+        assert_eq!(device.read_relative(1), 0x02);
     }
 
     // --- IRQ ---
@@ -337,7 +352,7 @@ mod tests {
     #[test]
     fn irq_on_rdrf_when_rx_irq_enabled() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write(0, 0x81); // RIE=1, CD=01
+        device.write_relative(0, 0x81); // RIE=1, CD=01
         remote.send(0x01).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
@@ -347,7 +362,7 @@ mod tests {
     #[test]
     fn no_irq_on_rdrf_when_rx_irq_disabled() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write(0, 0x01); // RIE=0, CD=01
+        device.write_relative(0, 0x01); // RIE=0, CD=01
         remote.send(0x01).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
@@ -357,14 +372,14 @@ mod tests {
     #[test]
     fn irq_on_tdre_when_tx_irq_enabled() {
         let mut device = Mc6850::new();
-        device.write(0, 0x41); // TC=10 (TX IRQ enabled), CD=01
+        device.write_relative(0, 0x41); // TC=10 (TX IRQ enabled), CD=01
         assert!(device.irq_active()); // TDRE is always set
     }
 
     #[test]
     fn no_irq_on_tdre_when_tx_irq_disabled() {
         let mut device = Mc6850::new();
-        device.write(0, 0x01); // TC=00, CD=01
+        device.write_relative(0, 0x01); // TC=00, CD=01
         assert!(!device.irq_active());
     }
 
@@ -376,8 +391,8 @@ mod tests {
         remote.send(0x99).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
-        let _ = device.peek(1);
-        assert_ne!(device.peek(0) & 0x01, 0); // RDRF still set
+        let _ = device.peek_relative(1);
+        assert_ne!(device.peek_relative(0) & 0x01, 0); // RDRF still set
     }
 
     #[test]
@@ -386,8 +401,8 @@ mod tests {
         remote.send(0x33).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
-        assert_eq!(device.peek(1), 0x33);
-        assert_eq!(device.read(1), 0x33); // still available
+        assert_eq!(device.peek_relative(1), 0x33);
+        assert_eq!(device.read_relative(1), 0x33); // still available
     }
 
     // reset
