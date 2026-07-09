@@ -31,7 +31,7 @@ pub const MEMORY_SIZE: u16 = NUM_BANKS as u16 * BANK_SIZE;
 /// ## Bank Selection Register
 /// The bank selection register can be mapped into the region of the address space that is used
 /// for I/O devices. Only the two low-order bits of the register are significant -- the remaining
-/// bits are ignored. When none of banks 1 to 3 is selected, the lower half of the region is
+/// bits are ignored. When none of banks 0 to 2 is selected, the lower half of the region is
 /// unmapped. The selection register is initialized to zero at system reset.
 ///
 /// | Bit 1 | Bit 0 | Bank selected |
