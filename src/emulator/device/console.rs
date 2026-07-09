@@ -157,11 +157,10 @@ impl IoDevice for Console {
             1 => {          // latch register
                 self.latch = value;
                 self.ring.clear();
-                if self.break_key.is_none() {
-                    self.interrupt_flag = false;
-                } else {
-                    let break_key = self.break_key.unwrap();
+                if let Some(break_key) = self.break_key {
                     self.interrupt_flag = break_key == value;
+                } else {
+                    self.interrupt_flag = false;
                 }
             },
             _ => (),
