@@ -151,6 +151,9 @@ impl TransportSlot {
 
 /// WDC 65C22 Versatile Interface Adapter.
 pub struct Via6522 {
+    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
+    address: u16,
+
     // --- Port registers ---
     /// Output register B — written bits drive output pins on port B.
     orb: u8,
@@ -239,6 +242,7 @@ impl Via6522 {
     /// Creates a new `Via6522` in reset state.
     pub fn new() -> Self {
         Self {
+            address: 0,
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
             input_b: 0, input_a: 0, ira_latch: 0, irb_latch: 0,
             t1_counter: 0, t1_latch: 0, t1_running: false, t1_pb7: false,
@@ -250,6 +254,12 @@ impl Via6522 {
             error_sender: None,
             device_id: None,
         }
+    }
+
+    /// Sets the address at which this device is registered on the bus.
+    pub fn with_address(mut self, address: u16) -> Self {
+        self.address = address;
+        self
     }
 
     /// Attaches a transport. All attached transports receive every port and control-signal
@@ -678,6 +688,10 @@ impl Default for Via6522 {
 }
 
 impl IoDevice for Via6522 {
+    fn base_address(&self) -> u16 {
+        self.address
+    }
+
     /// Reads the register at `offset` with side effects.
     fn read(&mut self, offset: u16) -> u8 {
         match offset {
@@ -938,6 +952,7 @@ impl IoDevice for Via6522 {
 
     /// Resets the device without disturbing state that is under peripheral control
     fn reset(&mut self) {
+        let address = self.address;
         let transports = std::mem::take(&mut self.transports);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
@@ -956,6 +971,7 @@ impl IoDevice for Via6522 {
         let t2_counter = self.t2_counter;
         let sr = self.sr;
         *self = Self::new();
+        self.address = address;
         self.transports = transports;
         self.error_sender = error_sender;
         self.device_id = device_id;

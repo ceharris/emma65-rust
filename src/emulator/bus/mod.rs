@@ -48,8 +48,12 @@ enum Region {
     },
     Device {
         range: AddressRange,
-        id: DeviceId,
-        device: Box<dyn IoDevice>,
+        /// Index into the owning `Bus`/`BusConfig`'s `devices` vector.
+        ///
+        /// Stable because devices are only ever appended during `BusConfig`
+        /// construction; more than one `Region::Device` may share a `device_index`
+        /// when a device is mapped at more than one range via `extend_device()`.
+        device_index: usize,
     },
 }
 
@@ -66,6 +70,9 @@ impl Region {
 /// The configurable memory bus with RAM, ROM, and IO device regions.
 pub struct Bus {
     regions: Vec<Region>,
+    /// Devices registered on the bus, in registration order. A device may be
+    /// referenced by more than one `Region::Device` entry via `device_index`.
+    devices: Vec<(DeviceId, Box<dyn IoDevice>)>,
     unmapped_policy: UnmappedPolicy,
     /// Monotonic clock state; updated by `Cpu::step()` before each instruction.
     trace_state: TraceState,
@@ -99,7 +106,7 @@ impl Bus {
         let value = match self.find_region_mut(addr) {
             Some(RegionMatch::Ram { data, offset }) => Ok(data[offset]),
             Some(RegionMatch::Rom { data, offset, .. }) => Ok(data[offset]),
-            Some(RegionMatch::Device { device, offset }) => Ok(device.read(offset)),
+            Some(RegionMatch::Device { device, addr }) => Ok(device.read_absolute(addr)),
             None => match self.unmapped_policy {
                 UnmappedPolicy::DefaultValue => Ok(UNMAPPED_READ_VALUE),
                 UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
@@ -120,8 +127,8 @@ impl Bus {
                 RomWritePolicy::Ignore => Ok(()),
                 RomWritePolicy::Error => Err(BusError::RomWrite { addr }),
             },
-            Some(RegionMatch::Device { device, offset }) => {
-                device.write(offset, value);
+            Some(RegionMatch::Device { device, addr }) => {
+                device.write_absolute(addr, value);
                 Ok(())
             }
             None => match self.unmapped_policy {
@@ -138,7 +145,7 @@ impl Bus {
         match self.find_region(addr) {
             Some(PeekMatch::Ram { data, offset }) => Ok(data[offset]),
             Some(PeekMatch::Rom { data, offset }) => Ok(data[offset]),
-            Some(PeekMatch::Device { device, offset }) => Ok(device.peek(offset)),
+            Some(PeekMatch::Device { device, addr }) => Ok(device.peek_absolute(addr)),
             None => match self.unmapped_policy {
                 UnmappedPolicy::DefaultValue => Ok(UNMAPPED_READ_VALUE),
                 UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
@@ -160,40 +167,28 @@ impl Bus {
 
     /// Calls `tick(cycles)` on every IO device mapped on the bus.
     pub fn tick_devices(&mut self, cycles: u32) {
-        for region in &mut self.regions {
-            if let Region::Device { device, .. } = region {
-                device.tick(cycles);
-            }
+        for (_, device) in &mut self.devices {
+            device.tick(cycles);
         }
     }
-    
+
     /// Calls `reset()` on every IO device mapped on the bus
     pub fn reset_devices(&mut self) {
-        for region in &mut self.regions {
-            if let Region::Device { device, .. } = region {
-                device.reset();
-            }
+        for (_, device) in &mut self.devices {
+            device.reset();
         }
     }
 
     /// Returns the IRQ state of every device as `(DeviceId, irq_active)` pairs.
     pub fn device_irq_states(&self) -> Vec<(crate::emulator::device::DeviceId, bool)> {
-        self.regions.iter().filter_map(|r| {
-            if let Region::Device { id, device, .. } = r {
-                Some((*id, device.irq_active()))
-            } else {
-                None
-            }
-        }).collect()
+        self.devices.iter().map(|(id, device)| (*id, device.irq_active())).collect()
     }
 
     /// Drains pending NMI edge events from all devices. Returns `true` if any device had one.
     pub fn take_device_nmi(&mut self) -> bool {
         let mut any = false;
-        for region in &mut self.regions {
-            if let Region::Device { device, .. } = region {
-                any |= device.take_nmi();
-            }
+        for (_, device) in &mut self.devices {
+            any |= device.take_nmi();
         }
         any
     }
@@ -231,50 +226,72 @@ impl Bus {
     }
 
     /// Returns the index of the most-specific (smallest) region that contains `addr`, if any.
+    ///
+    /// A device region whose device declines `addr` (`IoDevice::claims` returns `false`)
+    /// is excluded and the search retries among the remaining candidates, walking
+    /// through as many declined regions as exist.
     fn find_region_index(&self, addr: u16) -> Option<usize> {
-        let mut best_idx: Option<usize> = None;
-        let mut best_size: u32 = u32::MAX;
-        for (i, region) in self.regions.iter().enumerate() {
-            let range = region.range();
-            if range.contains(addr) {
-                let size = range.len();
-                if size < best_size {
-                    best_size = size;
-                    best_idx = Some(i);
+        let mut skip: Vec<usize> = Vec::new();
+        loop {
+            let mut best_idx: Option<usize> = None;
+            let mut best_size: u32 = u32::MAX;
+            for (i, region) in self.regions.iter().enumerate() {
+                if skip.contains(&i) {
+                    continue;
+                }
+                let range = region.range();
+                if range.contains(addr) {
+                    let size = range.len();
+                    if size < best_size {
+                        best_size = size;
+                        best_idx = Some(i);
+                    }
                 }
             }
+            let idx = best_idx?;
+            if let Region::Device { device_index, .. } = &self.regions[idx]
+                && !self.devices[*device_index].1.claims(addr)
+            {
+                skip.push(idx);
+                continue;
+            }
+            return Some(idx);
         }
-        best_idx
     }
 
     fn find_region(&self, addr: u16) -> Option<PeekMatch<'_>> {
         let idx = self.find_region_index(addr)?;
-        let range = self.regions[idx].range();
-        let offset = (addr - range.start) as usize;
         match &self.regions[idx] {
-            Region::Ram { data, .. } => Some(PeekMatch::Ram { data, offset }),
-            Region::Rom { data, .. } => Some(PeekMatch::Rom { data, offset }),
-            Region::Device { device, .. } => Some(PeekMatch::Device {
-                device: device.as_ref(),
-                offset: offset as u16,
+            Region::Ram { range, data } => {
+                let offset = (addr - range.start) as usize;
+                Some(PeekMatch::Ram { data, offset })
+            }
+            Region::Rom { range, data, .. } => {
+                let offset = (addr - range.start) as usize;
+                Some(PeekMatch::Rom { data, offset })
+            }
+            Region::Device { device_index, .. } => Some(PeekMatch::Device {
+                device: self.devices[*device_index].1.as_ref(),
+                addr,
             }),
         }
     }
 
     fn find_region_mut(&mut self, addr: u16) -> Option<RegionMatch<'_>> {
         let idx = self.find_region_index(addr)?;
-        let range = self.regions[idx].range();
-        let offset = (addr - range.start) as usize;
-        match &mut self.regions[idx] {
-            Region::Ram { data, .. } => Some(RegionMatch::Ram { data, offset }),
-            Region::Rom { data, write_policy, .. } => Some(RegionMatch::Rom {
-                data,
-                offset,
-                write_policy: *write_policy,
-            }),
-            Region::Device { device, .. } => Some(RegionMatch::Device {
-                device: device.as_mut(),
-                offset: offset as u16,
+        let Bus { regions, devices, .. } = self;
+        match &mut regions[idx] {
+            Region::Ram { range, data } => {
+                let offset = (addr - range.start) as usize;
+                Some(RegionMatch::Ram { data, offset })
+            }
+            Region::Rom { range, data, write_policy } => {
+                let offset = (addr - range.start) as usize;
+                Some(RegionMatch::Rom { data, offset, write_policy: *write_policy })
+            }
+            Region::Device { device_index, .. } => Some(RegionMatch::Device {
+                device: devices[*device_index].1.as_mut(),
+                addr,
             }),
         }
     }
@@ -284,18 +301,20 @@ impl Bus {
 enum PeekMatch<'a> {
     Ram { data: &'a Vec<u8>, offset: usize },
     Rom { data: &'a Vec<u8>, offset: usize },
-    Device { device: &'a dyn IoDevice, offset: u16 },
+    Device { device: &'a dyn IoDevice, addr: u16 },
 }
 
 enum RegionMatch<'a> {
     Ram { data: &'a mut Vec<u8>, offset: usize },
     Rom { data: &'a Vec<u8>, offset: usize, write_policy: RomWritePolicy },
-    Device { device: &'a mut dyn IoDevice, offset: u16 },
+    Device { device: &'a mut dyn IoDevice, addr: u16 },
 }
 
 /// Builder for constructing a `Bus`.
 pub struct BusConfig {
     regions: Vec<Region>,
+    /// Devices registered so far, in registration order. See `Bus::devices`.
+    devices: Vec<(DeviceId, Box<dyn IoDevice>)>,
     unmapped_policy: UnmappedPolicy,
     rom_write_policy: RomWritePolicy,
 }
@@ -305,6 +324,7 @@ impl BusConfig {
     pub fn new() -> Self {
         Self {
             regions: Vec::new(),
+            devices: Vec::new(),
             unmapped_policy: UnmappedPolicy::DefaultValue,
             rom_write_policy: RomWritePolicy::Ignore,
         }
@@ -376,26 +396,41 @@ impl BusConfig {
         Ok(self)
     }
 
-    /// Maps an IO device over `range`.
+    /// Maps an IO device over `range`, registering it under `id`.
     ///
-    /// `id` must be unique among all registered devices.
+    /// `id` must be unique among all registered devices. Use `extend_device()` to map
+    /// this same device at additional ranges once it's registered.
     pub fn device(
         mut self,
         range: AddressRange,
         id: DeviceId,
         device: Box<dyn IoDevice>,
     ) -> Result<Self, BusConfigError> {
-        if self.regions.iter().any(|r| {
-            if let Region::Device { id: existing_id, .. } = r {
-                *existing_id == id
-            } else {
-                false
-            }
-        }) {
+        if self.devices.iter().any(|(existing_id, _)| *existing_id == id) {
             return Err(BusConfigError::DuplicateDeviceId(id));
         }
+        debug_assert_eq!(
+            device.base_address(), range.start,
+            "device.base_address() must match the range it's registered at"
+        );
         self.check_overlap(range)?;
-        self.regions.push(Region::Device { range, id, device });
+        let device_index = self.devices.len();
+        self.devices.push((id, device));
+        self.regions.push(Region::Device { range, device_index });
+        Ok(self)
+    }
+
+    /// Maps an additional region over `range` for a device already registered via `device()`.
+    ///
+    /// Returns `BusConfigError::UnknownDeviceId` if `id` hasn't been registered yet.
+    pub fn extend_device(mut self, range: AddressRange, id: DeviceId) -> Result<Self, BusConfigError> {
+        let device_index = self
+            .devices
+            .iter()
+            .position(|(existing, _)| *existing == id)
+            .ok_or(BusConfigError::UnknownDeviceId(id))?;
+        self.check_overlap(range)?;
+        self.regions.push(Region::Device { range, device_index });
         Ok(self)
     }
 
@@ -403,6 +438,7 @@ impl BusConfig {
     pub fn build(self) -> Bus {
         Bus {
             regions: self.regions,
+            devices: self.devices,
             unmapped_policy: self.unmapped_policy,
             trace_state: TraceState::new(),
             trace_callback: None,
@@ -435,17 +471,21 @@ mod tests {
     use super::*;
 
     struct MockDevice {
+        address: u16,
         data: Vec<u8>,
         read_count: usize,
     }
 
     impl MockDevice {
-        fn new(size: usize) -> Self {
-            Self { data: vec![0u8; size], read_count: 0 }
+        fn new(address: u16, size: usize) -> Self {
+            Self { address, data: vec![0u8; size], read_count: 0 }
         }
     }
 
     impl IoDevice for MockDevice {
+        fn base_address(&self) -> u16 {
+            self.address
+        }
         fn read(&mut self, offset: u16) -> u8 {
             self.read_count += 1;
             self.data[offset as usize]
@@ -518,7 +558,7 @@ mod tests {
     fn most_specific_wins_device_shadows_rom() {
         // ROM covers 0x8000–0xFFFF; device covers small window inside it.
         let rom_data = vec![0xEAu8; 0x8000];
-        let device = Box::new(MockDevice::new(16));
+        let device = Box::new(MockDevice::new(0xDF00, 16));
         let mut bus = Bus::config()
             .rom(AddressRange::new(0x8000, 0xFFFF), rom_data)
             .unwrap()
@@ -542,7 +582,7 @@ mod tests {
 
     #[test]
     fn peek_does_not_trigger_device_side_effects() {
-        let device = Box::new(MockDevice::new(16));
+        let device = Box::new(MockDevice::new(0xDF00, 16));
         let bus = Bus::config()
             .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), device)
             .unwrap()
@@ -557,7 +597,7 @@ mod tests {
 
     #[test]
     fn device_offset_translation() {
-        let mut dev = MockDevice::new(16);
+        let mut dev = MockDevice::new(0xDF00, 16);
         dev.data[5] = 0x42;
         let mut bus = Bus::config()
             .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(dev))
@@ -596,9 +636,9 @@ mod tests {
     #[test]
     fn duplicate_device_id_error() {
         let result = Bus::config()
-            .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(MockDevice::new(16)))
+            .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(MockDevice::new(0xDF00, 16)))
             .unwrap()
-            .device(AddressRange::new(0xCF00, 0xCF0F), DeviceId(1), Box::new(MockDevice::new(16)));
+            .device(AddressRange::new(0xCF00, 0xCF0F), DeviceId(1), Box::new(MockDevice::new(0xCF00, 16)));
         assert!(matches!(result, Err(BusConfigError::DuplicateDeviceId(DeviceId(1)))));
     }
 
@@ -635,6 +675,282 @@ mod tests {
         let result = Bus::config()
             .ram_with_data(AddressRange::new(0xC000, 0xC0FF), vec![0u8; 100]);
         assert!(matches!(result, Err(BusConfigError::RomSizeMismatch { .. })));
+    }
+
+    // --- multi-region devices and conditional chip-select ---
+
+    #[test]
+    fn base_address_default_absolute_delegation() {
+        let mut dev = MockDevice::new(0xDF00, 16);
+        dev.data[5] = 0x42;
+        let mut bus = Bus::config()
+            .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(dev))
+            .unwrap()
+            .build();
+        // addr 0xDF05 - base_address() 0xDF00 = offset 5, via the default read_absolute/
+        // write_absolute/peek_absolute delegation to read/write/peek.
+        assert_eq!(bus.read(0xDF05).unwrap(), 0x42);
+        bus.write(0xDF06, 0x99).unwrap();
+        assert_eq!(bus.peek(0xDF06).unwrap(), 0x99);
+    }
+
+    /// A device mapped at two regions — a 1-byte register and a small data window —
+    /// that overrides the `*_absolute` methods directly instead of relying on the
+    /// default offset-based delegation.
+    struct MultiRegionDevice {
+        register_addr: u16,
+        window: AddressRange,
+        register: u8,
+        window_data: Vec<u8>,
+    }
+
+    impl MultiRegionDevice {
+        fn new(register_addr: u16, window: AddressRange) -> Self {
+            Self {
+                register_addr,
+                window,
+                register: 0,
+                window_data: vec![0u8; window.len() as usize],
+            }
+        }
+    }
+
+    impl IoDevice for MultiRegionDevice {
+        fn base_address(&self) -> u16 {
+            self.window.start
+        }
+        fn read(&mut self, _offset: u16) -> u8 {
+            unreachable!("multi-region device is dispatched via read_absolute")
+        }
+        fn write(&mut self, _offset: u16, _value: u8) {
+            unreachable!("multi-region device is dispatched via write_absolute")
+        }
+        fn peek(&self, _offset: u16) -> u8 {
+            unreachable!("multi-region device is dispatched via peek_absolute")
+        }
+        fn read_absolute(&mut self, addr: u16) -> u8 {
+            if addr == self.register_addr {
+                self.register
+            } else {
+                self.window_data[(addr - self.window.start) as usize]
+            }
+        }
+        fn write_absolute(&mut self, addr: u16, value: u8) {
+            if addr == self.register_addr {
+                self.register = value;
+            } else {
+                self.window_data[(addr - self.window.start) as usize] = value;
+            }
+        }
+        fn peek_absolute(&self, addr: u16) -> u8 {
+            if addr == self.register_addr {
+                self.register
+            } else {
+                self.window_data[(addr - self.window.start) as usize]
+            }
+        }
+    }
+
+    #[test]
+    fn multi_region_device_overrides_absolute_methods() {
+        let window = AddressRange::new(0x8000, 0x8003);
+        let device = Box::new(MultiRegionDevice::new(0xFF00, window));
+        let mut bus = Bus::config()
+            .device(window, DeviceId(1), device)
+            .unwrap()
+            .extend_device(AddressRange::new(0xFF00, 0xFF00), DeviceId(1))
+            .unwrap()
+            .build();
+
+        bus.write(0xFF00, 0x03).unwrap();
+        assert_eq!(bus.read(0xFF00).unwrap(), 0x03);
+
+        bus.write(0x8000, 0xAA).unwrap();
+        bus.write(0x8001, 0xBB).unwrap();
+        assert_eq!(bus.read(0x8000).unwrap(), 0xAA);
+        assert_eq!(bus.read(0x8001).unwrap(), 0xBB);
+        // Register and window are independent storage within the same device.
+        assert_eq!(bus.peek(0xFF00).unwrap(), 0x03);
+    }
+
+    #[test]
+    fn extend_device_errors_for_unknown_device_id() {
+        let result = Bus::config().extend_device(AddressRange::new(0xFF00, 0xFF00), DeviceId(1));
+        assert!(matches!(result, Err(BusConfigError::UnknownDeviceId(DeviceId(1)))));
+    }
+
+    #[test]
+    fn extend_device_still_checks_overlap() {
+        let result = Bus::config()
+            .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(MockDevice::new(0xDF00, 16)))
+            .unwrap()
+            .extend_device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1));
+        assert!(matches!(result, Err(BusConfigError::AmbiguousOverlap { .. })));
+    }
+
+    /// A device whose `claims` response is fixed at construction, for exercising
+    /// conditional chip-select fallthrough.
+    struct DecliningDevice {
+        address: u16,
+        claims: bool,
+        value: u8,
+    }
+
+    impl DecliningDevice {
+        fn new(address: u16, value: u8, claims: bool) -> Self {
+            Self { address, claims, value }
+        }
+    }
+
+    impl IoDevice for DecliningDevice {
+        fn base_address(&self) -> u16 {
+            self.address
+        }
+        fn read(&mut self, _offset: u16) -> u8 {
+            self.value
+        }
+        fn write(&mut self, _offset: u16, value: u8) {
+            self.value = value;
+        }
+        fn peek(&self, _offset: u16) -> u8 {
+            self.value
+        }
+        fn claims(&self, _addr: u16) -> bool {
+            self.claims
+        }
+    }
+
+    #[test]
+    fn claims_true_dispatches_to_device() {
+        let rom_data = vec![0xEAu8; 0x100];
+        let claiming = Box::new(DecliningDevice::new(0xC010, 0x99, true));
+        let mut bus = Bus::config()
+            .rom(AddressRange::new(0xC000, 0xC0FF), rom_data)
+            .unwrap()
+            .device(AddressRange::new(0xC010, 0xC010), DeviceId(1), claiming)
+            .unwrap()
+            .build();
+        assert_eq!(bus.read(0xC010).unwrap(), 0x99);
+    }
+
+    #[test]
+    fn claims_false_falls_through_to_underlying_region() {
+        let rom_data = vec![0xEAu8; 0x100];
+        let declining = Box::new(DecliningDevice::new(0xC010, 0x99, false));
+        let mut bus = Bus::config()
+            .rom(AddressRange::new(0xC000, 0xC0FF), rom_data)
+            .unwrap()
+            .device(AddressRange::new(0xC010, 0xC010), DeviceId(1), declining)
+            .unwrap()
+            .build();
+        // Device declines, so the read falls through to the underlying ROM.
+        assert_eq!(bus.read(0xC010).unwrap(), 0xEA);
+    }
+
+    #[test]
+    fn claims_false_falls_through_to_unmapped_default_value() {
+        let declining = Box::new(DecliningDevice::new(0x1234, 0x99, false));
+        let mut bus = Bus::config()
+            .unmapped_policy(UnmappedPolicy::DefaultValue)
+            .device(AddressRange::new(0x1234, 0x1234), DeviceId(1), declining)
+            .unwrap()
+            .build();
+        assert_eq!(bus.read(0x1234).unwrap(), UNMAPPED_READ_VALUE);
+    }
+
+    #[test]
+    fn claims_false_falls_through_to_unmapped_error() {
+        let declining = Box::new(DecliningDevice::new(0x1234, 0x99, false));
+        let mut bus = Bus::config()
+            .unmapped_policy(UnmappedPolicy::Error)
+            .device(AddressRange::new(0x1234, 0x1234), DeviceId(1), declining)
+            .unwrap()
+            .build();
+        assert!(matches!(bus.read(0x1234), Err(BusError::Unmapped { addr: 0x1234 })));
+    }
+
+    #[test]
+    fn claims_walks_multiple_shadow_levels() {
+        let rom_data = vec![0xEAu8; 0x8000];
+        let middle = Box::new(DecliningDevice::new(0xDF00, 0x11, false));
+        let inner = Box::new(DecliningDevice::new(0xDF00, 0x22, false));
+        let mut bus = Bus::config()
+            .rom(AddressRange::new(0x8000, 0xFFFF), rom_data)
+            .unwrap()
+            .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), middle)
+            .unwrap()
+            .device(AddressRange::new(0xDF00, 0xDF00), DeviceId(2), inner)
+            .unwrap()
+            .build();
+        // Innermost (1 byte) declines, middle (16 bytes) also declines, falls through to ROM.
+        assert_eq!(bus.read(0xDF00).unwrap(), 0xEA);
+    }
+
+    /// A device with shared, thread-safe call counters for verifying that per-device
+    /// lifecycle methods fire once per device rather than once per mapped region.
+    struct CountingDevice {
+        address: u16,
+        tick_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        reset_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        irq_active_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        take_nmi_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl IoDevice for CountingDevice {
+        fn base_address(&self) -> u16 {
+            self.address
+        }
+        fn read(&mut self, _offset: u16) -> u8 { 0 }
+        fn write(&mut self, _offset: u16, _value: u8) {}
+        fn peek(&self, _offset: u16) -> u8 { 0 }
+        fn tick(&mut self, _cycles: u32) {
+            self.tick_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn reset(&mut self) {
+            self.reset_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn irq_active(&self) -> bool {
+            self.irq_active_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            false
+        }
+        fn take_nmi(&mut self) -> bool {
+            self.take_nmi_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            false
+        }
+    }
+
+    #[test]
+    fn tick_reset_irq_nmi_called_once_per_device() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let tick_count = Arc::new(AtomicUsize::new(0));
+        let reset_count = Arc::new(AtomicUsize::new(0));
+        let irq_active_count = Arc::new(AtomicUsize::new(0));
+        let take_nmi_count = Arc::new(AtomicUsize::new(0));
+        let device = Box::new(CountingDevice {
+            address: 0xDF00,
+            tick_count: tick_count.clone(),
+            reset_count: reset_count.clone(),
+            irq_active_count: irq_active_count.clone(),
+            take_nmi_count: take_nmi_count.clone(),
+        });
+        let mut bus = Bus::config()
+            .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), device)
+            .unwrap()
+            .extend_device(AddressRange::new(0xFF00, 0xFF00), DeviceId(1))
+            .unwrap()
+            .build();
+
+        bus.tick_devices(1);
+        bus.reset_devices();
+        let _ = bus.device_irq_states();
+        bus.take_device_nmi();
+
+        assert_eq!(tick_count.load(Ordering::SeqCst), 1);
+        assert_eq!(reset_count.load(Ordering::SeqCst), 1);
+        assert_eq!(irq_active_count.load(Ordering::SeqCst), 1);
+        assert_eq!(take_nmi_count.load(Ordering::SeqCst), 1);
     }
 
     // --- bus trace ---

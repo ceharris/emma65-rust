@@ -47,6 +47,8 @@ use crate::emulator::transport::{Transport, TransportError};
 /// RX is timer-driven: `tick()` polls the transport once per byte period at the configured
 /// baud rate, or on every call when using the external clock (default).
 pub struct Acia6551 {
+    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
+    address: u16,
     /// Optional transport for byte-stream IO.
     transport: Option<Box<dyn Transport>>,
     /// Destination for async transport error events.
@@ -93,6 +95,7 @@ impl Acia6551 {
     /// CPU clock speed so that baud rate timing is accurate.
     pub fn new() -> Self {
         Self {
+            address: 0,
             transport: None,
             error_sender: None,
             device_id: None,
@@ -144,6 +147,12 @@ impl Acia6551 {
     /// bytes are held in the pipe until RDRF is cleared.
     pub fn with_overrun(mut self, enabled: bool) -> Self {
         self.overrun_enabled = enabled;
+        self
+    }
+
+    /// Sets the address at which this device is registered on the bus.
+    pub fn with_address(mut self, address: u16) -> Self {
+        self.address = address;
         self
     }
 
@@ -234,6 +243,10 @@ impl Default for Acia6551 {
 }
 
 impl IoDevice for Acia6551 {
+    fn base_address(&self) -> u16 {
+        self.address
+    }
+
     /// Reads the register at `offset`.
     ///
     /// Reading offset 0 (RX data) clears RDRF and overrun.
@@ -327,6 +340,7 @@ impl IoDevice for Acia6551 {
 
     /// Resets the command, control, and status registers as if a hardware reset has occurred.
     fn reset(&mut self) {
+        let address = self.address;
         let transport = std::mem::take(&mut self.transport);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
@@ -334,6 +348,7 @@ impl IoDevice for Acia6551 {
         let tdre_bug_compatible = self.tdre_bug_compatible;
         let overrun_enabled = self.overrun_enabled;
         *self = Self::new();
+        self.address = address;
         self.transport = transport;
         self.error_sender = error_sender;
         self.device_id = device_id;

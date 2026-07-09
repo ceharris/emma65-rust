@@ -45,7 +45,7 @@ impl DeviceModule for Mc6850Module {
 
         let device_id = DeviceId(address as u32);
         let device = {
-            let mut dev = Mc6850::new();
+            let mut dev = Mc6850::new().with_address(address);
             if let Some(transport_spec) = transport_spec {
                 let transport = transport_spec
                     .to_transport().await

@@ -45,7 +45,7 @@ impl DeviceModule for Via6522Module {
 
         let device_id = DeviceId(address as u32);
         let device = {
-            let mut dev = Via6522::new();
+            let mut dev = Via6522::new().with_address(address);
             if let Some(transport_spec) = transport_spec {
                 let transport = transport_spec
                     .to_transport().await

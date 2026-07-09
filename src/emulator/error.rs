@@ -34,6 +34,8 @@ pub enum BusConfigError {
     RomSizeMismatch { range: AddressRange, data_len: usize, expected: usize },
     #[error("duplicate device ID {0:?}")]
     DuplicateDeviceId(DeviceId),
+    #[error("extend_device references unknown device ID {0:?}: call .device() to register it first")]
+    UnknownDeviceId(DeviceId),
 }
 
 /// An error returned by `CpuBuilder::build()`.

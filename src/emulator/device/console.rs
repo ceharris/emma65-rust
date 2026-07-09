@@ -41,6 +41,8 @@ pub const CONSOLE_NAME: &str = "console";
 /// key value, the input buffer is drained, and the CPU's IRQ signal is asserted.
 ///
 pub struct Console {
+    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
+    address: u16,
     /// Optional transport for byte-stream IO.
     transport: Option<Box<dyn Transport>>,
     /// Destination for async transport error events.
@@ -62,6 +64,7 @@ impl Console {
     /// Creates a new `BufferedConsole` with no transport attached.
     pub fn new() -> Self {
         Self {
+            address: 0,
             transport: None,
             error_sender: None,
             device_id: None,
@@ -70,6 +73,12 @@ impl Console {
             latch: 0,
             interrupt_flag: false,
         }
+    }
+
+    /// Sets the address at which this device is registered on the bus.
+    pub fn with_address(mut self, address: u16) -> Self {
+        self.address = address;
+        self
     }
 
     /// Attaches a transport for byte-stream IO.
@@ -105,6 +114,10 @@ impl Default for Console {
 
 
 impl IoDevice for Console {
+
+    fn base_address(&self) -> u16 {
+        self.address
+    }
 
     /// Read device register at `offset`.
     fn read(&mut self, offset: u16) -> u8 {
@@ -373,7 +386,7 @@ mod tests {
         use crate::emulator::exec::StepResult;
 
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut console = Console::new();
+        let mut console = Console::new().with_address(0xF000);
         console.attach_transport(Box::new(local));
 
         // Map all of RAM (including reset vector region) plus console at 0xF000.
@@ -431,7 +444,7 @@ mod tests {
         use crate::emulator::exec::StepResult;
 
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut console = Console::new();
+        let mut console = Console::new().with_address(0xF000);
         console.attach_transport(Box::new(local));
 
         let bus = BusConfig::new()

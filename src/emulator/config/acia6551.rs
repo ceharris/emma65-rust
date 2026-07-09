@@ -49,6 +49,7 @@ impl DeviceModule for Acia6551Module {
         let device_id = DeviceId(address as u32);
         let device = {
             let mut dev = Acia6551::new()
+                .with_address(address)
                 .with_tdre_bug(config.with_tdre_bug.unwrap_or(false))
                 .with_overrun(config.with_overrun.unwrap_or(false));
             if let Some(hz) = context.clock_hz {

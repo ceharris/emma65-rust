@@ -87,6 +87,10 @@ impl FeedbackRegister {
 }
 
 impl IoDevice for FeedbackRegister {
+    fn base_address(&self) -> u16 {
+        0xBFFC
+    }
+
     fn write(&mut self, _offset: u16, value: u8) {
         let prev = self.last_value;
         self.last_value = value;

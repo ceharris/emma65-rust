@@ -31,6 +31,8 @@ use crate::emulator::transport::{Transport, TransportError};
 /// next `tick()` call, reflecting the real hardware's transmit-busy signalling.
 /// RX is polled on every `tick()` call.
 pub struct Mc6850 {
+    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
+    address: u16,
     /// Optional transport for byte-stream IO.
     transport: Option<Box<dyn Transport>>,
     /// Destination for async transport error events.
@@ -62,6 +64,7 @@ impl Mc6850 {
     /// Creates a new `Mc6850` with no transport and master-reset state.
     pub fn new() -> Self {
         Self {
+            address: 0,
             transport: None,
             error_sender: None,
             device_id: None,
@@ -72,6 +75,12 @@ impl Mc6850 {
             overrun: false,
             tx_pending: false,
         }
+    }
+
+    /// Sets the address at which this device is registered on the bus.
+    pub fn with_address(mut self, address: u16) -> Self {
+        self.address = address;
+        self
     }
 
     /// Attaches a transport for byte-stream IO.
@@ -125,6 +134,10 @@ impl Default for Mc6850 {
 }
 
 impl IoDevice for Mc6850 {
+    fn base_address(&self) -> u16 {
+        self.address
+    }
+
     /// Reads the register at `offset`.
     ///
     /// Reading offset 1 (RX data) clears RDRF and overrun.
@@ -190,10 +203,12 @@ impl IoDevice for Mc6850 {
 
     /// Resets the control and status registers as if a hardware reset has occurred.
     fn reset(&mut self) {
+        let address = self.address;
         let transport = std::mem::take(&mut self.transport);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
         *self = Self::new();
+        self.address = address;
         self.transport = transport;
         self.error_sender = error_sender;
         self.device_id = device_id;
