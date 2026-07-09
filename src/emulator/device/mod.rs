@@ -118,7 +118,7 @@ pub trait IoDevice: Send {
 
     /// Reads a byte at the absolute bus address `addr`, with side effects.
     ///
-    /// Default implementation subtracts `base_address()` and delegates to `read()` —
+    /// The default implementation subtracts `base_address()` and delegates to `read_relative()` —
     /// correct for any device mapped at a single region. A device mapped at more than
     /// one region (via `BusConfig::extend_device()`) overrides this directly,
     /// classifying `addr` against whatever address information it retains for its own
@@ -126,11 +126,23 @@ pub trait IoDevice: Send {
     fn read_absolute(&mut self, addr: u16) -> u8 {
         self.read_relative(addr - self.base_address())
     }
-    /// Writes `value` at the absolute bus address `addr`. See `read_absolute`.
+
+    /// Writes `value` at the absolute bus address `addr`.
+    /// The default implementation subtracts `base_address()` and delegates to `write_relative()` —
+    /// correct for any device mapped at a single region. A device mapped at more than
+    /// one region (via `BusConfig::extend_device()`) overrides this directly,
+    /// classifying `addr` against whatever address information it retains for its own
+    /// regions.
     fn write_absolute(&mut self, addr: u16, value: u8) {
         self.write_relative(addr - self.base_address(), value)
     }
-    /// Reads a byte at the absolute bus address `addr`, without side effects. See `read_absolute`.
+
+    /// Reads a byte at the absolute bus address `addr`, without side effects.
+    /// The default implementation subtracts `base_address()` and delegates to `peek_relative()` —
+    /// correct for any device mapped at a single region. A device mapped at more than
+    /// one region (via `BusConfig::extend_device()`) overrides this directly,
+    /// classifying `addr` against whatever address information it retains for its own
+    /// regions.
     fn peek_absolute(&self, addr: u16) -> u8 {
         self.peek_relative(addr - self.base_address())
     }
