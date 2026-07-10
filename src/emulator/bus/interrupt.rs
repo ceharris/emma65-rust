@@ -1,3 +1,5 @@
+//! IRQ and NMI interrupt controller.
+//! 
 use std::collections::HashSet;
 use crate::emulator::device::DeviceId;
 

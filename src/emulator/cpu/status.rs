@@ -1,3 +1,5 @@
+//! Processor status register (P) as a bitflags newtype over `u8`.
+
 use bitflags::bitflags;
 
 bitflags! {

@@ -1,3 +1,9 @@
+//! Bidirectional transport over a pair of OS pipes with non-blocking IO.
+//!
+//! Holds two pipes: one for inbound bytes (remote writes, we read) and one for
+//! outbound bytes (we write, remote reads). Both ends are set non-blocking so
+//! `try_recv` and `send` never block the CPU thread.
+
 use std::io::{self, Read, Write};
 use std::os::unix::io::{FromRawFd, OwnedFd};
 use std::fs::File;
@@ -5,14 +11,10 @@ use std::fs::File;
 use super::{Transport, TransportError};
 
 /// Bidirectional transport over a pair of OS pipes with non-blocking IO.
-///
-/// Holds two pipes: one for inbound bytes (remote writes, we read) and one for
-/// outbound bytes (we write, remote reads). Both ends are set non-blocking so
-/// `try_recv` and `send` never block the CPU thread.
 pub struct PipeTransport {
-    /// Read end of the inbound pipe (we read from this).
+    // Read end of the inbound pipe (we read from this).
     rx: File,
-    /// Write end of the outbound pipe (we write to this).
+    // Write end of the outbound pipe (we write to this).
     tx: File,
     connected: bool,
 }

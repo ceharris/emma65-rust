@@ -1,3 +1,4 @@
+//! IO device trait, device identification, and async device event channel, built-in devices.
 pub mod r6551;
 pub mod console;
 pub mod mc6850;

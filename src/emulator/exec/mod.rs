@@ -1,3 +1,5 @@
+//! Execution control; provides the main entry points for execution on the emulated CPU.
+
 use std::time::Instant;
 use tokio::sync::{oneshot, watch};
 use crate::emulator::cpu::{Cpu, Registers};
@@ -98,7 +100,7 @@ pub enum StepResult {
     Error(ExecError),
 }
 
-/// Clonable handle for signalling a free-running CPU thread to stop.
+/// Clonable handle for signaling a free-running CPU thread to stop.
 ///
 /// Obtained from [`RunHandle::stopper`] or created independently via
 /// [`RunStopper::channel`]. Multiple stoppers share the same underlying stop
@@ -106,8 +108,8 @@ pub enum StepResult {
 pub struct RunStopper(watch::Sender<bool>);
 
 impl RunStopper {
-    /// Creates a `(stopper, receiver)` pair for use with [`step_over_interruptible`]
-    /// and [`step_return_interruptible`].
+    /// Creates a `(stopper, receiver)` pair for use with [`step_over_subroutine`]
+    /// and [`step_return`].
     pub fn channel() -> (Self, watch::Receiver<bool>) {
         let (tx, rx) = watch::channel(false);
         (Self(tx), rx)
@@ -224,8 +226,8 @@ pub fn step_over_breakpoint(cpu: &mut Cpu, skip_pc: u16) -> StepResult {
 /// operation is interrupted and `None` is returned with the CPU left at its
 /// current PC. Returns `Some(result)` on natural completion.
 ///
-/// If `live_tx` is `Some`, a [`CpuLiveSnapshot`] is published every
-/// [`BATCH_SIZE`] instructions so callers can display live state while a long
+/// If `live_tx` is `Some`, a [`CpuLiveSnapshot`] is published periodically
+/// (based on a fixed batch size) so callers can display live state while a long
 /// subroutine runs.
 pub fn step_over_subroutine(
     cpu: &mut Cpu,
@@ -309,8 +311,8 @@ pub fn step_over_subroutine(
 /// operation is interrupted and `None` is returned with the CPU left at its
 /// current PC. Returns `Some(result)` on natural completion.
 ///
-/// If `live_tx` is `Some`, a [`CpuLiveSnapshot`] is published every
-/// [`BATCH_SIZE`] instructions so callers can display live state while a long
+/// If `live_tx` is `Some`, a [`CpuLiveSnapshot`] is published periodically
+/// (based on a fixed batch size) so callers can display live state while a long
 /// subroutine runs.
 pub fn step_return(
     cpu: &mut Cpu,

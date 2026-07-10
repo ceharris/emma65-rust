@@ -1,3 +1,4 @@
+//! Support for watchpoint expressions.
 mod location;
 mod error;
 mod scanner;

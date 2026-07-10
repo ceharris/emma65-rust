@@ -1,3 +1,5 @@
+//! CPU variant selection and invalid-opcode policy.
+
 /// Selects the CPU instruction set variant.
 ///
 /// `Wdc65C02` adds 34 opcodes: STP, WAI, BBR0–7, BBS0–7, RMB0–7, SMB0–7.

@@ -1,16 +1,11 @@
-/// Memory bus, address decoding, and bus tracing.
+//! Emulator for the (WDC)65C02 microprocessor and common peripherals.
+
 pub mod bus;
-/// CPU variants, registers, status flags, and opcode decode table.
 pub mod cpu;
-/// Disassembler: decodes bus memory into human-readable instruction listings.
 pub mod disasm;
-/// IO device trait, device identification, and async device event channel.
 pub mod device;
-/// Error types for execution, bus, configuration, and CPU construction failures.
 pub mod error;
-/// Execution model: clock speed, step results, and free-running run handle.
 pub mod exec;
-/// Transport abstraction and implementations for device IO.
 pub mod transport;
 mod config;
 mod session;

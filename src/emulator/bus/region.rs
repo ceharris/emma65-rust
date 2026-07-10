@@ -1,3 +1,5 @@
+//! Address ranges and bus operation types.
+
 /// A contiguous range of addresses in the 16-bit address space, inclusive on both ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AddressRange {

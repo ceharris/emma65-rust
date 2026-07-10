@@ -1,3 +1,5 @@
+//! Error types for execution, bus, configuration, and CPU construction failures.
+
 use thiserror::Error;
 use crate::emulator::bus::{AddressRange, BusOp};
 use crate::emulator::device::DeviceId;

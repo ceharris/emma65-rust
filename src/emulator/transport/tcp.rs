@@ -1,3 +1,9 @@
+//! Transport that listens for incoming TCP connections.
+//!
+//! A Tokio task owns the `TcpListener`; it accepts one client at a time, exchanges
+//! bytes via bounded `crossbeam` channels, and loops back to waiting when the client
+//! disconnects. The CPU thread never blocks on async IO.
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -10,15 +16,11 @@ use tokio::sync::oneshot;
 use super::{ChannelBridge, Transport, TransportError};
 
 /// Transport that listens for incoming TCP connections.
-///
-/// A Tokio task owns the `TcpListener`; it accepts one client at a time, exchanges
-/// bytes via bounded `crossbeam` channels, and loops back to waiting when the client
-/// disconnects. The CPU thread never blocks on async IO.
 pub struct TcpTransport {
     bridge: ChannelBridge,
-    /// Reflects whether a client is currently connected; shared with the Tokio task.
+    // Reflects whether a client is currently connected; shared with the Tokio task.
     client_connected: Arc<AtomicBool>,
-    /// Incremented each time a new client connects; shared with the Tokio task.
+    // Incremented each time a new client connects; shared with the Tokio task.
     connection_counter: Arc<AtomicU64>,
     local_addr: SocketAddr,
 }

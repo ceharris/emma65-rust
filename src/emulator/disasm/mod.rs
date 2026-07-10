@@ -1,3 +1,5 @@
+//! Disassembler: decodes bus memory into human-readable instruction listings.
+
 use crate::emulator::bus::Bus;
 use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use crate::emulator::cpu::variant::CpuVariant;

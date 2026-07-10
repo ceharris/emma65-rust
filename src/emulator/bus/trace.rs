@@ -1,3 +1,4 @@
+//! Bus tracing: callback trait, record type, and binary trace writer.
 use std::io::{BufWriter, Write};
 use std::time::Instant;
 use crate::emulator::bus::region::BusOp;

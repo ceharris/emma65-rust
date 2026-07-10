@@ -1,3 +1,5 @@
+//! Opcode decode table, mnemonics, and addressing modes.
+//! 
 use crate::emulator::cpu::variant::CpuVariant;
 
 /// All instruction mnemonics for the 65C02 family, including WDC-only additions.

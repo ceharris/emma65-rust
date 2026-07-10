@@ -1,3 +1,13 @@
+//! Transport over a pseudo-terminal (PTY).
+//!
+//! Opens a PTY pair on construction. A Tokio task owns the master side fd via
+//! [`AsyncFd`] for proper non-blocking epoll integration. The sync side
+//! communicates via bounded `crossbeam` channels. The slave device path is
+//! available for external processes to connect to. An optional stable symlink
+//! may be created at a caller-supplied path so that external programs (e.g.
+//! terminal emulators) can find the port by a predictable name; the symlink
+//! is removed automatically when the transport is shut down or dropped.
+
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
@@ -16,25 +26,17 @@ use tokio::sync::oneshot;
 use super::{ChannelBridge, Transport, TransportError};
 
 /// Transport over a pseudo-terminal (PTY).
-///
-/// Opens a PTY pair on construction. A Tokio task owns the master side fd via
-/// [`AsyncFd`] for proper non-blocking epoll integration. The sync side
-/// communicates via bounded `crossbeam` channels. The slave device path is
-/// available for external processes to connect to. An optional stable symlink
-/// may be created at a caller-supplied path so that external programs (e.g.
-/// terminal emulators) can find the port by a predictable name; the symlink
-/// is removed automatically when the transport is shut down or dropped.
 pub struct PtyTransport {
     bridge: ChannelBridge,
-    /// Path to the slave side of the PTY (e.g. `/dev/pts/N`).
+    // Path to the slave side of the PTY (e.g. `/dev/pts/N`).
     slave_path: Option<String>,
-    /// Keeps the slave fd open so the devpts node remains valid for the transport's lifetime.
+    // Keeps the slave fd open so the devpts node remains valid for the transport's lifetime.
     _slave: OwnedFd,
-    /// Reflects whether an external process is currently connected; shared with the Tokio task.
+    // Reflects whether an external process is currently connected; shared with the Tokio task.
     client_connected: Arc<AtomicBool>,
-    /// Incremented each time an external process opens the slave; shared with the Tokio task.
+    // Incremented each time an external process opens the slave; shared with the Tokio task.
     connection_counter: Arc<AtomicU64>,
-    /// Optional stable symlink pointing to the slave device node.
+    // Optional stable symlink pointing to the slave device node.
     symlink_path: Option<PathBuf>,
 }
 

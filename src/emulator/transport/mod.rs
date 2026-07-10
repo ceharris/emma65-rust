@@ -1,3 +1,4 @@
+//! Transport abstraction and implementations for device IO.
 pub mod pipe;
 pub mod tcp;
 pub mod unix_socket;

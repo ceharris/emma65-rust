@@ -1,8 +1,7 @@
-/// IRQ and NMI interrupt controller.
+//! Memory bus, address decoding, and bus tracing.
+
 mod interrupt;
-/// Address ranges and bus operation types.
 mod region;
-/// Bus tracing: callback trait, record type, and binary trace writer.
 pub mod trace;
 
 use rand::RngExt;
