@@ -3,11 +3,9 @@ use figment::value::{Dict, Value};
 use figment::providers::Serialized;
 use serde::Deserialize;
 
-use crate::emulator::{Acia6551, AddressRange, BusConfig, DeviceId};
+use crate::emulator::{AddressRange, BusConfig, DeviceId};
+use crate::emulator::device::acia6551::Acia6551;
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
-
-// Type name used in registering the device
-const DEVICE_TYPE: &str = "acia/6551";
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 4;
@@ -28,7 +26,7 @@ pub struct Acia6551Attributes {
 impl DeviceModule for Acia6551Module {
 
     fn name(&self) -> &'static str {
-        DEVICE_TYPE
+        "acia/6551"
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16,
@@ -48,7 +46,7 @@ impl DeviceModule for Acia6551Module {
 
         let device_id = DeviceId(address as u32);
         let device = {
-            let mut dev = Acia6551::new()
+            let mut dev = Acia6551::new(self.name())
                 .with_address(address)
                 .with_tdre_bug(config.with_tdre_bug.unwrap_or(false))
                 .with_overrun(config.with_overrun.unwrap_or(false));

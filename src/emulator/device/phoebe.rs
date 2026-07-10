@@ -42,7 +42,7 @@ pub const MEMORY_SIZE: u16 = NUM_BANKS as u16 * BANK_SIZE;
 /// |   1   |   1   | none          |
 ///
 pub struct Phoebe {
-    /// Device name used in configuration
+    /// Name of the device as it appears in configuration and CLI.
     name: &'static str,
     /// 16K address region mapped to the ROM; typically 0xC000..0xFFFF.
     rom_region: AddressRange,

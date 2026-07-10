@@ -47,6 +47,8 @@ use crate::emulator::transport::{Transport, TransportError};
 /// RX is timer-driven: `tick()` polls the transport once per byte period at the configured
 /// baud rate, or on every call when using the external clock (default).
 pub struct Acia6551 {
+    /// Name of the device as it appears in configuration and CLI.
+    name: &'static str,
     /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
     address: u16,
     /// Optional transport for byte-stream IO.
@@ -93,8 +95,9 @@ impl Acia6551 {
     ///
     /// The default CPU clock is 1 MHz. Use [`Acia6551::with_clock_hz`] to match the actual
     /// CPU clock speed so that baud rate timing is accurate.
-    pub fn new() -> Self {
+    pub fn new(name: &'static str) -> Self {
         Self {
+            name,
             address: 0,
             transport: None,
             error_sender: None,
@@ -236,12 +239,6 @@ impl Acia6551 {
     }
 }
 
-impl Default for Acia6551 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl IoDevice for Acia6551 {
     fn base_address(&self) -> u16 {
         self.address
@@ -347,7 +344,7 @@ impl IoDevice for Acia6551 {
         let clock_hz = self.clock_hz;
         let tdre_bug_compatible = self.tdre_bug_compatible;
         let overrun_enabled = self.overrun_enabled;
-        *self = Self::new();
+        *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
         self.error_sender = error_sender;
@@ -365,7 +362,7 @@ impl IoDevice for Acia6551 {
     }
 
     fn name(&self) -> &str {
-        "acia/6551"
+        self.name
     }
 }
 
@@ -375,9 +372,15 @@ mod tests {
     use crate::emulator::transport::PipeTransport;
     use std::time::Duration;
 
+    const DEVICE_NAME: &str = "acia6551";
+    
+    fn device() -> Acia6551 {
+        Acia6551::new(DEVICE_NAME)
+    }
+    
     fn device_with_pipe() -> (Acia6551, PipeTransport) {
         let (local, remote) = PipeTransport::pair().unwrap();
-        let mut device = Acia6551::new();
+        let mut device = device();
         device.attach_transport(Box::new(local));
         (device, remote)
     }
@@ -386,13 +389,13 @@ mod tests {
 
     #[test]
     fn new_has_tdre_set() {
-        let device = Acia6551::new();
+        let device = device();
         assert_ne!(device.peek_relative(1) & 0x10, 0);
     }
 
     #[test]
     fn new_has_rdrf_clear() {
-        let device = Acia6551::new();
+        let device = device();
         assert_eq!(device.peek_relative(1) & 0x08, 0);
     }
 
@@ -400,14 +403,14 @@ mod tests {
 
     #[test]
     fn write_read_command_register() {
-        let mut device = Acia6551::new();
+        let mut device = device();
         device.write_relative(2, 0x0A);
         assert_eq!(device.read_relative(2), 0x0A);
     }
 
     #[test]
     fn write_read_control_register() {
-        let mut device = Acia6551::new();
+        let mut device = device();
         device.write_relative(3, 0x1E); // 9600 baud, internal clock
         assert_eq!(device.read_relative(3), 0x1E);
     }
@@ -424,7 +427,7 @@ mod tests {
 
     #[test]
     fn tx_no_transport_is_silent() {
-        let mut device = Acia6551::new();
+        let mut device = device();
         device.write_relative(0, 0xFF); // should not panic
     }
 
@@ -467,7 +470,7 @@ mod tests {
     #[test]
     fn overrun_set_in_internal_clock_mode_with_overrun_enabled() {
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut device = Acia6551::new()
+        let mut device = device()
             .with_clock_hz(1_000_000)
             .with_overrun(true);
         device.attach_transport(Box::new(local));
@@ -485,7 +488,7 @@ mod tests {
     #[test]
     fn no_overrun_in_external_clock_mode_even_with_flag() {
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut device = Acia6551::new()
+        let mut device = device()
             .with_overrun(true);
         device.attach_transport(Box::new(local));
         // Control defaults to 0x00 → external clock (cycles_per_byte = 0)
@@ -541,14 +544,14 @@ mod tests {
 
     #[test]
     fn irq_active_on_tdre_when_tx_irq_enabled() {
-        let mut device = Acia6551::new();
+        let mut device = device();
         device.write_relative(2, 0x04); // TIC=01: TX IRQ enabled
         assert!(device.irq_active()); // TDRE is always set
     }
 
     #[test]
     fn irq_inactive_on_tdre_when_tx_irq_disabled() {
-        let mut device = Acia6551::new();
+        let mut device = device();
         device.write_relative(2, 0x00); // TIC=00: TX IRQ disabled
         assert!(!device.irq_active());
     }
@@ -574,7 +577,7 @@ mod tests {
     #[test]
     fn tdre_always_set_in_bug_compatible_mode() {
         let (local, _remote) = PipeTransport::pair().unwrap();
-        let mut device = Acia6551::new().with_tdre_bug(true);
+        let mut device = device().with_tdre_bug(true);
         device.attach_transport(Box::new(local));
         device.write_relative(0, 0x41); // TX write — should NOT clear TDRE
         assert_ne!(device.peek_relative(1) & 0x10, 0);
@@ -629,7 +632,7 @@ mod tests {
 
     #[test]
     fn reset_clears_command_control_and_status_registers() {
-        let mut device = Acia6551::new();
+        let mut device = device();
         device.rdrf = true;
         device.tdre = true;
         device.reset();
@@ -641,7 +644,7 @@ mod tests {
 
     #[test]
     fn reset_clears_irq() {
-        let mut device = Acia6551::new();
+        let mut device = device();
         device.rdrf = true;
         device.tdre = true;
         device.command = RX_IRQ_ENABLE | TX_IRQ_ENABLE;
@@ -652,7 +655,7 @@ mod tests {
 
     #[test]
     fn reset_preserves_configuration_attributes() {
-        let mut device = Acia6551::new()
+        let mut device = device()
             .with_clock_hz(1_843_200)
             .with_tdre_bug(true)
             .with_overrun(true);

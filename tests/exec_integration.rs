@@ -1,10 +1,12 @@
 use std::sync::{Arc, Mutex};
 
 use emma65::emulator::{
-    Acia6551, AddressRange, Bus, BusOp, BusTraceCallback, ClockSpeed, Console, CpuBuilder,
-    CpuVariant, DeviceId, InvalidOpcodePolicy, Mc6850, PipeTransport, StepResult, TraceRecord,
+    AddressRange, Bus, BusOp, BusTraceCallback, ClockSpeed, CpuBuilder,
+    CpuVariant, DeviceId, InvalidOpcodePolicy, PipeTransport, StepResult, TraceRecord,
     Transport, run,
 };
+
+use emma65::emulator::device::{Acia6551, Console, Mc6850};
 
 /// Collects bus trace records into a shared vec so tests can inspect them after execution.
 struct CapturingCallback {
@@ -27,7 +29,7 @@ async fn free_run_console_output() {
     use emma65::emulator::{Bus, Transport};
 
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut console = Console::new().with_address(0xF000);
+    let mut console = Console::new("console").with_address(0xF000);
     console.attach_transport(Box::new(local));
 
     // 64 KB RAM; Console at $F000–$F001.
@@ -213,7 +215,7 @@ async fn acia6551_external_clock_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new(); // control defaults to 0x00 → external clock
+    let mut acia = Acia6551::new("acia6551"); // control defaults to 0x00 → external clock
     acia.attach_transport(Box::new(local));
 
     // Program: poll RDRF (status bit 3), read each byte into $0300+X, loop N times, STP.
@@ -280,7 +282,7 @@ async fn acia6551_19200_baud_throughput_at_1_8432_mhz() {
     const CYCLES_PER_BYTE: u64 = CLOCK_HZ * 10 / BAUD; // 960
 
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new()
+    let mut acia = Acia6551::new("acia6551")
         .with_clock_hz(CLOCK_HZ);
     acia.attach_transport(Box::new(local));
 
@@ -362,7 +364,7 @@ async fn mc6850_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut mc = Mc6850::new().with_address(0xDF00);
+    let mut mc = Mc6850::new("mc6580").with_address(0xDF00);
     mc.attach_transport(Box::new(local));
 
     let bus = Bus::config()

@@ -6,8 +6,6 @@ use super::ring::Ring;
 
 pub use super::ring::RING_CAPACITY;
 
-pub const CONSOLE_NAME: &str = "console";
-
 /// A buffered console device with support for an interrupt-driven break key input.
 ///
 /// Provides two 8-bit addressable registers:
@@ -41,6 +39,8 @@ pub const CONSOLE_NAME: &str = "console";
 /// key value, the input buffer is drained, and the CPU's IRQ signal is asserted.
 ///
 pub struct Console {
+    /// Name of the device as it appears in configuration and CLI.
+    name: &'static str,
     /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
     address: u16,
     /// Optional transport for byte-stream IO.
@@ -62,8 +62,9 @@ pub struct Console {
 impl Console {
 
     /// Creates a new `BufferedConsole` with no transport attached.
-    pub fn new() -> Self {
+    pub fn new(name: &'static str) -> Self {
         Self {
+            name,
             address: 0,
             transport: None,
             error_sender: None,
@@ -105,13 +106,6 @@ impl Console {
     }
 
 }
-
-impl Default for Console {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 
 impl IoDevice for Console {
 
@@ -205,7 +199,7 @@ impl IoDevice for Console {
     fn irq_active(&self) -> bool { self.interrupt_flag }
 
     /// Gets the name of the device.
-    fn name(&self) -> &str { CONSOLE_NAME }
+    fn name(&self) -> &str { self.name }
 
 }
 
@@ -215,16 +209,22 @@ mod tests {
     use crate::emulator::PipeTransport;
     use super::*;
 
+    const DEVICE_NAME: &str = "console";
+
+    fn device() -> Console {
+        Console::new(DEVICE_NAME)
+    }
+
     fn device_with_pipe() -> (Console, PipeTransport) {
         let (local, remote) = PipeTransport::pair().unwrap();
-        let mut device = Console::new();
+        let mut device = device();
         device.attach_transport(Box::new(local));
         (device, remote)
     }
 
     #[test]
     fn read_data_register_resets_interrupt_flag() {
-        let mut device = Console::new();
+        let mut device = device();
         device.interrupt_flag = true;
         device.read_relative(0);
         assert!(!device.interrupt_flag, "expected interrupt flag reset")
@@ -232,20 +232,20 @@ mod tests {
 
     #[test]
     fn read_data_register_zero_when_nothing_latched_or_buffered() {
-        let mut device = Console::new();
+        let mut device = device();
         assert_eq!(device.read_relative(0), 0);
     }
 
     #[test]
     fn read_data_register_latched_value() {
-        let mut device = Console::new();
+        let mut device = device();
         device.latch = 0x42;
         assert_eq!(device.read_relative(0), 0x42);
     }
 
     #[test]
     fn read_data_register_buffered_value() {
-        let mut device = Console::new();
+        let mut device = device();
         device.latch = 0;
         device.ring.put(0x42);
         assert_eq!(device.read_relative(0), 0x42);
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn read_latch_register_resets_interrupt_flag() {
-        let mut device = Console::new();
+        let mut device = device();
         device.interrupt_flag = true;
         device.read_relative(1);
         assert!(!device.interrupt_flag, "expected interrupt flag reset")
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn read_latch_register_latched_value() {
-        let mut device = Console::new();
+        let mut device = device();
         device.latch = 0x42;
         device.ring.put(0x43);
         assert_eq!(device.read_relative(1), 0x42);
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn read_latch_register_latches_buffered_value() {
-        let mut device = Console::new();
+        let mut device = device();
         device.latch = 0;
         device.ring.put(0x42);
         assert_eq!(device.read_relative(1), 0x42);
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn read_latch_register_zero_when_nothing_latched_or_buffered() {
-        let mut device = Console::new();
+        let mut device = device();
         assert_eq!(device.read_relative(1), 0);
     }
 
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn write_latch_register_sets_latch() {
-        let mut device = Console::new();
+        let mut device = device();
         assert_eq!(device.latch, 0);
         device.write_relative(1, 0x42);
         assert_eq!(device.latch, 0x42);
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn write_latch_register_clears_ring() {
-        let mut device = Console::new();
+        let mut device = device();
         device.ring.put(0x42);
         device.write_relative(1, 0);
         assert_eq!(device.latch, 0);
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn write_break_key_to_latch_register_sets_interrupt_flag() {
-        let mut device = Console::new();
+        let mut device = device();
         device.set_break_key(0x3);
         assert_eq!(device.latch, 0);
         device.write_relative(1, 0x3);
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn write_latch_register_clears_interrupt_flag() {
-        let mut device = Console::new();
+        let mut device = device();
         device.interrupt_flag = true;
         device.write_relative(1, 0x42);
         assert_eq!(device.latch, 0x42);
@@ -385,7 +385,7 @@ mod tests {
         use crate::emulator::exec::StepResult;
 
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut console = Console::new().with_address(0xF000);
+        let mut console = device().with_address(0xF000);
         console.attach_transport(Box::new(local));
 
         // Map all of RAM (including reset vector region) plus console at 0xF000.
@@ -443,7 +443,7 @@ mod tests {
         use crate::emulator::exec::StepResult;
 
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut console = Console::new().with_address(0xF000);
+        let mut console = device().with_address(0xF000);
         console.attach_transport(Box::new(local));
 
         let bus = BusConfig::new()
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn reset_clears_latch() {
-        let mut console = Console::new();
+        let mut console = device();
         console.latch = 0xff;
         console.reset();
         assert_eq!(console.latch, 0, "reset must clear the latch");

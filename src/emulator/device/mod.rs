@@ -7,7 +7,7 @@ pub mod via_protocol;
 mod ring;
 
 pub use self::acia6551::Acia6551;
-pub use self::console::{Console, CONSOLE_NAME};
+pub use self::console::Console;
 pub use self::mc6850::Mc6850;
 pub use self::via6522::Via6522;
 pub use self::via_protocol::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
