@@ -93,6 +93,8 @@ const RX_IRQ_ENABLE: u8 = 0x2;
 const TX_IRQ_MASK: u8 = 0xC;
 const TX_IRQ_ENABLE: u8 = 0x4;
 
+const COMMAND_DTR: u8 = 0x1;
+
 impl R6551 {
     /// Creates a new `R6551` in correct (non-bug-compatible) mode with TDRE set.
     ///
@@ -189,8 +191,12 @@ impl R6551 {
         s
     }
 
+    fn rx_is_enabled(&self) -> bool {
+        (self.command & COMMAND_DTR) != 0
+    }
+
     fn rx_irq_enabled(&self) -> bool {
-        (self.command & RX_IRQ_ENABLE) == 0
+        self.rx_is_enabled() && (self.command & RX_IRQ_ENABLE) == 0
     }
 
     fn tx_irq_enabled(&self) -> bool {
@@ -198,7 +204,7 @@ impl R6551 {
     }
 
     fn poll_transport(&mut self, allow_overrun: bool) {
-        if self.rdrf && !allow_overrun {
+        if !self.rx_is_enabled() || (self.rdrf && !allow_overrun) {
             return;
         }
         if let Some(byte) = self.transport.as_mut().and_then(|t| t.try_recv()) {
@@ -437,8 +443,20 @@ mod tests {
     // --- RX via tick() ---
 
     #[test]
+    fn rx_byte_deferred_when_dtr_not_asserted() {
+        let (mut device, mut remote) = device_with_pipe();
+        device.write_relative(2, 0x0);   // deassert DTR
+        remote.send(0xBB).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        device.tick(1); // external clock: poll every tick
+        assert_eq!(device.peek_relative(0), 0); // no value read
+        assert_eq!(device.peek_relative(1) & 0x08, 0); // RDRF not set
+    }
+
+    #[test]
     fn rx_byte_sets_rdrf() {
         let (mut device, mut remote) = device_with_pipe();
+        device.write_relative(2, 0x1);   // assert DTR
         remote.send(0xBB).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // external clock: poll every tick
@@ -448,6 +466,7 @@ mod tests {
     #[test]
     fn rx_read_data_returns_byte_and_clears_rdrf() {
         let (mut device, mut remote) = device_with_pipe();
+        device.write_relative(2, 0x1);   // assert DTR
         remote.send(0x55).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
@@ -458,6 +477,7 @@ mod tests {
     #[test]
     fn second_byte_held_in_transport_until_first_read() {
         let (mut device, mut remote) = device_with_pipe();
+        device.write_relative(2, 0x1);   // assert DTR
         remote.send(0x01).unwrap();
         remote.send(0x02).unwrap();
         std::thread::sleep(Duration::from_millis(1));
@@ -478,6 +498,7 @@ mod tests {
             .with_overrun(true);
         device.attach_transport(Box::new(local));
         // 19200 baud internal clock: cycles_per_byte = 1_000_000 * 10 / 19200 = 520
+        device.write_relative(2, 0x1);   // assert DTR
         device.write_relative(3, 0x1F);
         remote.send(0x01).unwrap();
         remote.send(0x02).unwrap();
@@ -494,6 +515,7 @@ mod tests {
         let mut device = device()
             .with_overrun(true);
         device.attach_transport(Box::new(local));
+        device.write_relative(2, 0x1);   // assert DTR
         // Control defaults to 0x00 → external clock (cycles_per_byte = 0)
         remote.send(0x01).unwrap();
         remote.send(0x02).unwrap();
@@ -511,6 +533,7 @@ mod tests {
     #[test]
     fn baud_rate_setting_controls_poll_timing() {
         let (mut device, mut remote) = device_with_pipe();
+        device.write_relative(2, 0x1);  // assert DTR
         device.write_relative(3, 0x1F); // 19200 baud, internal receiver clock
         remote.send(0x42).unwrap();
         std::thread::sleep(Duration::from_millis(1));
@@ -526,9 +549,9 @@ mod tests {
     // --- IRQ ---
 
     #[test]
-    fn irq_active_on_rdrf_when_rx_irq_enabled() {
+    fn irq_active_on_rdrf_when_rx_irq_enabled_and_dtr_asserted() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write_relative(2, 0x00); // IRD=0: RX IRQ enabled
+        device.write_relative(2, 0x01); // IRD=0, DTR=1: RX IRQ enabled
         remote.send(0x01).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
@@ -536,9 +559,19 @@ mod tests {
     }
 
     #[test]
+    fn irq_inactive_when_rx_dtr_not_asserted() {
+        let (mut device, mut remote) = device_with_pipe();
+        device.write_relative(2, 0x2); // IRD=1, DTR=0: RX IRQ disabled
+        remote.send(0x01).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        device.tick(1);
+        assert!(!device.irq_active());
+    }
+
+    #[test]
     fn irq_inactive_when_rx_irq_disabled() {
         let (mut device, mut remote) = device_with_pipe();
-        device.write_relative(2, 0x02); // IRD=1: RX IRQ disabled
+        device.write_relative(2, 0x3); // IRD=1, DTR=1: RX IRQ disabled
         remote.send(0x01).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
@@ -605,6 +638,7 @@ mod tests {
     #[test]
     fn peek_does_not_clear_rdrf() {
         let (mut device, mut remote) = device_with_pipe();
+        device.write_relative(2, 0x1);   // assert DTR
         remote.send(0xCC).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
@@ -615,6 +649,7 @@ mod tests {
     #[test]
     fn peek_returns_rx_data_without_consuming() {
         let (mut device, mut remote) = device_with_pipe();
+        device.write_relative(2, 0x1);   // assert DTR
         remote.send(0x77).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);

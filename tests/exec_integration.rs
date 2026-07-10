@@ -219,18 +219,22 @@ async fn _external_clock_throughput_at_1_8432_mhz() {
     acia.attach_transport(Box::new(local));
 
     // Program: poll RDRF (status bit 3), read each byte into $0300+X, loop N times, STP.
-    // $0200: LDX #$00       A2 00
+    // $0200: LDA #$03       A9 03      -- IRD and DTR bits
+    // $0202: STA $DF02      8D 02 DF   -- write command register
+    // $0205: LDX #$00       A2 00
     // loop:
-    // $0202: LDA $DF01      AD 01 DF   -- status register
-    // $0205: AND #$08       29 08      -- isolate RDRF (bit 3)
-    // $0207: BEQ loop       F0 F9      -- next PC=$0209, target=$0202, offset=-7=0xF9
-    // $0209: LDA $DF00      AD 00 DF   -- read RX data
-    // $020C: STA $0300,X    9D 00 03
-    // $020F: INX             E8
-    // $0210: CPX #N         E0 64      -- compare with 100
-    // $0212: BNE loop       D0 EE      -- next PC=$0214, target=$0202, offset=-18=0xEE
-    // $0214: STP            DB
+    // $0207: LDA $DF01      AD 01 DF   -- status register
+    // $020A: AND #$08       29 08      -- isolate RDRF (bit 3)
+    // $020D: BEQ loop       F0 F9      -- next PC=$020E, target=$0207, offset=-7=0xF9
+    // $020E: LDA $DF00      AD 00 DF   -- read RX data
+    // $0211: STA $0300,X    9D 00 03
+    // $0215: INX             E8
+    // $021A: CPX #N         E0 64      -- compare with 100
+    // $0217: BNE loop       D0 EE      -- next PC=$0219, target=$0207, offset=-18=0xEE
+    // $0219: STP            DB
     let prog: &[u8] = &[
+        0xA9, 0x03,
+        0x8D, 0x02, 0xDF,
         0xA2, 0x00,
         0xAD, 0x01, 0xDF,
         0x29, 0x08,
@@ -290,19 +294,24 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
     // Write control register in the program before polling.
     // $0200: LDA #$1F       A9 1F
     // $0202: STA $DF03      8D 03 DF   -- write control register
-    // $0205: LDX #$00       A2 00
+    // $0205: LDA #$03       A9 03      -- IRD and DTR bits
+    // $0207: STA $DF02      8D 02 DF   -- write command register
+    // $020A: LDX #$00       A2 00
     // loop:
-    // $0207: LDA $DF01      AD 01 DF   -- status
-    // $020A: AND #$08       29 08      -- RDRF
-    // $020C: BEQ loop       F0 F9      -- next PC=$020E, target=$0207, offset=-7=0xF9
-    // $020E: LDA $DF00      AD 00 DF   -- read byte
-    // $0211: STA $0300,X    9D 00 03
-    // $0214: INX             E8
-    // $0215: CPX #N         E0 32      -- N=50=0x32
-    // $0217: BNE loop       D0 EE      -- next PC=$0219, target=$0207, offset=-18=0xEE
-    // $0219: STP            DB
+    // $020C: LDA $DF01      AD 01 DF   -- status
+    // $020F: AND #$08       29 08      -- RDRF
+    // $0211: BEQ loop       F0 F9      -- next PC=$020E, target=$0207, offset=-7=0xF9
+    // $0213: LDA $DF00      AD 00 DF   -- read byte
+    // $0216: STA $0300,X    9D 00 03
+    // $0219: INX            E8
+    // $021A: CPX #N         E0 32      -- N=50=0x32
+    // $021C: BNE loop       D0 EE      -- next PC=$021E, target=$020C, offset=-18=0xEE
+    // $021E: STP            DB
     let prog: &[u8] = &[
-        0xA9, 0x1F, 0x8D, 0x03, 0xDF,
+        0xA9, 0x1F,
+        0x8D, 0x03, 0xDF,
+        0xA9, 0x03,
+        0x8D, 0x02, 0xDF,
         0xA2, 0x00,
         0xAD, 0x01, 0xDF,
         0x29, 0x08,
