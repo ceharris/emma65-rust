@@ -11,7 +11,10 @@ use tokio::sync::oneshot;
 
 use emma65::emulator::{
     run_from as exec_run_from,
-    step_over as exec_step_over, step_return as exec_step_return,
+    step_into as exec_step_into,
+    step_over_breakpoint as exec_step_over_breakpoint,
+    step_over_subroutine as exec_step_over_subroutine,
+    step_return as exec_step_return,
     Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession,
     InstantiationContext, IrqSource, PipeTransport, RunStopper, StatusRegister, StepResult,
     TransportSlot,
@@ -269,9 +272,9 @@ fn step_into(
     // of a prior breakpoint or watch trigger — not on every step.
     let skip_pc = skip_breakpoint_pc.0.lock().unwrap().take();
     let result = if skip_pc == Some(pc) {
-        cpu.step_over_breakpoint(pc)
+        exec_step_over_breakpoint(cpu, pc)
     } else {
-        cpu.step()
+        exec_step_into(cpu)
     };
     let regs = *cpu.registers();
     let changed = p_before ^ regs.p.to_byte();
@@ -790,7 +793,7 @@ fn step_over(
 
     std::thread::spawn(move || {
         let mut cpu = cpu;
-        let result = exec_step_over(&mut cpu, &stop_rx, Some(&live_tx));
+        let result = exec_step_over_subroutine(&mut cpu, &stop_rx, Some(&live_tx));
         let pc = cpu.registers().pc;
         let changed = p_before ^ cpu.registers().p.to_byte();
         let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
