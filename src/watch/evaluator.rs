@@ -212,7 +212,6 @@ pub fn eval(code: &[OpCode], context: &dyn WatchContext, vars: &mut [Operand]) -
 }
 
 #[cfg(test)]
-
 mod tests {
 
     use super::*;
@@ -275,7 +274,7 @@ mod tests {
     #[test]
     fn push_immediate() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(42)], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(42)], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 42);
     }
 
@@ -283,7 +282,7 @@ mod tests {
     fn push_register() {
         let mut machine = MockMachine::new();
         machine.register = 42;
-        let result = eval(&vec![OpCode::FetchRegister(0)], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::FetchRegister(0)], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 42);
     }
 
@@ -291,7 +290,7 @@ mod tests {
     fn push_register_signed() {
         let mut machine = MockMachine::new();
         machine.register = -1i32 as Operand;
-        let result = eval(&vec![OpCode::FetchRegisterSigned(0)], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::FetchRegisterSigned(0)], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, -1i32 as Operand);
     }
 
@@ -299,7 +298,7 @@ mod tests {
     fn push_flag() {
         let mut machine = MockMachine::new();
         machine.flag = 42;
-        let result = eval(&vec![OpCode::FetchFlag(0)], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::FetchFlag(0)], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 42);
     }
 
@@ -307,7 +306,7 @@ mod tests {
     fn fetch_byte() {
         let mut machine = MockMachine::new();
         machine.memory_byte = 42;
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::FetchByte], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::FetchByte], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 42);
     }
 
@@ -315,7 +314,7 @@ mod tests {
     fn fetch_byte_signed() {
         let mut machine = MockMachine::new();
         machine.memory_byte = -1i32 as Operand;
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::FetchByteSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::FetchByteSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, -1i32 as Operand);
     }
 
@@ -323,7 +322,7 @@ mod tests {
     fn fetch_word() {
         let mut machine = MockMachine::new();
         machine.memory_word = 42;
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::FetchWord], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::FetchWord], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 42);
     }
 
@@ -331,7 +330,7 @@ mod tests {
     fn fetch_word_signed() {
         let mut machine = MockMachine::new();
         machine.memory_word = -1i32 as Operand;
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::FetchWordSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::FetchWordSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, -1i32 as Operand);
     }
 
@@ -339,7 +338,7 @@ mod tests {
     fn fetch_dword() {
         let mut machine = MockMachine::new();
         machine.memory_dword = 42;
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::FetchDWord], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::FetchDWord], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 42);
     }
 
@@ -347,265 +346,265 @@ mod tests {
     fn fetch_dword_signed() {
         let mut machine = MockMachine::new();
         machine.memory_dword = -1i32 as Operand;
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::FetchDWordSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::FetchDWordSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, -1i32 as Operand);
     }
 
     #[test]
     fn negate() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::Negate], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::Negate], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, -1i32 as Operand);
     }
 
     #[test]
     fn add() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::Add], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::Add], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 2);
     }
 
     #[test]
     fn subtract() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(2), OpCode::PushImmediate(1), OpCode::Subtract], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(2), OpCode::PushImmediate(1), OpCode::Subtract], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
     }
 
     #[test]
     fn multiply() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(2), OpCode::Multiply], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(2), OpCode::Multiply], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 2);
     }
 
     #[test]
     fn divide() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(4), OpCode::PushImmediate(2), OpCode::Divide], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(4), OpCode::PushImmediate(2), OpCode::Divide], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 2);
     }
 
     #[test]
     fn divide_by_zero() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(4), OpCode::PushImmediate(0), OpCode::Divide], &machine, &mut no_vars());
+        let result = eval(&[OpCode::PushImmediate(4), OpCode::PushImmediate(0), OpCode::Divide], &machine, &mut no_vars());
         assert_eq!(result, Err(WatchError::DivisionByZero));
     }
 
     #[test]
     fn divide_signed() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(4), OpCode::Negate, OpCode::PushImmediate(2), OpCode::DivideSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(4), OpCode::Negate, OpCode::PushImmediate(2), OpCode::DivideSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, (-4i32 / 2i32) as Operand);
     }
 
     #[test]
     fn divide_signed_by_zero() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(4), OpCode::PushImmediate(0), OpCode::DivideSigned], &machine, &mut no_vars());
+        let result = eval(&[OpCode::PushImmediate(4), OpCode::PushImmediate(0), OpCode::DivideSigned], &machine, &mut no_vars());
         assert_eq!(result, Err(WatchError::DivisionByZero));
     }
 
     #[test]
     fn remainder() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(5), OpCode::PushImmediate(2), OpCode::Remainder], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(5), OpCode::PushImmediate(2), OpCode::Remainder], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
     }
 
     #[test]
     fn remainder_by_zero() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(5), OpCode::PushImmediate(0), OpCode::Remainder], &machine, &mut no_vars());
+        let result = eval(&[OpCode::PushImmediate(5), OpCode::PushImmediate(0), OpCode::Remainder], &machine, &mut no_vars());
         assert_eq!(result, Err(WatchError::DivisionByZero));
     }
 
     #[test]
     fn remainder_signed() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(5), OpCode::Negate, OpCode::PushImmediate(2), OpCode::RemainderSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(5), OpCode::Negate, OpCode::PushImmediate(2), OpCode::RemainderSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, (-5i32 % 2i32) as Operand);
     }
 
     #[test]
     fn remainder_signed_by_zero() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(5), OpCode::PushImmediate(0), OpCode::RemainderSigned], &machine, &mut no_vars());
+        let result = eval(&[OpCode::PushImmediate(5), OpCode::PushImmediate(0), OpCode::RemainderSigned], &machine, &mut no_vars());
         assert_eq!(result, Err(WatchError::DivisionByZero));
     }
 
     #[test]
     fn equal() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::Equal], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::Equal], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::Equal], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::Equal], &machine, &mut no_vars()).unwrap();
         assert_ne!(result, 0);
     }
 
     #[test]
     fn not_equal() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::NotEqual], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::NotEqual], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::NotEqual], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::NotEqual], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn greater_than() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::GreaterThan], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::GreaterThan], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::GreaterThan], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::GreaterThan], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn greater_than_signed() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::Negate, OpCode::GreaterThanSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::Negate, OpCode::GreaterThanSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::Negate, OpCode::PushImmediate(1), OpCode::GreaterThanSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::Negate, OpCode::PushImmediate(1), OpCode::GreaterThanSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn greater_or_equal() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::GreaterOrEqual], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::GreaterOrEqual], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::GreaterOrEqual], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::GreaterOrEqual], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::GreaterOrEqual], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::GreaterOrEqual], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn greater_or_equal_signed() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::Negate, OpCode::GreaterOrEqualSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::Negate, OpCode::GreaterOrEqualSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(0), OpCode::GreaterOrEqualSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(0), OpCode::GreaterOrEqualSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::Negate, OpCode::PushImmediate(0), OpCode::GreaterOrEqualSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::Negate, OpCode::PushImmediate(0), OpCode::GreaterOrEqualSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn less_than() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::LessThan], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::LessThan], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::LessThan], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::LessThan], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn less_than_signed() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::Negate, OpCode::PushImmediate(1), OpCode::LessThanSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::Negate, OpCode::PushImmediate(1), OpCode::LessThanSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::Negate, OpCode::LessThanSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::Negate, OpCode::LessThanSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn less_or_equal() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::LessOrEqual], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::LessOrEqual], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::LessOrEqual], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::LessOrEqual], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::LessOrEqual], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::LessOrEqual], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn less_or_equal_signed() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::Negate, OpCode::PushImmediate(0), OpCode::Negate, OpCode::LessOrEqualSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::Negate, OpCode::PushImmediate(0), OpCode::Negate, OpCode::LessOrEqualSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(0), OpCode::LessOrEqualSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(0), OpCode::LessOrEqualSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::Negate, OpCode::LessOrEqualSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::Negate, OpCode::LessOrEqualSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn left_shift() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::LeftShift], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::LeftShift], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 2);
     }
 
     #[test]
     fn right_shift() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(2), OpCode::PushImmediate(1), OpCode::RightShift], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(2), OpCode::PushImmediate(1), OpCode::RightShift], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 1);
     }
 
     #[test]
     fn right_shift_signed() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(0x80000000), OpCode::PushImmediate(1), OpCode::RightShiftSigned], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0x80000000), OpCode::PushImmediate(1), OpCode::RightShiftSigned], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0xc0000000);
     }
 
     #[test]
     fn logical_not() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::LogicalNot], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::LogicalNot], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::LogicalNot], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::LogicalNot], &machine, &mut no_vars()).unwrap();
         assert_ne!(result, 0);
     }
 
     #[test]
     fn logical_and() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::LogicalAnd], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(1), OpCode::LogicalAnd], &machine, &mut no_vars()).unwrap();
         assert_ne!(result, 0);
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::LogicalAnd], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(1), OpCode::LogicalAnd], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn logical_or() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::LogicalOr], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::PushImmediate(0), OpCode::LogicalOr], &machine, &mut no_vars()).unwrap();
         assert_ne!(result, 0);
-        let result = eval(&vec![OpCode::PushImmediate(0), OpCode::PushImmediate(0), OpCode::LogicalOr], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0), OpCode::PushImmediate(0), OpCode::LogicalOr], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn bitwise_not() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(1), OpCode::BitwiseNot], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(1), OpCode::BitwiseNot], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, !1);
     }
 
     #[test]
     fn bitwise_and() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(0xff), OpCode::PushImmediate(0x55), OpCode::BitwiseAnd], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0xff), OpCode::PushImmediate(0x55), OpCode::BitwiseAnd], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0x55);
     }
 
     #[test]
     fn bitwise_or() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(0x55), OpCode::PushImmediate(0xaa), OpCode::BitwiseOr], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0x55), OpCode::PushImmediate(0xaa), OpCode::BitwiseOr], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0xff);
     }
 
     #[test]
     fn bitwise_xor() {
         let machine = MockMachine::new();
-        let result = eval(&vec![OpCode::PushImmediate(0x55), OpCode::PushImmediate(0xff), OpCode::BitwiseXor], &machine, &mut no_vars()).unwrap();
+        let result = eval(&[OpCode::PushImmediate(0x55), OpCode::PushImmediate(0xff), OpCode::BitwiseXor], &machine, &mut no_vars()).unwrap();
         assert_eq!(result, 0xaa);
     }
 
@@ -613,9 +612,9 @@ mod tests {
     fn push_and_store_variable() {
         let machine = MockMachine::new();
         let mut vars = vec![0u32; 1];
-        eval(&vec![OpCode::PushImmediate(99), OpCode::AssignAndPushVariable(0)], &machine, &mut vars).unwrap();
+        eval(&[OpCode::PushImmediate(99), OpCode::AssignAndPushVariable(0)], &machine, &mut vars).unwrap();
         assert_eq!(vars[0], 99);
-        let result = eval(&vec![OpCode::PushVariable(0)], &machine, &mut vars).unwrap();
+        let result = eval(&[OpCode::PushVariable(0)], &machine, &mut vars).unwrap();
         assert_eq!(result, 99);
     }
 
@@ -623,7 +622,7 @@ mod tests {
     fn store_variable_leaves_value_on_stack() {
         let machine = MockMachine::new();
         let mut vars = vec![0u32; 1];
-        let result = eval(&vec![OpCode::PushImmediate(42), OpCode::AssignAndPushVariable(0)], &machine, &mut vars).unwrap();
+        let result = eval(&[OpCode::PushImmediate(42), OpCode::AssignAndPushVariable(0)], &machine, &mut vars).unwrap();
         assert_eq!(result, 42);
     }
 

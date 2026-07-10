@@ -211,7 +211,7 @@ mod tests {
         let path = transport.path().to_path_buf();
 
         // No client connected; send should succeed silently
-        assert_eq!(transport.is_connected(), false);
+        assert!(!transport.is_connected());
         assert!(transport.send(0xFF).is_ok());
 
         let _ = std::fs::remove_file(&path);

@@ -77,7 +77,6 @@ impl<'a> Token<'a> {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 

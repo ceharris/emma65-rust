@@ -198,7 +198,7 @@ mod tests {
         let (mut transport, _addr) = make_transport().await;
 
         // No client connected; send should succeed silently
-        assert_eq!(transport.is_connected(), false);
+        assert!(!transport.is_connected());
         assert!(transport.send(0xFF).is_ok());
     }
 

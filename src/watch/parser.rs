@@ -418,32 +418,23 @@ mod tests {
     use super::*;
     use super::super::expr::ExprType;
 
-    const REGISTERS: [(&'static str, Operand); 2] = [("A", 1), ("PC", 2)];
-    const FLAGS: [(&'static str, Operand) ; 2] = [("C", 1), ("Z", 2)];
-    const SYMBOLS: [(&'static str, Operand) ; 2] = [("foo", 42), ("bar", 69)];
+    const REGISTERS: [(&str, Operand); 2] = [("A", 1), ("PC", 2)];
+    const FLAGS: [(&str, Operand) ; 2] = [("C", 1), ("Z", 2)];
+    const SYMBOLS: [(&str, Operand) ; 2] = [("foo", 42), ("bar", 69)];
 
     fn register_mapper(s: &str) -> Option<Operand> {
         let operand = REGISTERS.iter().find_map(|(name, value)| if s.eq_ignore_ascii_case(name) { Some(value) } else { None });
-        match operand {
-            Some(operand) => Some(*operand),
-            None => None,
-        }
+        operand.copied()
     }
 
     fn flag_mapper(s: &str) -> Option<Operand> {
         let operand = FLAGS.iter().find_map(|(name, value)| if s.eq_ignore_ascii_case(name) { Some(value) } else { None });
-        match operand {
-            Some(operand) => Some(*operand),
-            None => None,
-        }
+        operand.copied()
     }
 
     fn symbol_mapper(s: &str) -> Option<Operand> {
         let operand = SYMBOLS.iter().find_map(|(name, value)| if s.eq_ignore_ascii_case(name) { Some(value) } else { None });
-        match operand {
-            Some(operand) => Some(*operand),
-            None => None,
-        }
+        operand.copied()
     }
 
     pub fn parser() -> Parser {

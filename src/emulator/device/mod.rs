@@ -76,37 +76,6 @@ pub fn device_event_channel() -> (ErrorSender, ErrorReceiver) {
     mpsc::unbounded_channel()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::thread;
-
-    #[test]
-    fn send_events_receive_from_other_thread() {
-        let (sender, mut receiver) = device_event_channel();
-        let id = DeviceId(1);
-
-        let handle = thread::spawn(move || {
-            sender.send(DeviceEvent::TransportConnected { device: id }).unwrap();
-            sender.send(DeviceEvent::DeviceInfo {
-                device: id,
-                message: "hello".to_string(),
-            }).unwrap();
-        });
-
-        handle.join().unwrap();
-
-        // Use tokio runtime to drive the async receiver.
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let ev1 = receiver.recv().await.unwrap();
-            assert!(matches!(ev1, DeviceEvent::TransportConnected { .. }));
-            let ev2 = receiver.recv().await.unwrap();
-            assert!(matches!(ev2, DeviceEvent::DeviceInfo { .. }));
-        });
-    }
-}
-
 /// A device that can be mapped into the bus address space.
 pub trait IoDevice: Send {
     /// The address at which this device is registered via `BusConfig::device()`.
@@ -176,4 +145,35 @@ pub trait IoDevice: Send {
     fn take_nmi(&mut self) -> bool { false }
     /// Returns a human-readable name for this device, used in diagnostics and tracing.
     fn name(&self) -> &str { "unknown" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn send_events_receive_from_other_thread() {
+        let (sender, mut receiver) = device_event_channel();
+        let id = DeviceId(1);
+
+        let handle = thread::spawn(move || {
+            sender.send(DeviceEvent::TransportConnected { device: id }).unwrap();
+            sender.send(DeviceEvent::DeviceInfo {
+                device: id,
+                message: "hello".to_string(),
+            }).unwrap();
+        });
+
+        handle.join().unwrap();
+
+        // Use tokio runtime to drive the async receiver.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let ev1 = receiver.recv().await.unwrap();
+            assert!(matches!(ev1, DeviceEvent::TransportConnected { .. }));
+            let ev2 = receiver.recv().await.unwrap();
+            assert!(matches!(ev2, DeviceEvent::DeviceInfo { .. }));
+        });
+    }
 }

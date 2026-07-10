@@ -193,6 +193,14 @@ async fn drain_outbound(mut file: &File, out_rx: &Receiver<u8>) {
     tokio::task::yield_now().await;
 }
 
+/// Returns the slave PTY device name, or `None` on error.
+fn tty_name(fd: BorrowedFd<'_>) -> Option<String> {
+    match unistd::ttyname(fd) {
+        Ok(path) => path.to_str().map(String::from),
+        Err(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,13 +268,5 @@ mod tests {
 
         drop(transport);
         assert!(!link_path.exists(), "symlink should be removed after drop");
-    }
-}
-
-/// Returns the slave PTY device name, or `None` on error.
-fn tty_name(fd: BorrowedFd<'_>) -> Option<String> {
-    match unistd::ttyname(fd) {
-        Ok(path) => path.to_str().map(String::from),
-        Err(_) => None,
     }
 }

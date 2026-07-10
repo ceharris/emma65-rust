@@ -139,6 +139,31 @@ fn os_pipe() -> io::Result<(File, File)> {
     Ok((read_end, write_end))
 }
 
+fn dup_fd(fd: RawFd) -> io::Result<RawFd> {
+    // SAFETY: dup() with a valid fd either returns a new, exclusively-owned descriptor or -1.
+    let rc = unsafe { libc::dup(fd) };
+    if rc < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(rc)
+}
+
+fn set_nonblocking(file: &File) -> io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    // SAFETY: fcntl with F_GETFL/F_SETFL on a valid fd.
+    unsafe {
+        let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let rc = libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
+        if rc < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,29 +195,4 @@ mod tests {
         local.shutdown();
         assert!(!local.is_connected());
     }
-}
-
-fn dup_fd(fd: RawFd) -> io::Result<RawFd> {
-    // SAFETY: dup() with a valid fd either returns a new, exclusively-owned descriptor or -1.
-    let rc = unsafe { libc::dup(fd) };
-    if rc < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(rc)
-}
-
-fn set_nonblocking(file: &File) -> io::Result<()> {
-    use std::os::unix::io::AsRawFd;
-    // SAFETY: fcntl with F_GETFL/F_SETFL on a valid fd.
-    unsafe {
-        let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
-        if flags < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let rc = libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
-        if rc < 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    Ok(())
 }

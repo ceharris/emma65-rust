@@ -108,7 +108,6 @@ impl TryFrom<TransportSpecFormat> for TransportSpec {
 
 
 #[cfg(test)]
-
 mod tests {
 
     use super::*;

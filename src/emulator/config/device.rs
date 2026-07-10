@@ -191,7 +191,6 @@ fn parse_spec(s: &str) -> Result<DeviceSpec, String> {
 
 
 #[cfg(test)]
-
 mod tests {
 
     use super::*;
@@ -273,7 +272,7 @@ mod tests {
     fn parse_one_attribute_with_bool_value() {
         match parse_attributes("name=true") {
             Ok(map) => {
-                assert_eq!(map.get("name").unwrap().to_bool().unwrap(), true);
+                assert!(map.get("name").unwrap().to_bool().unwrap());
             }
             _ => panic!("expected mapped attribute")
         }

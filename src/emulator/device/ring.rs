@@ -66,7 +66,6 @@ impl<T: Copy> Ring<T> {
 }
 
 #[cfg(test)]
-
 mod tests {
 
     use super::*;

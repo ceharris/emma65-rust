@@ -1027,11 +1027,8 @@ mod tests {
 
     fn collect_bytes(remote: &mut PipeTransport) -> Vec<u8> {
         let mut buf = Vec::new();
-        loop {
-            match remote.try_recv() {
-                Some(b) => buf.push(b),
-                None => break,
-            }
+        while let Some(b) = remote.try_recv() {
+            buf.push(b);
         }
         buf
     }

@@ -489,8 +489,8 @@ mod tests {
     #[test]
     fn every_opcode_field_matches_index() {
         let t = cmos_table();
-        for i in 0..256usize {
-            assert_eq!(t[i].opcode, i as u8, "opcode field mismatch at index {i:#04X}");
+        for (i, op) in t.iter().enumerate() {
+            assert_eq!(op.opcode, i as u8, "opcode field mismatch at index {i:#04X}");
         }
     }
 

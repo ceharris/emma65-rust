@@ -332,7 +332,6 @@ impl Checksum {
 }
 
 #[cfg(test)]
-
 mod tests {
     use tempfile::NamedTempFile;
     use super::*;
@@ -370,7 +369,7 @@ S9030000FC
         let hex_data = IHEX_EXAMPLE.as_bytes();
         let mut mem: [u8; 1024] = [0; 1024];
         let start_addr = load_intel_hex(hex_data, &mut mem[..], 0x100).unwrap();
-        assert!(matches!(start_addr, None));
+        assert!(start_addr.is_none());
         assert_eq!(mem[0x0..0x4], vec![0x21u8, 0x46u8, 0x01u8, 0x36u8]);
         assert_eq!(mem[0x30..0x34], vec![0x3Fu8, 0x01u8, 0x56u8, 0x70u8]);
     }
@@ -380,7 +379,7 @@ S9030000FC
         let hex_data: [u8; 0] = [];
         let mut mem: [u8; 0] = [];
         let start_addr = load_intel_hex(&hex_data, &mut mem, 0x0).unwrap();
-        assert!(matches!(start_addr, None));
+        assert!(start_addr.is_none());
     }
 
     #[test]
@@ -388,7 +387,7 @@ S9030000FC
         let hex_data = "This is a test.\nThis is only a test\n".as_bytes();
         let mut mem: [u8; 0] = [];
         let start_addr = load_intel_hex(hex_data, &mut mem, 0x0).unwrap();
-        assert!(matches!(start_addr, None));
+        assert!(start_addr.is_none());
     }
 
     #[test]
@@ -396,7 +395,7 @@ S9030000FC
         let hex_data = ":00000001FF".as_bytes();
         let mut mem: [u8; 0] = [];
         let start_addr = load_intel_hex(hex_data, &mut mem, 0x0).unwrap();
-        assert!(matches!(start_addr, None));
+        assert!(start_addr.is_none());
     }
 
     #[test]
@@ -446,7 +445,7 @@ S9030000FC
         let hex_data = ":06FFFA0000F000F000F031\n:00000001FF\n".as_bytes();
         let mut mem: [u8; 16] = [0; 16];
         let start_addr = load_intel_hex(hex_data, &mut mem, 0xfff0).unwrap();
-        assert!(matches!(start_addr, None));
+        assert!(start_addr.is_none());
     }
 
     #[test]
@@ -464,7 +463,7 @@ S9030000FC
         let hex_data: [u8; 0] = [];
         let mut mem: [u8; 0] = [];
         let start_addr = load_motorola_srec(&hex_data, &mut mem, 0x0).unwrap();
-        assert!(matches!(start_addr, None));
+        assert!(start_addr.is_none());
     }
 
     #[test]
@@ -472,7 +471,7 @@ S9030000FC
         let hex_data = "This is a test.\nThis is only a test\n".as_bytes();
         let mut mem: [u8; 0] = [];
         let start_addr = load_motorola_srec(hex_data, &mut mem, 0x0).unwrap();
-        assert!(matches!(start_addr, None));
+        assert!(start_addr.is_none());
     }
 
     #[test]
@@ -529,7 +528,7 @@ S9030000FC
         let bin_data: [u8; 8] = BIN_EXAMPLE;
         let mut mem: [u8; 8] = [0xff; 8];
         let start_addr = load_binary(&bin_data, &mut mem[..]).unwrap();
-        assert!(matches!(start_addr, None));
+        assert!(start_addr.is_none());
         assert_eq!(mem[0x0..0x8], vec![0x00u8, 0xffu8, 0x55u8, 0xaau8, 0xdeu8, 0xadu8, 0xbeu8, 0xefu8]);
     }
 
@@ -602,7 +601,7 @@ S9030000FC
     #[test]
     fn consume_preamble_when_preamble_exists() {
         let data = "This is a test\n:\n".as_bytes();
-        let data = consume_preamble(&data, b':');
+        let data = consume_preamble(data, b':');
         assert_eq!(data.len(), 2);
         assert_eq!(data[0], b':');
     }
@@ -610,7 +609,7 @@ S9030000FC
     #[test]
     fn consume_preamble_when_preamble_has_trailing_nuls() {
         let data = "This is a test\n\0\0:\n".as_bytes();
-        let data = consume_preamble(&data, b':');
+        let data = consume_preamble(data, b':');
         assert_eq!(data.len(), 2);
         assert_eq!(data[0], b':');
     }
@@ -660,8 +659,8 @@ S9030000FC
     async fn validate_load_ihex(path: &NamedTempFile, data: &str) {
         tokio::fs::write(&path.path(), data.as_bytes()).await.unwrap();
         let mut mem: [u8; 1024] = [0; 1024];
-        let start_addr = load_image(&path.path(), &mut mem, 0x100).await.unwrap();
-        assert!(matches!(start_addr, None));
+        let start_addr = load_image(path.path(), &mut mem, 0x100).await.unwrap();
+        assert!(start_addr.is_none());
     }
 
     #[tokio::test]
@@ -685,7 +684,7 @@ S9030000FC
     async fn validate_load_srec(path: &NamedTempFile, data: &str) {
         tokio::fs::write(&path.path(), data.as_bytes()).await.unwrap();
         let mut mem: [u8; 1024] = [0; 1024];
-        let start_addr = load_image(&path.path(), &mut mem, 0).await.unwrap();
+        let start_addr = load_image(path.path(), &mut mem, 0).await.unwrap();
         assert!(matches!(start_addr, Some(0)));
     }
 
@@ -704,8 +703,8 @@ S9030000FC
     async fn validate_load_bin(path: &NamedTempFile, data: &[u8]) {
         tokio::fs::write(&path.path(), data).await.unwrap();
         let mut mem: [u8; 8] = [0; 8];
-        let start_addr = load_image(&path.path(), &mut mem, 0).await.unwrap();
-        assert!(matches!(start_addr, None));
+        let start_addr = load_image(path.path(), &mut mem, 0).await.unwrap();
+        assert!(start_addr.is_none());
     }
 
     #[tokio::test]
@@ -724,7 +723,7 @@ S9030000FC
     async fn load_image_with_unrecognized_extension() {
         let path  = tempfile::Builder::new().suffix(".foo").tempfile().unwrap();
         let mut mem: [u8; 0] = [];
-        let err = load_image(&path.path(), &mut mem, 0).await.unwrap_err();
+        let err = load_image(path.path(), &mut mem, 0).await.unwrap_err();
         assert!(matches!(err, LoadError::UnknownFormat(message) if message.contains("foo")));
     }
 
@@ -733,7 +732,7 @@ S9030000FC
         let path  = tempfile::Builder::new().suffix(".foo").tempfile().unwrap();
         tokio::fs::remove_file(&path).await.unwrap();
         let mut mem: [u8; 0] = [];
-        let err = load_image(&path.path(), &mut mem, 0).await.unwrap_err();
+        let err = load_image(path.path(), &mut mem, 0).await.unwrap_err();
         assert!(matches!(err, LoadError::Io(_)));
     }
 
