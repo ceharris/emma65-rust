@@ -66,6 +66,9 @@ pub fn apply_default_if_unconfigured(config: &mut AppConfig, default_rom: &[u8])
             format!("rom@0x8000,size=32768,image={}", rom_path.display())
                 .parse()
                 .unwrap(),
+            "via/6522@0xff80,transport=unix:~/.emma/sock/via6522".parse().unwrap(),
+            "acia/6551@0xfff0,transport=pty:~/.emma/dev/ttyS0".parse().unwrap(),
+            "acia/6850@0xfff4,transport=pty:~/.emma/dev/ttyS1".parse().unwrap(),
             "console@0xfff8,break=0x3".parse().unwrap(),
         ]);
         Some(f)
