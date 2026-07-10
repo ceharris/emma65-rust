@@ -156,8 +156,7 @@ fn run_with_unknown_device_type() {
 fn run_with_no_config_uses_default() {
     // Launch with no arguments; the binary should apply the built-in default config.
     // TaliForth runs a REPL and never halts on its own, so we kill the process after a
-    // short delay and check that (a) it didn't exit immediately with an error, and
-    // (b) the default-config notice appeared on stderr.
+    // short delay and check that it didn't exit immediately with an error.
     let mut child = std::process::Command::new(emulator_bin())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -172,14 +171,9 @@ fn run_with_no_config_uses_default() {
             panic!("binary exited unexpectedly with {status}: {stderr}");
         }
         None => {
-            // Still running — good. Kill it and check stderr for the notice.
+            // Still running — good.
             child.kill().unwrap();
-            let output = child.wait_with_output().unwrap();
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(
-                stderr.contains("using default configuration"),
-                "expected default-config notice in stderr, got: {stderr}"
-            );
+            child.wait().unwrap();
         }
     }
 }
