@@ -1,7 +1,8 @@
 use emma65::emulator::{
-    Acia6551, AddressRange, Bus, ClockSpeed, Console, CpuBuilder, CpuVariant, DeviceId,
-    InvalidOpcodePolicy, Mc6850, Mnemonic, PipeTransport, StepResult, Transport, Via6522,
+    AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId,
+    InvalidOpcodePolicy, Mnemonic, PipeTransport, StepResult, Transport,
 };
+use emma65::emulator::device::{Acia6551, Console, Mc6850, Via6522};
 
 const MAX_STEPS: u32 = 10_000;
 
@@ -120,7 +121,7 @@ fn page_crossing_adds_cycle() {
 #[test]
 fn console_full_system_echo() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut console = Console::new().with_address(0xDF00);
+    let mut console = Console::new("console").with_address(0xDF00);
     console.attach_transport(Box::new(local));
 
     // 64 KB RAM; Console at $DF00–$DF01.
@@ -173,7 +174,7 @@ fn console_full_system_echo() {
 #[test]
 fn acia6551_transmit() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new().with_address(0xDF00);
+    let mut acia = Acia6551::new("acia6551").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -210,7 +211,7 @@ fn acia6551_transmit() {
 #[test]
 fn acia6551_receive() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new().with_address(0xDF00);
+    let mut acia = Acia6551::new("acia6551").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -266,7 +267,7 @@ fn mc6850_transmit_and_receive() {
     // --- TX ---
     {
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut mc = Mc6850::new().with_address(0xDF00);
+        let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
         mc.attach_transport(Box::new(local));
 
         let bus = Bus::config()
@@ -311,7 +312,7 @@ fn mc6850_transmit_and_receive() {
     // --- RX ---
     {
         let (local, mut remote) = PipeTransport::pair().unwrap();
-        let mut mc = Mc6850::new().with_address(0xDF00);
+        let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
         mc.attach_transport(Box::new(local));
 
         let bus = Bus::config()
@@ -373,7 +374,7 @@ fn mc6850_transmit_and_receive() {
 #[test]
 fn acia6551_irq_driven_receive() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new().with_address(0xDF00);
+    let mut acia = Acia6551::new("acia6551").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -446,7 +447,7 @@ fn acia6551_irq_driven_receive() {
 #[test]
 fn acia6551_irq_driven_transmit() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new().with_address(0xDF00);
+    let mut acia = Acia6551::new("acia6551").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -543,7 +544,7 @@ fn acia6551_irq_driven_transmit() {
 #[test]
 fn mc6850_irq_driven_receive() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut mc = Mc6850::new().with_address(0xDF00);
+    let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
     mc.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -616,7 +617,7 @@ fn mc6850_irq_driven_receive() {
 #[test]
 fn mc6850_irq_driven_transmit() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut mc = Mc6850::new().with_address(0xDF00);
+    let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
     mc.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -711,7 +712,7 @@ fn mc6850_irq_driven_transmit() {
 /// The test verifies the CPU reaches STP, confirming the timer fired.
 #[test]
 fn via6522_timer1_sets_ifr() {
-    let via = Via6522::new().with_address(0xE000);
+    let via = Via6522::new("via6522").with_address(0xE000);
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDFFF), 0).unwrap()

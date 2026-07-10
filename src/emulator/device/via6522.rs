@@ -151,9 +151,10 @@ impl TransportSlot {
 
 /// WDC 65C22 Versatile Interface Adapter.
 pub struct Via6522 {
+    /// Name of the device as it appears in configuration and CLI.
+    name: &'static str,
     /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
     address: u16,
-
     // --- Port registers ---
     /// Output register B — written bits drive output pins on port B.
     orb: u8,
@@ -240,8 +241,9 @@ pub struct Via6522 {
 
 impl Via6522 {
     /// Creates a new `Via6522` in reset state.
-    pub fn new() -> Self {
+    pub fn new(name: &'static str) -> Self {
         Self {
+            name,
             address: 0,
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
             input_b: 0, input_a: 0, ira_latch: 0, irb_latch: 0,
@@ -681,12 +683,6 @@ impl Via6522 {
 
 }
 
-impl Default for Via6522 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl IoDevice for Via6522 {
     fn base_address(&self) -> u16 {
         self.address
@@ -970,7 +966,7 @@ impl IoDevice for Via6522 {
         let t2_latch_hi = self.t2_latch_hi;
         let t2_counter = self.t2_counter;
         let sr = self.sr;
-        *self = Self::new();
+        *self = Self::new(self.name);
         self.address = address;
         self.transports = transports;
         self.error_sender = error_sender;
@@ -1009,13 +1005,15 @@ mod tests {
     use crate::emulator::transport::PipeTransport;
     use std::time::Duration;
 
+    const DEVICE_NAME: &str = "via6522";
+    
     fn device() -> Via6522 {
-        Via6522::new()
+        Via6522::new(DEVICE_NAME)
     }
 
     fn device_with_pipe() -> (Via6522, PipeTransport) {
         let (local, remote) = PipeTransport::pair().unwrap();
-        let mut via = Via6522::new();
+        let mut via = Via6522::new(DEVICE_NAME);
         via.attach_transport(Box::new(local));
         (via, remote)
     }
@@ -1727,7 +1725,7 @@ mod tests {
     fn multiple_transports_both_receive_state_dump() {
         let (local1, mut remote1) = PipeTransport::pair().unwrap();
         let (local2, mut remote2) = PipeTransport::pair().unwrap();
-        let mut via = Via6522::new();
+        let mut via = device();
         via.attach_transport(Box::new(local1));
         via.attach_transport(Box::new(local2));
 
@@ -3036,7 +3034,7 @@ mod tests {
     fn multiple_transports_both_receive_port_state_change() {
         let (local1, mut remote1) = PipeTransport::pair().unwrap();
         let (local2, mut remote2) = PipeTransport::pair().unwrap();
-        let mut via = Via6522::new();
+        let mut via = device();
         via.attach_transport(Box::new(local1));
         via.attach_transport(Box::new(local2));
 
@@ -3099,7 +3097,7 @@ mod tests {
         // First connection: complete the handshake.
         let (local1, mut remote1) = PipeTransport::pair().unwrap();
         let pipe = ReconnectablePipe::new(local1);
-        let mut via = Via6522::new();
+        let mut via = device();
         via.attach_transport(Box::new(pipe));
 
         remote1.send(0x20).unwrap(); // ASCII selector

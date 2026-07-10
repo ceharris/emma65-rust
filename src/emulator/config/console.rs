@@ -3,8 +3,8 @@ use figment::value::{Dict, Value};
 use figment::providers::Serialized;
 use serde::Deserialize;
 
-use crate::emulator::{AddressRange, BusConfig, Console, DeviceId};
-use crate::emulator::device::CONSOLE_NAME;
+use crate::emulator::{AddressRange, BusConfig, DeviceId};
+use crate::emulator::device::Console;
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 
 // Size of the device on the bus (in contiguous bytes of address space)
@@ -24,9 +24,7 @@ pub struct ConsoleAttributes {
 
 impl DeviceModule for ConsoleModule {
 
-    fn name(&self) -> &'static str { 
-        CONSOLE_NAME
-    }
+    fn name(&self) -> &'static str { "console" }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16,
                          attributes: &HashMap<String, Value>, context: &InstantiationContext)
@@ -46,7 +44,7 @@ impl DeviceModule for ConsoleModule {
         let device_id = DeviceId(address as u32);
 
         let console = {
-            let mut dev = Console::new().with_address(address);
+            let mut dev = Console::new(self.name()).with_address(address);
             let injected = context.console_transport.as_ref()
                 .and_then(|slot| slot.lock().ok()?.take());
             if let Some(transport) = injected {

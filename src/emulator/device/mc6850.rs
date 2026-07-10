@@ -31,6 +31,8 @@ use crate::emulator::transport::{Transport, TransportError};
 /// next `tick()` call, reflecting the real hardware's transmit-busy signalling.
 /// RX is polled on every `tick()` call.
 pub struct Mc6850 {
+    /// Name of the device as it appears in configuration and CLI.
+    name: &'static str,
     /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
     address: u16,
     /// Optional transport for byte-stream IO.
@@ -62,8 +64,9 @@ const RIE_MASK: u8 = 0x80;
 
 impl Mc6850 {
     /// Creates a new `Mc6850` with no transport and master-reset state.
-    pub fn new() -> Self {
+    pub fn new(name: &'static str) -> Self {
         Self {
+            name,
             address: 0,
             transport: None,
             error_sender: None,
@@ -124,12 +127,6 @@ impl Mc6850 {
         self.tdre = true;
         self.overrun = false;
         self.tx_pending = false;
-    }
-}
-
-impl Default for Mc6850 {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -207,7 +204,7 @@ impl IoDevice for Mc6850 {
         let transport = std::mem::take(&mut self.transport);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
-        *self = Self::new();
+        *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
         self.error_sender = error_sender;
@@ -232,9 +229,15 @@ mod tests {
     use crate::emulator::transport::PipeTransport;
     use std::time::Duration;
 
+    const DEVICE_NAME: &str = "mc6850";
+    
+    fn device() -> Mc6850 {
+        Mc6850::new(DEVICE_NAME)    
+    }
+    
     fn device_with_pipe() -> (Mc6850, PipeTransport) {
         let (local, remote) = PipeTransport::pair().unwrap();
-        let mut device = Mc6850::new();
+        let mut device = device();
         device.attach_transport(Box::new(local));
         (device, remote)
     }
@@ -243,13 +246,13 @@ mod tests {
 
     #[test]
     fn new_has_tdre_set() {
-        let device = Mc6850::new();
+        let device = device();
         assert_ne!(device.peek_relative(0) & 0x02, 0);
     }
 
     #[test]
     fn new_has_rdrf_clear() {
-        let device = Mc6850::new();
+        let device = device();
         assert_eq!(device.peek_relative(0) & 0x01, 0);
     }
 
@@ -257,7 +260,7 @@ mod tests {
 
     #[test]
     fn write_control_register_stores_value() {
-        let mut device = Mc6850::new();
+        let mut device = device();
         device.write_relative(0, 0x56); // WS + TC bits, CD=10 (not master reset)
         assert_eq!(device.control, 0x56);
     }
@@ -275,7 +278,7 @@ mod tests {
 
     #[test]
     fn master_reset_keeps_tdre_set() {
-        let mut device = Mc6850::new();
+        let mut device = device();
         device.write_relative(0, 0x03); // master reset
         assert_ne!(device.peek_relative(0) & 0x02, 0);
     }
@@ -292,7 +295,7 @@ mod tests {
 
     #[test]
     fn tx_no_transport_is_silent() {
-        let mut device = Mc6850::new();
+        let mut device = device();
         device.write_relative(1, 0xFF); // should not panic
     }
 
@@ -371,14 +374,14 @@ mod tests {
 
     #[test]
     fn irq_on_tdre_when_tx_irq_enabled() {
-        let mut device = Mc6850::new();
+        let mut device = device();
         device.write_relative(0, 0x41); // TC=10 (TX IRQ enabled), CD=01
         assert!(device.irq_active()); // TDRE is always set
     }
 
     #[test]
     fn no_irq_on_tdre_when_tx_irq_disabled() {
-        let mut device = Mc6850::new();
+        let mut device = device();
         device.write_relative(0, 0x01); // TC=00, CD=01
         assert!(!device.irq_active());
     }
@@ -418,7 +421,7 @@ mod tests {
 
     #[test]
     fn reset_clears_irq() {
-        let mut device = Mc6850::new();
+        let mut device = device();
         device.rdrf = true;
         device.tdre = true;
         device.control = RIE_MASK | TC_TX_IRQ;
@@ -429,7 +432,7 @@ mod tests {
 
     #[test]
     fn reset_clears_control_and_status_registers_and_pending_irq() {
-        let mut device = Mc6850::new();
+        let mut device = device();
         device.rdrf = true;
         device.tdre = true;
         device.reset();

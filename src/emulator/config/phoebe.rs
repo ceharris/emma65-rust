@@ -4,7 +4,7 @@ use figment::providers::Serialized;
 use clap::Parser;
 use serde::Deserialize;
 
-use crate::emulator::device::{phoebe, phoebe::Phoebe};
+use crate::emulator::device::{Phoebe, phoebe};
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
 use crate::emulator::config::write_policy::WritePolicySpec;
 use super::{loader, DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext};
