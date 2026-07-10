@@ -36,7 +36,7 @@
 //! - **Correct mode** (default): TDRE clears when a byte is written to the TX register and
 //!   is restored after one byte-period worth of cycles (or on the next `tick()` call in
 //!   external-clock mode). Use this for new software that does not rely on the hardware bug.
-//! - **Bug-compatible mode** ([`Acia6551::with_tdre_bug`]): TDRE is permanently set,
+//! - **Bug-compatible mode** ([`R6551::with_tdre_bug`]): TDRE is permanently set,
 //!   matching real-hardware behaviour. Use this when running software written for the
 //!   actual WDC 65C51 chip.
 //!
@@ -49,7 +49,7 @@ use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
 
 /// Rockwell R6551 ACIA (Asynchronous Communications Interface Adapter).
-pub struct Acia6551 {
+pub struct R6551 {
     /// Name of the device as it appears in configuration and CLI.
     name: &'static str,
     /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
@@ -93,10 +93,10 @@ const RX_IRQ_ENABLE: u8 = 0x2;
 const TX_IRQ_MASK: u8 = 0xC;
 const TX_IRQ_ENABLE: u8 = 0x4;
 
-impl Acia6551 {
-    /// Creates a new `Acia6551` in correct (non-bug-compatible) mode with TDRE set.
+impl R6551 {
+    /// Creates a new `R6551` in correct (non-bug-compatible) mode with TDRE set.
     ///
-    /// The default CPU clock is 1 MHz. Use [`Acia6551::with_clock_hz`] to match the actual
+    /// The default CPU clock is 1 MHz. Use [`R6551::with_clock_hz`] to match the actual
     /// CPU clock speed so that baud rate timing is accurate.
     pub fn new(name: &'static str) -> Self {
         Self {
@@ -242,7 +242,7 @@ impl Acia6551 {
     }
 }
 
-impl IoDevice for Acia6551 {
+impl IoDevice for R6551 {
     fn base_address(&self) -> u16 {
         self.address
     }
@@ -375,13 +375,13 @@ mod tests {
     use crate::emulator::transport::PipeTransport;
     use std::time::Duration;
 
-    const DEVICE_NAME: &str = "acia6551";
+    const DEVICE_NAME: &str = "";
     
-    fn device() -> Acia6551 {
-        Acia6551::new(DEVICE_NAME)
+    fn device() -> R6551 {
+        R6551::new(DEVICE_NAME)
     }
     
-    fn device_with_pipe() -> (Acia6551, PipeTransport) {
+    fn device_with_pipe() -> (R6551, PipeTransport) {
         let (local, remote) = PipeTransport::pair().unwrap();
         let mut device = device();
         device.attach_transport(Box::new(local));

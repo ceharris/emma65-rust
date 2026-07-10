@@ -25,7 +25,7 @@ emu65c02/
     device/
       mod.rs                -- IoDevice trait, DeviceId, DeviceEvent, ErrorSender
       via.rs                -- Via6522 (WDC 65C22)
-      acia6551.rs            -- Acia6551 (WDC 65C51)
+      .rs            -- R6551 (WDC 65C51)
       mc6850.rs             -- Mc6850 (Motorola MC6850 ACIA)
       console.rs            -- Console (simple polling console device)
     transport/
@@ -219,7 +219,7 @@ impl Via6522 {
 }
 ```
 
-**Acia6551** — WDC 65C51 ACIA. 4 registers (data, status, command, control). TX/RX with IRQ support. Transport carries the serial byte stream.
+**R6551** — WDC 65C51 ACIA. 4 registers (data, status, command, control). TX/RX with IRQ support. Transport carries the serial byte stream.
 
 **Mc6850** — Motorola MC6850 ACIA. 2 addresses (status/control at offset 0, data at offset 1). Simpler than the 6551 — single control register handles clock divider, word format, and interrupt enables. IRQ support for both receive and transmit. Master reset via control register bits.
 
@@ -597,7 +597,7 @@ Cpu
  │    ├── Vec<u8> (rom)
  │    ├── HashMap<DeviceId, Box<dyn IoDevice>>
  │    │    ├── Via6522 → Option<Box<dyn Transport>>
- │    │    ├── Acia6551 → Option<Box<dyn Transport>>
+ │    │    ├── R6551 → Option<Box<dyn Transport>>
  │    │    ├── Mc6850 → Option<Box<dyn Transport>>
  │    │    └── Console → Option<Box<dyn Transport>>
  │    └── Option<Box<dyn BusTraceCallback>>
@@ -695,7 +695,7 @@ These types should be treated as a stability boundary — changes are breaking f
 1. **Unit tests per module**: opcode decode tables, ALU (especially BCD), address decoding, interrupt controller state machine, device register behavior
 2. **Integration tests**: load a known ROM, step through instructions, verify register/memory state against expected values
 3. **Klaus Dormann's 65C02 test suite**: a well-known functional test ROM that exercises all instructions and addressing modes — run to completion and check for success signature
-4. **Device tests**: test all built-in devices (Via6522, Acia6551, Mc6850, Console) against the IoDevice trait with mock transports
+4. **Device tests**: test all built-in devices (Via6522, R6551, Mc6850, Console) against the IoDevice trait with mock transports
 5. **Free-run tests**: start execution, send stop signal, verify CPU is returned with correct state; verify clock speed throttling produces approximately correct wall-clock timing
 6. **Watch evaluator tests**: compile expressions, evaluate against mock WatchContext, verify variable persistence across evaluations, verify error propagation (division by zero, etc.)
 7. **Breakpoint tests**: set PC breakpoints, step, verify correct StepResult variants

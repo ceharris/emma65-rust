@@ -44,7 +44,7 @@ above. It does **not** cover implementing an actual bank-switched device module 
 - Per-device lifecycle calls (`tick`, `reset`, `irq_active`, `take_nmi`) fire once per
   device, not once per region it occupies.
 - Minimal, mechanical change for existing single-region, always-responding devices
-  (`Console`, `Acia6551`, `Mc6850`, `Via6522`).
+  (`Console`, `R6551`, `Mc6850`, `Via6522`).
 - No changes required to `DeviceModule` / `DeviceRegistry` / `DeviceSpec`
   (`src/emulator/config/`) beyond passing each device its own address at construction
   (which `instantiate()` already has on hand) — the builder already threads an owned
@@ -375,10 +375,10 @@ Add to `src/emulator/bus/mod.rs`'s `#[cfg(test)]` module:
 ## Migration / compatibility notes
 
 - `IoDevice` gains one **required** method, `base_address()`. None of the four existing
-  devices (`Console`, `Acia6551`, `Mc6850`, `Via6522`) currently store their own
+  devices (`Console`, `R6551`, `Mc6850`, `Via6522`) currently store their own
   address, and each has a bare `new() -> Self` constructor — so each needs a new
   `address: u16` field, a constructor parameter, and a one-line `base_address()` impl.
-  Every corresponding `*Module::instantiate` (`src/emulator/config/{console,acia6551,
+  Every corresponding `*Module::instantiate` (`src/emulator/config/{console,,
   mc6850,via6522}.rs`) already has `address: u16` on hand and can pass it straight into
   the constructor call. Confirmed small and mechanical across all four.
 - `read_absolute`/`write_absolute`/`peek_absolute` are defaulted — no change to

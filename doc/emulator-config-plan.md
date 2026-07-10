@@ -49,7 +49,7 @@ pub fn with_builtins() -> Self {
     let mut r = Self::new();
     r.register(ConsoleModule);
     r.register(Via6522Module);
-    r.register(Acia6551Module);
+    r.register(R6551Module);
     r.register(Mc6850Module);
     r.register(RomModule);
     r.register(RamModule);

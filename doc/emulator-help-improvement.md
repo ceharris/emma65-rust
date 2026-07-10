@@ -43,7 +43,7 @@ Each module file gets a `static ATTRIBUTES: &[AttributeInfo] = &[...]` and imple
 | `RamModule` | "Random-access memory region" | `size` (int, required), `fill` (u8, no, "(random)"), `image` (path, no) |
 | `RomModule` | "Read-only memory region" | `size` (int, required), `image` (path, required) |
 | `ConsoleModule` | "Serial console device" | `transport` (transport, no) |
-| `Acia6551Module` | "MOS 6551 Asynchronous Communications Interface Adapter" | `with_tdre_bug` (bool, required), `with_overrun` (bool, required), `transport` (transport, no) |
+| `R6551Module` | "MOS 6551 Asynchronous Communications Interface Adapter" | `with_tdre_bug` (bool, required), `with_overrun` (bool, required), `transport` (transport, no) |
 | `Mc6850Module` | "Motorola 6850 Asynchronous Communications Interface Adapter" | `transport` (transport, no) |
 | `Via6522Module` | "MOS 6522 Versatile Interface Adapter" | `transport` (transport, no) |
 
@@ -138,7 +138,7 @@ rom — Read-only memory region
 - `src/emulator/config/registry.rs` — add `DeviceInfo`, `device_info` field + accessor
 - `src/emulator/config/memory.rs` — implement new methods on `RamModule` and `RomModule`
 - `src/emulator/config/console.rs` — implement new methods on `ConsoleModule`
-- `src/emulator/config/acia6551.rs` — implement new methods on `Acia6551Module`
+- `src/emulator/config/.rs` — implement new methods on `R6551Module`
 - `src/emulator/config/mc6850.rs` — implement new methods on `Mc6850Module`
 - `src/emulator/config/via6522.rs` — implement new methods on `Via6522Module`
 - `src/emulator/config/emulator.rs` — add `long_help` to `--device` field

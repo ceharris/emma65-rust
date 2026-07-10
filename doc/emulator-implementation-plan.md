@@ -242,12 +242,12 @@ Implement the simple polling console device — the first concrete `IoDevice` im
 
 ---
 
-### MR 10: ACIA Devices (Acia6551, Mc6850)
+### MR 10: ACIA Devices (R6551, Mc6850)
 
 Implement both serial communication interface devices.
 
 **Scope:**
-- `emulator/device/acia6551.rs` — `Acia6551` implementing `IoDevice`
+- `emulator/device/.rs` — `R6551` implementing `IoDevice`
   - 4 registers: data, status, command, control
   - TX/RX via transport
   - IRQ support (receive data ready, transmit data register empty)

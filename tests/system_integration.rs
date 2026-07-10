@@ -2,7 +2,7 @@ use emma65::emulator::{
     AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId,
     InvalidOpcodePolicy, Mnemonic, PipeTransport, StepResult, Transport,
 };
-use emma65::emulator::device::{Acia6551, Console, Mc6850, Via6522};
+use emma65::emulator::device::{R6551, Console, Mc6850, Via6522};
 
 const MAX_STEPS: u32 = 10_000;
 
@@ -170,11 +170,11 @@ fn console_full_system_echo() {
 // Category 3: Device integration
 // ---------------------------------------------------------------------------
 
-/// CPU writes a byte to ACIA6551 TX register; byte appears on the remote transport.
+/// CPU writes a byte to R6551 TX register; byte appears on the remote transport.
 #[test]
-fn acia6551_transmit() {
+fn _transmit() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new("acia6551").with_address(0xDF00);
+    let mut acia = R6551::new("").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -207,11 +207,11 @@ fn acia6551_transmit() {
     assert_eq!(remote.try_recv(), Some(0x41), "ACIA TX byte should appear on remote transport");
 }
 
-/// Remote sends a byte; CPU polls ACIA6551 RDRF status and reads the received byte.
+/// Remote sends a byte; CPU polls R6551 RDRF status and reads the received byte.
 #[test]
-fn acia6551_receive() {
+fn _receive() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new("acia6551").with_address(0xDF00);
+    let mut acia = R6551::new("").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -365,16 +365,16 @@ fn mc6850_transmit_and_receive() {
 // Category 4: Interrupt-driven device I/O
 // ---------------------------------------------------------------------------
 
-/// ACIA6551 RX interrupt: remote sends one byte; CPU uses WAI to suspend until the IRQ fires,
+/// R6551 RX interrupt: remote sends one byte; CPU uses WAI to suspend until the IRQ fires,
 /// ISR reads the byte and stores it, RTI resumes at STP.
 ///
 /// ACIA command = $00 (IRD=0 → RX IRQ enabled; TIC=00 → TX IRQ disabled).
 /// IRQ vector ($FFFE/$FFFF) points to ISR at $0400.
 /// ISR: LDA $DF00 (clears RDRF, deasserts IRQ); STA $0300; RTI.
 #[test]
-fn acia6551_irq_driven_receive() {
+fn _irq_driven_receive() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new("acia6551").with_address(0xDF00);
+    let mut acia = R6551::new("").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()
@@ -438,16 +438,16 @@ fn acia6551_irq_driven_receive() {
     );
 }
 
-/// ACIA6551 TX interrupt: CPU uses IRQ-driven transmit to send 3 bytes.
+/// R6551 TX interrupt: CPU uses IRQ-driven transmit to send 3 bytes.
 ///
 /// ACIA command = $06 (IRD=1 → RX IRQ disabled; TIC=01 → TX IRQ enabled).
 /// IRQ fires immediately when TDRE is set. ISR sends the next byte; after the last
 /// byte is sent, ISR disables TX IRQ (TIC=00) so no further interrupts fire.
 /// Main program spins on a zero-page counter until all bytes are sent, then STPs.
 #[test]
-fn acia6551_irq_driven_transmit() {
+fn _irq_driven_transmit() {
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new("acia6551").with_address(0xDF00);
+    let mut acia = R6551::new("").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
     let bus = Bus::config()

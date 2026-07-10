@@ -127,7 +127,7 @@ peripherals. On connection the VIA performs a format-negotiation handshake and
 sends a full state dump so the peripheral starts with an accurate picture of
 all pins and control lines.
 
-#### Rockwell 6551 ACIA (`Acia6551`)
+#### Rockwell 6551 ACIA (`R6551`)
 
 An implementation of the Rockwell 6551 Asynchronous Communications Interface
 Adapter:
@@ -138,7 +138,7 @@ Adapter:
 - Interrupt-driven I/O with separate RX and TX interrupt enables
 - Baud rate selection from the control register; external-clock mode polls the
   transport on every CPU tick for maximum responsiveness
-- Hardware bug–compatible mode (`Acia6551::with_tdre_bug()`) keeps TDRE
+- Hardware bug–compatible mode (`R6551::with_tdre_bug()`) keeps TDRE
   permanently set, matching the behavior of the WDC 65C51 variant for software
   that uses timed delays rather than TDRE polling
 

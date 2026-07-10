@@ -4,26 +4,26 @@ use figment::providers::Serialized;
 use serde::Deserialize;
 
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
-use crate::emulator::device::Acia6551;
+use crate::emulator::device::R6551;
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 4;
 
 
-/// 6551 Asynchronous Communications Interface Adapter module.
+/// R6551 Asynchronous Communications Interface Adapter module.
 #[derive(Clone)]
-pub struct Acia6551Module;
+pub struct R6551Module;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub struct Acia6551Attributes {
+pub struct R6551Attributes {
     with_tdre_bug: Option<bool>,
     with_overrun: Option<bool>,
     transport: Option<TransportSpecFormat>,
 }
 
-impl DeviceModule for Acia6551Module {
+impl DeviceModule for R6551Module {
 
     fn name(&self) -> &'static str {
         "acia/6551"
@@ -34,7 +34,7 @@ impl DeviceModule for Acia6551Module {
             -> Result<BusConfig, DeviceModuleError> {
 
         let attrs = Dict::from_iter(attributes.clone());
-        let config: Acia6551Attributes = figment::Figment::new()
+        let config: R6551Attributes = figment::Figment::new()
             .merge(Serialized::defaults(attrs))
             .extract()
             .map_err(|e| DeviceModuleError::Config(format!("configuration error: {e}")))?;
@@ -46,7 +46,7 @@ impl DeviceModule for Acia6551Module {
 
         let device_id = DeviceId(address as u32);
         let device = {
-            let mut dev = Acia6551::new(self.name())
+            let mut dev = R6551::new(self.name())
                 .with_address(address)
                 .with_tdre_bug(config.with_tdre_bug.unwrap_or(false))
                 .with_overrun(config.with_overrun.unwrap_or(false));

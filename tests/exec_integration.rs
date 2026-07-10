@@ -6,7 +6,7 @@ use emma65::emulator::{
     Transport, run,
 };
 
-use emma65::emulator::device::{Acia6551, Console, Mc6850};
+use emma65::emulator::device::{R6551, Console, Mc6850};
 
 /// Collects bus trace records into a shared vec so tests can inspect them after execution.
 struct CapturingCallback {
@@ -182,9 +182,9 @@ fn bus_trace_captures_reads_and_writes() {
 // Throughput tests at 1.8432 MHz
 // ---------------------------------------------------------------------------
 
-/// Builds a CPU with 64 KB RAM and an ACIA6551 at $DF00–$DF03, writing `prog` at $0200
+/// Builds a CPU with 64 KB RAM and an R6551 at $DF00–$DF03, writing `prog` at $0200
 /// and setting the reset vector to $0200.
-fn build_acia_cpu(acia: Acia6551, prog: &[u8]) -> emma65::emulator::Cpu {
+fn build_acia_cpu(acia: R6551, prog: &[u8]) -> emma65::emulator::Cpu {
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
         .device(AddressRange::new(0xDF00, 0xDF03), DeviceId(1), Box::new(acia.with_address(0xDF00))).unwrap()
@@ -205,17 +205,17 @@ fn build_acia_cpu(acia: Acia6551, prog: &[u8]) -> emma65::emulator::Cpu {
     cpu
 }
 
-/// ACIA6551 in external-clock mode (control bit 4 = 0) polls the transport on every
+/// R6551 in external-clock mode (control bit 4 = 0) polls the transport on every
 /// device tick, so receive rate is limited only by the CPU clock.
 ///
 /// At 1.8432 MHz with 100 bytes pre-loaded in the pipe, the CPU should receive all
 /// bytes and reach STP within a generous wall-clock deadline.
 #[tokio::test]
-async fn acia6551_external_clock_throughput_at_1_8432_mhz() {
+async fn _external_clock_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new("acia6551"); // control defaults to 0x00 → external clock
+    let mut acia = R6551::new(""); // control defaults to 0x00 → external clock
     acia.attach_transport(Box::new(local));
 
     // Program: poll RDRF (status bit 3), read each byte into $0300+X, loop N times, STP.
@@ -256,7 +256,7 @@ async fn acia6551_external_clock_throughput_at_1_8432_mhz() {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         handle.wait(),
-    ).await.expect("ACIA6551 external-clock throughput test timed out");
+    ).await.expect("R6551 external-clock throughput test timed out");
 
     assert!(
         matches!(result, StepResult::Stopped),
@@ -264,7 +264,7 @@ async fn acia6551_external_clock_throughput_at_1_8432_mhz() {
     );
 }
 
-/// ACIA6551 at 19200 baud with a 1.8432 MHz clock.
+/// R6551 at 19200 baud with a 1.8432 MHz clock.
 ///
 /// With `with_clock_hz(1_843_200)`, `cycles_per_byte = 1_843_200 * 10 / 19200 = 960`.
 /// Expected receive rate: 19200 / 10 = 1920 bytes/sec — the same as at 1 MHz.
@@ -275,14 +275,14 @@ async fn acia6551_external_clock_throughput_at_1_8432_mhz() {
 /// - elapsed wall time ≤ that lower bound × 5 (generous CI slack)
 /// - CPU cycle count ≥ 50 × 960 (at minimum N × cycles_per_byte must have elapsed)
 #[tokio::test]
-async fn acia6551_19200_baud_throughput_at_1_8432_mhz() {
+async fn _19200_baud_throughput_at_1_8432_mhz() {
     const N: usize = 50;
     const BAUD: u64 = 19200;
     const CLOCK_HZ: u64 = 1_843_200;
     const CYCLES_PER_BYTE: u64 = CLOCK_HZ * 10 / BAUD; // 960
 
     let (local, mut remote) = PipeTransport::pair().unwrap();
-    let mut acia = Acia6551::new("acia6551")
+    let mut acia = R6551::new("")
         .with_clock_hz(CLOCK_HZ);
     acia.attach_transport(Box::new(local));
 
@@ -327,7 +327,7 @@ async fn acia6551_19200_baud_throughput_at_1_8432_mhz() {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         handle.wait(),
-    ).await.expect("ACIA6551 19200 baud throughput test timed out");
+    ).await.expect("R6551 19200 baud throughput test timed out");
 
     let elapsed = wall_start.elapsed();
 
