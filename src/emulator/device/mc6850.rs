@@ -1,35 +1,37 @@
-use log::{debug};
+//! Motorola MC6850 Asynchronous Communications Interface Adapter (ACIA).
+//!
+//! Provides two addressable registers:
+//!
+//! | Offset | Read             | Write            |
+//! |--------|------------------|------------------|
+//! | 0      | Status Register  | Control Register |
+//! | 1      | RX Data Register | TX Data Register |
+//!
+//! **Control Register (offset 0 write):**
+//! - Bits 1–0 (CD): Counter Divide — `11` = master reset; `00`/`01`/`10` = ÷1/÷16/÷64
+//! - Bits 4–2 (WS): Word Select — data bits, parity, stop bits
+//! - Bits 6–5 (TC): Transmit Control — `10` = TX interrupt enabled; others = disabled
+//! - Bit 7 (RIE): Receive Interrupt Enable — `1` = enabled
+//!
+//! **Status Register (offset 0 read):**
+//! - Bit 0: RDRF — Receive Data Register Full
+//! - Bit 1: TDRE — Transmit Data Register Empty
+//! - Bit 2: DCD — Data Carrier Detect (always 0 in emulation)
+//! - Bit 3: CTS — Clear To Send (always 0 in emulation)
+//! - Bit 4: FE — Framing Error (always 0)
+//! - Bit 5: OVRN — Overrun Error
+//! - Bit 6: PE — Parity Error (always 0)
+//! - Bit 7: IRQ — Interrupt Requested
+//!
+//! TX is immediate: bytes sent on write. TDRE clears on TX write and is restored on the
+//! next `tick()` call, reflecting the real hardware's transmit-busy signaling.
+//! RX is polled on every `tick()` call.
+
+use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
 
-/// Motorola MC6850 ACIA (Asynchronous Communications Interface Adapter).
-///
-/// Provides two addressable registers:
-///
-/// | Offset | Read             | Write            |
-/// |--------|------------------|------------------|
-/// | 0      | Status Register  | Control Register |
-/// | 1      | RX Data Register | TX Data Register |
-///
-/// **Control Register (offset 0 write):**
-/// - Bits 1–0 (CD): Counter Divide — `11` = master reset; `00`/`01`/`10` = ÷1/÷16/÷64
-/// - Bits 4–2 (WS): Word Select — data bits, parity, stop bits
-/// - Bits 6–5 (TC): Transmit Control — `10` = TX interrupt enabled; others = disabled
-/// - Bit 7 (RIE): Receive Interrupt Enable — `1` = enabled
-///
-/// **Status Register (offset 0 read):**
-/// - Bit 0: RDRF — Receive Data Register Full
-/// - Bit 1: TDRE — Transmit Data Register Empty
-/// - Bit 2: DCD — Data Carrier Detect (always 0 in emulation)
-/// - Bit 3: CTS — Clear To Send (always 0 in emulation)
-/// - Bit 4: FE — Framing Error (always 0)
-/// - Bit 5: OVRN — Overrun Error
-/// - Bit 6: PE — Parity Error (always 0)
-/// - Bit 7: IRQ — Interrupt Requested
-///
-/// TX is immediate: bytes sent on write. TDRE clears on TX write and is restored on the
-/// next `tick()` call, reflecting the real hardware's transmit-busy signalling.
-/// RX is polled on every `tick()` call.
+/// Motorola MC6850 Asynchronous Communications Interface Adapter (ACIA).
 pub struct Mc6850 {
     /// Name of the device as it appears in configuration and CLI.
     name: &'static str,

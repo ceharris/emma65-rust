@@ -1,51 +1,54 @@
+//! Rockwell R6551 Asynchronous Communications Interface Adapter (ACIA).
+//!
+//! Provides four addressable registers:
+//!
+//! | Offset | Read              | Write                            |
+//! |--------|-------------------|----------------------------------|
+//! | 0      | RX Data Register  | TX Data Register                 |
+//! | 1      | Status Register   | Programmed Reset (any value)     |
+//! | 2      | Command Register  | Command Register                 |
+//! | 3      | Control Register  | Control Register                 |
+//!
+//! **Status Register (offset 1 read):**
+//! - Bit 7: IRQ — interrupt pending
+//! - Bit 4: TDRE — Transmit Data Register Empty (ready to send)
+//! - Bit 3: RDRF — Receive Data Register Full (byte available)
+//! - Bit 2: OVRN — Overrun error
+//!
+//! **Command Register (offset 2):**
+//! - Bit 1 (IRD): Receive IRQ Disable — `0` = RX interrupt enabled, `1` = disabled
+//! - Bits 3–2 (TIC): Transmit interrupt control — `01` = TX interrupt enabled, others = disabled
+//!
+//! **Control Register (offset 3):**
+//! - Bit 4: Receiver clock source — `0` = external (poll every tick), `1` = internal (baud rate)
+//! - Bits 3–0: Baud rate select when bit 4 = 1 (0x1=50 … 0xF=19200 baud)
+//!
+//! TX is immediate: bytes are sent to the transport on write.
+//!
+//! # TDRE behaviour and the WDC 65C51 hardware bug
+//!
+//! The WDC 65C51 made by Western Design Center has a well-known silicon bug: TDRE is permanently
+//! stuck high and is never cleared after a TX write. Software targeting the real chip therefore
+//! cannot poll TDRE to detect transmit-ready; it must use fixed timing delays instead.
+//!
+//! This emulation supports two modes, selectable at construction time:
+//!
+//! - **Correct mode** (default): TDRE clears when a byte is written to the TX register and
+//!   is restored after one byte-period worth of cycles (or on the next `tick()` call in
+//!   external-clock mode). Use this for new software that does not rely on the hardware bug.
+//! - **Bug-compatible mode** ([`Acia6551::with_tdre_bug`]): TDRE is permanently set,
+//!   matching real-hardware behaviour. Use this when running software written for the
+//!   actual WDC 65C51 chip.
+//!
+//! RX is timer-driven: `tick()` polls the transport once per byte period at the configured
+//! baud rate, or on every call when using the external clock (default).
+
+
 use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
 
-/// WDC 65C51 ACIA (Asynchronous Communications Interface Adapter).
-///
-/// Provides four addressable registers:
-///
-/// | Offset | Read              | Write                            |
-/// |--------|-------------------|----------------------------------|
-/// | 0      | RX Data Register  | TX Data Register                 |
-/// | 1      | Status Register   | Programmed Reset (any value)     |
-/// | 2      | Command Register  | Command Register                 |
-/// | 3      | Control Register  | Control Register                 |
-///
-/// **Status Register (offset 1 read):**
-/// - Bit 7: IRQ — interrupt pending
-/// - Bit 4: TDRE — Transmit Data Register Empty (ready to send)
-/// - Bit 3: RDRF — Receive Data Register Full (byte available)
-/// - Bit 2: OVRN — Overrun error
-///
-/// **Command Register (offset 2):**
-/// - Bit 1 (IRD): Receive IRQ Disable — `0` = RX interrupt enabled, `1` = disabled
-/// - Bits 3–2 (TIC): Transmit interrupt control — `01` = TX interrupt enabled, others = disabled
-///
-/// **Control Register (offset 3):**
-/// - Bit 4: Receiver clock source — `0` = external (poll every tick), `1` = internal (baud rate)
-/// - Bits 3–0: Baud rate select when bit 4 = 1 (0x1=50 … 0xF=19200 baud)
-///
-/// TX is immediate: bytes are sent to the transport on write.
-///
-/// # TDRE behaviour and the WDC 65C51 hardware bug
-///
-/// The real WDC 65C51 has a well-known silicon bug: TDRE is permanently stuck high and is
-/// never cleared after a TX write. Software targeting the real chip therefore cannot poll
-/// TDRE to detect transmit-ready; it must use fixed timing delays instead.
-///
-/// This emulation supports two modes, selectable at construction time:
-///
-/// - **Correct mode** (default): TDRE clears when a byte is written to the TX register and
-///   is restored after one byte-period worth of cycles (or on the next `tick()` call in
-///   external-clock mode). Use this for new software that does not rely on the hardware bug.
-/// - **Bug-compatible mode** ([`Acia6551::with_tdre_bug`]): TDRE is permanently set,
-///   matching real-hardware behaviour. Use this when running software written for the
-///   actual WDC 65C51 chip.
-///
-/// RX is timer-driven: `tick()` polls the transport once per byte period at the configured
-/// baud rate, or on every call when using the external clock (default).
+/// Rockwell R6551 ACIA (Asynchronous Communications Interface Adapter).
 pub struct Acia6551 {
     /// Name of the device as it appears in configuration and CLI.
     name: &'static str,

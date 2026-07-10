@@ -1,3 +1,50 @@
+//! A buffered console device with support for an interrupt-driven break key input.
+//!
+//! This device is similar to the typical single port console devices of early microcomputers,
+//! in which a single memory-mapped port is read to receive ASCII characters from a keyboard device,
+//! and is written to print ASCII characters to display. In this emulation, the keyboard and
+//! display are replaced with an IPC transport (typically a pipe connected to the virtual terminal
+//! device provided with the Emma65 debugger).
+//!
+//! This implementation incorporates an integral ring buffer that holds input characters until they
+//! are read by the program running on the 6502. An additional latch register allows the 6502
+//! program to perform a single-character lookahead and to drain the input buffer when desired. An
+//! optional break key code (e.g. ASCII Ctrl+C) may be configured; when this break key code is
+//! detected in the input the transport, the input buffer is drained, the break key code is latched
+//! and the CPU's IRQ signal is asserted.
+//!
+//! Provides two 8-bit addressable registers:
+//!
+//! | Offset |      Name      |
+//! |--------|----------------|
+//! | 0      | Data Register  |
+//! | 1      | Latch Register |
+//!
+//! ## Data Register
+//! - Reading the data register returns either the contents of the latch register (if non-zero), or
+//!   the next input byte from connected transport  (if available), or zero if no input is available.
+//!   The latch register and the interrupt status are both reset by a read of the data register.
+//! - Writing the data register sends a byte to the connected transport; has no effect if no
+//!   transport is connected.
+//!
+//! ## Latch Register
+//! - Reading the latch register fetches the next byte of input from the connected transport if
+//!   no value is already latched and an input byte is available; i.e. the fetch occurs only if the
+//!   latch register is zero at the time of the read. The returned value remains in the latch for
+//!   a subsequent read of either the data register or latch register. Interrupt status is cleared
+//!   by a read of the latch register.
+//! - Writing the latch register overwrites the current contents of the latch and drains the input
+//!   buffer. If the value written corresponds to the configured break key (if any), an interrupt
+//!   is triggered just as it would if the configured break key code was received from the transport.
+//!   Writing any other value resets the interrupt status.
+//!
+//! ## Break Key
+//! The device can be configured with a break key code (one byte; e.g. ASCII Ctrl+C). When the
+//! configured break key value is read from the transport, the Latch Register is set to the break
+//! key value, the input buffer is drained, and the CPU's IRQ signal is asserted. Reading the
+//! Data Register or Latch Register, or writing the Latch Register resets the interrupt condition.
+//!
+
 use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
@@ -7,37 +54,6 @@ use super::ring::Ring;
 pub use super::ring::RING_CAPACITY;
 
 /// A buffered console device with support for an interrupt-driven break key input.
-///
-/// Provides two 8-bit addressable registers:
-///
-/// | Offset |      Name      |
-/// |--------|----------------|
-/// | 0      | Data Register  |
-/// | 1      | Latch Register |
-///
-/// ## Data Register
-/// - Reading the data register returns either the contents of the latch register (if non-zero), or
-///   the next input byte from connected transport  (if available), or zero if no input is available.
-///   The latch register and the interrupt status are both reset by a read of the data register.
-/// - Writing the data register sends a byte to the connected transport; has no effect if no
-///   transport is connected.
-///
-/// ## Latch Register
-/// - Reading the latch register fetches the next byte of input from the connected transport if
-///   no value is already latched and an input byte is available; i.e. the fetch occurs only if the
-///   latch register is zero at the time of the read. The returned value remains in the latch for
-///   a subsequent read of either the data register or latch register. Interrupt status is cleared
-///   by a read of the latch register.
-/// - Writing the latch register overwrites the current contents of the latch and drains the input
-///   buffer. If the value written corresponds to the configured break key (if any), an interrupt
-///   is triggered just as it would if the configured break key code was received from the transport.
-///   Writing any other value resets the interrupt status.
-///
-/// ## Break Key
-/// The device can be configured with a break key code (one byte; e.g. ASCII Ctrl+C). When the
-/// configured break key value is read from the transport, the Latch Register is set to the break
-/// key value, the input buffer is drained, and the CPU's IRQ signal is asserted.
-///
 pub struct Console {
     /// Name of the device as it appears in configuration and CLI.
     name: &'static str,

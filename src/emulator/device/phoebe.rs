@@ -1,3 +1,33 @@
+//! A bank-switched ROM (designed for the Phoebe SBC).
+//! 
+//! This device provides a 32K ROM designed to be bank-switched into a 16K region in the address
+//! space (typically at 0xC000). It divides the region in half and maps a fixed 8K bank into the
+//! upper half of the region. Using a single memory-mapped register, the lower half of the
+//! region can be mapped to any one of three 8K banks. The lower half of the region can also be
+//! unmapped, allowing additional RAM or RAM in the same region to be selectively shadowed by the
+//! bank-switched ROM.
+//!
+//! The 8K banks are numbered from 0 to 3, corresponding to their offsets in the 32K space of the
+//! ROM; Bank 0 = offset 0, Bank 1 = offset 0x2000, Bank 2 = offset 0x4000, Bank 3 = offset 0x6000.
+//!
+//! Bank 3 is always mapped to the upper half of the region. Assuming the typical use in which the
+//! target address region for the device is 0xC000..0xFFFF, the image loaded into bank 3 must
+//! include appropriate target addresses for the 6502 machine vectors; offset 0x7FFA = NMI vector,
+//! 0x7FFC = reset vector, 0x7FFE = IRQ vector.
+//!
+//! ## Bank Selection Register
+//! The bank selection register can be mapped into the region of the address space that is used
+//! for I/O devices. Only the two low-order bits of the register are significant -- the remaining
+//! bits are ignored. When none of banks 0 to 2 is selected, the lower half of the region is
+//! unmapped. The selection register is initialized to zero at system reset.
+//!
+//! | Bit 1 | Bit 0 | Bank selected |
+//! |-------|-------|---------------|
+//! |   0   |   0   | Bank 0        |
+//! |   0   |   1   | Bank 1        |
+//! |   1   |   0   | Bank 2        |
+//! |   1   |   1   | none          |
+//!
 use log::debug;
 use crate::emulator::AddressRange;
 use crate::emulator::bus::RomWritePolicy;
@@ -13,34 +43,6 @@ pub const REGION_SIZE: u16 = 2 * BANK_SIZE;
 pub const MEMORY_SIZE: u16 = NUM_BANKS as u16 * BANK_SIZE;
 
 /// A bank-switched ROM (designed for the Phoebe SBC).
-/// This device provides a 32K ROM designed to be bank-switched into a 16K region in the address
-/// space (typically at 0xC000). It divides the region in half and maps a fixed 8K bank into the
-/// upper half of the region. Using a single memory-mapped register, the lower half of the
-/// region can be mapped to any one of three 8K banks. The lower half of the region can also be
-/// unmapped, allowing additional RAM or RAM in the same region to be selectively shadowed by the
-/// bank-switched ROM.
-///
-/// The 8K banks are numbered from 0 to 3, corresponding to their offsets in the 32K space of the
-/// ROM; Bank 0 = offset 0, Bank 1 = offset 0x2000, Bank 2 = offset 0x4000, Bank 3 = offset 0x6000.
-///
-/// Bank 3 is always mapped to the upper half of the region. Assuming the typical use in which the
-/// target address region for the device is 0xC000..0xFFFF, the image loaded into bank 3 must
-/// include appropriate target addresses for the 6502 machine vectors; offset 0x7FFA = NMI vector,
-/// 0x7FFC = reset vector, 0x7FFE = IRQ vector.
-///
-/// ## Bank Selection Register
-/// The bank selection register can be mapped into the region of the address space that is used
-/// for I/O devices. Only the two low-order bits of the register are significant -- the remaining
-/// bits are ignored. When none of banks 0 to 2 is selected, the lower half of the region is
-/// unmapped. The selection register is initialized to zero at system reset.
-///
-/// | Bit 1 | Bit 0 | Bank selected |
-/// |-------|-------|---------------|
-/// |   0   |   0   | Bank 0        |
-/// |   0   |   1   | Bank 1        |
-/// |   1   |   0   | Bank 2        |
-/// |   1   |   1   | none          |
-///
 pub struct Phoebe {
     /// Name of the device as it appears in configuration and CLI.
     name: &'static str,
