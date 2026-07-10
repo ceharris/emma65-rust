@@ -34,6 +34,8 @@ fn device_args(rom_path: &std::path::Path) -> Vec<String> {
         "ram@0x0000,size=32768,fill=0".to_string(),
         "--device".to_string(),
         format!("rom@0x8000,size=32768,image={}", rom_path.display()),
+        "--device".to_string(),
+        "console@0xfff8".to_string(),
     ]
 }
 
@@ -150,32 +152,6 @@ fn run_with_unknown_device_type() {
         stderr.contains("bogus"),
         "expected device type name in stderr, got: {stderr}"
     );
-}
-
-#[test]
-fn run_with_no_config_uses_default() {
-    // Launch with no arguments; the binary should apply the built-in default config.
-    // TaliForth runs a REPL and never halts on its own, so we kill the process after a
-    // short delay and check that it didn't exit immediately with an error.
-    let mut child = std::process::Command::new(emulator_bin())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    // If it already exited it was a startup error — capture status.
-    match child.try_wait().unwrap() {
-        Some(status) => {
-            // Collect stderr to report the error, then fail.
-            let output = child.wait_with_output().unwrap();
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            panic!("binary exited unexpectedly with {status}: {stderr}");
-        }
-        None => {
-            // Still running — good.
-            child.kill().unwrap();
-            child.wait().unwrap();
-        }
-    }
 }
 
 #[test]

@@ -1,7 +1,4 @@
-use emma65::emulator::{
-    AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId,
-    InvalidOpcodePolicy, Mnemonic, PipeTransport, StepResult, Transport,
-};
+use emma65::emulator::{AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InvalidOpcodePolicy, Mnemonic, PipeTransport, StepResult, Transport};
 use emma65::emulator::device::{R6551, Console, Mc6850, Via6522};
 
 const MAX_STEPS: u32 = 10_000;
@@ -228,13 +225,17 @@ fn _receive() {
         .unwrap();
 
     // Program: poll status bit 3 (RDRF) until set, then read data byte.
-    // $0200: LDA $DF01   AD 01 DF   -- ACIA status register
-    // $0203: AND #$08    29 08      -- isolate RDRF (bit 3)
-    // $0205: BEQ poll    F0 F9      -- next PC=$0207, target=$0200, offset=-7=0xF9
-    // $0207: LDA $DF00   AD 00 DF   -- read RX data (clears RDRF)
-    // $020A: STA $0300   8D 00 03   -- store result
-    // $020D: STP         DB
+    // $0200: LDA #$03    A9 03      -- DTR, IRD bits
+    // $0202: STA $DF02   8D 02 DF   -- ACIA command register
+    // $0205: LDA $DF01   AD 01 DF   -- ACIA status register
+    // $0208: AND #$08    29 08      -- isolate RDRF (bit 3)
+    // $020A: BEQ poll    F0 F9      -- next PC=$0207, target=$0200, offset=-7=0xF9
+    // $020F: LDA $DF00   AD 00 DF   -- read RX data (clears RDRF)
+    // $0212: STA $0300   8D 00 03   -- store result
+    // $0215: STP         DB
     let prog: &[u8] = &[
+        0xA9, 0x03,
+        0x8D, 0x02, 0xDF,
         0xAD, 0x01, 0xDF,
         0x29, 0x08,
         0xF0, 0xF9,
@@ -404,13 +405,13 @@ fn _irq_driven_receive() {
     cpu.bus_mut().write(0xFFFF, 0x04).unwrap();
 
     // Program at $0200:
-    //   LDA #$00    A9 00       -- RX IRQ enabled (IRD=0, TIC=00)
+    //   LDA #$00    A9 01       -- RX IRQ enabled (DTR=1, IRD=0, TIC=00)
     //   STA $DF02   8D 02 DF   -- write command register
     //   CLI         58          -- enable IRQ
     //   WAI         CB          -- suspend until IRQ fires
     //   STP         DB          -- RTI resumes here
     let prog: &[u8] = &[
-        0xA9, 0x00, 0x8D, 0x02, 0xDF,
+        0xA9, 0x01, 0x8D, 0x02, 0xDF,
         0x58,
         0xCB,
         0xDB,
