@@ -5,7 +5,7 @@
 //! `try_recv` and `send` never block the CPU thread.
 
 use std::io::{self, Read, Write};
-use std::os::unix::io::{FromRawFd, OwnedFd};
+use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
 use std::fs::File;
 
 use super::{Transport, TransportError};
@@ -35,6 +35,18 @@ impl PipeTransport {
         set_nonblocking(&rx)?;
         set_nonblocking(&tx)?;
         Ok(Self { rx, tx, connected: true })
+    }
+
+    /// Creates a `PipeTransport` connected to the process's own stdin and stdout.
+    ///
+    /// Duplicates fd 0 and fd 1 so this transport owns independent descriptors: dropping it
+    /// (or its underlying files) closes only the duplicates, leaving the process's real
+    /// stdin/stdout usable for anything else (e.g. `println!`).
+    pub fn stdio() -> io::Result<Self> {
+        let rx_fd = dup_fd(0)?;
+        let tx_fd = dup_fd(1)?;
+        // SAFETY: dup_fd returns a fresh, exclusively-owned descriptor each call.
+        unsafe { Self::from_raw_fds(rx_fd, tx_fd) }
     }
 
     /// Consumes this transport and returns the underlying `(rx, tx)` files.
@@ -158,6 +170,15 @@ mod tests {
         local.shutdown();
         assert!(!local.is_connected());
     }
+}
+
+fn dup_fd(fd: RawFd) -> io::Result<RawFd> {
+    // SAFETY: dup() with a valid fd either returns a new, exclusively-owned descriptor or -1.
+    let rc = unsafe { libc::dup(fd) };
+    if rc < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(rc)
 }
 
 fn set_nonblocking(file: &File) -> io::Result<()> {

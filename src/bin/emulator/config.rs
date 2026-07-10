@@ -44,7 +44,6 @@ impl AppConfig {
 
 }
 
-const PTY_LINK_NAME: &str = ".emma/dev/ttyS0";
 const DEFAULT_CLOCK_SPEED: u64 = 1_843_200;
 const DEFAULT_CPU_VARIANT: CpuVariantSpec = CpuVariantSpec::Wdc6502;
 
@@ -53,7 +52,6 @@ const DEFAULT_CPU_VARIANT: CpuVariantSpec = CpuVariantSpec::Wdc6502;
 /// and returns the tempfile handle (must be kept alive until `Config::build()` completes).
 pub fn apply_default_if_unconfigured(config: &mut AppConfig, default_rom: &[u8]) -> Option<tempfile::NamedTempFile> {
     if config.emulator.devices.as_ref().is_none_or(|d| d.is_empty()) {
-        eprintln!("notice: using default configuration; connect terminal to ~/{}", PTY_LINK_NAME);
         let f = tempfile::Builder::new()
             .suffix(".bin")
             .tempfile()
@@ -63,16 +61,12 @@ pub fn apply_default_if_unconfigured(config: &mut AppConfig, default_rom: &[u8])
         let rom_path = f.path().to_path_buf();
         config.emulator.cpu_variant_spec.get_or_insert(DEFAULT_CPU_VARIANT);
         config.emulator.clock_speed_hz.get_or_insert(DEFAULT_CLOCK_SPEED);
-        let home = std::env::var("HOME").expect("HOME not set");
-        let pty_symlink = std::path::Path::new(&home).join(PTY_LINK_NAME);
         config.emulator.devices = Some(vec![
             "ram@0x0000,size=32768,fill=0".parse().unwrap(),
             format!("rom@0x8000,size=32768,image={}", rom_path.display())
                 .parse()
                 .unwrap(),
-            format!("console@0xfff8,transport=pty:{}", pty_symlink.display())
-                .parse()
-                .unwrap(),
+            "console@0xfff8,break=0x3".parse().unwrap(),
         ]);
         Some(f)
     } else {
