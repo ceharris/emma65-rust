@@ -439,7 +439,7 @@ mod tests {
 
         let _ = cpu.reset();
         loop {
-            match cpu.step() {
+            match cpu.step(None) {
                 StepResult::Stopped => break,
                 StepResult::Error(e) => panic!("CPU error: {:?}", e),
                 _ => {}
@@ -496,7 +496,7 @@ mod tests {
         remote.send(0x5A).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1));
         loop {
-            match cpu.step() {
+            match cpu.step(None) {
                 StepResult::Stopped => break,
                 StepResult::Error(e) => panic!("CPU error: {:?}", e),
                 _ => {}

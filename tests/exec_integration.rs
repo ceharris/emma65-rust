@@ -135,7 +135,7 @@ fn bus_trace_captures_reads_and_writes() {
     })));
 
     loop {
-        match cpu.step() {
+        match cpu.step(None) {
             StepResult::Stopped => break,
             StepResult::Error(e) => panic!("CPU error: {e}"),
             StepResult::Executed(_) | StepResult::Waiting => {}

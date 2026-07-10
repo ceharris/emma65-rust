@@ -187,24 +187,8 @@ impl Cpu {
     }
 
     /// Fetches, decodes, and executes one instruction. Returns the step result.
-    ///
-    /// Halts before executing if PC matches a breakpoint or a watch expression triggers.
-    /// Use [`step_over_breakpoint`](Self::step_over_breakpoint) to advance past the
-    /// breakpoint at the current PC without disabling it.
-    pub fn step(&mut self) -> StepResult {
-        self.step_impl(None)
-    }
-
-    /// Like [`step`](Self::step), but skips the breakpoint and watch check at `skip_pc`.
-    ///
-    /// Use this when the debugger is already halted at `skip_pc` (due to a breakpoint or
-    /// watch trigger) and needs to advance past it without requiring the breakpoint to be
-    /// disabled first. All other addresses are checked normally.
-    pub fn step_over_breakpoint(&mut self, skip_pc: u16) -> StepResult {
-        self.step_impl(Some(skip_pc))
-    }
-
-    fn step_impl(&mut self, skip_pc: Option<u16>) -> StepResult {
+    /// Skips a breakpoint at `skip_pc` if specified.
+    pub fn step(&mut self, skip_pc: Option<u16>) -> StepResult {
         if self.stopped {
             return StepResult::Stopped;
         }
@@ -1143,7 +1127,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.bus.write(0x0042, 0xAB).unwrap();
         write_program(&mut cpu, 0x0200, &[0xA5, 0x42]); // LDA $42
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0xAB);
     }
 
@@ -1153,7 +1137,7 @@ mod tests {
         cpu.regs.x = 0x05;
         cpu.bus.write(0x0047, 0xCC).unwrap();
         write_program(&mut cpu, 0x0200, &[0xB5, 0x42]); // LDA $42,X
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0xCC);
     }
 
@@ -1163,7 +1147,7 @@ mod tests {
         cpu.regs.y = 0x03;
         cpu.bus.write(0x0045, 0x77).unwrap();
         write_program(&mut cpu, 0x0200, &[0xB6, 0x42]); // LDX $42,Y
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.x, 0x77);
     }
 
@@ -1172,7 +1156,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.bus.write(0x1234, 0x99).unwrap();
         write_program(&mut cpu, 0x0200, &[0xAD, 0x34, 0x12]); // LDA $1234
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x99);
     }
 
@@ -1182,7 +1166,7 @@ mod tests {
         cpu.regs.x = 0x10;
         cpu.bus.write(0x1244, 0x55).unwrap();
         write_program(&mut cpu, 0x0200, &[0xBD, 0x34, 0x12]); // LDA $1234,X
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x55);
     }
 
@@ -1192,7 +1176,7 @@ mod tests {
         cpu.regs.y = 0x04;
         cpu.bus.write(0x1238, 0x44).unwrap();
         write_program(&mut cpu, 0x0200, &[0xB9, 0x34, 0x12]); // LDA $1234,Y
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x44);
     }
 
@@ -1203,7 +1187,7 @@ mod tests {
         cpu.bus.write(0x0300, 0x00).unwrap();
         cpu.bus.write(0x0301, 0x04).unwrap();
         write_program(&mut cpu, 0x0200, &[0x6C, 0x00, 0x03]); // JMP ($0300)
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0400);
     }
 
@@ -1216,7 +1200,7 @@ mod tests {
         cpu.bus.write(0x0011, 0x05).unwrap();
         cpu.bus.write(0x0500, 0xBB).unwrap();
         write_program(&mut cpu, 0x0200, &[0xA1, 0x0C]); // LDA ($0C,X)
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0xBB);
     }
 
@@ -1229,7 +1213,7 @@ mod tests {
         cpu.bus.write(0x0011, 0x05).unwrap();
         cpu.bus.write(0x0502, 0xDD).unwrap();
         write_program(&mut cpu, 0x0200, &[0xB1, 0x10]); // LDA ($10),Y
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0xDD);
     }
 
@@ -1240,7 +1224,7 @@ mod tests {
         cpu.bus.write(0x0021, 0x06).unwrap();
         cpu.bus.write(0x0600, 0xEE).unwrap();
         write_program(&mut cpu, 0x0200, &[0xB2, 0x20]); // LDA ($20)
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0xEE);
     }
 
@@ -1252,7 +1236,7 @@ mod tests {
         cpu.bus.write(0x0302, 0x00).unwrap();
         cpu.bus.write(0x0303, 0x05).unwrap();
         write_program(&mut cpu, 0x0200, &[0x7C, 0x00, 0x03]); // JMP ($0300,X)
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0500);
     }
 
@@ -1264,7 +1248,7 @@ mod tests {
         cpu.bus.write(0x0300, 0x42).unwrap();
         write_program(&mut cpu, 0x0200, &[0xBD, 0x01, 0x02]); // LDA $0201,X
         let cycles_before = cpu.cycles;
-        cpu.step();
+        cpu.step(None);
         // base is 4, +1 for page cross
         assert_eq!(cpu.cycles - cycles_before, 5);
     }
@@ -1275,7 +1259,7 @@ mod tests {
     fn lda_immediate_sets_nz() {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xA9, 0x00]); // LDA #$00
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x00);
         assert!(cpu.regs.p.contains(StatusRegister::Z));
         assert!(!cpu.regs.p.contains(StatusRegister::N));
@@ -1285,7 +1269,7 @@ mod tests {
     fn lda_negative_sets_n() {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xA9, 0x80]); // LDA #$80
-        cpu.step();
+        cpu.step(None);
         assert!(cpu.regs.p.contains(StatusRegister::N));
     }
 
@@ -1294,7 +1278,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.a = 0x42;
         write_program(&mut cpu, 0x0200, &[0x85, 0x50]); // STA $50
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.bus.read(0x0050).unwrap(), 0x42);
     }
 
@@ -1303,7 +1287,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.bus.write(0x0050, 0xFF).unwrap();
         write_program(&mut cpu, 0x0200, &[0x64, 0x50]); // STZ $50
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.bus.read(0x0050).unwrap(), 0x00);
     }
 
@@ -1314,7 +1298,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.a = 0x42;
         write_program(&mut cpu, 0x0200, &[0xAA]); // TAX
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.x, 0x42);
     }
 
@@ -1324,7 +1308,7 @@ mod tests {
         cpu.regs.x = 0x00;
         cpu.regs.p.remove(StatusRegister::Z);
         write_program(&mut cpu, 0x0200, &[0x9A]); // TXS
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.s, 0x00);
         assert!(!cpu.regs.p.contains(StatusRegister::Z)); // TXS doesn't touch flags
     }
@@ -1336,9 +1320,9 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.a = 0xBE;
         write_program(&mut cpu, 0x0200, &[0x48, 0x68]); // PHA, PLA
-        cpu.step(); // PHA
+        cpu.step(None); // PHA
         cpu.regs.a = 0x00;
-        cpu.step(); // PLA
+        cpu.step(None); // PLA
         assert_eq!(cpu.regs.a, 0xBE);
     }
 
@@ -1347,9 +1331,9 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.p = StatusRegister::N | StatusRegister::C | StatusRegister::UNUSED;
         write_program(&mut cpu, 0x0200, &[0x08, 0x28]); // PHP, PLP
-        cpu.step();
+        cpu.step(None);
         cpu.regs.p = StatusRegister::empty();
-        cpu.step();
+        cpu.step(None);
         assert!(cpu.regs.p.contains(StatusRegister::N));
         assert!(cpu.regs.p.contains(StatusRegister::C));
     }
@@ -1360,13 +1344,13 @@ mod tests {
         cpu.regs.x = 0x12;
         cpu.regs.y = 0x34;
         write_program(&mut cpu, 0x0200, &[0xDA, 0x5A, 0x7A, 0xFA]); // PHX PHY PLY PLX
-        cpu.step(); // PHX
-        cpu.step(); // PHY
+        cpu.step(None); // PHX
+        cpu.step(None); // PHY
         cpu.regs.y = 0;
-        cpu.step(); // PLY
+        cpu.step(None); // PLY
         assert_eq!(cpu.regs.y, 0x34);
         cpu.regs.x = 0;
-        cpu.step(); // PLX
+        cpu.step(None); // PLX
         assert_eq!(cpu.regs.x, 0x12);
     }
 
@@ -1376,7 +1360,7 @@ mod tests {
     fn bra_always_branches() {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0x80, 0x02]); // BRA +2
-        cpu.step();
+        cpu.step(None);
         // PC was 0x0202 (after fetch), branch +2 → 0x0204
         assert_eq!(cpu.regs.pc, 0x0204);
     }
@@ -1386,7 +1370,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.p.insert(StatusRegister::Z);
         write_program(&mut cpu, 0x0200, &[0xD0, 0x10]); // BNE +16
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0202); // not taken
     }
 
@@ -1395,7 +1379,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.p.insert(StatusRegister::Z);
         write_program(&mut cpu, 0x0200, &[0xF0, 0x10]); // BEQ +16
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0212);
     }
 
@@ -1404,7 +1388,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0x80, 0xFE_u8]); // BRA -2 → loops to self
         let pc_before = cpu.regs.pc;
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, pc_before); // back to 0x0200
     }
 
@@ -1416,9 +1400,9 @@ mod tests {
         // JSR $0300; at $0300: RTS
         write_program(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write_program(&mut cpu, 0x0300, &[0x60]);              // RTS
-        cpu.step(); // JSR
+        cpu.step(None); // JSR
         assert_eq!(cpu.regs.pc, 0x0300);
-        cpu.step(); // RTS
+        cpu.step(None); // RTS
         assert_eq!(cpu.regs.pc, 0x0203); // return to instruction after JSR
     }
 
@@ -1432,7 +1416,7 @@ mod tests {
         cpu.regs.p = StatusRegister::UNUSED;
         write_program(&mut cpu, 0x0200, &[0x00, 0xEA]); // BRK (pad byte)
         let s_before = cpu.regs.s;
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0400);
         // 3 bytes pushed (PC hi, PC lo, P)
         assert_eq!(cpu.regs.s, s_before.wrapping_sub(3));
@@ -1453,7 +1437,7 @@ mod tests {
         cpu.bus.write(STACK_BASE | s.wrapping_sub(2) as u16, 0xC5).unwrap(); // P
         cpu.regs.s = s.wrapping_sub(3);
         write_program(&mut cpu, 0x0200, &[0x40]); // RTI
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0300);
         assert!(cpu.regs.p.contains(StatusRegister::N));
         assert!(cpu.regs.p.contains(StatusRegister::C));
@@ -1467,7 +1451,7 @@ mod tests {
         cpu.regs.a = 0x10;
         cpu.regs.p.remove(StatusRegister::C);
         write_program(&mut cpu, 0x0200, &[0x69, 0x20]); // ADC #$20
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x30);
     }
 
@@ -1477,7 +1461,7 @@ mod tests {
         cpu.regs.a = 0x50;
         cpu.regs.p.insert(StatusRegister::C); // no borrow
         write_program(&mut cpu, 0x0200, &[0xE9, 0x10]); // SBC #$10
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x40);
     }
 
@@ -1488,7 +1472,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.a = 0xFF;
         write_program(&mut cpu, 0x0200, &[0x29, 0x0F]); // AND #$0F
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x0F);
     }
 
@@ -1497,7 +1481,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.a = 0x0F;
         write_program(&mut cpu, 0x0200, &[0x09, 0xF0]); // ORA #$F0
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0xFF);
     }
 
@@ -1506,7 +1490,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.a = 0xFF;
         write_program(&mut cpu, 0x0200, &[0x49, 0xFF]); // EOR #$FF
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x00);
         assert!(cpu.regs.p.contains(StatusRegister::Z));
     }
@@ -1518,7 +1502,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.a = 0x41;
         write_program(&mut cpu, 0x0200, &[0x0A]); // ASL A
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x82);
         assert!(!cpu.regs.p.contains(StatusRegister::C));
         assert!(cpu.regs.p.contains(StatusRegister::N));
@@ -1529,7 +1513,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.a = 0x03;
         write_program(&mut cpu, 0x0200, &[0x4A]); // LSR A
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x01);
         assert!(cpu.regs.p.contains(StatusRegister::C));
     }
@@ -1540,7 +1524,7 @@ mod tests {
         cpu.regs.a = 0x80;
         cpu.regs.p.insert(StatusRegister::C);
         write_program(&mut cpu, 0x0200, &[0x2A]); // ROL A
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x01);
         assert!(cpu.regs.p.contains(StatusRegister::C));
     }
@@ -1551,7 +1535,7 @@ mod tests {
         cpu.regs.a = 0x01;
         cpu.regs.p.insert(StatusRegister::C);
         write_program(&mut cpu, 0x0200, &[0x6A]); // ROR A
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.a, 0x80);
         assert!(cpu.regs.p.contains(StatusRegister::C));
         assert!(cpu.regs.p.contains(StatusRegister::N));
@@ -1564,9 +1548,9 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.p.insert(StatusRegister::C);
         write_program(&mut cpu, 0x0200, &[0x18, 0x38]); // CLC, SEC
-        cpu.step();
+        cpu.step(None);
         assert!(!cpu.regs.p.contains(StatusRegister::C));
-        cpu.step();
+        cpu.step(None);
         assert!(cpu.regs.p.contains(StatusRegister::C));
     }
 
@@ -1577,7 +1561,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         // $CB is WAI — valid only on WDC; invalid (1 byte) on Cmos65C02
         write_program(&mut cpu, 0x0200, &[0xCB]);
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0201);
     }
 
@@ -1596,7 +1580,7 @@ mod tests {
             .build()
             .unwrap();
         cpu.reset().unwrap();
-        assert!(matches!(cpu.step(), StepResult::Error(ExecError::InvalidOpcode { .. })));
+        assert!(matches!(cpu.step(None), StepResult::Error(ExecError::InvalidOpcode { .. })));
     }
 
     // --- WAI / STP ---
@@ -1605,16 +1589,16 @@ mod tests {
     fn wai_returns_waiting() {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
-        cpu.step();
-        assert!(matches!(cpu.step(), StepResult::Waiting));
+        cpu.step(None);
+        assert!(matches!(cpu.step(None), StepResult::Waiting));
     }
 
     #[test]
     fn stp_returns_stopped() {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xDB]); // STP
-        cpu.step();
-        assert!(matches!(cpu.step(), StepResult::Stopped));
+        cpu.step(None);
+        assert!(matches!(cpu.step(None), StepResult::Stopped));
     }
 
     // --- WDC: RMB / SMB ---
@@ -1624,7 +1608,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.bus.write(0x0050, 0xFF).unwrap();
         write_program(&mut cpu, 0x0200, &[0x07, 0x50]); // RMB0 $50
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.bus.read(0x0050).unwrap(), 0xFE);
     }
 
@@ -1633,7 +1617,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.bus.write(0x0050, 0x00).unwrap();
         write_program(&mut cpu, 0x0200, &[0x87, 0x50]); // SMB0 $50
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.bus.read(0x0050).unwrap(), 0x01);
     }
 
@@ -1645,7 +1629,7 @@ mod tests {
         cpu.bus.write(0x0050, 0xFE).unwrap(); // bit 0 clear
         // BBR0 $50, +4
         write_program(&mut cpu, 0x0200, &[0x0F, 0x50, 0x04]);
-        cpu.step();
+        cpu.step(None);
         // PC was 0x0203 after fetch, +4 = 0x0207
         assert_eq!(cpu.regs.pc, 0x0207);
     }
@@ -1655,7 +1639,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         cpu.bus.write(0x0050, 0x01).unwrap(); // bit 0 set
         write_program(&mut cpu, 0x0200, &[0x0F, 0x50, 0x04]);
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0203); // not taken
     }
 
@@ -1665,7 +1649,7 @@ mod tests {
         cpu.bus.write(0x0050, 0x01).unwrap(); // bit 0 set
         // BBS0 $50, +4
         write_program(&mut cpu, 0x0200, &[0x8F, 0x50, 0x04]);
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0207);
     }
 
@@ -1675,7 +1659,7 @@ mod tests {
     fn tick_called_with_cycle_count() {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xEA]); // NOP = 2 cycles
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.cycles(), 2);
     }
 
@@ -1685,9 +1669,9 @@ mod tests {
     fn cycles_accumulate_over_steps() {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xEA, 0xEA, 0xEA]); // 3x NOP
-        cpu.step();
-        cpu.step();
-        cpu.step();
+        cpu.step(None);
+        cpu.step(None);
+        cpu.step(None);
         assert_eq!(cpu.cycles(), 6);
     }
 
@@ -1700,7 +1684,7 @@ mod tests {
         cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
         cpu.regs.p.remove(StatusRegister::I);
         cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0400);
         assert!(cpu.regs.p.contains(StatusRegister::I));
     }
@@ -1711,7 +1695,7 @@ mod tests {
         write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
         cpu.regs.p.insert(StatusRegister::I);
         cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
-        cpu.step();
+        cpu.step(None);
         // NOP executes normally; PC advances past it
         assert_eq!(cpu.regs.pc, 0x0201);
     }
@@ -1724,7 +1708,7 @@ mod tests {
         cpu.regs.p = StatusRegister::UNUSED | StatusRegister::C; // I clear, C set
         let s_before = cpu.regs.s;
         cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
-        cpu.step();
+        cpu.step(None);
         // 3 bytes pushed: PC hi, PC lo, P
         assert_eq!(cpu.regs.s, s_before.wrapping_sub(3));
         // Pushed PC should be 0x0200 (PC at time of IRQ)
@@ -1757,7 +1741,7 @@ mod tests {
         cpu.bus.write(NMI_VECTOR + 1, 0x03).unwrap();
         cpu.regs.p.insert(StatusRegister::I); // I set — NMI ignores it
         cpu.interrupts_mut().signal_nmi();
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.pc, 0x0300);
         assert!(cpu.regs.p.contains(StatusRegister::I));
     }
@@ -1770,7 +1754,7 @@ mod tests {
         cpu.regs.p = StatusRegister::UNUSED | StatusRegister::C;
         let s_before = cpu.regs.s;
         cpu.interrupts_mut().signal_nmi();
-        cpu.step();
+        cpu.step(None);
         assert_eq!(cpu.regs.s, s_before.wrapping_sub(3));
         // Pushed P should not have B set
         let pushed_p = cpu.bus.read(STACK_BASE | s_before.wrapping_sub(2) as u16).unwrap();
@@ -1787,7 +1771,7 @@ mod tests {
         cpu.regs.p.remove(StatusRegister::I);
         cpu.interrupts_mut().signal_nmi();
         cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
-        cpu.step();
+        cpu.step(None);
         // Should vector through NMI, not IRQ
         assert_eq!(cpu.regs.pc, 0x0300);
     }
@@ -1801,10 +1785,10 @@ mod tests {
         cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
         cpu.regs.p.remove(StatusRegister::I);
         write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
-        cpu.step(); // execute WAI — sets waiting=true
-        assert!(matches!(cpu.step(), StepResult::Waiting)); // no interrupt yet
+        cpu.step(None); // execute WAI — sets waiting=true
+        assert!(matches!(cpu.step(None), StepResult::Waiting)); // no interrupt yet
         cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
-        cpu.step(); // wakes and services IRQ
+        cpu.step(None); // wakes and services IRQ
         assert_eq!(cpu.regs.pc, 0x0400);
         assert!(!cpu.is_waiting());
     }
@@ -1816,9 +1800,9 @@ mod tests {
         cpu.bus.write(NMI_VECTOR + 1, 0x03).unwrap();
         cpu.regs.p.insert(StatusRegister::I); // I set — NMI still wakes
         write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
-        cpu.step(); // execute WAI
+        cpu.step(None); // execute WAI
         cpu.interrupts_mut().signal_nmi();
-        cpu.step(); // wakes and services NMI
+        cpu.step(None); // wakes and services NMI
         assert_eq!(cpu.regs.pc, 0x0300);
         assert!(!cpu.is_waiting());
     }
@@ -1832,7 +1816,7 @@ mod tests {
         let mut compiler = make_compiler();
         let wp = compiler.compile(expr, cpu.evaluator_mut()).unwrap();
         cpu.evaluator_mut().add(wp);
-        cpu.step()
+        cpu.step(None)
     }
 
     #[test]
@@ -1948,7 +1932,7 @@ mod tests {
     fn stp_cleared_by_reset() {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xDB]); // STP
-        cpu.step(); // execute STP
+        cpu.step(None); // execute STP
         assert!(cpu.is_stopped());
         cpu.reset().unwrap();
         assert!(!cpu.is_stopped());
@@ -1961,7 +1945,7 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
         cpu.add_breakpoint(0x0200);
-        let result = cpu.step();
+        let result = cpu.step(None);
         assert!(matches!(result, StepResult::Breakpoint(0x0200)));
         // Instruction must NOT have been executed — PC must not have advanced.
         assert_eq!(cpu.regs.pc, 0x0200);
@@ -1972,11 +1956,11 @@ mod tests {
         let mut cpu = make_cpu(0x0200);
         write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
         cpu.add_breakpoint(0x0200);
-        assert!(matches!(cpu.step(), StepResult::Breakpoint(0x0200)));
+        assert!(matches!(cpu.step(None), StepResult::Breakpoint(0x0200)));
         // Remove the breakpoint; next step should execute.
         let removed = cpu.remove_breakpoint(0x0200);
         assert!(removed);
-        assert!(matches!(cpu.step(), StepResult::Executed(_)));
+        assert!(matches!(cpu.step(None), StepResult::Executed(_)));
         assert_eq!(cpu.regs.pc, 0x0201);
     }
 
@@ -1987,7 +1971,7 @@ mod tests {
         cpu.add_breakpoint(0x0200);
         cpu.add_breakpoint(0x0201);
         cpu.clear_breakpoints();
-        assert!(matches!(cpu.step(), StepResult::Executed(_)));
+        assert!(matches!(cpu.step(None), StepResult::Executed(_)));
         assert_eq!(cpu.regs.pc, 0x0201);
     }
 
@@ -2005,7 +1989,7 @@ mod tests {
         let mut compiler = make_compiler();
         let wp = compiler.compile("A == 0", cpu.evaluator_mut()).unwrap();
         cpu.evaluator_mut().add(wp);
-        let result = cpu.step();
+        let result = cpu.step(None);
         assert!(matches!(result, StepResult::WatchTriggered { watch_index: 0, pc: 0x0200 }));
         // Instruction must NOT have executed — PC unchanged.
         assert_eq!(cpu.regs.pc, 0x0200);
@@ -2019,7 +2003,7 @@ mod tests {
         let mut compiler = make_compiler();
         let wp = compiler.compile("A == 1", cpu.evaluator_mut()).unwrap();
         cpu.evaluator_mut().add(wp);
-        assert!(matches!(cpu.step(), StepResult::Executed(_)));
+        assert!(matches!(cpu.step(None), StepResult::Executed(_)));
         assert_eq!(cpu.regs.pc, 0x0201);
     }
 
@@ -2031,7 +2015,7 @@ mod tests {
         let mut compiler = make_compiler();
         let wp = compiler.compile("A / 0", cpu.evaluator_mut()).unwrap();
         cpu.evaluator_mut().add(wp);
-        let result = cpu.step();
+        let result = cpu.step(None);
         assert!(matches!(
             result,
             StepResult::WatchError {

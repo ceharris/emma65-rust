@@ -25,7 +25,7 @@ pub use device::{device_event_channel, DeviceEvent, DeviceId, ErrorReceiver, Err
 pub use device::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
 pub use disasm::{DisassembledLine, Disassembler};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
-pub use exec::{run, run_from, step_over, step_return, ClockSpeed, CpuLiveSnapshot, RunHandle, RunStopper, StepResult};
+pub use exec::{run, run_from, step_into, step_over_breakpoint, step_over_subroutine, step_return, ClockSpeed, CpuLiveSnapshot, RunHandle, RunStopper, StepResult};
 pub use transport::{PipeTransport, PtyTransport, TcpTransport, Transport, TransportError, UnixSocketTransport};
 pub use session::EmulatorSession;
 pub use config::{BuildError, Config, CpuVariantSpec, DeviceModule, DeviceModuleError, DeviceRegistry, DeviceSpec, InstantiationContext, RamModule, RomModule, TransportSlot, TransportSpec, TransportSpecFormat};

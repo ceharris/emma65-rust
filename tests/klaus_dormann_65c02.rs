@@ -42,7 +42,7 @@ fn run_functional_test(rom_path: &str, start: u16, success_pc: u16) {
             return;
         }
 
-        match cpu.step() {
+        match cpu.step(None) {
             StepResult::Executed(_) | StepResult::Waiting => {}
             StepResult::Breakpoint(_) | StepResult::WatchTriggered { .. } | StepResult::WatchError { .. } => {
                 unreachable!("no breakpoints or watches configured")
@@ -166,7 +166,7 @@ fn run_interrupt_test(rom_path: &str, start: u16, success_pc: u16) {
             return;
         }
 
-        match cpu.step() {
+        match cpu.step(None) {
             StepResult::Executed(_) | StepResult::Waiting => {}
             StepResult::Breakpoint(_) | StepResult::WatchTriggered { .. } | StepResult::WatchError { .. } => {
                 unreachable!("no breakpoints or watches configured")
@@ -215,7 +215,7 @@ fn run_decimal_test(rom_path: &str, start: u16) {
     cpu.registers_mut().pc = start;
 
     for _ in 0..MAX_STEPS {
-        match cpu.step() {
+        match cpu.step(None) {
             StepResult::Executed(_) | StepResult::Waiting => {}
             StepResult::Breakpoint(_) | StepResult::WatchTriggered { .. } | StepResult::WatchError { .. } => {
                 unreachable!("no breakpoints or watches configured")
