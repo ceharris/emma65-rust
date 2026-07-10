@@ -745,7 +745,7 @@ fn via6522_timer1_sets_ifr() {
         0xA9, 0x00,
         0x8D, 0x05, 0xE0,
     ];
-    prog.extend(std::iter::repeat(0xEA).take(10)); // 10× NOP
+    prog.extend(std::iter::repeat_n(0xEA, 10)); // 10× NOP
     prog.extend_from_slice(&[
         0xAD, 0x0D, 0xE0,
         0x29, 0x40,
