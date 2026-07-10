@@ -4,7 +4,7 @@ use figment::providers::Serialized;
 use serde::Deserialize;
 
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
-use crate::emulator::device::acia6551::Acia6551;
+use crate::emulator::device::Acia6551;
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 
 // Size of the device on the bus (in contiguous bytes of address space)

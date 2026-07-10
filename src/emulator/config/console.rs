@@ -4,7 +4,7 @@ use figment::providers::Serialized;
 use serde::Deserialize;
 
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
-use crate::emulator::device::console::Console;
+use crate::emulator::device::Console;
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 
 // Size of the device on the bus (in contiguous bytes of address space)
