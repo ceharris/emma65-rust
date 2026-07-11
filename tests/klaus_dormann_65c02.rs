@@ -62,7 +62,7 @@ fn run_functional_test(rom_path: &str, start: u16, success_pc: u16) {
     );
 }
 
-/// Single-byte device at `$BFFC` used by the Klaus Dormann interrupt test.
+/// Single-byte device used by the Klaus Dormann interrupt test.
 ///
 /// The test drives the feedback register with an open-collector, active-low protocol:
 /// - Bit 0 low  → assert IRQ; bit 0 high → release IRQ
@@ -71,11 +71,8 @@ fn run_functional_test(rom_path: &str, start: u16, success_pc: u16) {
 /// `irq_active()` and `take_nmi()` are polled by the CPU after each instruction via
 /// `Bus::device_irq_states()` and `Bus::take_device_nmi()`.
 struct FeedbackRegister {
-    /// Current value written by the test program.
     last_value: u8,
-    /// Whether the IRQ line is currently asserted (bit 0 low).
     irq_asserted: bool,
-    /// Latched NMI edge: set on a falling edge of bit 1, cleared by `take_nmi`.
     nmi_pending: bool,
 }
 
@@ -87,11 +84,12 @@ impl FeedbackRegister {
 }
 
 impl IoDevice for FeedbackRegister {
-    fn base_address(&self) -> u16 {
-        0xBFFC
+
+    fn read(&mut self, _address: u16) -> u8 {
+        self.last_value
     }
 
-    fn write_relative(&mut self, _offset: u16, value: u8) {
+    fn write(&mut self, _address: u16, value: u8) {
         let prev = self.last_value;
         self.last_value = value;
         // Bit 0: active-HIGH IRQ (1 = asserted, 0 = released).
@@ -102,11 +100,7 @@ impl IoDevice for FeedbackRegister {
         }
     }
 
-    fn read_relative(&mut self, _offset: u16) -> u8 {
-        self.last_value
-    }
-
-    fn peek_relative(&self, _offset: u16) -> u8 {
+    fn peek(&self, _address: u16) -> u8 {
         self.last_value
     }
 

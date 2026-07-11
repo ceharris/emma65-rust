@@ -105,7 +105,7 @@ impl Bus {
         let value = match self.find_region_mut(addr) {
             Some(RegionMatch::Ram { data, offset }) => Ok(data[offset]),
             Some(RegionMatch::Rom { data, offset, .. }) => Ok(data[offset]),
-            Some(RegionMatch::Device { device, addr }) => Ok(device.read_absolute(addr)),
+            Some(RegionMatch::Device { device, addr }) => Ok(device.read(addr)),
             None => match self.unmapped_policy {
                 UnmappedPolicy::DefaultValue => Ok(UNMAPPED_READ_VALUE),
                 UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
@@ -127,7 +127,7 @@ impl Bus {
                 RomWritePolicy::Error => Err(BusError::RomWrite { addr }),
             },
             Some(RegionMatch::Device { device, addr }) => {
-                device.write_absolute(addr, value);
+                device.write(addr, value);
                 Ok(())
             }
             None => match self.unmapped_policy {
@@ -144,7 +144,7 @@ impl Bus {
         match self.find_region(addr) {
             Some(PeekMatch::Ram { data, offset }) => Ok(data[offset]),
             Some(PeekMatch::Rom { data, offset }) => Ok(data[offset]),
-            Some(PeekMatch::Device { device, addr }) => Ok(device.peek_absolute(addr)),
+            Some(PeekMatch::Device { device, addr }) => Ok(device.peek(addr)),
             None => match self.unmapped_policy {
                 UnmappedPolicy::DefaultValue => Ok(UNMAPPED_READ_VALUE),
                 UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
@@ -408,10 +408,6 @@ impl BusConfig {
         if self.devices.iter().any(|(existing_id, _)| *existing_id == id) {
             return Err(BusConfigError::DuplicateDeviceId(id));
         }
-        debug_assert_eq!(
-            device.base_address(), range.start,
-            "device.base_address() must match the range it's registered at"
-        );
         self.check_overlap(range)?;
         let device_index = self.devices.len();
         self.devices.push((id, device));
@@ -482,18 +478,15 @@ mod tests {
     }
 
     impl IoDevice for MockDevice {
-        fn base_address(&self) -> u16 {
-            self.address
-        }
-        fn read_relative(&mut self, offset: u16) -> u8 {
+        fn read(&mut self, address: u16) -> u8 {
             self.read_count += 1;
-            self.data[offset as usize]
+            self.data[(address - self.address) as usize]
         }
-        fn write_relative(&mut self, offset: u16, value: u8) {
-            self.data[offset as usize] = value;
+        fn write(&mut self, address: u16, value: u8) {
+            self.data[(address - self.address) as usize] = value;
         }
-        fn peek_relative(&self, offset: u16) -> u8 {
-            self.data[offset as usize]
+        fn peek(&self, address: u16) -> u8 {
+            self.data[(address - self.address) as usize]
         }
     }
 
@@ -715,33 +708,21 @@ mod tests {
     }
 
     impl IoDevice for MultiRegionDevice {
-        fn base_address(&self) -> u16 {
-            self.window.start
-        }
-        fn read_relative(&mut self, _offset: u16) -> u8 {
-            unreachable!("multi-region device is dispatched via read_absolute")
-        }
-        fn write_relative(&mut self, _offset: u16, _value: u8) {
-            unreachable!("multi-region device is dispatched via write_absolute")
-        }
-        fn peek_relative(&self, _offset: u16) -> u8 {
-            unreachable!("multi-region device is dispatched via peek_absolute")
-        }
-        fn read_absolute(&mut self, addr: u16) -> u8 {
+        fn read(&mut self, addr: u16) -> u8 {
             if addr == self.register_addr {
                 self.register
             } else {
                 self.window_data[(addr - self.window.start) as usize]
             }
         }
-        fn write_absolute(&mut self, addr: u16, value: u8) {
+        fn write(&mut self, addr: u16, value: u8) {
             if addr == self.register_addr {
                 self.register = value;
             } else {
                 self.window_data[(addr - self.window.start) as usize] = value;
             }
         }
-        fn peek_absolute(&self, addr: u16) -> u8 {
+        fn peek(&self, addr: u16) -> u8 {
             if addr == self.register_addr {
                 self.register
             } else {
@@ -790,28 +771,24 @@ mod tests {
     /// A device whose `claims` response is fixed at construction, for exercising
     /// conditional chip-select fallthrough.
     struct DecliningDevice {
-        address: u16,
         claims: bool,
         value: u8,
     }
 
     impl DecliningDevice {
-        fn new(address: u16, value: u8, claims: bool) -> Self {
-            Self { address, claims, value }
+        fn new(value: u8, claims: bool) -> Self {
+            Self { claims, value }
         }
     }
 
     impl IoDevice for DecliningDevice {
-        fn base_address(&self) -> u16 {
-            self.address
-        }
-        fn read_relative(&mut self, _offset: u16) -> u8 {
+        fn read(&mut self, _offset: u16) -> u8 {
             self.value
         }
-        fn write_relative(&mut self, _offset: u16, value: u8) {
+        fn write(&mut self, _offset: u16, value: u8) {
             self.value = value;
         }
-        fn peek_relative(&self, _offset: u16) -> u8 {
+        fn peek(&self, _offset: u16) -> u8 {
             self.value
         }
         fn claims(&self, _addr: u16) -> bool {
@@ -822,7 +799,7 @@ mod tests {
     #[test]
     fn claims_true_dispatches_to_device() {
         let rom_data = vec![0xEAu8; 0x100];
-        let claiming = Box::new(DecliningDevice::new(0xC010, 0x99, true));
+        let claiming = Box::new(DecliningDevice::new(0x99, true));
         let mut bus = Bus::config()
             .rom(AddressRange::new(0xC000, 0xC0FF), rom_data)
             .unwrap()
@@ -835,7 +812,7 @@ mod tests {
     #[test]
     fn claims_false_falls_through_to_underlying_region() {
         let rom_data = vec![0xEAu8; 0x100];
-        let declining = Box::new(DecliningDevice::new(0xC010, 0x99, false));
+        let declining = Box::new(DecliningDevice::new(0x99, false));
         let mut bus = Bus::config()
             .rom(AddressRange::new(0xC000, 0xC0FF), rom_data)
             .unwrap()
@@ -848,7 +825,7 @@ mod tests {
 
     #[test]
     fn claims_false_falls_through_to_unmapped_default_value() {
-        let declining = Box::new(DecliningDevice::new(0x1234, 0x99, false));
+        let declining = Box::new(DecliningDevice::new(0x99, false));
         let mut bus = Bus::config()
             .unmapped_policy(UnmappedPolicy::DefaultValue)
             .device(AddressRange::new(0x1234, 0x1234), DeviceId(1), declining)
@@ -859,7 +836,7 @@ mod tests {
 
     #[test]
     fn claims_false_falls_through_to_unmapped_error() {
-        let declining = Box::new(DecliningDevice::new(0x1234, 0x99, false));
+        let declining = Box::new(DecliningDevice::new(0x99, false));
         let mut bus = Bus::config()
             .unmapped_policy(UnmappedPolicy::Error)
             .device(AddressRange::new(0x1234, 0x1234), DeviceId(1), declining)
@@ -871,8 +848,8 @@ mod tests {
     #[test]
     fn claims_walks_multiple_shadow_levels() {
         let rom_data = vec![0xEAu8; 0x8000];
-        let middle = Box::new(DecliningDevice::new(0xDF00, 0x11, false));
-        let inner = Box::new(DecliningDevice::new(0xDF00, 0x22, false));
+        let middle = Box::new(DecliningDevice::new(0x11, false));
+        let inner = Box::new(DecliningDevice::new(0x22, false));
         let mut bus = Bus::config()
             .rom(AddressRange::new(0x8000, 0xFFFF), rom_data)
             .unwrap()
@@ -888,7 +865,6 @@ mod tests {
     /// A device with shared, thread-safe call counters for verifying that per-device
     /// lifecycle methods fire once per device rather than once per mapped region.
     struct CountingDevice {
-        address: u16,
         tick_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         reset_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         irq_active_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -896,12 +872,9 @@ mod tests {
     }
 
     impl IoDevice for CountingDevice {
-        fn base_address(&self) -> u16 {
-            self.address
-        }
-        fn read_relative(&mut self, _offset: u16) -> u8 { 0 }
-        fn write_relative(&mut self, _offset: u16, _value: u8) {}
-        fn peek_relative(&self, _offset: u16) -> u8 { 0 }
+        fn read(&mut self, _offset: u16) -> u8 { 0 }
+        fn write(&mut self, _offset: u16, _value: u8) {}
+        fn peek(&self, _offset: u16) -> u8 { 0 }
         fn tick(&mut self, _cycles: u32) {
             self.tick_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -928,7 +901,6 @@ mod tests {
         let irq_active_count = Arc::new(AtomicUsize::new(0));
         let take_nmi_count = Arc::new(AtomicUsize::new(0));
         let device = Box::new(CountingDevice {
-            address: 0xDF00,
             tick_count: tick_count.clone(),
             reset_count: reset_count.clone(),
             irq_active_count: irq_active_count.clone(),

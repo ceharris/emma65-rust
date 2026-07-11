@@ -110,37 +110,11 @@ impl Phoebe {
 
 impl IoDevice for Phoebe {
 
-    #[allow(dead_code)]
-    fn base_address(&self) -> u16 {
-       self.rom_region.start
+    fn read(&mut self, address: u16) -> u8 {
+        self.peek(address)
     }
 
-    fn read_relative(&mut self, _offset: u16) -> u8 {
-        unreachable!("all reads are handled in `read_absolute()`")
-    }
-
-    fn write_relative(&mut self, _offset: u16, _value: u8) {
-        unreachable!("all writes are handled in `write_absolute()`")
-    }
-
-    fn peek_relative(&self, offset: u16) -> u8 {
-        if offset < BANK_SIZE {
-            // NOTE: If `selected_bank == NUM_BANKS - 1`, `claims()` will return false for any
-            // address in the lower half of the region, in which case the bus won't call on this
-            // device, so this code isn't executed.
-            let effective_addr = (BANK_SIZE * (self.selected_bank as u16) + offset) as usize;
-            self.data[effective_addr]
-        } else {
-            let effective_addr = offset.wrapping_add((NUM_BANKS - 2) as u16 * BANK_SIZE) as usize;
-            self.data[effective_addr]
-        }
-    }
-
-    fn read_absolute(&mut self, address: u16) -> u8 {
-        self.peek_absolute(address)
-    }
-
-    fn write_absolute(&mut self, address: u16, value: u8) {
+    fn write(&mut self, address: u16, value: u8) {
         if address == self.register_address {
             self.selected_bank = value & SELECTION_MASK;
         } else if let Some(write_policy) = self.write_policy {
@@ -151,11 +125,21 @@ impl IoDevice for Phoebe {
         }
     }
 
-    fn peek_absolute(&self, address: u16) -> u8 {
+    fn peek(&self, address: u16) -> u8 {
         if address == self.register_address {
             self.selected_bank
         } else {
-            self.peek_relative(address - self.rom_region.start)
+            let offset = address - self.rom_region.start;
+            if offset < BANK_SIZE {
+                // NOTE: If `selected_bank == NUM_BANKS - 1`, `claims()` will return false for any
+                // address in the lower half of the region, in which case the bus won't call on this
+                // device, so this code isn't executed.
+                let effective_addr = (BANK_SIZE * (self.selected_bank as u16) + offset) as usize;
+                self.data[effective_addr]
+            } else {
+                let effective_addr = offset.wrapping_add((NUM_BANKS - 2) as u16 * BANK_SIZE) as usize;
+                self.data[effective_addr]
+            }
         }
     }
 
@@ -194,27 +178,27 @@ mod tests {
     #[should_panic]
     fn read_absolute_panics_when_no_data() {
         let mut device = rom_device();
-        device.read_absolute(START_ADDR);
+        device.read(START_ADDR);
     }
 
     #[test]
     #[should_panic]
     fn peek_absolute_panics_when_no_data() {
         let device = rom_device();
-        device.peek_relative(0);
+        device.peek(0);
     }
 
     #[test]
     fn write_absolute_ignored_when_policy_is_none() {
         let mut device = rom_device();
-        device.write_absolute(START_ADDR, 0);
+        device.write(START_ADDR, 0);
     }
 
     #[test]
     fn write_absolute_ignored_when_policy_is_ignore() {
         let mut device = rom_device();
         device.set_write_policy(RomWritePolicy::Ignore);
-        device.write_absolute(START_ADDR, 0);
+        device.write(START_ADDR, 0);
     }
 
     #[tokio::test]
@@ -225,7 +209,7 @@ mod tests {
         device.set_error_sender(tx, device_id);
         device.set_write_policy(RomWritePolicy::Error);
 
-        device.write_absolute(START_ADDR, 0);
+        device.write(START_ADDR, 0);
 
         match rx.try_recv() {
             Ok(event) => {
@@ -276,11 +260,11 @@ mod tests {
         let mut device = Phoebe::with_data("phoebe", AddressRange::new(START_ADDR, END_ADDR), REGISTER_ADDR, data);
         for bank in 0..=3 {
             device.selected_bank = bank;
-            assert_eq!(device.peek_absolute(START_ADDR), bank);
-            assert_eq!(device.peek_absolute(START_ADDR + BANK_SIZE - 1), bank);
+            assert_eq!(device.peek(START_ADDR), bank);
+            assert_eq!(device.peek(START_ADDR + BANK_SIZE - 1), bank);
         }
-        assert_eq!(device.peek_absolute(START_ADDR.wrapping_add(BANK_SIZE)), NUM_BANKS - 1);
-        assert_eq!(device.peek_absolute(START_ADDR.wrapping_add(2*BANK_SIZE).wrapping_sub(1)), NUM_BANKS - 1);
+        assert_eq!(device.peek(START_ADDR.wrapping_add(BANK_SIZE)), NUM_BANKS - 1);
+        assert_eq!(device.peek(START_ADDR.wrapping_add(2*BANK_SIZE).wrapping_sub(1)), NUM_BANKS - 1);
     }
 
     #[test]
