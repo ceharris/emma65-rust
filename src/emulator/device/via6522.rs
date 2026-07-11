@@ -684,13 +684,9 @@ impl Via6522 {
 }
 
 impl IoDevice for Via6522 {
-    fn base_address(&self) -> u16 {
-        self.address
-    }
 
-    /// Reads the register at `offset` with side effects.
-    fn read_relative(&mut self, offset: u16) -> u8 {
-        match offset {
+    fn read(&mut self, address: u16) -> u8 {
+        match address - self.address {
             0x0 => {
                 // Reading ORB clears CB1 flag and CB2 flag (only in non-independent input modes).
                 self.clear_ifr(IRQ_CB1);
@@ -738,9 +734,8 @@ impl IoDevice for Via6522 {
         }
     }
 
-    /// Writes the register at `offset` with side effects.
-    fn write_relative(&mut self, offset: u16, value: u8) {
-        match offset {
+    fn write(&mut self, address: u16, value: u8) {
+        match address - self.address {
             0x0 => {
                 // Writing ORB: update output register, clear CB1/CB2 flags (CB2 only in non-independent modes).
                 let old_orb = self.orb;
@@ -908,9 +903,8 @@ impl IoDevice for Via6522 {
         }
     }
 
-    /// Reads the register at `offset` without side effects.
-    fn peek_relative(&self, offset: u16) -> u8 {
-        match offset {
+    fn peek(&self, address: u16) -> u8 {
+        match address - self.address {
             0x0 => self.read_port_b(),
             0x1 => self.read_port_a(),
             0x2 => self.ddrb,
@@ -931,7 +925,6 @@ impl IoDevice for Via6522 {
         }
     }
 
-    /// Ticks timers and polls transports for incoming protocol messages.
     fn tick(&mut self, cycles: u32) {
         self.poll_transports();
         for i in 0..2*cycles {
@@ -946,7 +939,6 @@ impl IoDevice for Via6522 {
         }
     }
 
-    /// Resets the device without disturbing state that is under peripheral control
     fn reset(&mut self) {
         let address = self.address;
         let transports = std::mem::take(&mut self.transports);
@@ -989,7 +981,6 @@ impl IoDevice for Via6522 {
         self.send_state_to_all();
     }
 
-    /// Returns `true` when any enabled interrupt flag is set.
     fn irq_active(&self) -> bool {
         self.ifr & self.ier & 0x7F != 0
     }
@@ -997,6 +988,7 @@ impl IoDevice for Via6522 {
     fn name(&self) -> &str {
         "via/6522"
     }
+
 }
 
 #[cfg(test)]
@@ -1038,18 +1030,18 @@ mod tests {
     #[test]
     fn new_all_registers_zero() {
         let via = device();
-        assert_eq!(via.peek_relative(0x0), 0); // ORB
-        assert_eq!(via.peek_relative(0x1), 0); // ORA
-        assert_eq!(via.peek_relative(0x2), 0); // DDRB
-        assert_eq!(via.peek_relative(0x3), 0); // DDRA
-        assert_eq!(via.peek_relative(0xB), 0); // ACR
-        assert_eq!(via.peek_relative(0xC), 0); // PCR
+        assert_eq!(via.peek(0x0), 0); // ORB
+        assert_eq!(via.peek(0x1), 0); // ORA
+        assert_eq!(via.peek(0x2), 0); // DDRB
+        assert_eq!(via.peek(0x3), 0); // DDRA
+        assert_eq!(via.peek(0xB), 0); // ACR
+        assert_eq!(via.peek(0xC), 0); // PCR
     }
 
     #[test]
     fn new_ier_reads_with_bit7_set() {
         let via = device();
-        assert_eq!(via.peek_relative(0xE), 0x80);
+        assert_eq!(via.peek(0xE), 0x80);
     }
 
     #[test]
@@ -1063,33 +1055,33 @@ mod tests {
     #[test]
     fn ddrb_controls_output_vs_input() {
         let mut via = device();
-        via.write_relative(0x2, 0xF0); // upper nibble = output, lower = input
+        via.write(0x2, 0xF0); // upper nibble = output, lower = input
         via.input_b = 0x0A;   // simulate peripheral driving lower nibble
-        via.write_relative(0x0, 0x50); // write 0x50 to ORB (upper nibble)
-        assert_eq!(via.read_relative(0x0), 0x5A); // output bits from ORB, input bits from input_b
+        via.write(0x0, 0x50); // write 0x50 to ORB (upper nibble)
+        assert_eq!(via.read(0x0), 0x5A); // output bits from ORB, input bits from input_b
     }
 
     #[test]
     fn ddra_controls_output_vs_input() {
         let mut via = device();
-        via.write_relative(0x3, 0x0F); // lower nibble = output, upper = input
+        via.write(0x3, 0x0F); // lower nibble = output, upper = input
         via.input_a = 0xC0;
-        via.write_relative(0x1, 0x07);
-        assert_eq!(via.read_relative(0x1), 0xC7);
+        via.write(0x1, 0x07);
+        assert_eq!(via.read(0x1), 0xC7);
     }
 
     #[test]
     fn write_read_ddrb() {
         let mut via = device();
-        via.write_relative(0x2, 0xAA);
-        assert_eq!(via.peek_relative(0x2), 0xAA);
+        via.write(0x2, 0xAA);
+        assert_eq!(via.peek(0x2), 0xAA);
     }
 
     #[test]
     fn write_read_ddra() {
         let mut via = device();
-        via.write_relative(0x3, 0x55);
-        assert_eq!(via.peek_relative(0x3), 0x55);
+        via.write(0x3, 0x55);
+        assert_eq!(via.peek(0x3), 0x55);
     }
 
     // --- ACR / PCR ---
@@ -1097,15 +1089,15 @@ mod tests {
     #[test]
     fn write_read_acr() {
         let mut via = device();
-        via.write_relative(0xB, 0x5A);
-        assert_eq!(via.peek_relative(0xB), 0x5A);
+        via.write(0xB, 0x5A);
+        assert_eq!(via.peek(0xB), 0x5A);
     }
 
     #[test]
     fn write_read_pcr() {
         let mut via = device();
-        via.write_relative(0xC, 0xA5);
-        assert_eq!(via.peek_relative(0xC), 0xA5);
+        via.write(0xC, 0xA5);
+        assert_eq!(via.peek(0xC), 0xA5);
     }
 
     // --- IER ---
@@ -1113,16 +1105,16 @@ mod tests {
     #[test]
     fn ier_set_bits_with_bit7() {
         let mut via = device();
-        via.write_relative(0xE, 0x82); // set bit 1 (CA1)
-        assert_eq!(via.peek_relative(0xE), 0x82); // bit 7 always 1 on read
+        via.write(0xE, 0x82); // set bit 1 (CA1)
+        assert_eq!(via.peek(0xE), 0x82); // bit 7 always 1 on read
     }
 
     #[test]
     fn ier_clear_bits_without_bit7() {
         let mut via = device();
-        via.write_relative(0xE, 0xFF); // set all
-        via.write_relative(0xE, 0x02); // clear bit 1
-        assert_eq!(via.peek_relative(0xE), 0xFD);
+        via.write(0xE, 0xFF); // set all
+        via.write(0xE, 0x02); // clear bit 1
+        assert_eq!(via.peek(0xE), 0xFD);
     }
 
     // --- IFR ---
@@ -1131,29 +1123,29 @@ mod tests {
     fn write_ifr_clears_bits() {
         let mut via = device();
         via.set_ifr(0x42); // manually set bits 1 and 6
-        via.write_relative(0xD, 0x40); // clear bit 6
-        assert_eq!(via.peek_relative(0xD) & 0x7F, 0x02);
+        via.write(0xD, 0x40); // clear bit 6
+        assert_eq!(via.peek(0xD) & 0x7F, 0x02);
     }
 
     #[test]
     fn ifr_bit7_set_when_enabled_flag_set() {
         let mut via = device();
-        via.write_relative(0xE, 0x82); // enable CA1
+        via.write(0xE, 0x82); // enable CA1
         via.set_ifr(IRQ_CA1);
-        assert_ne!(via.peek_relative(0xD) & 0x80, 0);
+        assert_ne!(via.peek(0xD) & 0x80, 0);
     }
 
     #[test]
     fn ifr_bit7_clear_when_no_enabled_flags() {
         let mut via = device();
         via.set_ifr(IRQ_CA1); // flag set but IER has CA1 disabled
-        assert_eq!(via.peek_relative(0xD) & 0x80, 0);
+        assert_eq!(via.peek(0xD) & 0x80, 0);
     }
 
     #[test]
     fn irq_active_when_enabled_flag_set() {
         let mut via = device();
-        via.write_relative(0xE, 0x82); // enable CA1
+        via.write(0xE, 0x82); // enable CA1
         via.set_ifr(IRQ_CA1);
         assert!(via.irq_active());
     }
@@ -1171,51 +1163,51 @@ mod tests {
     fn read_orb_clears_cb1_cb2_flags() {
         let mut via = device();
         via.set_ifr(IRQ_CB1 | IRQ_CB2);
-        via.read_relative(0x0);
-        assert_eq!(via.peek_relative(0xD) & (IRQ_CB1 | IRQ_CB2), 0);
+        via.read(0x0);
+        assert_eq!(via.peek(0xD) & (IRQ_CB1 | IRQ_CB2), 0);
     }
 
     #[test]
     fn read_ora_clears_ca1_ca2_flags() {
         let mut via = device();
         via.set_ifr(IRQ_CA1 | IRQ_CA2);
-        via.read_relative(0x1);
-        assert_eq!(via.peek_relative(0xD) & (IRQ_CA1 | IRQ_CA2), 0);
+        via.read(0x1);
+        assert_eq!(via.peek(0xD) & (IRQ_CA1 | IRQ_CA2), 0);
     }
 
     #[test]
     fn read_t1cl_clears_t1_flag() {
         let mut via = device();
         via.set_ifr(IRQ_T1);
-        via.read_relative(0x4);
-        assert_eq!(via.peek_relative(0xD) & IRQ_T1, 0);
+        via.read(0x4);
+        assert_eq!(via.peek(0xD) & IRQ_T1, 0);
     }
 
     #[test]
     fn read_t2cl_clears_t2_flag() {
         let mut via = device();
         via.set_ifr(IRQ_T2);
-        via.read_relative(0x8);
-        assert_eq!(via.peek_relative(0xD) & IRQ_T2, 0);
+        via.read(0x8);
+        assert_eq!(via.peek(0xD) & IRQ_T2, 0);
     }
 
     #[test]
     fn read_sr_clears_sr_flag() {
         let mut via = device();
         via.set_ifr(IRQ_SR);
-        via.read_relative(0xA);
-        assert_eq!(via.peek_relative(0xD) & IRQ_SR, 0);
+        via.read(0xA);
+        assert_eq!(via.peek(0xD) & IRQ_SR, 0);
     }
 
     #[test]
     fn peek_does_not_clear_flags() {
         let mut via = device();
         via.set_ifr(IRQ_CA1 | IRQ_CB1 | IRQ_T1 | IRQ_T2);
-        let _ = via.peek_relative(0x0); // ORB
-        let _ = via.peek_relative(0x1); // ORA
-        let _ = via.peek_relative(0x4); // T1CL
-        let _ = via.peek_relative(0x8); // T2CL
-        assert_eq!(via.peek_relative(0xD) & 0x7F, IRQ_CA1 | IRQ_CB1 | IRQ_T1 | IRQ_T2);
+        let _ = via.peek(0x0); // ORB
+        let _ = via.peek(0x1); // ORA
+        let _ = via.peek(0x4); // T1CL
+        let _ = via.peek(0x8); // T2CL
+        assert_eq!(via.peek(0xD) & 0x7F, IRQ_CA1 | IRQ_CB1 | IRQ_T1 | IRQ_T2);
     }
 
     // --- Timer 1 ---
@@ -1223,29 +1215,29 @@ mod tests {
     #[test]
     fn t1_write_ch_starts_timer() {
         let mut via = device();
-        via.write_relative(0x4, 0x10); // latch low
-        via.write_relative(0x5, 0x00); // latch high + start
-        assert_eq!(via.peek_relative(0x4), 0x10);
+        via.write(0x4, 0x10); // latch low
+        via.write(0x5, 0x00); // latch high + start
+        assert_eq!(via.peek(0x4), 0x10);
         assert!(via.t1_running);
     }
 
     #[test]
     fn t1_one_shot_fires_irq_on_underflow() {
         let mut via = device();
-        via.write_relative(0xE, 0xC0); // enable T1 IRQ
-        via.write_relative(0xB, T1_MODE_ONE_SHOT); // one-shot mode
-        via.write_relative(0x4, 10u8);
-        via.write_relative(0x5, 0x00);
+        via.write(0xE, 0xC0); // enable T1 IRQ
+        via.write(0xB, T1_MODE_ONE_SHOT); // one-shot mode
+        via.write(0x4, 10u8);
+        via.write(0x5, 0x00);
         via.tick(10);
-        assert_ne!(via.peek_relative(0xD) & IRQ_T1, 0);
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0);
         assert!(via.irq_active());
     }
 
     #[test]
     fn t1_one_shot_stops_after_underflow() {
         let mut via = device();
-        via.write_relative(0x4, 5u8);
-        via.write_relative(0x5, 0x00);
+        via.write(0x4, 5u8);
+        via.write(0x5, 0x00);
         via.tick(10);
         assert!(!via.t1_running);
     }
@@ -1253,20 +1245,20 @@ mod tests {
     #[test]
     fn t1_free_run_reloads_after_underflow() {
         let mut via = device();
-        via.write_relative(0xB, T1_MODE_FREE_RUN);
-        via.write_relative(0x4, 10u8);
-        via.write_relative(0x5, 0x00);
+        via.write(0xB, T1_MODE_FREE_RUN);
+        via.write(0x4, 10u8);
+        via.write(0x5, 0x00);
         via.tick(10); // first underflow
         assert!(via.t1_running);
-        assert_ne!(via.peek_relative(0xD) & IRQ_T1, 0);
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0);
     }
 
     #[test]
     fn t1_write_latch_high_clears_t1_flag() {
         let mut via = device();
         via.set_ifr(IRQ_T1);
-        via.write_relative(0x7, 0x00); // write latch high
-        assert_eq!(via.peek_relative(0xD) & IRQ_T1, 0);
+        via.write(0x7, 0x00); // write latch high
+        assert_eq!(via.peek(0xD) & IRQ_T1, 0);
     }
 
     #[test]
@@ -1277,9 +1269,9 @@ mod tests {
         via.tick(1); // process handshake
 
         via.orb = 0x80;     // set PB7 high
-        via.write_relative(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
-        via.write_relative(0x4, 10);
-        via.write_relative(0x5, 0);
+        via.write(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
+        via.write(0x4, 10);
+        via.write(0x5, 0);
         via.tick(5);
 
         let received = collect_bytes(&mut remote);
@@ -1294,9 +1286,9 @@ mod tests {
 
         via.orb = 0x0;          // set PB7 low
         via.t1_pb7 = false;     // Timer 1 PB7 is driving PB7 low
-        via.write_relative(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
-        via.write_relative(0x4, 10);
-        via.write_relative(0x5, 0);
+        via.write(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
+        via.write(0x4, 10);
+        via.write(0x5, 0);
         via.tick(10);
 
         let received = collect_bytes(&mut remote);
@@ -1315,16 +1307,16 @@ mod tests {
 
         via.ddrb = 0x80;    // PB7 is an output
         via.orb = 0x00;     // set PB7 low
-        via.write_relative(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
-        via.write_relative(0x4, 5);
-        via.write_relative(0x5, 0);
+        via.write(0xB, T1_MODE_ONE_SHOT | ACR_T1_PB7_OUTPUT);
+        via.write(0x4, 5);
+        via.write(0x5, 0);
         via.tick(5);
 
         let received = collect_bytes(&mut remote);
         assert!(received.windows(3).any(|w| w == b"B80"),
                 "expected B80 in {:?}", String::from_utf8_lossy(&received));
 
-        via.write_relative(0xB, 0);      // disable PB7 output mode
+        via.write(0xB, 0);      // disable PB7 output mode
 
         let received = collect_bytes(&mut remote);
         assert!(received.windows(3).any(|w| w == b"B00"),
@@ -1337,27 +1329,27 @@ mod tests {
     #[test]
     fn t2_write_ch_starts_timer() {
         let mut via = device();
-        via.write_relative(0x8, 0x05); // latch low
-        via.write_relative(0x9, 0x00); // high + start
+        via.write(0x8, 0x05); // latch low
+        via.write(0x9, 0x00); // high + start
         assert!(via.t2_running);
     }
 
     #[test]
     fn t2_fires_irq_on_underflow() {
         let mut via = device();
-        via.write_relative(0xE, 0xA0); // enable T2 IRQ
-        via.write_relative(0x8, 5u8);
-        via.write_relative(0x9, 0x00);
+        via.write(0xE, 0xA0); // enable T2 IRQ
+        via.write(0x8, 5u8);
+        via.write(0x9, 0x00);
         via.tick(5);
-        assert_ne!(via.peek_relative(0xD) & IRQ_T2, 0);
+        assert_ne!(via.peek(0xD) & IRQ_T2, 0);
         assert!(via.irq_active());
     }
 
     #[test]
     fn t2_disarms_irq_after_underflow() {
         let mut via = device();
-        via.write_relative(0x8, 5u8);
-        via.write_relative(0x9, 0x00);
+        via.write(0x8, 5u8);
+        via.write(0x9, 0x00);
         via.tick(10);
         assert!(!via.t2_irq_armed, "IRQ arm must be cleared after underflow");
         assert!(via.t2_running, "counter must keep running after underflow");
@@ -1366,8 +1358,8 @@ mod tests {
     #[test]
     fn t2_counter_continues_after_underflow() {
         let mut via = device();
-        via.write_relative(0x8, 5u8);
-        via.write_relative(0x9, 0x00);
+        via.write(0x8, 5u8);
+        via.write(0x9, 0x00);
         via.tick(5); // 5th tick_timers call: counter reaches 0 → underflow, counter = 0
         // Next tick immediately underflows again (0 - 1 wraps to 0xFFFF), then keeps decrementing.
         via.tick(3); // 3 more tick_timers calls: 0→0xFFFF, 0xFFFF→0xFFFE, 0xFFFE→0xFFFD
@@ -1377,13 +1369,13 @@ mod tests {
     #[test]
     fn t2_does_not_fire_irq_again_after_underflow_without_reload() {
         let mut via = device();
-        via.write_relative(0x8, 3u8);
-        via.write_relative(0x9, 0x00);
+        via.write(0x8, 3u8);
+        via.write(0x9, 0x00);
         via.tick(3); // underflow → IRQ fires
-        via.write_relative(0xD, IRQ_T2); // clear IRQ_T2
+        via.write(0xD, IRQ_T2); // clear IRQ_T2
         // Tick enough for counter to wrap from 0xFFFF back to near 0 and underflow again.
         via.tick(0xFFFF);
-        assert_eq!(via.peek_relative(0xD) & IRQ_T2, 0, "IRQ_T2 must not fire again without reloading T2CH");
+        assert_eq!(via.peek(0xD) & IRQ_T2, 0, "IRQ_T2 must not fire again without reloading T2CH");
     }
 
     // --- Timer 1 additional coverage ---
@@ -1391,70 +1383,70 @@ mod tests {
     #[test]
     fn t1_latch_low_read_returns_latch_not_counter() {
         let mut via = device();
-        via.write_relative(0x4, 0x10u8); // latch low = 0x10
-        via.write_relative(0x5, 0x00);   // start timer, period = 0x0010
+        via.write(0x4, 0x10u8); // latch low = 0x10
+        via.write(0x5, 0x00);   // start timer, period = 0x0010
         via.tick(8);             // counter now 0x0008
-        assert_eq!(via.read_relative(0x6), 0x10, "T1L-L read must return latch, not counter");
+        assert_eq!(via.read(0x6), 0x10, "T1L-L read must return latch, not counter");
     }
 
     #[test]
     fn t1_latch_low_read_does_not_clear_irq() {
         let mut via = device();
         via.set_ifr(IRQ_T1);
-        via.read_relative(0x6); // T1L-L read must not clear IRQ_T1
-        assert_ne!(via.peek_relative(0xD) & IRQ_T1, 0, "IRQ_T1 must not be cleared by T1L-L read");
+        via.read(0x6); // T1L-L read must not clear IRQ_T1
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must not be cleared by T1L-L read");
     }
 
     #[test]
     fn t1_latch_high_write_does_not_reload_counter() {
         let mut via = device();
-        via.write_relative(0x4, 20u8);
-        via.write_relative(0x5, 0x00); // start, period = 20
+        via.write(0x4, 20u8);
+        via.write(0x5, 0x00); // start, period = 20
         via.tick(8);           // counter ≈ 12
         let counter_before = via.t1_counter;
-        via.write_relative(0x7, 0x00); // write T1L-H — clears IRQ but must not reload counter
+        via.write(0x7, 0x00); // write T1L-H — clears IRQ but must not reload counter
         assert_eq!(via.t1_counter, counter_before, "T1L-H write must not reload the running counter");
     }
 
     #[test]
     fn t1_retrigger_restarts_countdown_from_new_latch() {
         let mut via = device();
-        via.write_relative(0x4, 20u8);
-        via.write_relative(0x5, 0x00); // start, period = 20
+        via.write(0x4, 20u8);
+        via.write(0x5, 0x00); // start, period = 20
         via.tick(5);           // mid-countdown
-        via.write_relative(0x4, 0x0Au8); // new latch low = 10
-        via.write_relative(0x5, 0x00);   // write T1CH — re-triggers with new period 10
+        via.write(0x4, 0x0Au8); // new latch low = 10
+        via.write(0x5, 0x00);   // write T1CH — re-triggers with new period 10
         assert_eq!(via.t1_counter, 10, "re-trigger must load new latch value into counter");
         assert!(via.t1_running);
-        assert_eq!(via.peek_relative(0xD) & IRQ_T1, 0, "IRQ_T1 must be cleared on re-trigger");
+        assert_eq!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must be cleared on re-trigger");
     }
 
     #[test]
     fn t1_free_run_fires_irq_on_consecutive_underflows() {
         let mut via = device();
-        via.write_relative(0xB, T1_MODE_FREE_RUN);
-        via.write_relative(0x4, 5u8);
-        via.write_relative(0x5, 0x00); // period = 5
+        via.write(0xB, T1_MODE_FREE_RUN);
+        via.write(0x4, 5u8);
+        via.write(0x5, 0x00); // period = 5
         via.tick(5);           // first underflow
-        assert_ne!(via.peek_relative(0xD) & IRQ_T1, 0, "IRQ_T1 must be set after first underflow");
-        via.read_relative(0x4);         // clear IRQ_T1 by reading T1CL
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must be set after first underflow");
+        via.read(0x4);         // clear IRQ_T1 by reading T1CL
         via.tick(5);           // second underflow
-        assert_ne!(via.peek_relative(0xD) & IRQ_T1, 0, "IRQ_T1 must fire again after second underflow");
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must fire again after second underflow");
     }
 
     #[test]
     fn t1_latch_update_while_running_takes_effect_on_next_reload() {
         let mut via = device();
-        via.write_relative(0xB, T1_MODE_FREE_RUN);
-        via.write_relative(0x4, 20u8);
-        via.write_relative(0x5, 0x00); // period = 20, timer running
+        via.write(0xB, T1_MODE_FREE_RUN);
+        via.write(0x4, 20u8);
+        via.write(0x5, 0x00); // period = 20, timer running
         // Update latch only while running (offsets 0x4 and 0x7 — no counter reload).
-        via.write_relative(0x4, 0x0Au8); // new latch low = 10
-        via.write_relative(0x7, 0x00);   // new latch high = 0; IRQ cleared, counter not reloaded
+        via.write(0x4, 0x0Au8); // new latch low = 10
+        via.write(0x7, 0x00);   // new latch high = 0; IRQ cleared, counter not reloaded
         via.tick(20);            // first underflow: reloads from new latch (10)
-        via.read_relative(0x4);           // clear IRQ_T1
+        via.read(0x4);           // clear IRQ_T1
         via.tick(10);            // second period of 10
-        assert_ne!(via.peek_relative(0xD) & IRQ_T1, 0, "IRQ_T1 must fire with the new latch period after reload");
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0, "IRQ_T1 must fire with the new latch period after reload");
     }
 
     // --- Timer 1 PB7 toggle ---
@@ -1462,9 +1454,9 @@ mod tests {
     #[test]
     fn t1_pb7_toggles_on_underflow_when_enabled() {
         let mut via = device();
-        via.write_relative(0xB, ACR_T1_PB7_OUTPUT | T1_MODE_FREE_RUN);
-        via.write_relative(0x4, 5);
-        via.write_relative(0x5, 0);
+        via.write(0xB, ACR_T1_PB7_OUTPUT | T1_MODE_FREE_RUN);
+        via.write(0x4, 5);
+        via.write(0x5, 0);
         let before = via.read_port_b() & 0x80;
         via.tick(5);
         let after = via.read_port_b() & 0x80;
@@ -1483,9 +1475,9 @@ mod tests {
         assert!(received.windows(3).any(|w| w == b"B00"),
                 "expected B00 in {:?}", String::from_utf8_lossy(&received));
 
-        via.write_relative(0xB, ACR_T1_PB7_OUTPUT | T1_MODE_FREE_RUN);
-        via.write_relative(0x4, 5);
-        via.write_relative(0x5, 0);
+        via.write(0xB, ACR_T1_PB7_OUTPUT | T1_MODE_FREE_RUN);
+        via.write(0x4, 5);
+        via.write(0x5, 0);
 
         via.tick(5);
         let received = collect_bytes(&mut remote);
@@ -1511,8 +1503,8 @@ mod tests {
         via.tick(1); // process handshake
 
         // Configure PB0 as output.
-        via.write_relative(0x2, 0x01);
-        via.write_relative(0x0, 0x01); // drive PB0 high
+        via.write(0x2, 0x01);
+        via.write(0x0, 0x01); // drive PB0 high
 
         std::thread::sleep(Duration::from_millis(1));
         let received = collect_bytes(&mut remote);
@@ -1555,7 +1547,7 @@ mod tests {
         via.tick(1);
 
         // PB pins configured as inputs (DDRB=0), so read returns input_b.
-        assert_eq!(via.read_relative(0x0), 0xAB);
+        assert_eq!(via.read(0x0), 0xAB);
     }
 
     #[test]
@@ -1570,7 +1562,7 @@ mod tests {
         via.tick(1);
 
         // PA pins configured as inputs (DDRA=0), so read returns input_a.
-        assert_eq!(via.read_relative(0x1), 0x55);
+        assert_eq!(via.read(0x1), 0x55);
     }
 
     // --- Control signal interrupts ---
@@ -1578,8 +1570,8 @@ mod tests {
     #[test]
     fn incoming_ca1_low_triggers_irq_when_neg_edge_configured() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write_relative(0xE, 0x82); // enable CA1 IRQ
-        via.write_relative(0xC, 0x00); // PCR: CA1 negative edge (bit 0 = 0)
+        via.write(0xE, 0x82); // enable CA1 IRQ
+        via.write(0xC, 0x00); // PCR: CA1 negative edge (bit 0 = 0)
         via.ca1 = true; // start high
 
         remote.send(0x20).unwrap();
@@ -1590,15 +1582,15 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        assert_ne!(via.peek_relative(0xD) & IRQ_CA1, 0);
+        assert_ne!(via.peek(0xD) & IRQ_CA1, 0);
         assert!(via.irq_active());
     }
 
     #[test]
     fn incoming_ca1_high_does_not_trigger_when_neg_edge_configured() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write_relative(0xE, 0x82); // enable CA1 IRQ
-        via.write_relative(0xC, 0x00); // PCR: CA1 negative edge
+        via.write(0xE, 0x82); // enable CA1 IRQ
+        via.write(0xC, 0x00); // PCR: CA1 negative edge
         via.ca1 = false;
 
         remote.send(0x20).unwrap();
@@ -1609,14 +1601,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        assert_eq!(via.peek_relative(0xD) & IRQ_CA1, 0);
+        assert_eq!(via.peek(0xD) & IRQ_CA1, 0);
     }
 
     #[test]
     fn incoming_ca2_triggers_irq_when_input_mode() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write_relative(0xE, 0x81); // enable CA2 IRQ
-        via.write_relative(0xC, 0x00); // PCR bits 3:1 = 000 → CA2 input, negative edge
+        via.write(0xE, 0x81); // enable CA2 IRQ
+        via.write(0xC, 0x00); // PCR bits 3:1 = 000 → CA2 input, negative edge
         via.ca2 = true;
 
         remote.send(0x20).unwrap();
@@ -1627,14 +1619,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        assert_ne!(via.peek_relative(0xD) & IRQ_CA2, 0);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
 
     #[test]
     fn incoming_cb1_triggers_irq_when_neg_edge_configured() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write_relative(0xE, 0x90); // enable CB1 IRQ
-        via.write_relative(0xC, 0x00); // PCR: CB1 negative edge (bit 4 = 0)
+        via.write(0xE, 0x90); // enable CB1 IRQ
+        via.write(0xC, 0x00); // PCR: CB1 negative edge (bit 4 = 0)
         via.cb1 = true;
 
         remote.send(0x20).unwrap();
@@ -1645,15 +1637,15 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        assert_ne!(via.peek_relative(0xD) & IRQ_CB1, 0);
+        assert_ne!(via.peek(0xD) & IRQ_CB1, 0);
         assert!(via.irq_active());
     }
 
     #[test]
     fn incoming_cb2_triggers_irq_when_input_mode() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write_relative(0xE, 0x88); // enable CB2 IRQ
-        via.write_relative(0xC, 0x00); // PCR bits 7:5 = 000 → CB2 input, negative edge
+        via.write(0xE, 0x88); // enable CB2 IRQ
+        via.write(0xC, 0x00); // PCR bits 7:5 = 000 → CB2 input, negative edge
         via.cb2 = true;
 
         remote.send(0x20).unwrap();
@@ -1664,7 +1656,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        assert_ne!(via.peek_relative(0xD) & IRQ_CB2, 0);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
 
     // --- peek does not affect timer counters or flags ---
@@ -1672,23 +1664,23 @@ mod tests {
     #[test]
     fn peek_t1_does_not_clear_flag_or_alter_counter() {
         let mut via = device();
-        via.write_relative(0x4, 10u8);
-        via.write_relative(0x5, 0x00);
+        via.write(0x4, 10u8);
+        via.write(0x5, 0x00);
         via.tick(10); // underflow: sets IRQ_T1, stops timer
         let counter_after = via.t1_counter;
-        let _ = via.peek_relative(0x4); // must not clear T1 flag or alter counter
+        let _ = via.peek(0x4); // must not clear T1 flag or alter counter
         assert_eq!(via.t1_counter, counter_after);
-        assert_ne!(via.peek_relative(0xD) & IRQ_T1, 0);
+        assert_ne!(via.peek(0xD) & IRQ_T1, 0);
     }
 
     #[test]
     fn peek_t2_does_not_affect_counter() {
         let mut via = device();
-        via.write_relative(0x8, 100u8);
-        via.write_relative(0x9, 0x00);
+        via.write(0x8, 100u8);
+        via.write(0x9, 0x00);
         via.tick(10);
         let after_tick = via.t2_counter;
-        let _ = via.peek_relative(0x8);
+        let _ = via.peek(0x8);
         assert_eq!(via.t2_counter, after_tick);
     }
 
@@ -1769,10 +1761,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca1 = true;
-        via.write_relative(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA1, 0);
     }
 
@@ -1781,10 +1773,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca1 = false;
-        via.write_relative(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA1, 0);
     }
 
@@ -1793,10 +1785,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca1 = false;
-        via.write_relative(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
+        via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: true });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA1, 0);
     }
 
@@ -1805,10 +1797,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca1 = true;
-        via.write_relative(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
+        via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: true });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA1, 0);
     }
 
@@ -1817,10 +1809,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb1 = true;
-        via.write_relative(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
+        via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB1, 0);
     }
 
@@ -1829,10 +1821,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb1 = false;
-        via.write_relative(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
+        via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB1, 0);
     }
 
@@ -1841,10 +1833,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb1 = false;
-        via.write_relative(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
+        via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB1, 0);
     }
 
@@ -1853,10 +1845,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb1 = true;
-        via.write_relative(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
+        via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB1, 0);
     }
 
@@ -1865,10 +1857,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = true;
-        via.write_relative(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA2, 0);
     }
 
@@ -1877,10 +1869,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = false;
-        via.write_relative(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA2, 0);
     }
 
@@ -1889,10 +1881,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = false;
-        via.write_relative(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
+        via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA2, 0);
     }
 
@@ -1901,10 +1893,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = true;
-        via.write_relative(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
+        via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA2, 0);
     }
 
@@ -1913,10 +1905,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = true;
-        via.write_relative(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB2, 0);
     }
 
@@ -1925,10 +1917,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = false;
-        via.write_relative(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB2, 0);
     }
 
@@ -1937,10 +1929,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = false;
-        via.write_relative(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
+        via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB2, 0);
     }
 
@@ -1949,10 +1941,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = true;
-        via.write_relative(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
+        via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
         via.tick(2);
-        let int_flags = via.read_relative(0xd);
+        let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB2, 0);
     }
 
@@ -1961,10 +1953,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = true;
-        via.write_relative(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
+        via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
         send_bytes(&mut remote, "CA20");
         via.tick(1);
-        assert_ne!(via.peek_relative(0xD) & IRQ_CA2, 0);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
 
     #[test]
@@ -1972,10 +1964,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = false;
-        via.write_relative(0xC, PCR_CA2_INPUT_POSITIVE_EDGE);
+        via.write(0xC, PCR_CA2_INPUT_POSITIVE_EDGE);
         send_bytes(&mut remote, "CA21");
         via.tick(1);
-        assert_ne!(via.peek_relative(0xD) & IRQ_CA2, 0);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
 
     #[test]
@@ -1983,10 +1975,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = true;
-        via.write_relative(0xC, PCR_CA2_OUTPUT_LOW);
+        via.write(0xC, PCR_CA2_OUTPUT_LOW);
         send_bytes(&mut remote, "CA20");
         via.tick(1);
-        assert_eq!(via.peek_relative(0xD) & IRQ_CA2, 0);
+        assert_eq!(via.peek(0xD) & IRQ_CA2, 0);
     }
 
     #[test]
@@ -1994,7 +1986,7 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         // Write PCR first (ca2 is false by default so no immediate transition).
-        via.write_relative(0xC, PCR_CA2_OUTPUT_LOW);
+        via.write(0xC, PCR_CA2_OUTPUT_LOW);
         // A peripheral message asserting CA2 high must not overwrite the driven-low state.
         send_bytes(&mut remote, "CA21");
         via.tick(1);
@@ -2006,10 +1998,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = true;
-        via.write_relative(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
+        via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
         send_bytes(&mut remote, "CB20");
         via.tick(1);
-        assert_ne!(via.peek_relative(0xD) & IRQ_CB2, 0);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
 
     #[test]
@@ -2017,10 +2009,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = false;
-        via.write_relative(0xC, PCR_CB2_INPUT_POSITIVE_EDGE);
+        via.write(0xC, PCR_CB2_INPUT_POSITIVE_EDGE);
         send_bytes(&mut remote, "CB21");
         via.tick(1);
-        assert_ne!(via.peek_relative(0xD) & IRQ_CB2, 0);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
 
     #[test]
@@ -2028,10 +2020,10 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = true;
-        via.write_relative(0xC, PCR_CB2_OUTPUT_LOW);
+        via.write(0xC, PCR_CB2_OUTPUT_LOW);
         send_bytes(&mut remote, "CB20");
         via.tick(1);
-        assert_eq!(via.peek_relative(0xD) & IRQ_CB2, 0);
+        assert_eq!(via.peek(0xD) & IRQ_CB2, 0);
     }
 
     #[test]
@@ -2039,7 +2031,7 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         // Write PCR first (cb2 is false by default so no immediate transition).
-        via.write_relative(0xC, PCR_CB2_OUTPUT_LOW);
+        via.write(0xC, PCR_CB2_OUTPUT_LOW);
         // A peripheral message asserting CB2 high must not overwrite the driven-low state.
         send_bytes(&mut remote, "CB21");
         via.tick(1);
@@ -2061,72 +2053,72 @@ mod tests {
     fn ca2_independent_input_ifr_not_cleared_by_ora_read() {
         let mut via = device();
         via.set_ifr(IRQ_CA2);
-        via.write_relative(0xC, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.read_relative(0x1);
-        assert_ne!(via.peek_relative(0xD) & IRQ_CA2, 0, "IRQ_CA2 must not be cleared by ORA read in independent mode");
+        via.write(0xC, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.read(0x1);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0, "IRQ_CA2 must not be cleared by ORA read in independent mode");
     }
 
     #[test]
     fn ca2_independent_input_ifr_not_cleared_by_ora_write() {
         let mut via = device();
         via.set_ifr(IRQ_CA2);
-        via.write_relative(0xC, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.write_relative(0x1, 0x00);
-        assert_ne!(via.peek_relative(0xD) & IRQ_CA2, 0, "IRQ_CA2 must not be cleared by ORA write in independent mode");
+        via.write(0xC, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.write(0x1, 0x00);
+        assert_ne!(via.peek(0xD) & IRQ_CA2, 0, "IRQ_CA2 must not be cleared by ORA write in independent mode");
     }
 
     #[test]
     fn ca2_non_independent_input_ifr_cleared_by_ora_read() {
         let mut via = device();
         via.set_ifr(IRQ_CA2);
-        via.write_relative(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
-        via.read_relative(0x1);
-        assert_eq!(via.peek_relative(0xD) & IRQ_CA2, 0, "IRQ_CA2 must be cleared by ORA read in non-independent mode");
+        via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
+        via.read(0x1);
+        assert_eq!(via.peek(0xD) & IRQ_CA2, 0, "IRQ_CA2 must be cleared by ORA read in non-independent mode");
     }
 
     #[test]
     fn ca2_non_independent_input_ifr_cleared_by_ora_write() {
         let mut via = device();
         via.set_ifr(IRQ_CA2);
-        via.write_relative(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
-        via.write_relative(0x1, 0x00);
-        assert_eq!(via.peek_relative(0xD) & IRQ_CA2, 0, "IRQ_CA2 must be cleared by ORA write in non-independent mode");
+        via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
+        via.write(0x1, 0x00);
+        assert_eq!(via.peek(0xD) & IRQ_CA2, 0, "IRQ_CA2 must be cleared by ORA write in non-independent mode");
     }
 
     #[test]
     fn cb2_independent_input_ifr_not_cleared_by_orb_read() {
         let mut via = device();
         via.set_ifr(IRQ_CB2);
-        via.write_relative(0xC, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.read_relative(0x0);
-        assert_ne!(via.peek_relative(0xD) & IRQ_CB2, 0, "IRQ_CB2 must not be cleared by ORB read in independent mode");
+        via.write(0xC, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.read(0x0);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0, "IRQ_CB2 must not be cleared by ORB read in independent mode");
     }
 
     #[test]
     fn cb2_independent_input_ifr_not_cleared_by_orb_write() {
         let mut via = device();
         via.set_ifr(IRQ_CB2);
-        via.write_relative(0xC, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.write_relative(0x0, 0x00);
-        assert_ne!(via.peek_relative(0xD) & IRQ_CB2, 0, "IRQ_CB2 must not be cleared by ORB write in independent mode");
+        via.write(0xC, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
+        via.write(0x0, 0x00);
+        assert_ne!(via.peek(0xD) & IRQ_CB2, 0, "IRQ_CB2 must not be cleared by ORB write in independent mode");
     }
 
     #[test]
     fn cb2_non_independent_input_ifr_cleared_by_orb_read() {
         let mut via = device();
         via.set_ifr(IRQ_CB2);
-        via.write_relative(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
-        via.read_relative(0x0);
-        assert_eq!(via.peek_relative(0xD) & IRQ_CB2, 0, "IRQ_CB2 must be cleared by ORB read in non-independent mode");
+        via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
+        via.read(0x0);
+        assert_eq!(via.peek(0xD) & IRQ_CB2, 0, "IRQ_CB2 must be cleared by ORB read in non-independent mode");
     }
 
     #[test]
     fn cb2_non_independent_input_ifr_cleared_by_orb_write() {
         let mut via = device();
         via.set_ifr(IRQ_CB2);
-        via.write_relative(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
-        via.write_relative(0x0, 0x00);
-        assert_eq!(via.peek_relative(0xD) & IRQ_CB2, 0, "IRQ_CB2 must be cleared by ORB write in non-independent mode");
+        via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
+        via.write(0x0, 0x00);
+        assert_eq!(via.peek(0xD) & IRQ_CB2, 0, "IRQ_CB2 must be cleared by ORB write in non-independent mode");
     }
 
     // --- Manual output modes ---
@@ -2136,7 +2128,7 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = true;
-        via.write_relative(0xC, PCR_CA2_OUTPUT_LOW);
+        via.write(0xC, PCR_CA2_OUTPUT_LOW);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(s.contains("CA20"), "expected CA20 after PCR manual-low write, got: {s}");
@@ -2148,7 +2140,7 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         // ca2 starts false by default
-        via.write_relative(0xC, PCR_CA2_MANUAL_HIGH_OUTPUT);
+        via.write(0xC, PCR_CA2_MANUAL_HIGH_OUTPUT);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(s.contains("CA21"), "expected CA21 after PCR manual-high write, got: {s}");
@@ -2160,7 +2152,7 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = true;
-        via.write_relative(0xC, PCR_CB2_OUTPUT_LOW);
+        via.write(0xC, PCR_CB2_OUTPUT_LOW);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(s.contains("CB20"), "expected CB20 after PCR manual-low write, got: {s}");
@@ -2172,7 +2164,7 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         // cb2 starts false by default
-        via.write_relative(0xC, PCR_CB2_MANUAL_HIGH_OUTPUT);
+        via.write(0xC, PCR_CB2_MANUAL_HIGH_OUTPUT);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(s.contains("CB21"), "expected CB21 after PCR manual-high write, got: {s}");
@@ -2186,9 +2178,9 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = true;
-        via.write_relative(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
         collect_bytes(&mut remote); // drain any PCR-triggered messages
-        via.read_relative(0x1);
+        via.read(0x1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(s.contains("CA20"), "expected CA20 after ORA read in handshake mode, got: {s}");
@@ -2201,9 +2193,9 @@ mod tests {
         handshake(&mut via, &mut remote);
         via.ca2 = true;
         via.ca1 = true; // start high so falling edge triggers
-        via.write_relative(0xC, PCR_CA2_HANDSHAKE_OUTPUT | PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT | PCR_CA1_INPUT_NEGATIVE_EDGE);
         collect_bytes(&mut remote);
-        via.read_relative(0x1); // assert CA2 low
+        via.read(0x1); // assert CA2 low
         collect_bytes(&mut remote); // drain CA20
         send_bytes(&mut remote, "CA10"); // CA1 falling edge — active edge in neg-edge mode
         via.tick(1);
@@ -2218,9 +2210,9 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = true;
-        via.write_relative(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
         collect_bytes(&mut remote);
-        via.read_relative(0xF); // ORA no-handshake
+        via.read(0xF); // ORA no-handshake
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(!s.contains("CA20"), "CA20 must not be sent on ORA_NH read, got: {s}");
@@ -2232,9 +2224,9 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = false; // already asserted
-        via.write_relative(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
         collect_bytes(&mut remote);
-        via.read_relative(0x1);
+        via.read(0x1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(!s.contains("CA20"), "CA20 must not be sent redundantly when already low, got: {s}");
@@ -2247,9 +2239,9 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.ca2 = true;
-        via.write_relative(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
         collect_bytes(&mut remote);
-        via.write_relative(0x1, 0x00);
+        via.write(0x1, 0x00);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(s.contains("CA20"), "expected CA20 after ORA write in handshake mode, got: {s}");
@@ -2262,9 +2254,9 @@ mod tests {
         handshake(&mut via, &mut remote);
         via.ca2 = true;
         via.ca1 = true;
-        via.write_relative(0xC, PCR_CA2_HANDSHAKE_OUTPUT | PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT | PCR_CA1_INPUT_NEGATIVE_EDGE);
         collect_bytes(&mut remote);
-        via.write_relative(0x1, 0x00); // assert CA2 low
+        via.write(0x1, 0x00); // assert CA2 low
         collect_bytes(&mut remote);
         send_bytes(&mut remote, "CA10");
         via.tick(1);
@@ -2280,9 +2272,9 @@ mod tests {
     fn ca2_pulse_output_on_ora_read_sends_low_then_high() {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.write_relative(0xC, PCR_CA2_PULSE_OUTPUT);
+        via.write(0xC, PCR_CA2_PULSE_OUTPUT);
         collect_bytes(&mut remote);
-        via.read_relative(0x1);
+        via.read(0x1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         let low_pos  = s.find("CA20").expect("expected CA20 in pulse output");
@@ -2294,9 +2286,9 @@ mod tests {
     fn ca2_pulse_output_on_ora_write_sends_low_then_high() {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.write_relative(0xC, PCR_CA2_PULSE_OUTPUT);
+        via.write(0xC, PCR_CA2_PULSE_OUTPUT);
         collect_bytes(&mut remote);
-        via.write_relative(0x1, 0x00);
+        via.write(0x1, 0x00);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         let low_pos  = s.find("CA20").expect("expected CA20 in pulse output");
@@ -2308,9 +2300,9 @@ mod tests {
     fn ca2_pulse_output_not_triggered_by_ora_nh() {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.write_relative(0xC, PCR_CA2_PULSE_OUTPUT);
+        via.write(0xC, PCR_CA2_PULSE_OUTPUT);
         collect_bytes(&mut remote);
-        via.read_relative(0xF); // ORA no-handshake
+        via.read(0xF); // ORA no-handshake
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(!s.contains("CA20"), "CA20 must not be sent on ORA_NH read, got: {s}");
@@ -2324,9 +2316,9 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = true;
-        via.write_relative(0xC, PCR_CB2_HANDSHAKE_OUTPUT);
+        via.write(0xC, PCR_CB2_HANDSHAKE_OUTPUT);
         collect_bytes(&mut remote);
-        via.write_relative(0x0, 0x00);
+        via.write(0x0, 0x00);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(s.contains("CB20"), "expected CB20 after ORB write in handshake mode, got: {s}");
@@ -2339,9 +2331,9 @@ mod tests {
         handshake(&mut via, &mut remote);
         via.cb2 = true;
         via.cb1 = true;
-        via.write_relative(0xC, PCR_CB2_HANDSHAKE_OUTPUT | PCR_CB1_INPUT_NEGATIVE_EDGE);
+        via.write(0xC, PCR_CB2_HANDSHAKE_OUTPUT | PCR_CB1_INPUT_NEGATIVE_EDGE);
         collect_bytes(&mut remote);
-        via.write_relative(0x0, 0x00); // assert CB2 low
+        via.write(0x0, 0x00); // assert CB2 low
         collect_bytes(&mut remote);
         send_bytes(&mut remote, "CB10"); // CB1 falling edge — active in neg-edge mode
         via.tick(1);
@@ -2356,9 +2348,9 @@ mod tests {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
         via.cb2 = true;
-        via.write_relative(0xC, PCR_CB2_HANDSHAKE_OUTPUT);
+        via.write(0xC, PCR_CB2_HANDSHAKE_OUTPUT);
         collect_bytes(&mut remote);
-        via.read_relative(0x0); // ORB read — must NOT trigger CB2
+        via.read(0x0); // ORB read — must NOT trigger CB2
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(!s.contains("CB20"), "CB20 must not be sent on ORB read, got: {s}");
@@ -2371,9 +2363,9 @@ mod tests {
     fn cb2_pulse_output_on_orb_write_sends_low_then_high() {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.write_relative(0xC, PCR_CB2_PULSE_OUTPUT);
+        via.write(0xC, PCR_CB2_PULSE_OUTPUT);
         collect_bytes(&mut remote);
-        via.write_relative(0x0, 0x00);
+        via.write(0x0, 0x00);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         let low_pos  = s.find("CB20").expect("expected CB20 in pulse output");
@@ -2388,23 +2380,23 @@ mod tests {
         let mut via = device();
         // ACR bit 0 clear — live input_a is returned.
         via.input_a = 0xAB;
-        assert_eq!(via.read_relative(0x1), 0xAB);
+        assert_eq!(via.read(0x1), 0xAB);
     }
 
     #[test]
     fn pa_latch_enabled_reads_captured_value_not_live_input() {
         let mut via = device();
-        via.write_relative(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
         via.input_a = 0xAB;
         via.ira_latch = 0x55;
-        assert_eq!(via.read_relative(0x1), 0x55, "latch value must be returned, not live input");
+        assert_eq!(via.read(0x1), 0x55, "latch value must be returned, not live input");
     }
 
     #[test]
     fn pa_latch_captures_on_ca1_active_edge() {
         let mut via = device();
-        via.write_relative(0xB, ACR_PA_LATCH_ENABLE);
-        via.write_relative(0xC, PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xC, PCR_CA1_INPUT_NEGATIVE_EDGE);
         via.ca1 = true;
         via.input_a = 0xCD;
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
@@ -2414,8 +2406,8 @@ mod tests {
     #[test]
     fn pa_latch_does_not_capture_on_inactive_ca1_edge() {
         let mut via = device();
-        via.write_relative(0xB, ACR_PA_LATCH_ENABLE);
-        via.write_relative(0xC, PCR_CA1_INPUT_NEGATIVE_EDGE);
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xC, PCR_CA1_INPUT_NEGATIVE_EDGE);
         via.ca1 = false; // already low — no edge when we send low again
         via.input_a = 0xCD;
         via.ira_latch = 0x11; // sentinel
@@ -2426,33 +2418,33 @@ mod tests {
     #[test]
     fn pa_latch_enabled_ora_nh_also_reads_latch() {
         let mut via = device();
-        via.write_relative(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
         via.input_a = 0xAB;
         via.ira_latch = 0x55;
-        assert_eq!(via.read_relative(0xF), 0x55, "ORA_NH must also return latch value when latch is enabled");
+        assert_eq!(via.read(0xF), 0x55, "ORA_NH must also return latch value when latch is enabled");
     }
 
     #[test]
     fn pb_latch_disabled_reads_live_input() {
         let mut via = device();
         via.input_b = 0xAB;
-        assert_eq!(via.read_relative(0x0), 0xAB);
+        assert_eq!(via.read(0x0), 0xAB);
     }
 
     #[test]
     fn pb_latch_enabled_reads_captured_value_not_live_input() {
         let mut via = device();
-        via.write_relative(0xB, ACR_PB_LATCH_ENABLE);
+        via.write(0xB, ACR_PB_LATCH_ENABLE);
         via.input_b = 0xAB;
         via.irb_latch = 0x55;
-        assert_eq!(via.read_relative(0x0), 0x55, "latch value must be returned, not live input");
+        assert_eq!(via.read(0x0), 0x55, "latch value must be returned, not live input");
     }
 
     #[test]
     fn pb_latch_captures_on_cb1_active_edge() {
         let mut via = device();
-        via.write_relative(0xB, ACR_PB_LATCH_ENABLE);
-        via.write_relative(0xC, PCR_CB1_INPUT_NEGATIVE_EDGE);
+        via.write(0xB, ACR_PB_LATCH_ENABLE);
+        via.write(0xC, PCR_CB1_INPUT_NEGATIVE_EDGE);
         via.cb1 = true;
         via.input_b = 0xCD;
         via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
@@ -2465,13 +2457,13 @@ mod tests {
         // in the same tick — port update must precede the capture.
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.write_relative(0xB, ACR_PA_LATCH_ENABLE);
-        via.write_relative(0xC, PCR_CA1_INPUT_POSITIVE_EDGE); // positive edge
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xC, PCR_CA1_INPUT_POSITIVE_EDGE); // positive edge
         // Send port A update then CA1 rising edge in a single burst.
         send_bytes(&mut remote, "A3F CA11");
         via.tick(1); // poll_transports processes both messages in order
         assert_eq!(via.ira_latch, 0x3F, "ira_latch must capture the value from the same-tick port update");
-        assert_eq!(via.read_relative(0x1), 0x3F, "ORA read must return latched value");
+        assert_eq!(via.read(0x1), 0x3F, "ORA read must return latched value");
     }
 
     #[test]
@@ -2479,47 +2471,47 @@ mod tests {
         // Validates that the latch retains its captured value when input_a changes afterwards.
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.write_relative(0xB, ACR_PA_LATCH_ENABLE);
-        via.write_relative(0xC, PCR_CA1_INPUT_POSITIVE_EDGE);
+        via.write(0xB, ACR_PA_LATCH_ENABLE);
+        via.write(0xC, PCR_CA1_INPUT_POSITIVE_EDGE);
         // Capture 0x3F via CA1 rising edge.
         send_bytes(&mut remote, "A3F CA11");
         via.tick(1);
         // Port A changes after the latch was captured.
         send_bytes(&mut remote, "AFF");
         via.tick(1);
-        assert_eq!(via.read_relative(0x1), 0x3F, "latched value must be held despite subsequent port update");
+        assert_eq!(via.read(0x1), 0x3F, "latched value must be held despite subsequent port update");
     }
 
     #[test]
     fn pb_latch_captures_via_transport_in_same_tick() {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.write_relative(0xB, ACR_PB_LATCH_ENABLE);
-        via.write_relative(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
+        via.write(0xB, ACR_PB_LATCH_ENABLE);
+        via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
         send_bytes(&mut remote, "B5A CB11");
         via.tick(1);
         assert_eq!(via.irb_latch, 0x5A, "irb_latch must capture the value from the same-tick port update");
-        assert_eq!(via.read_relative(0x0), 0x5A, "ORB read must return latched value");
+        assert_eq!(via.read(0x0), 0x5A, "ORB read must return latched value");
     }
 
     #[test]
     fn pb_latch_holds_value_after_subsequent_port_update() {
         let (mut via, mut remote) = device_with_pipe();
         handshake(&mut via, &mut remote);
-        via.write_relative(0xB, ACR_PB_LATCH_ENABLE);
-        via.write_relative(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
+        via.write(0xB, ACR_PB_LATCH_ENABLE);
+        via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
         send_bytes(&mut remote, "B5A CB11");
         via.tick(1);
         send_bytes(&mut remote, "BFF");
         via.tick(1);
-        assert_eq!(via.read_relative(0x0), 0x5A, "latched value must be held despite subsequent port update");
+        assert_eq!(via.read(0x0), 0x5A, "latched value must be held despite subsequent port update");
     }
 
     // --- Shift register ---
 
     fn sr_device_with_pipe_and_mode(acr: u8) -> (Via6522, PipeTransport) {
         let (mut via, remote) = device_with_pipe();
-        via.write_relative(0xB, acr);
+        via.write(0xB, acr);
         (via, remote)
     }
 
@@ -2534,12 +2526,12 @@ mod tests {
     #[test]
     fn sr_disabled_mode_is_noop() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_DISABLED); // ACR SR mode = 000
-        via.write_relative(0xA, 0xAB);            // write SR data
+        via.write(0xB, SR_MODE_DISABLED); // ACR SR mode = 000
+        via.write(0xA, 0xAB);            // write SR data
         for _ in 0..20 { via.tick(1); }
-        assert_eq!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR should not fire when disabled");
+        assert_eq!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR should not fire when disabled");
         assert_eq!(via.sr_count, 0);
-        assert_eq!(via.peek_relative(0xA), 0xAB);
+        assert_eq!(via.peek(0xA), 0xAB);
     }
 
     #[test]
@@ -2548,9 +2540,9 @@ mod tests {
         handshake(&mut via, &mut remote);
 
         // Load T2 = 2, write SR to start (ACR already set).
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0x00); // T2 starts
-        via.write_relative(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00); // T2 starts
+        via.write(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
 
         // 8 T2 underflows → 8 SR clocks. Each clock: CB1 low + optional CB2 + CB1 high.
         for _ in 0..8 {
@@ -2567,7 +2559,7 @@ mod tests {
     fn sr_shift_out_ext_sends_cb2_messages() {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
         handshake(&mut via, &mut remote);
-        via.write_relative(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
+        via.write(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
         for _ in 0..8 {
             send_bytes(&mut remote, " CB10");
             via.tick(5);
@@ -2581,21 +2573,21 @@ mod tests {
     #[test]
     fn sr_shift_out_t2_sets_ifr_after_8_clocks() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_T2);
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0x00);
-        via.write_relative(0xA, 0xAA);
+        via.write(0xB, SR_MODE_OUT_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xAA);
         for _ in 0..8 { via.tick(2); }
-        assert_ne!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 T2 underflows");
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 T2 underflows");
     }
 
     #[test]
     fn sr_shift_out_t2_stops_after_8_bits() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_T2);
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0x00);
-        via.write_relative(0xA, 0xFF);
+        via.write(0xB, SR_MODE_OUT_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xFF);
         for _ in 0..8 { via.tick(2); }
         assert_eq!(via.sr_count, 0, "sr_count must be zero after self-terminating mode completes");
     }
@@ -2603,10 +2595,10 @@ mod tests {
     #[test]
     fn sr_shift_out_free_t2_continues_indefinitely() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_FREE_T2);
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0x00);
-        via.write_relative(0xA, 0x55);
+        via.write(0xB, SR_MODE_OUT_FREE_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0x55);
         for _ in 0..16 { via.tick(1); }
         assert!(via.sr_t2_restart, "expect T2 restart flag for free-running mode");
     }
@@ -2614,24 +2606,24 @@ mod tests {
     #[test]
     fn sr_shift_out_free_t2_never_sets_ifr() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_FREE_T2);
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0x00);
-        via.write_relative(0xA, 0xAA);
+        via.write(0xB, SR_MODE_OUT_FREE_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xAA);
         // Run for two full 8-bit cycles.
         for _ in 0..8 { via.tick(2); }
         via.tick(1); // trigger restart
         for _ in 0..8 { via.tick(2); }
-        assert_eq!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must never be set in free-running OUT_FREE_T2 mode");
+        assert_eq!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must never be set in free-running OUT_FREE_T2 mode");
     }
 
     #[test]
     fn sr_shift_out_free_t2_sends_cb1_cb2_messages() {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_FREE_T2);
         handshake(&mut via, &mut remote);
-        via.write_relative(0x8, 5u8);
-        via.write_relative(0x9, 0);
-        via.write_relative(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
+        via.write(0x8, 5u8);
+        via.write(0x9, 0);
+        via.write(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
         for _ in 0..8 {
             via.tick(5);
         }
@@ -2653,7 +2645,7 @@ mod tests {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
         handshake(&mut via, &mut remote);
 
-        via.write_relative(0xA, 0x00); // start SR shift-in
+        via.write(0xA, 0x00); // start SR shift-in
 
         // Clock in byte 0b10110010 by toggling CB2 then sending CB1 rising edge.
         // Bit order: MSB first, so bit7=1, bit6=0, bit5=1, bit4=1, bit3=0, bit2=0, bit1=1, bit0=0
@@ -2667,39 +2659,39 @@ mod tests {
         }
 
         assert_eq!(via.sr, 0b10110010, "shifted-in byte mismatch: got 0x{:02X}", via.sr);
-        assert_ne!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
     }
 
     #[test]
     fn sr_shift_in_phi2() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_IN_PHI2);
-        via.read_relative(0xa);
+        via.write(0xB, SR_MODE_IN_PHI2);
+        via.read(0xa);
         let b = 0b11010010;
         for i in 0..8 {
             let mask = 1u8 << (7 - i);
             via.cb2 = b & mask != 0;
             via.tick(1);
         }
-        assert_eq!(via.peek_relative(0xa), b);
-        assert_ne!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
+        assert_eq!(via.peek(0xa), b);
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
     }
 
     #[test]
     fn sr_shift_in_t2() {
         let mut via = device();
-        via.write_relative(0xb, SR_MODE_IN_T2);
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0);
-        via.read_relative(0xa);
+        via.write(0xb, SR_MODE_IN_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0);
+        via.read(0xa);
         let b = 0b11010010;
         for i in 0..8 {
             let mask = 1u8 << (7 - i);
             via.cb2 = b & mask != 0;
             via.tick(2);
         }
-        assert_eq!(via.peek_relative(0xa), b, "expected {b:02x} got {:02x}", via.peek_relative(0xa));
-        assert_ne!(via.peek_relative(0xd) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
+        assert_eq!(via.peek(0xa), b, "expected {b:02x} got {:02x}", via.peek(0xa));
+        assert_ne!(via.peek(0xd) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
     }
 
     #[test]
@@ -2707,7 +2699,7 @@ mod tests {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_PHI2);
         handshake(&mut via, &mut remote);
 
-        via.write_relative(0xA, 0b10110100); // write SR to start shifting out
+        via.write(0xA, 0b10110100); // write SR to start shifting out
 
         for _ in 0..8 { via.tick(1); }
 
@@ -2720,17 +2712,17 @@ mod tests {
     #[test]
     fn sr_shift_out_phi2_sets_ifr_after_8_ticks() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_PHI2);
-        via.write_relative(0xA, 0xAA);
+        via.write(0xB, SR_MODE_OUT_PHI2);
+        via.write(0xA, 0xAA);
         for _ in 0..9 { via.tick(1); }
-        assert_ne!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
     }
 
     #[test]
     fn sr_shift_out_phi2_stops_after_8_bits() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_PHI2);
-        via.write_relative(0xA, 0xFF);
+        via.write(0xB, SR_MODE_OUT_PHI2);
+        via.write(0xA, 0xFF);
         for _ in 0..9 { via.tick(1); }
         assert_eq!(via.sr_count, 0, "sr_count must be zero after PHI2 shift-out completes");
     }
@@ -2740,7 +2732,7 @@ mod tests {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
         handshake(&mut via, &mut remote);
 
-        via.write_relative(0xA, 0x00); // start shift-in
+        via.write(0xA, 0x00); // start shift-in
         collect_bytes(&mut remote);
 
         let data = 0b10110100u8;
@@ -2752,8 +2744,8 @@ mod tests {
             via.tick(1); // poll processes CB10, CB2x, CB11 in order
         }
 
-        assert_eq!(via.peek_relative(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek_relative(0xA));
-        assert_ne!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
+        assert_eq!(via.peek(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek(0xA));
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
     }
 
     #[test]
@@ -2761,8 +2753,8 @@ mod tests {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_T2);
         handshake(&mut via, &mut remote);
 
-        via.write_relative(0x8, 2u8); // T2 period = 2 cycles
-        via.read_relative(0xA);        // sr_start → CB10 sent, T2 begins counting
+        via.write(0x8, 2u8); // T2 period = 2 cycles
+        via.read(0xA);        // sr_start → CB10 sent, T2 begins counting
         collect_bytes(&mut remote); // drain CB10
 
         let data = 0b10110100u8;
@@ -2775,8 +2767,8 @@ mod tests {
             collect_bytes(&mut remote);
         }
 
-        assert_eq!(via.peek_relative(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek_relative(0xA));
-        assert_ne!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 T2 clocks");
+        assert_eq!(via.peek(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek(0xA));
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 T2 clocks");
     }
 
     #[test]
@@ -2784,8 +2776,8 @@ mod tests {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_T2);
         handshake(&mut via, &mut remote);
 
-        via.write_relative(0x8, 2u8);
-        via.read_relative(0xA); // sr_start → sr_update(false) → CB10 sent
+        via.write(0x8, 2u8);
+        via.read(0xA); // sr_start → sr_update(false) → CB10 sent
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         assert!(s.contains("CB10"), "expected CB10 after SR start, got: {s}");
@@ -2810,7 +2802,7 @@ mod tests {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_PHI2);
         handshake(&mut via, &mut remote);
 
-        via.read_relative(0xA); // start shift-in
+        via.read(0xA); // start shift-in
         collect_bytes(&mut remote);
 
         let data = 0b10110100u8;
@@ -2823,8 +2815,8 @@ mod tests {
             collect_bytes(&mut remote);
         }
 
-        assert_eq!(via.peek_relative(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek_relative(0xA));
-        assert_ne!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
+        assert_eq!(via.peek(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek(0xA));
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 PHI2 ticks");
     }
 
     #[test]
@@ -2832,7 +2824,7 @@ mod tests {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_PHI2);
         handshake(&mut via, &mut remote);
 
-        via.read_relative(0xA); // start shift-in
+        via.read(0xA); // start shift-in
         collect_bytes(&mut remote);
 
         for _ in 0..8 {
@@ -2849,7 +2841,7 @@ mod tests {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
         handshake(&mut via, &mut remote);
 
-        via.write_relative(0xA, 0xAA); // start shift-out
+        via.write(0xA, 0xAA); // start shift-out
         collect_bytes(&mut remote);
 
         for _ in 0..8 {
@@ -2857,7 +2849,7 @@ mod tests {
             via.tick(1); // poll processes falling then rising edge; sr_count decrements
         }
 
-        assert_ne!(via.peek_relative(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
+        assert_ne!(via.peek(0xD) & IRQ_SR, 0, "IRQ_SR must be set after 8 external clocks");
     }
 
     // --- SR does not set T2/CB1/CB2 IFR bits ---
@@ -2865,12 +2857,12 @@ mod tests {
     #[test]
     fn sr_in_t2_does_not_set_t2_cb1_cb2_ifr_bits() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_IN_T2);
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0x00);
-        via.read_relative(0xA);
+        via.write(0xB, SR_MODE_IN_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.read(0xA);
         for _ in 0..8 { via.tick(2); }
-        let ifr = via.peek_relative(0xD);
+        let ifr = via.peek(0xD);
         assert_eq!(ifr & IRQ_T2,  0, "IRQ_T2  must not be set during IN_T2 shift");
         assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during IN_T2 shift");
         assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during IN_T2 shift");
@@ -2879,12 +2871,12 @@ mod tests {
     #[test]
     fn sr_out_t2_does_not_set_t2_cb1_cb2_ifr_bits() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_T2);
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0x00);
-        via.write_relative(0xA, 0xAA);
+        via.write(0xB, SR_MODE_OUT_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xAA);
         for _ in 0..8 { via.tick(2); }
-        let ifr = via.peek_relative(0xD);
+        let ifr = via.peek(0xD);
         assert_eq!(ifr & IRQ_T2,  0, "IRQ_T2  must not be set during OUT_T2 shift");
         assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during OUT_T2 shift");
         assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during OUT_T2 shift");
@@ -2893,14 +2885,14 @@ mod tests {
     #[test]
     fn sr_out_free_t2_does_not_set_t2_cb1_cb2_ifr_bits() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_FREE_T2);
-        via.write_relative(0x8, 2u8);
-        via.write_relative(0x9, 0x00);
-        via.write_relative(0xA, 0xAA);
+        via.write(0xB, SR_MODE_OUT_FREE_T2);
+        via.write(0x8, 2u8);
+        via.write(0x9, 0x00);
+        via.write(0xA, 0xAA);
         for _ in 0..8 { via.tick(2); }
         via.tick(1); // trigger restart
         for _ in 0..8 { via.tick(2); }
-        let ifr = via.peek_relative(0xD);
+        let ifr = via.peek(0xD);
         assert_eq!(ifr & IRQ_T2,  0, "IRQ_T2  must not be set during OUT_FREE_T2 shift");
         assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during OUT_FREE_T2 shift");
         assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during OUT_FREE_T2 shift");
@@ -2909,11 +2901,11 @@ mod tests {
     #[test]
     fn sr_in_phi2_does_not_set_cb1_cb2_ifr_bits() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_IN_PHI2);
-        via.read_relative(0xA);
+        via.write(0xB, SR_MODE_IN_PHI2);
+        via.read(0xA);
         via.cb2 = true;
         for _ in 0..8 { via.tick(1); }
-        let ifr = via.peek_relative(0xD);
+        let ifr = via.peek(0xD);
         assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during IN_PHI2 shift");
         assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during IN_PHI2 shift");
     }
@@ -2921,10 +2913,10 @@ mod tests {
     #[test]
     fn sr_out_phi2_does_not_set_cb1_cb2_ifr_bits() {
         let mut via = device();
-        via.write_relative(0xB, SR_MODE_OUT_PHI2);
-        via.write_relative(0xA, 0xAA);
+        via.write(0xB, SR_MODE_OUT_PHI2);
+        via.write(0xA, 0xAA);
         for _ in 0..8 { via.tick(1); }
-        let ifr = via.peek_relative(0xD);
+        let ifr = via.peek(0xD);
         assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during OUT_PHI2 shift");
         assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during OUT_PHI2 shift");
     }
@@ -2933,13 +2925,13 @@ mod tests {
     fn sr_in_ext_does_not_set_cb1_cb2_ifr_bits() {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
         handshake(&mut via, &mut remote);
-        via.write_relative(0xA, 0x00);
+        via.write(0xA, 0x00);
         collect_bytes(&mut remote);
         for _ in 0..8 {
             send_bytes(&mut remote, " CB10 CB21 CB11");
             via.tick(1);
         }
-        let ifr = via.peek_relative(0xD);
+        let ifr = via.peek(0xD);
         assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during IN_EXT shift");
         assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during IN_EXT shift");
     }
@@ -2948,13 +2940,13 @@ mod tests {
     fn sr_out_ext_does_not_set_cb1_cb2_ifr_bits() {
         let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
         handshake(&mut via, &mut remote);
-        via.write_relative(0xA, 0xAA);
+        via.write(0xA, 0xAA);
         collect_bytes(&mut remote);
         for _ in 0..8 {
             send_bytes(&mut remote, " CB10 CB11");
             via.tick(1);
         }
-        let ifr = via.peek_relative(0xD);
+        let ifr = via.peek(0xD);
         assert_eq!(ifr & IRQ_CB1, 0, "IRQ_CB1 must not be set during OUT_EXT shift");
         assert_eq!(ifr & IRQ_CB2, 0, "IRQ_CB2 must not be set during OUT_EXT shift");
     }
@@ -2964,9 +2956,9 @@ mod tests {
     #[test]
     fn t2_pulse_count_pb6_neg_transition_decrements_counter() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write_relative(0xB, ACR_T2_PB6_COUNT);
-        via.write_relative(0x8, 5u8);
-        via.write_relative(0x9, 0x00); // T2 = 5, starts
+        via.write(0xB, ACR_T2_PB6_COUNT);
+        via.write(0x8, 5u8);
+        via.write(0x9, 0x00); // T2 = 5, starts
         handshake(&mut via, &mut remote);
 
         // PB6 high→low: negative transition should decrement counter.
@@ -2979,10 +2971,10 @@ mod tests {
     #[test]
     fn t2_pulse_count_fires_irq_on_underflow() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write_relative(0xE, 0xA0); // enable T2 IRQ
-        via.write_relative(0xB, ACR_T2_PB6_COUNT);
-        via.write_relative(0x8, 3u8);
-        via.write_relative(0x9, 0x00); // T2 = 3
+        via.write(0xE, 0xA0); // enable T2 IRQ
+        via.write(0xB, ACR_T2_PB6_COUNT);
+        via.write(0x8, 3u8);
+        via.write(0x9, 0x00); // T2 = 3
         handshake(&mut via, &mut remote);
 
         for _ in 0..3 {
@@ -2990,7 +2982,7 @@ mod tests {
             via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 });
         }
 
-        assert_ne!(via.peek_relative(0xD) & IRQ_T2, 0, "IRQ_T2 must fire after 3 PB6 neg transitions");
+        assert_ne!(via.peek(0xD) & IRQ_T2, 0, "IRQ_T2 must fire after 3 PB6 neg transitions");
         assert!(via.irq_active());
         assert!(!via.t2_irq_armed, "IRQ arm must be cleared after pulse-count underflow");
         assert!(via.t2_running, "counter must keep running after pulse-count underflow");
@@ -2999,9 +2991,9 @@ mod tests {
     #[test]
     fn t2_pulse_count_ignores_positive_transitions() {
         let (mut via, mut remote) = device_with_pipe();
-        via.write_relative(0xB, ACR_T2_PB6_COUNT);
-        via.write_relative(0x8, 5u8);
-        via.write_relative(0x9, 0x00);
+        via.write(0xB, ACR_T2_PB6_COUNT);
+        via.write(0x8, 5u8);
+        via.write(0x9, 0x00);
         handshake(&mut via, &mut remote);
 
         // PB6 low → high (positive transition) must not decrement.
@@ -3015,9 +3007,9 @@ mod tests {
     fn t2_timed_mode_not_affected_by_pb6() {
         let (mut via, mut remote) = device_with_pipe();
         // ACR bit 5 clear → timed mode.
-        via.write_relative(0xB, 0x00);
-        via.write_relative(0x8, 100u8);
-        via.write_relative(0x9, 0x00);
+        via.write(0xB, 0x00);
+        via.write(0x8, 100u8);
+        via.write(0x9, 0x00);
         handshake(&mut via, &mut remote);
 
         via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 });
@@ -3046,8 +3038,8 @@ mod tests {
         collect_bytes(&mut remote2);
 
         // Drive PA0 high.
-        via.write_relative(0x3, 0x01); // DDRA: PA0 = output
-        via.write_relative(0x1, 0x01); // ORA: PA0 high
+        via.write(0x3, 0x01); // DDRA: PA0 = output
+        via.write(0x1, 0x01); // ORA: PA0 high
 
         std::thread::sleep(Duration::from_millis(1));
         let r1 = collect_bytes(&mut remote1);

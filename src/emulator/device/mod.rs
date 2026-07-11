@@ -78,51 +78,15 @@ pub fn device_event_channel() -> (ErrorSender, ErrorReceiver) {
 
 /// A device that can be mapped into the bus address space.
 pub trait IoDevice: Send {
-    /// The address at which this device is registered via `BusConfig::device()`.
-    ///
-    /// Used by the default `*_absolute` methods to translate an absolute bus address
-    /// into a range-relative offset. A device that overrides all three `*_absolute`
-    /// methods (and `claims`) is free to return any value here, since nothing else
-    /// consults it.
-    fn base_address(&self) -> u16;
 
-    /// Reads a byte from `offset` relative to `base_address()`, with side effects.
-    fn read_relative(&mut self, offset: u16) -> u8;
-    /// Writes `value` to `offset` relative to `base_address()`.
-    fn write_relative(&mut self, offset: u16, value: u8);
-    /// Reads a byte from `offset` relative to `base_address()`, without side effects.
-    fn peek_relative(&self, offset: u16) -> u8;
+    /// Reads a byte at the absolute bus address `address`, with side effects.
+    fn read(&mut self, address: u16) -> u8;
 
-    /// Reads a byte at the absolute bus address `addr`, with side effects.
-    ///
-    /// The default implementation subtracts `base_address()` and delegates to `read_relative()` —
-    /// correct for any device mapped at a single region. A device mapped at more than
-    /// one region (via `BusConfig::extend_device()`) overrides this directly,
-    /// classifying `addr` against whatever address information it retains for its own
-    /// regions.
-    fn read_absolute(&mut self, addr: u16) -> u8 {
-        self.read_relative(addr - self.base_address())
-    }
+    /// Writes `value` at the absolute bus address `address`.
+    fn write(&mut self, address: u16, value: u8);
 
-    /// Writes `value` at the absolute bus address `addr`.
-    /// The default implementation subtracts `base_address()` and delegates to `write_relative()` —
-    /// correct for any device mapped at a single region. A device mapped at more than
-    /// one region (via `BusConfig::extend_device()`) overrides this directly,
-    /// classifying `addr` against whatever address information it retains for its own
-    /// regions.
-    fn write_absolute(&mut self, addr: u16, value: u8) {
-        self.write_relative(addr - self.base_address(), value)
-    }
-
-    /// Reads a byte at the absolute bus address `addr`, without side effects.
-    /// The default implementation subtracts `base_address()` and delegates to `peek_relative()` —
-    /// correct for any device mapped at a single region. A device mapped at more than
-    /// one region (via `BusConfig::extend_device()`) overrides this directly,
-    /// classifying `addr` against whatever address information it retains for its own
-    /// regions.
-    fn peek_absolute(&self, addr: u16) -> u8 {
-        self.peek_relative(addr - self.base_address())
-    }
+    /// Reads a byte at the absolute bus address `address`, without side effects.
+    fn peek(&self, address: u16) -> u8;
 
     /// Returns `true` if this device currently responds to `addr`, the absolute bus
     /// address. Consulted before dispatching `*_absolute`; declining causes the bus to
@@ -134,17 +98,22 @@ pub trait IoDevice: Send {
 
     /// Advances device state by `cycles` clock cycles. Called after each CPU instruction.
     fn tick(&mut self, _cycles: u32) {}
+
     /// Resets the state of the device in a manner comparable to a hardware reset
     fn reset(&mut self) {}
+
     /// Returns `true` if this device is currently asserting an IRQ.
     fn irq_active(&self) -> bool { false }
+
     /// Consumes a pending NMI edge event from this device, returning `true` if one was pending.
     ///
     /// Called once per CPU step. Implementations set an internal flag on the triggering write and
     /// clear it here. The default returns `false` (no NMI capability).
     fn take_nmi(&mut self) -> bool { false }
+
     /// Returns a human-readable name for this device, used in diagnostics and tracing.
     fn name(&self) -> &str { "unknown" }
+
 }
 
 #[cfg(test)]
