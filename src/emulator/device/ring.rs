@@ -1,6 +1,6 @@
 
 /// Capacity of the ring (number of elements); must be a power of two.
-pub const RING_CAPACITY: usize = 128;      // any smallish power of two
+pub const RING_CAPACITY: usize = 65536;      // any smallish power of two
 
 /// A ring buffer of fixed capacity.
 pub struct Ring<T> {
