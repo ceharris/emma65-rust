@@ -17,6 +17,7 @@ pub use cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
 pub use cpu::status::StatusRegister;
 pub use cpu::variant::{CpuVariant, InvalidOpcodePolicy};
 pub use device::{device_event_channel, DeviceEvent, DeviceId, ErrorReceiver, ErrorSender, IoDevice};
+pub use device::{PtmProtocolDecoder, PtmProtocolEncoder, PtmProtocolFormat, PtmProtocolMessage};
 pub use device::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
 pub use disasm::{DisassembledLine, Disassembler};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
