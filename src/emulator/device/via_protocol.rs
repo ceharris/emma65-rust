@@ -151,8 +151,10 @@ impl TransportMessageEncoder<ViaProtocolMessage> for ViaProtocolEncoder {
     }
     
     fn reset(&mut self) {
-        todo!()
+        self.has_prior = false;
+        self.encoding = TransportMessageEncoding::Ascii;
     }
+
 }
 
 impl Default for ViaProtocolEncoder {
@@ -373,8 +375,10 @@ impl TransportMessageDecoder<ViaProtocolMessage> for ViaProtocolDecoder {
     }
 
     fn reset(&mut self) {
-        todo!()
+        self.state = DecoderState::Idle;
+        self.encoding = None;
     }
+
 }
 
 impl Default for ViaProtocolDecoder {
