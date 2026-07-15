@@ -19,7 +19,7 @@ pub use cpu::variant::{CpuVariant, InvalidOpcodePolicy};
 pub use device::{device_event_channel, DeviceEvent, DeviceId, ErrorReceiver, ErrorSender, IoDevice};
 pub use device::{PtmProtocolDecoder, PtmProtocolEncoder, PtmProtocolMessage};
 pub use device::{TransportManager, TransportMessageDecoder, TransportMessageEncoder, TransportMessageEncoding};
-pub use device::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
+pub use device::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolMessage};
 pub use disasm::{DisassembledLine, Disassembler};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
 pub use exec::{run, run_from, step_into, step_over_breakpoint, step_over_subroutine, step_return, ClockSpeed, CpuLiveSnapshot, RunHandle, RunStopper, StepResult};

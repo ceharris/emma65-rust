@@ -18,7 +18,7 @@ pub use self::phoebe::Phoebe;
 pub use self::via6522::Via6522;
 pub use self::transport_manager::{TransportManager, TransportMessageDecoder, TransportMessageEncoder, TransportMessageEncoding};
 pub use self::ptm_protocol::{PtmProtocolDecoder, PtmProtocolEncoder, PtmProtocolMessage};
-pub use self::via_protocol::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
+pub use self::via_protocol::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolMessage};
 
 use std::fmt::{Display, Formatter, Result};
 use tokio::sync::mpsc;
