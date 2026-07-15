@@ -59,8 +59,11 @@
 //! positive-edge transitions for any of the three clock input and three gate input signals.
 //!
 
+use super::ptm_protocol;
+use super::ptm_protocol::PtmProtocolMessage;
+use crate::emulator::{DeviceId, ErrorSender, IoDevice, ProtocolManager, ProtocolMessageEncoding, Transport, TransportError};
 use log::debug;
-use crate::emulator::{DeviceId, ErrorSender, IoDevice, Transport, TransportError, TransportManager, PtmProtocolDecoder, PtmProtocolEncoder, PtmProtocolMessage};
+
 
 const T1: usize = 0;
 const T2: usize = 1;
@@ -402,7 +405,8 @@ impl AsyncIoState {
 pub struct Mc6840 {
     name: &'static str,
     address: u16,
-    transport_manager: TransportManager<PtmProtocolMessage>,
+    protocol: ProtocolMessageEncoding,
+    transport_manager: ProtocolManager<PtmProtocolMessage>,
     error_sender: Option<ErrorSender>,
     device_id: Option<DeviceId>,
 
@@ -420,7 +424,8 @@ impl Mc6840 {
         Mc6840 {
             name,
             address: 0,
-            transport_manager: TransportManager::new(),
+            protocol: ProtocolMessageEncoding::Ascii,
+            transport_manager: ProtocolManager::new(),
             error_sender: None,
             device_id: None,
             latched_status: 0,
@@ -442,12 +447,17 @@ impl Mc6840 {
         self
     }
 
+    /// Sets the protocol format to use in communication with peripherals
+    pub fn with_protocol(mut self, protocol: ProtocolMessageEncoding) -> Self {
+        self.protocol = protocol;
+        self
+    }
+
     /// Attaches a transport. All attached transports receive every port and control-signal
     /// state change; any number of peripherals may be connected simultaneously.
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        self.transport_manager.attach_transport(transport,
-                                                Box::new(PtmProtocolEncoder::new()),
-                                                Box::new(PtmProtocolDecoder::new()));
+        let (encoder, decoder) = ptm_protocol::new_codecs(self.protocol);
+        self.transport_manager.attach_transport(transport, encoder, decoder);
     }
 
     /// Sets the error sender for async transport event reporting.
