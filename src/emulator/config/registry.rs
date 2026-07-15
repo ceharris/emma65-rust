@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use figment::value::Value;
 use crate::emulator::{BusConfig, ErrorSender};
 use crate::emulator::transport::Transport;
-use super::{DeviceModule, DeviceModuleError, RamModule, RomModule, ConsoleModule, R6551Module, Mc6850Module, PhoebeModule, Via6522Module};
+use super::{DeviceModule, DeviceModuleError, RamModule, RomModule, ConsoleModule, R6551Module, Mc6840Module, Mc6850Module, PhoebeModule, Via6522Module};
 
 /// A shareable slot holding an optional transport, suitable for one-time consumption.
 pub type TransportSlot = Arc<Mutex<Option<Box<dyn Transport>>>>;
@@ -56,6 +56,7 @@ impl DeviceRegistry {
         r.register(RomModule);
         r.register(ConsoleModule);
         r.register(R6551Module);
+        r.register(Mc6840Module);
         r.register(Mc6850Module);
         r.register(PhoebeModule);
         r.register(Via6522Module);
