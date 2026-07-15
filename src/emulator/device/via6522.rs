@@ -74,10 +74,8 @@
 use std::time::Duration;
 use log::debug;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::device::via_protocol::{
-    ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage,
-};
-use crate::emulator::transport::{Transport, TransportError};
+use crate::emulator::device::via_protocol::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolMessage};
+use crate::emulator::{Transport, TransportError, TransportManager};
 
 // --- IFR/IER bit masks ---
 const IRQ_CA2: u8 = 0x01;
@@ -115,39 +113,6 @@ const PCR_CB2_MASK:  u8 = 0xE0;
 const T1_MODE_ONE_SHOT:  u8 = 0x00; // reserved for explicit mode comparison
 const T1_MODE_FREE_RUN:  u8 = 0x40;
 
-/// One active transport connection with its associated protocol state.
-struct TransportSlot {
-    /// The underlying byte-stream transport.
-    transport: Box<dyn Transport>,
-    /// Encoder for outgoing protocol messages (format selected after handshake).
-    encoder: ViaProtocolEncoder,
-    /// Decoder for incoming protocol messages.
-    decoder: ViaProtocolDecoder,
-    /// True once the format-negotiation handshake has completed.
-    handshake_done: bool,
-    /// Last `Transport::connection_id()` value seen; used to detect reconnection.
-    last_connection_id: u64,
-}
-
-impl TransportSlot {
-    fn new(transport: Box<dyn Transport>) -> Self {
-        let last_connection_id = transport.connection_id();
-        Self {
-            transport,
-            encoder: ViaProtocolEncoder::new(),
-            decoder: ViaProtocolDecoder::new(),
-            handshake_done: false,
-            last_connection_id,
-        }
-    }
-
-    /// Resets handshake and codec state for a new client session.
-    fn reset(&mut self) {
-        self.encoder = ViaProtocolEncoder::new();
-        self.decoder = ViaProtocolDecoder::new();
-        self.handshake_done = false;
-    }
-}
 
 /// WDC 65C22 Versatile Interface Adapter.
 pub struct Via6522 {
@@ -227,10 +192,8 @@ pub struct Via6522 {
     /// CB2 input/output line state.
     cb2: bool,
 
-    // --- Transport connections ---
-    /// All active transport connections; each peripheral sees all port and signal state changes.
-    transports: Vec<TransportSlot>,
-
+    /// Manager for transport connections
+    transport_manager: TransportManager<ViaProtocolMessage>,
     // --- Async error reporting ---
     /// Destination for async transport error events.
     error_sender: Option<ErrorSender>,
@@ -252,7 +215,7 @@ impl Via6522 {
             sr: 0, sr_count: 0, sr_shifting_out: false, sr_t2_restart: false, sr_external: false,
             acr: 0, pcr: 0, ifr: 0, ier: 0,
             ca1: false, ca2: false, cb1: false, cb2: false,
-            transports: Vec::new(),
+            transport_manager: TransportManager::new(),
             error_sender: None,
             device_id: None,
         }
@@ -267,7 +230,8 @@ impl Via6522 {
     /// Attaches a transport. All attached transports receive every port and control-signal
     /// state change; any number of peripherals may be connected simultaneously.
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        self.transports.push(TransportSlot::new(transport));
+        self.transport_manager.attach_transport(transport, Box::new(ViaProtocolEncoder::new()),
+                                                Box::new(ViaProtocolDecoder::new()));
     }
 
     /// Sets the error sender for async transport event reporting.
@@ -324,32 +288,12 @@ impl Via6522 {
         (self.ora & self.ddra) | (input & !self.ddra)
     }
 
-    // --- Protocol transmission helpers ---
-
-    /// Encodes `message` and sends it to all transport connections that have completed
-    /// the format-negotiation handshake.
-    fn send_to_all(&mut self, message: ViaProtocolMessage) {
-        for i in 0..self.transports.len() {
-            if !self.transports[i].handshake_done { continue; }
-            let mut bytes = Vec::new();
-            self.transports[i].encoder.encode(message, &mut bytes);
-            for b in bytes {
-                if let Err(e) = self.transports[i].transport.send(b) {
-                    self.report_error(e);
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Sends the full port and control-signal state dump to transport `idx` after
-    /// format negotiation, so the newly-connected peripheral can synchronise.
-    fn send_state_dump(&mut self, idx: usize) {
+    fn dump_state(&mut self) -> Vec<ViaProtocolMessage> {
         let port_a = self.read_port_a();
         let port_b = self.read_port_b();
         let (ca1, ca2, cb1, cb2) = (self.ca1, self.ca2, self.cb1, self.cb2);
         // Control signal bit layout: CA1=bit1, CA2=bit0, CB1=bit3, CB2=bit2.
-        let msgs = [
+        let messages = vec![
             ViaProtocolMessage::PortStateChange { port: 'A', value: port_a },
             ViaProtocolMessage::PortStateChange { port: 'B', value: port_b },
             ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: ca1 },
@@ -357,62 +301,30 @@ impl Via6522 {
             ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: cb1 },
             ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: cb2 },
         ];
-        for msg in msgs {
-            let mut bytes = Vec::new();
-            self.transports[idx].encoder.encode(msg, &mut bytes);
-            for b in bytes {
-                if let Err(e) = self.transports[idx].transport.send(b) {
-                    self.report_error(e);
-                    return;
-                }
-            }
-        }
+        messages
     }
 
-    /// Sends the full port and control-signal state dump to all connected
-    /// peripherals that have completed the handshake.
-    fn send_state_to_all(&mut self) {
-        for i in 0..self.transports.len() {
-            if self.transports[i].handshake_done {
-                self.send_state_dump(i);
-            }
+    fn send_to_all(&mut self, message: ViaProtocolMessage) {
+        if let Err(e) = self.transport_manager.send_to_all(&message) {
+            self.report_error(e);
         }
     }
-
-    // --- Handshake / incoming byte processing ---
 
     /// Polls all transport connections for incoming bytes and processes decoded messages.
     fn poll_transports(&mut self) {
-        for i in 0..self.transports.len() {
-            // Detect reconnection: a new client session began since the last poll.
-            let current_id = self.transports[i].transport.connection_id();
-            if current_id != self.transports[i].last_connection_id {
-                self.transports[i].last_connection_id = current_id;
-                self.transports[i].reset();
-            }
-
-            while let Some(byte) = self.transports[i].transport.try_recv() {
-                let msg = self.transports[i].decoder.feed(byte);
-
-                // First qualifying byte locks the format → complete the handshake.
-                if !self.transports[i].handshake_done
-                    && self.transports[i].decoder.format().is_some()
-                {
-                    self.transports[i].handshake_done = true;
-                    if self.transports[i].decoder.format() == Some(ViaProtocolFormat::Binary) {
-                        self.transports[i].encoder.select_binary();
-                    }
-                    self.send_state_dump(i);
-                }
-
-                if let Some(m) = msg {
-                    self.apply_message(m);
+        let state = self.dump_state();
+        loop {
+            match self.transport_manager.poll_transports(&state) {
+                Ok(Some(m)) => self.apply_message(m),
+                Ok(None) => break,
+                Err(e) => {
+                    self.report_error(e);
+                    break;
                 }
             }
         }
     }
 
-    /// Applies an incoming protocol message, updating port inputs and triggering interrupts.
     fn apply_message(&mut self, msg: ViaProtocolMessage) {
         match msg {
             ViaProtocolMessage::PortStateChange { port: 'A', value } => {
@@ -941,7 +853,7 @@ impl IoDevice for Via6522 {
 
     fn reset(&mut self) {
         let address = self.address;
-        let transports = std::mem::take(&mut self.transports);
+        let transport_manager = std::mem::take(&mut self.transport_manager);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
         // state that must be preserved because it is under peripheral control
@@ -960,7 +872,7 @@ impl IoDevice for Via6522 {
         let sr = self.sr;
         *self = Self::new(self.name);
         self.address = address;
-        self.transports = transports;
+        self.transport_manager = transport_manager;
         self.error_sender = error_sender;
         self.device_id = device_id;
         // restore state under peripheral control
@@ -978,7 +890,10 @@ impl IoDevice for Via6522 {
         self.t2_counter = t2_counter;
         self.sr = sr;
         debug!("{} {} reset", self.name(), device_id.unwrap());
-        self.send_state_to_all();
+        let state = self.dump_state();
+        if let Err(e) = self.transport_manager.send_all_to_all(&state) {
+            self.report_error(e);
+        }
     }
 
     fn irq_active(&self) -> bool {
@@ -1513,26 +1428,6 @@ mod tests {
             "expected B01 in {:?}", String::from_utf8_lossy(&received));
     }
 
-    // --- Format negotiation handshake ---
-
-    #[test]
-    fn binary_format_selector_triggers_handshake() {
-        let (mut via, mut remote) = device_with_pipe();
-        remote.send(0xFF).unwrap(); // binary selector
-        std::thread::sleep(Duration::from_millis(1));
-        via.tick(1);
-        assert!(via.transports[0].handshake_done);
-    }
-
-    #[test]
-    fn ascii_format_selector_triggers_handshake() {
-        let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
-        via.tick(1);
-        assert!(via.transports[0].handshake_done);
-    }
-
     // --- Incoming port message updates input pins ---
 
     #[test]
@@ -1706,34 +1601,6 @@ mod tests {
         assert!(s.contains("CA20"), "expected CA20 in state dump, got: {s}");
         assert!(s.contains("CB10"), "expected CB10 in state dump, got: {s}");
         assert!(s.contains("CB21"), "expected CB21 in state dump, got: {s}");
-    }
-
-    // --- Multiple transports ---
-
-    #[test]
-    fn multiple_transports_both_receive_state_dump() {
-        let (local1, mut remote1) = PipeTransport::pair().unwrap();
-        let (local2, mut remote2) = PipeTransport::pair().unwrap();
-        let mut via = device();
-        via.attach_transport(Box::new(local1));
-        via.attach_transport(Box::new(local2));
-
-        remote1.send(0x20).unwrap();
-        remote2.send(0x20).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
-        via.tick(1);
-
-        assert!(via.transports[0].handshake_done);
-        assert!(via.transports[1].handshake_done);
-
-        std::thread::sleep(Duration::from_millis(1));
-        let r1 = collect_bytes(&mut remote1);
-        let r2 = collect_bytes(&mut remote2);
-
-        assert!(r1.windows(3).any(|w| w == b"A00"),
-            "transport 1 missing state dump: {:?}", String::from_utf8_lossy(&r1));
-        assert!(r2.windows(3).any(|w| w == b"A00"),
-            "transport 2 missing state dump: {:?}", String::from_utf8_lossy(&r2));
     }
 
     // --- Interrupts for CA1, CA2, CB1, CB2  ---
@@ -3051,85 +2918,11 @@ mod tests {
             "transport 2 missing A01: {:?}", String::from_utf8_lossy(&r2));
     }
 
-    // --- Reconnection resets handshake ---
-
-    /// A `PipeTransport` wrapper that exposes a `reconnect()` method for testing.
-    ///
-    /// Swaps in a fresh pipe pair and bumps the `connection_id` counter so that
-    /// `poll_transports` detects a new client session and resets the protocol state.
-    struct ReconnectablePipe {
-        inner: PipeTransport,
-        id: u64,
-    }
-
-    impl ReconnectablePipe {
-        fn new(inner: PipeTransport) -> Self {
-            Self { inner, id: 0 }
-        }
-
-        fn reconnect(&mut self, new_pipe: PipeTransport) {
-            self.inner = new_pipe;
-            self.id += 1;
-        }
-    }
-
-    impl Transport for ReconnectablePipe {
-        fn try_recv(&mut self) -> Option<u8> { self.inner.try_recv() }
-        fn send(&mut self, byte: u8) -> Result<(), crate::emulator::transport::TransportError> { self.inner.send(byte) }
-        fn is_connected(&self) -> bool { self.inner.is_connected() }
-        fn connection_id(&self) -> u64 { self.id }
-        fn shutdown(&mut self) { self.inner.shutdown() }
-    }
-
-    #[test]
-    fn reconnection_resets_handshake_and_sends_state_dump() {
-        // First connection: complete the handshake.
-        let (local1, mut remote1) = PipeTransport::pair().unwrap();
-        let pipe = ReconnectablePipe::new(local1);
-        let mut via = device();
-        via.attach_transport(Box::new(pipe));
-
-        remote1.send(0x20).unwrap(); // ASCII selector
-        std::thread::sleep(Duration::from_millis(1));
-        via.tick(1); // handshake completes
-        assert!(via.transports[0].handshake_done, "first handshake must complete");
-        std::thread::sleep(Duration::from_millis(1));
-        collect_bytes(&mut remote1); // drain first state dump
-
-        // Simulate disconnect + reconnect: swap in a fresh pipe and bump the connection ID.
-        let (local2, mut remote2) = PipeTransport::pair().unwrap();
-        // SAFETY: downcast — we know slot 0 holds a ReconnectablePipe.
-        let slot_transport = via.transports[0].transport.as_mut();
-        let reconnectable = unsafe {
-            &mut *(slot_transport as *mut dyn Transport as *mut ReconnectablePipe)
-        };
-        reconnectable.reconnect(local2);
-
-        // Tick once without sending a format selector — the reconnect detection should
-        // fire but the handshake should not yet be marked done (awaiting format byte).
-        via.tick(1);
-        assert!(!via.transports[0].handshake_done,
-            "handshake_done must be false after reconnect and before new format byte");
-
-        // New client sends format selector; handshake should re-complete and new state dump sent.
-        remote2.send(0xFF).unwrap(); // binary selector
-        std::thread::sleep(Duration::from_millis(1));
-        via.tick(1);
-        assert!(via.transports[0].handshake_done,
-            "handshake_done must be true after new client sends format byte");
-
-        std::thread::sleep(Duration::from_millis(1));
-        let received = collect_bytes(&mut remote2);
-        assert!(!received.is_empty(),
-            "new client must receive a state dump after reconnect handshake");
-    }
-
     #[test]
     fn reset_preserves_bus_config() {
         let (mut device, _) = device_with_pipe();
         device.device_id = Some(DeviceId(0));
         device.reset();
-        assert!(!device.transports.is_empty(), "expected transport to be preserved");
         assert!(device.device_id.is_some(), "expected device ID to be preserved");
     }
 

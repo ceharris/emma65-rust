@@ -47,14 +47,7 @@
 //! the lifetime of the connection. Until the format is locked, the encoder transmits ASCII.
 //! See [`ViaProtocolDecoder`] and [`ViaProtocolEncoder`] for details.
 
-/// Wire format used on a VIA protocol connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViaProtocolFormat {
-    /// Compact binary encoding.
-    Binary,
-    /// Human-readable ASCII encoding.
-    Ascii,
-}
+use crate::emulator::{TransportMessageDecoder, TransportMessageEncoder, TransportMessageEncoding};
 
 /// A decoded VIA protocol message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +75,7 @@ pub enum ViaProtocolMessage {
 /// between messages as a readability aid.
 pub struct ViaProtocolEncoder {
     /// The format currently in use for encoding.
-    format: ViaProtocolFormat,
+    encoding: TransportMessageEncoding,
     /// Whether at least one message has been encoded (used to insert inter-message spaces).
     has_prior: bool,
 }
@@ -90,51 +83,31 @@ pub struct ViaProtocolEncoder {
 impl ViaProtocolEncoder {
     /// Creates a new encoder in ASCII mode.
     pub fn new() -> Self {
-        Self { format: ViaProtocolFormat::Ascii, has_prior: false }
+        Self { encoding: TransportMessageEncoding::Ascii, has_prior: false }
     }
 
-    /// Locks the encoder into binary mode. Has no effect if already in binary mode.
-    pub fn select_binary(&mut self) {
-        self.format = ViaProtocolFormat::Binary;
-    }
-
-    /// Returns the format currently used by this encoder.
-    pub fn format(&self) -> ViaProtocolFormat {
-        self.format
-    }
-
-    /// Encodes `message` and appends the resulting bytes to `out`.
-    ///
-    /// In ASCII mode a space separator is prepended before every message after the first.
-    pub fn encode(&mut self, message: ViaProtocolMessage, out: &mut Vec<u8>) {
-        match self.format {
-            ViaProtocolFormat::Binary => self.encode_binary(message, out),
-            ViaProtocolFormat::Ascii => self.encode_ascii(message, out),
-        }
-    }
-
-    fn encode_binary(&self, message: ViaProtocolMessage, out: &mut Vec<u8>) {
+    fn encode_binary(&self, message: &ViaProtocolMessage, out: &mut Vec<u8>) {
         match message {
             ViaProtocolMessage::PortStateChange { port, value } => {
-                let tag = if port == 'A' { 0x80u8 } else { 0x90u8 };
+                let tag = if *port == 'A' { 0x80u8 } else { 0x90u8 };
                 out.push(tag);
-                out.push(value);
+                out.push(*value);
             }
             ViaProtocolMessage::ControlSignalChange { signals, state } => {
-                let high = if state { 0xD0u8 } else { 0xC0u8 };
+                let high = if *state { 0xD0u8 } else { 0xC0u8 };
                 out.push(high | (signals & 0x0F));
             }
         }
     }
 
-    fn encode_ascii(&mut self, message: ViaProtocolMessage, out: &mut Vec<u8>) {
+    fn encode_ascii(&mut self, message: &ViaProtocolMessage, out: &mut Vec<u8>) {
         if self.has_prior {
             out.push(b' ');
         }
         self.has_prior = true;
         match message {
             ViaProtocolMessage::PortStateChange { port, value } => {
-                let tag = if port == 'A' { b'A' } else { b'B' };
+                let tag = if *port == 'A' { b'A' } else { b'B' };
                 out.push(tag);
                 out.push(hex_nibble(value >> 4));
                 out.push(hex_nibble(value & 0x0F));
@@ -146,13 +119,42 @@ impl ViaProtocolEncoder {
                 // Emit the lowest affected signal; callers wanting multiple signals
                 // must call encode() once per signal, or use encode_all().
                 // Per spec, <p>=A|B, <n>=1|2, <v>=0|1.
-                let (port_char, signal_num) = signal_bits_to_ascii(signals);
+                let (port_char, signal_num) = signal_bits_to_ascii(*signals);
                 out.push(port_char);
                 out.push(signal_num);
-                out.push(if state { b'1' } else { b'0' });
+                out.push(if *state { b'1' } else { b'0' });
             }
         }
     }
+}
+
+impl TransportMessageEncoder<ViaProtocolMessage> for ViaProtocolEncoder {
+
+    /// Locks the encoder into binary mode. Has no effect if already in binary mode.
+    fn select_binary(&mut self) {
+        self.encoding = TransportMessageEncoding::Binary;
+    }
+
+    /// Returns the format currently used by this encoder.
+    fn encoding(&self) -> TransportMessageEncoding {
+        self.encoding
+    }
+
+    /// Encodes `message` and appends the resulting bytes to `out`.
+    ///
+    /// In ASCII mode a space separator is prepended before every message after the first.
+    fn encode(&mut self, message: &ViaProtocolMessage, out: &mut Vec<u8>) {
+        match self.encoding {
+            TransportMessageEncoding::Binary => self.encode_binary(message, out),
+            TransportMessageEncoding::Ascii => self.encode_ascii(message, out),
+        }
+    }
+    
+    fn reset(&mut self) {
+        self.has_prior = false;
+        self.encoding = TransportMessageEncoding::Ascii;
+    }
+
 }
 
 impl Default for ViaProtocolEncoder {
@@ -172,7 +174,7 @@ impl Default for ViaProtocolEncoder {
 /// Invalid data is silently ignored per the protocol specification.
 pub struct ViaProtocolDecoder {
     /// Locked format, or `None` until the first qualifying byte arrives.
-    format: Option<ViaProtocolFormat>,
+    encoding: Option<TransportMessageEncoding>,
     /// Internal parse state.
     state: DecoderState,
 }
@@ -199,12 +201,12 @@ enum DecoderState {
 impl ViaProtocolDecoder {
     /// Creates a new decoder with no format selected.
     pub fn new() -> Self {
-        Self { format: None, state: DecoderState::Idle }
+        Self { encoding: None, state: DecoderState::Idle }
     }
 
     /// Returns the format that has been locked in, or `None` if not yet determined.
-    pub fn format(&self) -> Option<ViaProtocolFormat> {
-        self.format
+    pub fn encoding(&self) -> Option<TransportMessageEncoding> {
+        self.encoding
     }
 
     /// Feeds a single byte into the decoder.
@@ -213,17 +215,17 @@ impl ViaProtocolDecoder {
     /// if more bytes are needed or the byte was ignored.
     pub fn feed(&mut self, byte: u8) -> Option<ViaProtocolMessage> {
         // Lock format on first qualifying byte.
-        if self.format.is_none() {
+        if self.encoding.is_none() {
             if byte & 0x80 != 0 {
-                self.format = Some(ViaProtocolFormat::Binary);
+                self.encoding = Some(TransportMessageEncoding::Binary);
             } else {
-                self.format = Some(ViaProtocolFormat::Ascii);
+                self.encoding = Some(TransportMessageEncoding::Ascii);
             }
         }
 
-        match self.format.unwrap() {
-            ViaProtocolFormat::Binary => self.feed_binary(byte),
-            ViaProtocolFormat::Ascii => self.feed_ascii(byte),
+        match self.encoding.unwrap() {
+            TransportMessageEncoding::Binary => self.feed_binary(byte),
+            TransportMessageEncoding::Ascii => self.feed_ascii(byte),
         }
     }
 
@@ -345,6 +347,40 @@ impl ViaProtocolDecoder {
     }
 }
 
+impl TransportMessageDecoder<ViaProtocolMessage> for ViaProtocolDecoder {
+    
+    /// Returns the format that has been locked in, or `None` if not yet determined.
+    fn encoding(&self) -> Option<TransportMessageEncoding> {
+        self.encoding
+    }
+
+    /// Feeds a single byte into the decoder.
+    ///
+    /// Returns `Some(message)` when a complete, valid message has been decoded, or `None`
+    /// if more bytes are needed or the byte was ignored.
+    fn feed(&mut self, byte: u8) -> Option<ViaProtocolMessage> {
+        // Lock format on first qualifying byte.
+        if self.encoding.is_none() {
+            if byte & 0x80 != 0 {
+                self.encoding = Some(TransportMessageEncoding::Binary);
+            } else {
+                self.encoding = Some(TransportMessageEncoding::Ascii);
+            }
+        }
+
+        match self.encoding.unwrap() {
+            TransportMessageEncoding::Binary => self.feed_binary(byte),
+            TransportMessageEncoding::Ascii => self.feed_ascii(byte),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.state = DecoderState::Idle;
+        self.encoding = None;
+    }
+
+}
+
 impl Default for ViaProtocolDecoder {
     fn default() -> Self {
         Self::new()
@@ -399,7 +435,7 @@ mod tests {
         let mut enc = ViaProtocolEncoder::new();
         enc.select_binary();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::PortStateChange { port: 'A', value: 0x55 }, &mut out);
+        enc.encode(&ViaProtocolMessage::PortStateChange { port: 'A', value: 0x55 }, &mut out);
         assert_eq!(out, &[0x80, 0x55]);
     }
 
@@ -408,7 +444,7 @@ mod tests {
         let mut enc = ViaProtocolEncoder::new();
         enc.select_binary();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::PortStateChange { port: 'B', value: 0xAA }, &mut out);
+        enc.encode(&ViaProtocolMessage::PortStateChange { port: 'B', value: 0xAA }, &mut out);
         assert_eq!(out, &[0x90, 0xAA]);
     }
 
@@ -417,7 +453,7 @@ mod tests {
         let mut enc = ViaProtocolEncoder::new();
         enc.select_binary();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false }, &mut out);
+        enc.encode(&ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false }, &mut out);
         assert_eq!(out, &[0xC8]); // CB1 clear
     }
 
@@ -426,7 +462,7 @@ mod tests {
         let mut enc = ViaProtocolEncoder::new();
         enc.select_binary();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true }, &mut out);
+        enc.encode(&ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true }, &mut out);
         assert_eq!(out, &[0xD1]); // CA2 set
     }
 
@@ -436,7 +472,7 @@ mod tests {
     fn encoder_ascii_port_a_state_change() {
         let mut enc = ViaProtocolEncoder::new();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::PortStateChange { port: 'A', value: 0x5C }, &mut out);
+        enc.encode(&ViaProtocolMessage::PortStateChange { port: 'A', value: 0x5C }, &mut out);
         assert_eq!(out, b"A5C");
     }
 
@@ -444,7 +480,7 @@ mod tests {
     fn encoder_ascii_port_b_state_change() {
         let mut enc = ViaProtocolEncoder::new();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::PortStateChange { port: 'B', value: 0xD3 }, &mut out);
+        enc.encode(&ViaProtocolMessage::PortStateChange { port: 'B', value: 0xD3 }, &mut out);
         assert_eq!(out, b"BD3");
     }
 
@@ -452,7 +488,7 @@ mod tests {
     fn encoder_ascii_control_ca1_clear() {
         let mut enc = ViaProtocolEncoder::new();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false }, &mut out);
+        enc.encode(&ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false }, &mut out);
         assert_eq!(out, b"CA10");
     }
 
@@ -460,7 +496,7 @@ mod tests {
     fn encoder_ascii_control_cb2_set() {
         let mut enc = ViaProtocolEncoder::new();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true }, &mut out);
+        enc.encode(&ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true }, &mut out);
         assert_eq!(out, b"CB21");
     }
 
@@ -468,8 +504,8 @@ mod tests {
     fn encoder_ascii_inserts_space_between_messages() {
         let mut enc = ViaProtocolEncoder::new();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::PortStateChange { port: 'A', value: 0x00 }, &mut out);
-        enc.encode(ViaProtocolMessage::PortStateChange { port: 'B', value: 0xFF }, &mut out);
+        enc.encode(&ViaProtocolMessage::PortStateChange { port: 'A', value: 0x00 }, &mut out);
+        enc.encode(&ViaProtocolMessage::PortStateChange { port: 'B', value: 0xFF }, &mut out);
         assert_eq!(out, b"A00 BFF");
     }
 
@@ -477,21 +513,21 @@ mod tests {
     fn encoder_ascii_no_leading_space_on_first_message() {
         let mut enc = ViaProtocolEncoder::new();
         let mut out = Vec::new();
-        enc.encode(ViaProtocolMessage::PortStateChange { port: 'A', value: 0x12 }, &mut out);
+        enc.encode(&ViaProtocolMessage::PortStateChange { port: 'A', value: 0x12 }, &mut out);
         assert!(!out.starts_with(b" "));
     }
 
     #[test]
     fn encoder_starts_in_ascii_mode() {
         let enc = ViaProtocolEncoder::new();
-        assert_eq!(enc.format(), ViaProtocolFormat::Ascii);
+        assert_eq!(enc.encoding(), TransportMessageEncoding::Ascii);
     }
 
     #[test]
     fn encoder_select_binary_locks_format() {
         let mut enc = ViaProtocolEncoder::new();
         enc.select_binary();
-        assert_eq!(enc.format(), ViaProtocolFormat::Binary);
+        assert_eq!(enc.encoding(), TransportMessageEncoding::Binary);
     }
 
     // --- Decoder: format negotiation ---
@@ -500,21 +536,21 @@ mod tests {
     fn decoder_high_bit_byte_selects_binary() {
         let mut dec = ViaProtocolDecoder::new();
         dec.feed(0xFF); // 0xFF: selects binary, otherwise ignored
-        assert_eq!(dec.format(), Some(ViaProtocolFormat::Binary));
+        assert_eq!(dec.encoding(), Some(TransportMessageEncoding::Binary));
     }
 
     #[test]
     fn decoder_space_selects_ascii() {
         let mut dec = ViaProtocolDecoder::new();
         dec.feed(0x20);
-        assert_eq!(dec.format(), Some(ViaProtocolFormat::Ascii));
+        assert_eq!(dec.encoding(), Some(TransportMessageEncoding::Ascii));
     }
 
     #[test]
     fn decoder_control_char_selects_ascii() {
         let mut dec = ViaProtocolDecoder::new();
         dec.feed(0x0A); // newline
-        assert_eq!(dec.format(), Some(ViaProtocolFormat::Ascii));
+        assert_eq!(dec.encoding(), Some(TransportMessageEncoding::Ascii));
     }
 
     #[test]
@@ -522,7 +558,7 @@ mod tests {
         let mut dec = ViaProtocolDecoder::new();
         dec.feed(0x20); // ASCII selected
         dec.feed(0xFF); // high-bit byte: format already locked, must not change
-        assert_eq!(dec.format(), Some(ViaProtocolFormat::Ascii));
+        assert_eq!(dec.encoding(), Some(TransportMessageEncoding::Ascii));
     }
 
     // --- Decoder: binary messages ---
@@ -563,7 +599,7 @@ mod tests {
         // 0xFF has high bit set → binary mode; upper nibble is 0xF → not 0x80/0x90/0xC/0xD → ignored
         let msg = dec.feed(0xFF);
         assert!(msg.is_none());
-        assert_eq!(dec.format(), Some(ViaProtocolFormat::Binary));
+        assert_eq!(dec.encoding(), Some(TransportMessageEncoding::Binary));
     }
 
     #[test]
@@ -700,7 +736,7 @@ mod tests {
         enc.select_binary();
         let mut bytes = Vec::new();
         for &m in &messages {
-            enc.encode(m, &mut bytes);
+            enc.encode(&m, &mut bytes);
         }
         let mut dec = ViaProtocolDecoder::new();
         let mut decoded = Vec::new();
@@ -717,7 +753,7 @@ mod tests {
         let mut enc = ViaProtocolEncoder::new();
         let mut bytes = Vec::new();
         for &m in &messages {
-            enc.encode(m, &mut bytes);
+            enc.encode(&m, &mut bytes);
         }
         // The encoded bytes start with 'A' (ASCII, high bit clear) → decoder selects ASCII.
         let mut dec = ViaProtocolDecoder::new();
