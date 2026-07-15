@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-use figment::value::{Dict, Value};
 use figment::providers::Serialized;
+use figment::value::{Dict, Value};
 use serde::Deserialize;
+use std::collections::HashMap;
 
-use crate::emulator::{AddressRange, BusConfig, DeviceId};
+use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 use crate::emulator::device::Mc6840;
-use super::{DeviceModule, InstantiationContext, DeviceModuleError, TransportSpec, TransportSpecFormat};
+use crate::emulator::{AddressRange, BusConfig, DeviceId, ProtocolMessageEncoding};
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 8;
@@ -17,6 +17,7 @@ pub struct Mc6840Module;
 
 #[derive(Deserialize)]
 pub struct Mc6840Attributes {
+    protocol: Option<ProtocolMessageEncoding>,
     transport: Option<TransportSpecFormat>,
 }
 
@@ -44,6 +45,9 @@ impl DeviceModule for Mc6840Module {
         let device_id = DeviceId(address as u32);
         let device = {
             let mut dev = Mc6840::new(self.name()).with_address(address);
+            if let Some(protocol) = config.protocol {
+                dev = dev.with_protocol(protocol);
+            }
             if let Some(transport_spec) = transport_spec {
                 let transport = transport_spec
                     .to_transport().await

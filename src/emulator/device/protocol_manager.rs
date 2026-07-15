@@ -1,20 +1,56 @@
-use std::fmt::Debug;
 use crate::emulator::{Transport, TransportError};
+use serde::{Deserialize, Serialize};
+use std::fmt::{Debug, Display, Formatter};
+use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportMessageEncoding {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum ProtocolMessageEncoding {
     Ascii,
     Binary,
 }
 
+impl Display for ProtocolMessageEncoding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProtocolMessageEncoding::Ascii => write!(f, "ASCII"),
+            ProtocolMessageEncoding::Binary => write!(f, "Binary"),
+        }
+    }
+}
+
+impl From<ProtocolMessageEncoding> for String {
+    fn from(v: ProtocolMessageEncoding) -> Self {
+        v.to_string()
+    }
+}
+
+impl TryFrom<String> for ProtocolMessageEncoding {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl FromStr for ProtocolMessageEncoding {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lower_s = s.to_ascii_lowercase();
+        let ls = lower_s.as_str();
+        match ls {
+            "ascii" => Ok(ProtocolMessageEncoding::Ascii),
+            "binary" => Ok(ProtocolMessageEncoding::Binary),
+            _ => Err(format!("Invalid transport message encoding '{s}'; try '{}' or '{}'",
+                             ProtocolMessageEncoding::Ascii, ProtocolMessageEncoding::Binary)),
+        }
+    }
+
+}
+
 /// A message protocol encoder.
-pub trait TransportMessageEncoder<T>: Send {
-
-    /// Locks the encoder into binary mode.
-    fn select_binary(&mut self);
-
-    /// Returns the encoding currently used by this encoder.
-    fn encoding(&self) -> TransportMessageEncoding;
+pub trait ProtocolMessageEncoder<T>: Send {
 
     /// Encodes `message` appending the encoded form to `out`.
     fn encode(&mut self, message: &T, out: &mut Vec<u8>);
@@ -25,10 +61,7 @@ pub trait TransportMessageEncoder<T>: Send {
 }
 
 /// A message protocol decoder.
-pub trait TransportMessageDecoder<T>: Send {
-
-    /// Returns the selected encoding.
-    fn encoding(&self) -> Option<TransportMessageEncoding>;
+pub trait ProtocolMessageDecoder<T>: Send {
 
     /// Feeds the byte `b` received from the transport into the decoder's state machine.
     /// Returns `Some(T)` if the state machine outputs a valid message, otherwise `None`.
@@ -39,53 +72,48 @@ pub trait TransportMessageDecoder<T>: Send {
 
 }
 
-struct TransportSlot<T> {
+struct ProtocolSlot<T> {
     transport: Box<dyn Transport>,
-    encoder: Box<dyn TransportMessageEncoder<T>>,
-    decoder: Box<dyn TransportMessageDecoder<T>>,
-    handshake_done: bool,
+    encoder: Box<dyn ProtocolMessageEncoder<T>>,
+    decoder: Box<dyn ProtocolMessageDecoder<T>>,
+    initial_dump_sent: bool,
     last_connection_id: u64,
 }
 
-impl<T> TransportSlot<T> {
+impl<T> ProtocolSlot<T> {
 
     fn new(transport: Box<dyn Transport>,
-           encoder: Box<dyn TransportMessageEncoder<T>>,
-           decoder: Box<dyn TransportMessageDecoder<T>>) -> Self {
+           encoder: Box<dyn ProtocolMessageEncoder<T>>,
+           decoder: Box<dyn ProtocolMessageDecoder<T>>) -> Self {
         let last_connection_id = transport.connection_id();
         Self {
             transport,
             encoder,
             decoder,
-            handshake_done: false,
+            initial_dump_sent: false,
             last_connection_id,
         }
     }
 
-    /// Resets handshake and codec state for a new peripheral session.
+    /// Resets codec state for a new peripheral session.
     fn reset(&mut self) {
         self.encoder.reset();
         self.decoder.reset();
-        self.handshake_done = false;
     }
 
     /// Sends `message` to the connected peripheral if the handshake has
     /// been completed.
     fn send(&mut self, message: &T) -> Result<(), TransportError> {
-        if self.handshake_done {
-            let mut bytes = Vec::new();
-            self.encoder.encode(message, &mut bytes);
-            for b in bytes {
-                self.transport.send(b)?;
-            }
+        let mut bytes = Vec::new();
+        self.encoder.encode(message, &mut bytes);
+        for b in bytes {
+            self.transport.send(b)?;
         }
         Ok(())
     }
 
     /// Sends `messages` to the connected peripheral.
-    /// Panics if the handshake has not been completed.
     fn send_all(&mut self, messages: &[T]) -> Result<(), TransportError> {
-        assert!(self.handshake_done);
         for message in messages.iter() {
             self.send(message)?
         }
@@ -94,22 +122,15 @@ impl<T> TransportSlot<T> {
 
     fn poll(&mut self, state: &[T]) -> Result<Option<T>, TransportError> {
         let current_id = self.transport.connection_id();
-        if current_id != self.last_connection_id {
+        if current_id != self.last_connection_id || !self.initial_dump_sent {
             self.last_connection_id = current_id;
+            self.initial_dump_sent = true;
             self.reset();
+            self.send_all(state)?;
         }
 
         while let Some(byte) = self.transport.try_recv() {
             let msg = self.decoder.feed(byte);
-
-            // First qualifying byte locks the format → complete the handshake.
-            if !self.handshake_done && self.decoder.encoding().is_some() {
-                self.handshake_done = true;
-                if self.decoder.encoding() == Some(TransportMessageEncoding::Binary) {
-                    self.encoder.select_binary();
-                }
-                self.send_all(state)?;
-            }
 
             if let Some(m) = msg {
                 return Ok(Some(m))
@@ -119,26 +140,26 @@ impl<T> TransportSlot<T> {
     }
 }
 
-/// A transport manager takes responsibility for relaying peripheral protocol
+/// A protocol manager takes responsibility for relaying peripheral protocol
 /// messages between peripherals connected via a transport protocol and an
 /// I/O device that accepts multiple concurrently connected peripherals.
 ///
-/// For each transport connection, the manager accepts the initial protocol
-/// handshake and provides a state dump from the I/O device. Subsequently, on
-/// each call to the [`poll_transports`] method, it checks for a valid message
-/// from any connected peripheral. Messages can be delivered to peripherals using
-/// either the [`send_to_all`] or [`send_all_to_all`] methods.
-pub struct TransportManager<T> {
-    slots: Vec<TransportSlot<T>>,
+/// For each transport connection, the manager provides a state dump from the 
+/// I/O device. Subsequently, on each call to the [`poll_transports`] method, it 
+/// checks for a valid message from any connected peripheral. Messages can be 
+/// delivered to peripherals using either the [`send_to_all`] or [`send_all_to_all`] 
+/// methods.
+pub struct ProtocolManager<T> {
+    slots: Vec<ProtocolSlot<T>>,
 }
 
-impl<T> Default for TransportManager<T> {
+impl<T> Default for ProtocolManager<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> TransportManager<T> {
+impl<T> ProtocolManager<T> {
 
     pub fn new() -> Self {
         Self {
@@ -147,9 +168,9 @@ impl<T> TransportManager<T> {
     }
 
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>,
-                            encoder: Box<dyn TransportMessageEncoder<T>>,
-                            decoder: Box<dyn TransportMessageDecoder<T>>) {
-        self.slots.push(TransportSlot::new(transport, encoder, decoder));
+                            encoder: Box<dyn ProtocolMessageEncoder<T>>,
+                            decoder: Box<dyn ProtocolMessageDecoder<T>>) {
+        self.slots.push(ProtocolSlot::new(transport, encoder, decoder));
     }
 
     pub fn send_to_all(&mut self, message: &T) -> Result<(), TransportError> {
@@ -179,13 +200,13 @@ impl<T> TransportManager<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::emulator::UnixSocketTransport;
     use std::path::PathBuf;
     use tempfile::TempDir;
-    use tokio::net::UnixStream;
     use tokio::io::AsyncWriteExt;
+    use tokio::net::UnixStream;
     use tokio::time::{sleep, Duration};
-    use crate::emulator::{UnixSocketTransport};
-    use super::*;
 
     async fn unix_listener(path: &PathBuf) -> Result<Box<dyn Transport>, TransportError> {
         let transport = UnixSocketTransport::listen(path).await;
