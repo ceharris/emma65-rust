@@ -8,6 +8,7 @@ pub mod via6522;
 pub mod via_protocol;
 mod ring;
 mod ptm_protocol;
+mod transport_manager;
 
 pub use self::r6551::R6551;
 pub use self::console::Console;
@@ -15,7 +16,8 @@ pub use self::mc6840::Mc6840;
 pub use self::mc6850::Mc6850;
 pub use self::phoebe::Phoebe;
 pub use self::via6522::Via6522;
-pub use self::ptm_protocol::{PtmProtocolDecoder, PtmProtocolEncoder, PtmProtocolFormat, PtmProtocolMessage};
+pub use self::transport_manager::{TransportManager, TransportMessageDecoder, TransportMessageEncoder, TransportMessageEncoding};
+pub use self::ptm_protocol::{PtmProtocolDecoder, PtmProtocolEncoder, PtmProtocolMessage};
 pub use self::via_protocol::{ViaProtocolDecoder, ViaProtocolEncoder, ViaProtocolFormat, ViaProtocolMessage};
 
 use std::fmt::{Display, Formatter, Result};

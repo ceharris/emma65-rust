@@ -60,7 +60,7 @@
 //!
 
 use log::debug;
-use crate::emulator::{DeviceId, ErrorSender, IoDevice, Transport, TransportError, PtmProtocolDecoder, PtmProtocolEncoder, PtmProtocolFormat, PtmProtocolMessage};
+use crate::emulator::{DeviceId, ErrorSender, IoDevice, Transport, TransportError, TransportManager, PtmProtocolDecoder, PtmProtocolEncoder, PtmProtocolMessage};
 
 const T1: usize = 0;
 const T2: usize = 1;
@@ -75,8 +75,9 @@ const CTRL_COUNTER_DUAL_8BIT: u8   = 0b00000100;
 const CTRL_IRQ_ENABLE: u8          = 0b01000000;
 const CTRL_OUTPUT_ENABLE: u8       = 0b10000000;
 
+const CTRL_MODE_MASK: u8           = 0b00111000;
 const CTRL_MODE_COMPARE: u8        = 0b00001000;
-const CTRL_MODE_DEFERRED_LOAD: u8  = 0b00010000;
+const CTRL_MODE_DEFERRED_INIT: u8  = 0b00010000;
 const CTRL_MODE_SINGLE_SHOT: u8    = 0b00100000;
 const CTRL_MODE_PULSE_WIDTH: u8    = 0b00010000;
 const CTRL_MODE_GREATER: u8        = 0b00100000;
@@ -84,16 +85,6 @@ const CTRL_MODE_GREATER: u8        = 0b00100000;
 const RESET_COUNT: u16 = 0xFFFF;
 
 const IRQ_COMPOSITE: u8 = 0b10000000;
-
-enum Measure {
-    Frequency,
-    PulseWidth,
-}
-
-enum Mode {
-    Generating { single_shot: bool, deferred_load: bool },
-    Comparing { measure: Measure, is_greater: bool },
-}
 
 struct Prescaler {
     divisor: u8,
@@ -120,20 +111,99 @@ impl Prescaler {
 
 }
 
+/// Synchronizes an asynchronous input to the E clock through a pipeline,
+/// delaying either a detected falling edge (Clock/Gate) or the raw level
+/// itself (Reset) by `depth` E cycles.
+struct Synchronizer {
+    prev_level: bool,
+    // Fixed-capacity buffer sized to the deepest case (Clock/Gate = 4).
+    // Only indices 0..depth are ever read or written.
+    pipeline: [bool; 4],
+    depth: usize,
+    edge_triggered: bool,
+}
 
+impl Synchronizer {
+
+    /// Creates a new instance.
+    /// ## Arguments
+    /// - `depth` - 4 for Clock/Gate, 3 for Reset.
+    /// - `edge_triggered` - true for Clock/Gate, false for Reset.
+    ///
+    fn new(depth: usize, prev_level: bool, edge_triggered: bool) -> Self {
+        assert!((1..=4).contains(&depth));
+        Self {
+            prev_level,
+            pipeline: [if edge_triggered { false } else { prev_level }; 4],
+            depth,
+            edge_triggered,
+        }
+    }
+
+    /// Call once per full system clock cycle (E) with the current raw pin level.
+    ///
+    /// Returns whether the input is *recognized* on this tick, delayed by
+    /// `depth` E cycles from the underlying transition/level:
+    /// - edge_triggered: a one-cycle pulse, true only on the tick a
+    ///   falling edge finishes propagating through the pipeline.
+    /// - level-triggered: tracks the raw level itself, delayed by
+    ///   `depth` cycles — true for as long as the (delayed) level is
+    ///   asserted, not just a single pulse.
+    ///
+    fn sample(&mut self, level: bool) -> bool {
+        let falling_edge = self.prev_level && !level;
+        self.prev_level = level;
+
+        let value_to_pipe = if self.edge_triggered { falling_edge } else { level };
+
+        let recognized = self.pipeline[self.depth - 1];
+        for i in (1..self.depth).rev() {
+            self.pipeline[i] = self.pipeline[i - 1];
+        }
+        self.pipeline[0] = value_to_pipe;
+        recognized
+    }
+
+}
+
+/// A timer unit of the MC6840 PTM.
+/// All three timers in the PTM are modeled using this struct. The optional prescaler
+/// of Timer 3 is handled at the device level, separate from the timer itself, similar
+/// to the design of the real hardware.
+///
 struct Timer {
+    // count to set at each load
     latch: u16,
+    // true if the latch was zero at last load; used only for 16-bit continuous countdown mode
     carry_in: bool,
+    // optional prescaler (used only by T3 when prescaling mode is enabled)
+    prescaler: Option<Prescaler>,
+    // count remaining after last load
     counter: u16,
-    mode: Mode,
+    // true if the gate input has been triggered (on falling edge)
+    triggered: bool,
+    // mode selected in the control register
+    mode: u8,
+    // true if this timer is clocked by the clock pin (Cx)
     external_clock: bool,
+    // true if the dual 8-bit mode has been selected
     dual8bit_mode: bool,
+    // true if timeouts result in an interrupt
     irq_enabled: bool,
-    irq_active: bool,
+    // true if changes to output pin (Ox) are transmitted to transport
     output_enabled: bool,
+    // true if this timer wants to assert CPU's IRQ
+    irq_active: bool,
+    // state of the output pin (Ox)
     output_state: bool,
-    clock_input: bool,
-    gate_input: bool,
+    // raw level of the clock pin (Cx) last received from transport
+    clock_level: bool,
+    // synchronizer used to model the pipeline delay of the clock input (Cx)
+    clock_sync: Synchronizer,
+    // raw level of the gate pin (Gx) last received from transport
+    gate_level: bool,
+    // synchronizer used to model the pipeline delay of the gate input (Gx)
+    gate_sync: Synchronizer,
 }
 
 impl Timer {
@@ -142,72 +212,57 @@ impl Timer {
         Timer {
             latch: RESET_COUNT,
             carry_in: false,
+            prescaler: None,
             counter: 0,
-            mode: Mode::Generating { single_shot: false, deferred_load: false },
+            triggered: false,
+            mode: 0,
             external_clock: false,
             dual8bit_mode: false,
             irq_enabled: false,
             irq_active: false,
             output_enabled: false,
             output_state: false,
-            clock_input: false,
-            gate_input: true,
+            clock_level: true,
+            clock_sync: Synchronizer::new(4, true, true),
+            gate_level: false,
+            gate_sync: Synchronizer::new(4, false, true),
         }
     }
 
-    fn is_zero(&self) -> bool {
-        self.counter == 0 && (self.dual8bit_mode || !self.carry_in)
+    fn is_generating(&self) -> bool {
+        self.mode & CTRL_MODE_COMPARE == 0
     }
 
-    fn load(&mut self) {
-        self.counter = self.latch;
-        self.carry_in = self.counter == 0;
-        if self.dual8bit_mode && self.latch != 0 {
-            self.output_state = false;
-        }
+    fn is_continuous(&self) -> bool {
+        self.is_generating() && self.mode & CTRL_MODE_SINGLE_SHOT == 0
     }
 
-    fn decrement(&mut self) {
-        if self.gate_input {
-            if self.dual8bit_mode {
-                let mut lsb = (self.counter & 0xFF) as u8;
-                let mut msb = (self.counter >> 8) as u8;
-                if lsb == 0 {
-                    lsb = (self.latch & 0xFF) as u8;
-                    if msb > 0 {
-                        msb -= 1;
-                        if msb == 0 {
-                            self.output_state = true;
-                        }
-                    }
-                } else {
-                    lsb -= 1;
-                }
-                self.counter = u16::from_le_bytes([lsb, msb])
-            } else {
-                assert!(self.carry_in || self.counter > 0, "expected non-zero counter");
-                self.counter = self.counter.wrapping_sub(1);
-            }
-        }
+    fn is_single_shot(&self) -> bool {
+        self.is_generating() && self.mode & CTRL_MODE_SINGLE_SHOT != 0
+    }
+
+    fn is_deferred_init(&self) -> bool {
+        self.is_generating() && self.mode & CTRL_MODE_DEFERRED_INIT != 0
+    }
+
+    fn is_comparing(&self) -> bool {
+        self.mode & CTRL_MODE_COMPARE != 0
+    }
+
+    fn is_frequency(&self) -> bool {
+        self.is_comparing() && self.mode & CTRL_MODE_PULSE_WIDTH == 0
+    }
+
+    fn is_pulse_width(&self) -> bool {
+        self.is_comparing() && self.mode & CTRL_MODE_PULSE_WIDTH != 0
+    }
+
+    fn is_compare_greater(&self) -> bool {
+        self.is_comparing() && self.mode & CTRL_MODE_GREATER != 0
     }
 
     fn set_control_register(&mut self, value: u8) {
-        self.mode = if value & CTRL_MODE_COMPARE == 0 {
-            Mode::Generating {
-                single_shot: value & CTRL_MODE_SINGLE_SHOT != 0,
-                deferred_load: value & CTRL_MODE_DEFERRED_LOAD != 0,
-            }
-        } else {
-            Mode::Comparing {
-                measure: if value & CTRL_MODE_PULSE_WIDTH != 0 {
-                    Measure::PulseWidth
-                } else {
-                    Measure::Frequency
-                },
-                is_greater: value & CTRL_MODE_GREATER != 0,
-            }
-        };
-
+        self.mode = value & CTRL_MODE_MASK;
         self.dual8bit_mode = value & CTRL_COUNTER_DUAL_8BIT != 0;
         self.external_clock = value & CTRL_USE_EXTERNAL_CLOCK != 0;
         self.irq_enabled = value & CTRL_IRQ_ENABLE != 0;
@@ -225,14 +280,62 @@ impl Timer {
         self.irq_active
     }
 
-    fn tick(&mut self) {
-        if self.is_zero() {
-            self.irq_active = self.irq_enabled;
-            let single_shot = matches!(self.mode, Mode::Generating { single_shot: true, .. });
-            if !single_shot {
-                self.load()
+    fn is_zero(&self) -> bool {
+        self.counter == 0 && (self.dual8bit_mode || !self.carry_in)
+    }
+
+    fn load(&mut self) {
+        self.counter = self.latch;
+        self.carry_in = self.latch == 0 && self.is_continuous();
+        if self.dual8bit_mode && self.latch != 0 {
+            self.output_state = false;
+        }
+    }
+
+    fn init(&mut self) {
+        self.load();
+        self.irq_active = false;
+        self.output_state = false;
+        self.triggered = true;
+    }
+
+    fn decrement(&mut self) {
+        if self.dual8bit_mode {
+            let mut lsb = (self.counter & 0xFF) as u8;
+            let mut msb = (self.counter >> 8) as u8;
+            if lsb == 0 {
+                lsb = (self.latch & 0xFF) as u8;
+                if msb > 0 {
+                    msb -= 1;
+                    if msb == 0 {
+                        self.output_state = true;
+                    }
+                }
+            } else {
+                lsb -= 1;
             }
-            self.output_state = if self.dual8bit_mode && self.latch != 0 {
+            self.counter = u16::from_le_bytes([lsb, msb])
+        } else {
+            assert!(self.carry_in || self.counter > 0, "expected non-zero counter");
+            self.counter = self.counter.wrapping_sub(1);
+        }
+    }
+
+    fn clock_counter(&mut self) {
+        if !self.triggered {
+            return
+        }
+        if self.is_continuous() && self.gate_level {
+            return;
+        }
+        if self.is_zero() {
+            if self.is_continuous() || self.is_comparing() {
+                self.load()
+            } else {
+                self.triggered = false;
+            }
+            self.irq_active = self.irq_enabled;
+            self.output_state = if self.dual8bit_mode && self.latch != 0 || self.is_single_shot() {
                 false
             } else {
                 !self.output_state
@@ -240,37 +343,35 @@ impl Timer {
         } else {
             self.decrement();
             self.carry_in = false;
+            if self.is_single_shot() {
+                self.output_state = true;
+            }
         }
     }
 
-}
-
-struct TransportSlot {
-    transport: Box<dyn Transport>,
-    encoder: PtmProtocolEncoder,
-    decoder: PtmProtocolDecoder,
-    handshake_done: bool,
-    last_connection_id: u64,
-}
-
-impl TransportSlot {
-    fn new(transport: Box<dyn Transport>) -> Self {
-        let last_connection_id = transport.connection_id();
-        Self {
-            transport,
-            encoder: PtmProtocolEncoder::new(),
-            decoder: PtmProtocolDecoder::new(),
-            handshake_done: false,
-            last_connection_id,
+    fn clock(&mut self) {
+        if self.prescaler.is_none() {
+            self.clock_counter();
+        } else {
+            let prescaler = self.prescaler.as_mut().unwrap();
+            if prescaler.update_has_carry_out() {
+                self.clock_counter();
+            }
         }
     }
 
-    /// Resets handshake and codec state for a new client session.
-    fn reset(&mut self) {
-        self.encoder = PtmProtocolEncoder::new();
-        self.decoder = PtmProtocolDecoder::new();
-        self.handshake_done = false;
+    fn tick(&mut self) {
+        let gate_triggered = self.gate_sync.sample(self.gate_level);
+        if gate_triggered {
+            self.init();
+        } else {
+            let clock_triggered = self.clock_sync.sample(self.clock_level);
+            if !self.external_clock || clock_triggered {
+                self.clock();
+            }
+        }
     }
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,10 +389,10 @@ impl AsyncIoState {
             gates: [false; 3],
             outputs: [false; 3],
         };
-        for i in 0..3 {
-            state.clocks[i] = timers[i].clock_input;
-            state.gates[i] = timers[i].gate_input;
-            state.outputs[i] = timers[i].output_state & timers[i].output_enabled;
+        for (i, timer) in timers.iter().enumerate() {
+            state.clocks[i] = timer.clock_level;
+            state.gates[i] = timer.gate_level;
+            state.outputs[i] = timer.output_state & timer.output_enabled;
         }
         state
     }
@@ -301,7 +402,7 @@ impl AsyncIoState {
 pub struct Mc6840 {
     name: &'static str,
     address: u16,
-    transports: Vec<TransportSlot>,
+    transport_manager: TransportManager<PtmProtocolMessage>,
     error_sender: Option<ErrorSender>,
     device_id: Option<DeviceId>,
 
@@ -310,7 +411,6 @@ pub struct Mc6840 {
     msb_buffer: u8,
     timers: [Timer; 3],
     cr1_enabled: bool,
-    t3_prescaler: Prescaler,
     reset_active: bool,
 }
 
@@ -320,7 +420,7 @@ impl Mc6840 {
         Mc6840 {
             name,
             address: 0,
-            transports: Vec::new(),
+            transport_manager: TransportManager::new(),
             error_sender: None,
             device_id: None,
             latched_status: 0,
@@ -332,7 +432,6 @@ impl Mc6840 {
                 Timer::new(),   // T3
             ],
             cr1_enabled: false,
-            t3_prescaler: Prescaler::new(1),
             reset_active: false,
         }
     }
@@ -346,7 +445,9 @@ impl Mc6840 {
     /// Attaches a transport. All attached transports receive every port and control-signal
     /// state change; any number of peripherals may be connected simultaneously.
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        self.transports.push(TransportSlot::new(transport));
+        self.transport_manager.attach_transport(transport,
+                                                Box::new(PtmProtocolEncoder::new()),
+                                                Box::new(PtmProtocolDecoder::new()));
     }
 
     /// Sets the error sender for async transport event reporting.
@@ -362,13 +463,39 @@ impl Mc6840 {
         }
     }
 
-    fn send_to_all(&mut self, message: PtmProtocolMessage) {
-        for i in 0..self.transports.len() {
-            if !self.transports[i].handshake_done { continue; }
-            let mut bytes = Vec::new();
-            self.transports[i].encoder.encode(message, &mut bytes);
-            for b in bytes {
-                if let Err(e) = self.transports[i].transport.send(b) {
+    fn send_state_update(&mut self, before: &AsyncIoState, after: &AsyncIoState) -> Result<(), TransportError>{
+        if before.clocks != after.clocks {
+            self.transport_manager.send_to_all(
+                &PtmProtocolMessage::ClockState { clocks: after.clocks })?;
+        }
+        if before.gates != after.gates {
+            self.transport_manager.send_to_all(
+                &PtmProtocolMessage::GateState { gates: after.gates })?;
+        }
+        if before.outputs != after.outputs {
+            self.transport_manager.send_to_all(
+                &PtmProtocolMessage::OutputState { outputs: after.outputs })?;
+        }
+        Ok(())
+    }
+
+    fn dump_state(&self) -> Vec<PtmProtocolMessage> {
+        let state = AsyncIoState::new(&self.timers);
+        let messages = vec![
+            PtmProtocolMessage::ClockState { clocks: state.clocks },
+            PtmProtocolMessage::GateState { gates: state.gates },
+            PtmProtocolMessage::OutputState { outputs: state.outputs },
+        ];
+        messages
+    }
+
+    fn poll_transports(&mut self) {
+        let state = self.dump_state();
+        loop {
+            match self.transport_manager.poll_transports(&state) {
+                Ok(Some(m)) => self.apply_message(m),
+                Ok(None) => break,
+                Err(e) => {
                     self.report_error(e);
                     break;
                 }
@@ -376,102 +503,15 @@ impl Mc6840 {
         }
     }
 
-    fn send_state_update(&mut self, before: &AsyncIoState, after: &AsyncIoState) {
-        if before.clocks != after.clocks {
-            self.send_to_all(PtmProtocolMessage::ClockState { clocks: after.clocks });
-        }
-        if before.gates != after.gates {
-            self.send_to_all(PtmProtocolMessage::GateState { gates: after.gates });
-        }
-        if before.outputs != after.outputs {
-            self.send_to_all(PtmProtocolMessage::OutputState { outputs: after.outputs });
-        }
-    }
-
-    fn send_state_dump(&mut self, idx: usize) {
-        let mut clocks: [bool; 3] = [false, false, false];
-        let mut gates: [bool; 3] = [false, false, false];
-        let mut outputs: [bool; 3] = [false, false, false];
-        for i in 0..3 {
-            let timer = &self.timers[i];
-            clocks[i] = timer.clock_input;
-            gates[i] = timer.gate_input;
-            outputs[i] = timer.output_state;
-        }
-        let messages = vec![
-            PtmProtocolMessage::ClockState { clocks },
-            PtmProtocolMessage::GateState { gates },
-            PtmProtocolMessage::OutputState { outputs},
-        ];
-        for message in messages {
-            let mut data = Vec::new();
-            self.transports[idx].encoder.encode(message, &mut data);
-            for b in data {
-                if let Err(e) = self.transports[idx].transport.send(b) {
-                    self.report_error(e);
-                    return;
-                }
-            }
-        }
-    }
-
-    fn send_state_to_all(&mut self) {
-        for i in 0..self.transports.len() {
-            if self.transports[i].handshake_done {
-                self.send_state_dump(i);
-            }
-        }
-    }
-
-    fn apply_message(&mut self, message: PtmProtocolMessage) {
-        // TODO
-    }
-
-    fn poll_transports(&mut self) {
-        for i in 0..self.transports.len() {
-            // Detect reconnection: a new client session began since the last poll.
-            let current_id = self.transports[i].transport.connection_id();
-            if current_id != self.transports[i].last_connection_id {
-                self.transports[i].last_connection_id = current_id;
-                self.transports[i].reset();
-            }
-
-            while let Some(byte) = self.transports[i].transport.try_recv() {
-                let msg = self.transports[i].decoder.feed(byte);
-
-                // First qualifying byte locks the format → complete the handshake.
-                if !self.transports[i].handshake_done
-                    && self.transports[i].decoder.format().is_some()
-                {
-                    self.transports[i].handshake_done = true;
-                    if self.transports[i].decoder.format() == Some(PtmProtocolFormat::Binary) {
-                        self.transports[i].encoder.select_binary();
-                    }
-                    self.send_state_dump(i);
-                }
-
-                if let Some(m) = msg {
-                    self.apply_message(m);
-                }
-            }
-        }
-    }
-
     fn tick_timers(&mut self) {
         for timer_id in 0..3 {
-            if !self.timers[timer_id].external_clock {
-                if timer_id != T3 || self.t3_prescaler.update_has_carry_out() {
-                    self.timers[timer_id].tick();
-                }
-            }
+            self.timers[timer_id].tick();
         }
     }
 
     fn internal_reset(&mut self) {
         for i in 0..3 {
-            self.timers[i].load();
-            self.timers[i].irq_active = false;
-            self.timers[i].output_state = false;
+            self.timers[i].init();
         }
     }
 
@@ -486,6 +526,26 @@ impl Mc6840 {
             status |= IRQ_COMPOSITE
         }
         status
+    }
+
+    fn apply_message(&mut self, message: PtmProtocolMessage) {
+        match message {
+            PtmProtocolMessage::ClockEdge { clocks, positive} => {
+                for (i, clock) in clocks.iter().enumerate() {
+                    if *clock {
+                        self.timers[i].clock_level = positive;
+                    }
+                }
+            }
+            PtmProtocolMessage::GateEdge { gates, positive} => {
+                for (i, gate) in gates.iter().enumerate() {
+                    if *gate {
+                        self.timers[i].gate_level = positive;
+                    }
+                }
+            }
+            _ => ()
+        }
     }
 
 }
@@ -526,8 +586,11 @@ impl IoDevice for Mc6840 {
                     }
                 } else {
                     self.timers[T3].set_control_register(value);
-                    let divisor = if value & CTRL_T3_PRESCALE != 0 { 8 } else { 1 };
-                    self.t3_prescaler = Prescaler::new(divisor);
+                    self.timers[T3].prescaler = if value & CTRL_T3_PRESCALE != 0 {
+                        Some(Prescaler::new(8))
+                    } else {
+                        None
+                    };
                 }
             }
             1 => {
@@ -539,9 +602,8 @@ impl IoDevice for Mc6840 {
                 let timer_id = ((offset - 3) / 2) as usize;
                 let latched_value = u16::from_le_bytes([value, self.msb_buffer]);
                 self.timers[timer_id].latch = latched_value;
-                if let Mode::Generating { deferred_load, .. } = self.timers[timer_id].mode
-                        && !deferred_load {
-                    self.timers[timer_id].load();
+                if !self.timers[timer_id].is_deferred_init() {
+                    self.timers[timer_id].init();
                 }
             }
             _ => (),
@@ -575,21 +637,26 @@ impl IoDevice for Mc6840 {
             }
         }
         let after = AsyncIoState::new(&self.timers);
-        self.send_state_update(&before, &after);
+        if let Err(e) = self.send_state_update(&before, &after) {
+            self.report_error(e);
+        }
     }
 
     fn reset(&mut self) {
         let address = self.address;
-        let transports = std::mem::take(&mut self.transports);
+        let transport_manager = std::mem::take(&mut self.transport_manager);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
         *self = Self::new(self.name);
         self.address = address;
-        self.transports = transports;
+        self.transport_manager = transport_manager;
         self.error_sender = error_sender;
         self.device_id = device_id;
         debug!("{} {} reset", self.name(), device_id.unwrap());
-        self.send_state_to_all();
+        self.internal_reset();
+        if let Err(e) = self.transport_manager.send_all_to_all(&self.dump_state()) {
+            self.report_error(e);
+        }
     }
 
     fn irq_active(&self) -> bool {
@@ -610,7 +677,7 @@ mod tests {
     const CTRL_MODE_GENERATE: u8 = 0;
     const CTRL_MODE_CONTINUOUS: u8 = 0;
     const CTRL_MODE_FREQUENCY: u8 = 0;
-    const CTRL_MODE_IMMEDIATE_LOAD: u8 = 0;
+    const CTRL_MODE_IMMEDIATE_INIT: u8 = 0;
     const CTRL_MODE_LESS: u8 = 0;
 
     fn device() -> Mc6840 {
@@ -680,8 +747,7 @@ mod tests {
         device.write(0, 0xff & !CTRL_INTERNAL_RESET);
         assert!(!device.reset_active, "expected reset not active");
         assert!(device.timers[T1].external_clock, "expected external clock");
-        assert!(matches!(device.timers[T1].mode, Mode::Comparing { measure: Measure::PulseWidth, is_greater: true }),
-                "expected measure pulse width in greater than mode");
+        assert_eq!(device.timers[T1].mode, 0xff & CTRL_MODE_MASK);
         assert!(device.timers[T1].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T1].output_enabled, "expected output enabled");
     }
@@ -709,8 +775,7 @@ mod tests {
         device.write(1, 0xff);
         assert!(device.cr1_enabled, "expected CR1 enabled");
         assert!(device.timers[T2].external_clock, "expected external clock");
-        assert!(matches!(device.timers[T2].mode, Mode::Comparing { measure: Measure::PulseWidth, is_greater: true }),
-                "expected measure pulse width in greater than mode");
+        assert_eq!(device.timers[T2].mode, 0xff & CTRL_MODE_MASK);
         assert!(device.timers[T2].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T2].output_enabled, "expected output enabled");
     }
@@ -720,10 +785,9 @@ mod tests {
         let mut device = device();
         assert!(!device.cr1_enabled, "expected CR3 enabled");
         device.write(0, 0xff & !CTRL_T3_PRESCALE);
-        assert_eq!(device.t3_prescaler.divisor, 1);
+        assert!(matches!(device.timers[T3].prescaler, None), "expected no prescaler");
         assert!(device.timers[T3].external_clock, "expected external clock");
-        assert!(matches!(device.timers[T3].mode, Mode::Comparing { measure: Measure::PulseWidth, is_greater: true }),
-                "expected measure pulse width in greater than mode");
+        assert_eq!(device.timers[T3].mode, 0xff & CTRL_MODE_MASK);
         assert!(device.timers[T3].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T3].output_enabled, "expected output enabled");
     }
@@ -732,7 +796,7 @@ mod tests {
     fn write_t3_control_register_with_prescaler() {
         let mut device = device();
         device.write(0, CTRL_T3_PRESCALE);
-        assert_eq!(device.t3_prescaler.divisor, 8);
+        assert!(matches!(device.timers[T3].prescaler, Some(_)), "expected prescaler");
     }
 
     #[test]
@@ -757,7 +821,7 @@ mod tests {
     #[test]
     fn write_latch_immediate_load() {
         let mut device = device();
-        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_LOAD);
+        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_INIT);
         device.write(2 + 2 * (T2 as u16), 0x55);
         device.write(3 + 2 * (T2 as u16), 0xAA);
         assert_eq!(device.timers[T2].latch, 0x55AA);
@@ -765,10 +829,10 @@ mod tests {
     }
 
     #[test]
-    fn write_latch_deferred_load() {
+    fn write_latch_deferred_init() {
         let mut device = device();
         device.timers[T2].counter = 0;
-        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_DEFERRED_LOAD);
+        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_DEFERRED_INIT);
         device.write(2 + 2 * (T2 as u16), 0x55);
         device.write(3 + 2 * (T2 as u16), 0xAA);
         assert_eq!(device.timers[T2].latch, 0x55AA);
@@ -776,67 +840,67 @@ mod tests {
     }
 
     #[test]
-    fn write_mode_generate_continuous_immediate_load() {
+    fn write_mode_generate_continuous_immediate_init() {
         let mut device = device();
-        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_LOAD);
-        assert!(matches!(device.timers[T2].mode,
-            Mode::Generating { deferred_load: false, single_shot: false }));
+        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_INIT);
+        assert!(device.timers[T2].is_continuous());
+        assert!(!device.timers[T2].is_deferred_init());
     }
 
     #[test]
     fn write_mode_compare_frequency_less() {
         let mut device = device();
         device.write(1, CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_LESS);
-        assert!(matches!(device.timers[T2].mode,
-            Mode::Comparing { measure: Measure::Frequency, is_greater: false }));
+        assert!(device.timers[T2].is_frequency());
+        assert!(!device.timers[T2].is_compare_greater());
     }
 
     #[test]
-    fn write_mode_generate_continuous_deferred_load() {
+    fn write_mode_generate_continuous_deferred_init() {
         let mut device = device();
-        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_DEFERRED_LOAD);
-        assert!(matches!(device.timers[T2].mode,
-            Mode::Generating { deferred_load: true, single_shot: false }));
+        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_DEFERRED_INIT);
+        assert!(device.timers[T2].is_continuous());
+        assert!(device.timers[T2].is_deferred_init());
     }
 
     #[test]
     fn write_mode_compare_pulse_width_less() {
         let mut device = device();
         device.write(1, CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_LESS);
-        assert!(matches!(device.timers[T2].mode,
-            Mode::Comparing { measure: Measure::PulseWidth, is_greater: false }));
+        assert!(device.timers[T2].is_pulse_width());
+        assert!(!device.timers[T2].is_compare_greater());
     }
 
     #[test]
-    fn write_mode_generate_single_shot_immediate_load() {
+    fn write_mode_generate_single_shot_immediate_init() {
         let mut device = device();
-        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT | CTRL_MODE_IMMEDIATE_LOAD);
-        assert!(matches!(device.timers[T2].mode,
-            Mode::Generating { deferred_load: false, single_shot: true }));
+        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT | CTRL_MODE_IMMEDIATE_INIT);
+        assert!(device.timers[T2].is_single_shot());
+        assert!(!device.timers[T2].is_deferred_init());
     }
 
     #[test]
     fn write_mode_compare_frequency_greater() {
         let mut device = device();
         device.write(1, CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_GREATER);
-        assert!(matches!(device.timers[T2].mode,
-            Mode::Comparing { measure: Measure::Frequency, is_greater: true }));
+        assert!(device.timers[T2].is_frequency());
+        assert!(device.timers[T2].is_compare_greater());
     }
 
     #[test]
-    fn write_mode_generate_single_shot_deferred_load() {
+    fn write_mode_generate_single_shot_deferred_init() {
         let mut device = device();
-        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT | CTRL_MODE_DEFERRED_LOAD);
-        assert!(matches!(device.timers[T2].mode,
-            Mode::Generating { deferred_load: true, single_shot: true }));
+        device.write(1, CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT | CTRL_MODE_DEFERRED_INIT);
+        assert!(device.timers[T2].is_single_shot());
+        assert!(device.timers[T2].is_deferred_init());
     }
 
     #[test]
     fn write_mode_compare_pulse_width_greater() {
         let mut device = device();
         device.write(1, CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_GREATER);
-        assert!(matches!(device.timers[T2].mode,
-            Mode::Comparing { measure: Measure::PulseWidth, is_greater: true }));
+        assert!(device.timers[T2].is_pulse_width());
+        assert!(device.timers[T2].is_compare_greater());
     }
 
     #[test]
@@ -867,13 +931,21 @@ mod tests {
     }
 
     #[test]
+    fn prescaler_update() {
+        let mut prescaler = Prescaler::new(2);
+        assert!(!prescaler.update_has_carry_out(), "expected no carry out");
+        assert!(prescaler.update_has_carry_out(), "expected carry out");
+        assert_eq!(prescaler.count, prescaler.divisor);
+    }
+
+    #[test]
     fn timer_tick_in_generate_continuous_normal_count_mode() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
         assert!(!timer.output_state, "expected output state low");
-        timer.mode = Mode::Generating { single_shot: false, deferred_load: false };
+        timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_INIT;
         timer.latch = 1;
-        timer.load();
+        timer.init();
         // first tick should decrement counter
         timer.tick();
         assert_eq!(timer.counter, 0);
@@ -889,15 +961,16 @@ mod tests {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
         assert!(!timer.output_state, "expected output state low");
-        timer.mode = Mode::Generating { single_shot: true, deferred_load: false };
+        timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT | CTRL_MODE_IMMEDIATE_INIT;
         timer.latch = 1;
-        timer.load();
-        // first tick should decrement counter
+        timer.init();
+        // first tick should decrement counter and set the output high
         timer.tick();
         assert_eq!(timer.counter, 0);
-        // second tick should set output state high, signal interrupt; counter remains at zero
-        timer.tick();
         assert!(timer.output_state, "expected output state high");
+        // second tick should set output state low, signal interrupt; counter remains at zero
+        timer.tick();
+        assert!(!timer.output_state, "expected output state low");
         assert!(timer.irq_active, "expected IRQ active");
         assert_eq!(timer.counter, 0);
     }
@@ -908,9 +981,9 @@ mod tests {
         timer.dual8bit_mode = true;
         timer.irq_enabled = true;
         timer.output_state = true;
-        timer.mode = Mode::Generating { single_shot: false, deferred_load: false };
+        timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_INIT;
         timer.latch = 0x0101;
-        timer.load();
+        timer.init();
         assert!(!timer.output_state, "expected output state low");
         assert_eq!(timer.counter, timer.latch);
         // first tick should zero counter LSB
@@ -936,9 +1009,9 @@ mod tests {
         timer.dual8bit_mode = true;
         timer.irq_enabled = true;
         timer.output_state = true;
-        timer.mode = Mode::Generating { single_shot: true, deferred_load: false };
+        timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT | CTRL_MODE_IMMEDIATE_INIT;
         timer.latch = 0x0101;
-        timer.load();
+        timer.init();
         assert!(!timer.output_state, "expected output state low");
         assert_eq!(timer.counter, timer.latch);
         // first tick should zero counter LSB
@@ -961,10 +1034,10 @@ mod tests {
     #[test]
     fn timer_tick_in_generate_mode_normal_count_with_latch_zero() {
         let mut timer = Timer::new();
-        timer.mode = Mode::Generating { single_shot: false, deferred_load: false };
+        timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_INIT;
         timer.latch = 0;
         timer.irq_enabled = true;
-        timer.load();
+        timer.init();
         assert!(!timer.is_zero(), "expected timer not zero");
         timer.tick();
         assert_eq!(timer.counter, 0xFFFF);
@@ -983,10 +1056,10 @@ mod tests {
     #[test]
     fn timer_tick_in_generate_mode_dual8bit_count_with_latch_zero() {
         let mut timer = Timer::new();
-        timer.mode = Mode::Generating { single_shot: false, deferred_load: false };
+        timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_INIT;
         timer.dual8bit_mode = true;
         timer.latch = 0;
-        timer.load();
+        timer.init();
         let output_state = timer.output_state;
         timer.tick();
         assert_ne!(timer.output_state, output_state);
@@ -997,11 +1070,110 @@ mod tests {
     }
 
     #[test]
-    fn prescaler_update() {
-        let mut prescaler = Prescaler::new(2);
-        assert!(!prescaler.update_has_carry_out(), "expected no carry out");
-        assert!(prescaler.update_has_carry_out(), "expected carry out");
-        assert_eq!(prescaler.count, prescaler.divisor);
+    fn timer_tick_in_generate_mode_single_shot_normal_count_deferred_init() {
+        let mut timer = Timer::new();
+        timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT | CTRL_MODE_DEFERRED_INIT;
+        timer.latch = 1;
+        timer.gate_level = true;
+        // when the timer is initialized in software, it counts down once
+        timer.init();
+        assert_eq!(timer.counter, 1);
+        timer.tick();
+        assert_eq!(timer.counter, 0);
+        // it's single-shot, so it shouldn't reload
+        timer.tick();
+        assert_eq!(timer.counter, 0);
+        // next tick clocks in the falling edge of the gate
+        timer.gate_level = false;
+        timer.tick();
+        // need four ticks to recognize falling edge of gate; loop gets the first three
+        for _ in 0..3 {
+            timer.tick();
+            assert_eq!(timer.counter, 0);
+        }
+        // falling edge of gate should be recognized on fourth tick
+        // so timer should initialize and count down
+        timer.tick();
+        assert_eq!(timer.counter, 1);
+        timer.tick();
+        assert_eq!(timer.counter, 0);
+        // since gate is edge-triggered, additional ticks won't initialize timer even
+        // with gate held low
+        for _ in 0..3 {
+            timer.tick();
+            assert_eq!(timer.counter, 0);
+        }
+        timer.gate_level = true;
+        timer.tick();
+        // next tick clocks in the falling edge of the gate
+        timer.gate_level = false;
+        timer.tick();
+        // need four ticks to recognize falling edge of gate; loop gets the first three
+        for _ in 0..3 {
+            timer.tick();
+            assert_eq!(timer.counter, 0);
+        }
+        // falling edge of gate should be recognized on fourth tick
+        // so timer should initialize and count down
+        timer.tick();
+        assert_eq!(timer.counter, 1);
+        timer.tick();
+        assert_eq!(timer.counter, 0);
     }
 
+    #[test]
+    fn synchronizer_latency_edge_triggered() {
+        let mut sync = Synchronizer::new(1, true, true);
+        // put the edge in the pipeline
+        assert!(!sync.sample(false));
+        // edge emerges from the pipeline
+        assert!(sync.sample(false));
+        assert!(!sync.sample(true));
+        assert!(!sync.sample(true));
+        assert!(!sync.sample(true));
+        assert!(!sync.sample(false));
+        assert!(sync.sample(true));
+    }
+
+    #[test]
+    fn synchronizer_latency_level_triggered() {
+        let mut sync = Synchronizer::new(1, true, false);
+        // first clock puts the new level in the pipeline
+        assert!(sync.sample(false));
+        // level emerges from the pipeline on the next clock
+        assert!(!sync.sample(false));
+    }
+
+    fn timer_with_external_clock() -> Timer {
+        let mut timer = Timer::new();
+        timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT | CTRL_MODE_DEFERRED_INIT;
+        timer.external_clock = true;
+        timer.latch = 1;
+        timer
+    }
+
+    #[test]
+    fn external_clock_updates_timer_after_pipeline_delay() {
+        let mut timer = timer_with_external_clock();
+        timer.init();
+        // E clocks in the external clock edge
+        timer.clock_level = false;
+        timer.tick();
+        timer.clock_level = true;
+        // need four more E clocks to recognize the external clock edge
+        timer.tick();
+        assert_eq!(timer.counter, 1);
+        timer.tick();
+        assert_eq!(timer.counter, 1);
+        timer.tick();
+        assert_eq!(timer.counter, 1);
+        timer.tick();
+        // previous E clock should have decremented the counter
+        assert_eq!(timer.counter, 0);
+        // subsequent E clocks shouldn't change the timer
+        timer.tick();
+        assert_eq!(timer.counter, 0);
+        timer.tick();
+        assert_eq!(timer.counter, 0);
+    }
 }

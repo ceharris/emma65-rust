@@ -1,5 +1,8 @@
 //! Protocol codec for the MC6840 peripheral interface.
 //!
+
+use crate::emulator::device::transport_manager::{TransportMessageDecoder, TransportMessageEncoder, TransportMessageEncoding};
+
 const BINARY_TYPE_MASK: u8 = 0b11110000;
 const BINARY_CLOCK_EDGE: u8   = 0b10000000;
 const BINARY_GATE_EDGE: u8    = 0b10010000;
@@ -8,16 +11,6 @@ const BINARY_GATE_STATE: u8   = 0b10110000;
 const BINARY_OUTPUT_STATE: u8 = 0b11000000;
 
 const BINARY_POLARITY_BIT: u8 = 0b00001000;
-
-/// Wire format used on a PTM protocol connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PtmProtocolFormat {
-    /// Compact binary encoding.
-    Binary,
-    /// Human-readable ASCII encoding.
-    Ascii,
-}
-
 
 /// A decoded PTM protocol message
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,8 +53,12 @@ pub enum PtmProtocolMessage {
 /// between messages for human readability, and a carriage return + line feed pair is output
 /// each time the length of the current output line exceeds 72 bytes.
 pub struct PtmProtocolEncoder {
-    format: PtmProtocolFormat,
+    encoding: TransportMessageEncoding,
     line_length: u8,
+}
+
+impl Default for PtmProtocolEncoder {
+    fn default() -> Self { Self::new() }
 }
 
 impl PtmProtocolEncoder {
@@ -69,66 +66,53 @@ impl PtmProtocolEncoder {
     /// Creates a new encoder that uses ASCII mode.
     pub fn new() -> Self {
         PtmProtocolEncoder {
-            format: PtmProtocolFormat::Ascii,
+            encoding: TransportMessageEncoding::Ascii,
             line_length: 0,
         }
     }
 
-    /// Locks the encoder into binary mode.
-    pub fn select_binary(&mut self) {
-        self.format = PtmProtocolFormat::Binary;
-    }
-
-    /// Returns the format currently used by this encoder.
-    pub fn format(&self) -> PtmProtocolFormat {
-        self.format
-    }
-
-    /// Encodes the given message at the tail of the given output vector.
-    pub fn encode(&mut self, message: PtmProtocolMessage, out: &mut Vec<u8>) {
-        match self.format {
-            PtmProtocolFormat::Ascii => self.encode_ascii(message, out),
-            PtmProtocolFormat::Binary => self.encode_binary(message, out),
-        }
-    }
-
-    fn encode_ascii(&mut self, message: PtmProtocolMessage, out: &mut Vec<u8>) {
+    fn encode_ascii(&mut self, message: &PtmProtocolMessage, out: &mut Vec<u8>) {
         match message {
             PtmProtocolMessage::ClockEdge { clocks, positive } => {
-                for i in 0..3 {
-                    if clocks[i] {
+                for (i, clock) in clocks.iter().enumerate() {
+                    if *clock {
                         self.encode_ascii_prefix(b'C', out);
                         self.encode_ascii_timer_id(i as u8, out);
-                        self.encode_ascii_state(positive, out);
+                        self.encode_ascii_state(*positive, out);
+                        self.encode_ascii_space(out);
                     }
                 }
             },
             PtmProtocolMessage::GateEdge { gates, positive } => {
-                for i in 0..3 {
-                    if gates[i] {
+                for (i, gate) in gates.iter().enumerate() {
+                    if *gate {
                         self.encode_ascii_prefix(b'G', out);
                         self.encode_ascii_timer_id(i as u8, out);
-                        self.encode_ascii_state(positive, out);
+                        self.encode_ascii_state(*positive, out);
+                        self.encode_ascii_space(out);
                     }
                 }
             },
             PtmProtocolMessage::ClockState { clocks } => {
                 self.encode_ascii_prefix(b'T', out);
-                for i in 0..3 {
-                    self.encode_ascii_state(clocks[i], out);
+                for clock in clocks.iter() {
+                    self.encode_ascii_state(*clock, out);
                 }
+                self.encode_ascii_space(out);
             },
             PtmProtocolMessage::GateState { gates } => {
                 self.encode_ascii_prefix(b'U', out);
-                for i in 0..3 {
-                    self.encode_ascii_state(gates[i], out);
+                for gate in gates.iter() {
+                    self.encode_ascii_state(*gate, out);
                 }
+                self.encode_ascii_space(out);
             },
             PtmProtocolMessage::OutputState { outputs } => {
                 self.encode_ascii_prefix(b'V', out);
-                for i in 0..3 {
-                    self.encode_ascii_state(outputs[i], out);
+                for output in outputs.iter() {
+                    self.encode_ascii_state(*output, out);
                 }
+                self.encode_ascii_space(out);
             },
         }
     }
@@ -136,8 +120,6 @@ impl PtmProtocolEncoder {
     fn encode_ascii_prefix(&mut self, prefix: u8, out: &mut Vec<u8>) {
         if self.line_length >= 72 {
             self.encode_ascii_newline(out);
-        } else if self.line_length > 0 {
-            self.encode_ascii_space(out);
         }
         self.encode_ascii_char(prefix, out);
     }
@@ -165,22 +147,22 @@ impl PtmProtocolEncoder {
         self.line_length = 0;
     }
 
-    fn encode_binary(&mut self, message: PtmProtocolMessage, out: &mut Vec<u8>) {
+    fn encode_binary(&mut self, message: &PtmProtocolMessage, out: &mut Vec<u8>) {
         match message {
             PtmProtocolMessage::ClockEdge { clocks, positive } => {
-                self.encode_binary_edges(BINARY_CLOCK_EDGE, positive, clocks, out);
+                self.encode_binary_edges(BINARY_CLOCK_EDGE, *positive, *clocks, out);
             },
             PtmProtocolMessage::GateEdge { gates, positive } => {
-                self.encode_binary_edges(BINARY_GATE_EDGE, positive, gates, out);
+                self.encode_binary_edges(BINARY_GATE_EDGE, *positive, *gates, out);
             },
             PtmProtocolMessage::ClockState { clocks } => {
-                self.encode_binary_states(BINARY_CLOCK_STATE, clocks, out);
+                self.encode_binary_states(BINARY_CLOCK_STATE, *clocks, out);
             },
             PtmProtocolMessage::GateState { gates } => {
-                self.encode_binary_states(BINARY_GATE_STATE, gates, out);
+                self.encode_binary_states(BINARY_GATE_STATE, *gates, out);
             },
             PtmProtocolMessage::OutputState { outputs } => {
-                self.encode_binary_states(BINARY_OUTPUT_STATE, outputs, out);
+                self.encode_binary_states(BINARY_OUTPUT_STATE, *outputs, out);
             },
         }
     }
@@ -189,17 +171,17 @@ impl PtmProtocolEncoder {
         if positive {
             message |= BINARY_POLARITY_BIT;
         }
-        for i in 0..3 {
-            if edges[i] {
+        for (i, edge) in edges.iter().enumerate() {
+            if *edge {
                 message |= 1 << i;
             }
         }
         out.push(message);
     }
 
-    fn encode_binary_states(&self, mut message: u8, outputs: [bool; 3], out: &mut Vec<u8>) {
-        for i in 0..3 {
-            if outputs[i] {
+    fn encode_binary_states(&self, mut message: u8, states: [bool; 3], out: &mut Vec<u8>) {
+        for (i, state) in states.iter().enumerate() {
+            if *state {
                 message |= 1 << i;
             }
         }
@@ -208,10 +190,32 @@ impl PtmProtocolEncoder {
 
 }
 
-impl Default for PtmProtocolEncoder {
-    fn default() -> Self { Self::new() }
-}
+impl TransportMessageEncoder<PtmProtocolMessage> for PtmProtocolEncoder {
 
+    /// Locks the encoder into binary mode.
+    fn select_binary(&mut self) {
+        self.encoding = TransportMessageEncoding::Binary;
+    }
+
+    /// Returns the format currently used by this encoder.
+    fn encoding(&self) -> TransportMessageEncoding {
+        self.encoding
+    }
+
+    /// Encodes the given message at the tail of the given output vector.
+    fn encode(&mut self, message: &PtmProtocolMessage, out: &mut Vec<u8>) {
+        match self.encoding {
+            TransportMessageEncoding::Ascii => self.encode_ascii(message, out),
+            TransportMessageEncoding::Binary => self.encode_binary(message, out),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.line_length = 0;
+        self.encoding = TransportMessageEncoding::Ascii;
+    }
+
+}
 
 /// Decodes a byte stream into [`PtmProtocolMessage`] values.
 ///
@@ -223,7 +227,7 @@ impl Default for PtmProtocolEncoder {
 ///
 /// Invalid data is silently ignored per the protocol specification.
 pub struct PtmProtocolDecoder {
-    format: Option<PtmProtocolFormat>,
+    encoding: Option<TransportMessageEncoding>,
     state: DecoderState,
     next_state: DecoderState,
 }
@@ -246,41 +250,20 @@ enum DecoderState {
     AsciiOutputStatusT3 { t1: u8, t2: u8 },
 }
 
+impl Default for PtmProtocolDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PtmProtocolDecoder {
     /// Creates a new decoder with no format selected.
     pub fn new() -> Self {
         PtmProtocolDecoder {
-            format: None,
+            encoding: None,
             state: DecoderState::Idle,
             next_state: DecoderState:: Idle,
         }
-    }
-
-    /// Returns the format.
-    pub fn format(&self) -> Option<PtmProtocolFormat> {
-        self.format
-    }
-
-    /// Feeds a single byte into the decoder.
-    ///
-    /// Returns `Some(message)` when a complete, valid message has been decoded, or `None`
-    /// if more bytes are needed or the byte was ignored.
-    pub fn feed(&mut self, b: u8) -> Option<PtmProtocolMessage> {
-        // Lock format on first qualifying byte.
-        if self.format.is_none() {
-            if b & 0x80 != 0 {
-                self.format = Some(PtmProtocolFormat::Binary);
-            } else {
-                self.format = Some(PtmProtocolFormat::Ascii);
-            }
-        }
-
-        let result = match self.format.unwrap() {
-            PtmProtocolFormat::Ascii => self.feed_ascii(b),
-            PtmProtocolFormat::Binary => self.feed_binary(b),
-        };
-        self.state = self.next_state;
-        result
     }
 
     fn feed_ascii(&mut self, b: u8) -> Option<PtmProtocolMessage> {
@@ -491,22 +474,58 @@ impl PtmProtocolDecoder {
     
     fn decode_binary_edges(&self, b: u8) -> [bool; 3]{
         let mut edges: [bool; 3] = [false; 3];
-        for i in 0..3 {
-            edges[i] = b & (1 << i) != 0;
+        for (i, edge) in edges.iter_mut().enumerate() {
+            *edge = b & (1 << i) != 0;
         }
         edges
     }
 
     fn decode_binary_states(&self, b: u8) -> [bool; 3] {
         let mut states: [bool; 3] = [false; 3];
-        for i in 0..3 {
-            states[i] = b & (1 << i) != 0;
+        for (i, state) in states.iter_mut().enumerate() {
+            *state = b & (1 << i) != 0;
         }
         states
     }
     
 }
 
+impl TransportMessageDecoder<PtmProtocolMessage> for PtmProtocolDecoder {
+
+    /// Returns the format.
+    fn encoding(&self) -> Option<TransportMessageEncoding> {
+        self.encoding
+    }
+
+    /// Feeds a single byte into the decoder.
+    ///
+    /// Returns `Some(message)` when a complete, valid message has been decoded, or `None`
+    /// if more bytes are needed or the byte was ignored.
+    fn feed(&mut self, b: u8) -> Option<PtmProtocolMessage> {
+        // Lock format on first qualifying byte.
+        if self.encoding.is_none() {
+            if b & 0x80 != 0 {
+                self.encoding = Some(TransportMessageEncoding::Binary);
+            } else {
+                self.encoding = Some(TransportMessageEncoding::Ascii);
+            }
+        }
+
+        let result = match self.encoding.unwrap() {
+            TransportMessageEncoding::Ascii => self.feed_ascii(b),
+            TransportMessageEncoding::Binary => self.feed_binary(b),
+        };
+        self.state = self.next_state;
+        result
+    }
+
+    fn reset(&mut self) {
+        self.encoding = None;
+        self.state = DecoderState::Idle;
+        self.next_state = DecoderState::Idle;
+    }
+
+}
 
 #[cfg(test)]
 mod tests {
@@ -516,117 +535,128 @@ mod tests {
     fn encode_ascii_clock_edges_negative() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::ClockEdge {
-            clocks: [true, true, true], positive: false }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "C10 C20 C30");
+        encoder.encode_ascii(&PtmProtocolMessage::ClockEdge {
+            clocks: [true, true, true],
+            positive: false
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "C10 C20 C30 ");
     }
 
     #[test]
     fn encode_ascii_clock_edges_positive() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::ClockEdge {
-            clocks: [true, true, true], positive: true }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "C11 C21 C31");
+        encoder.encode_ascii(&PtmProtocolMessage::ClockEdge {
+            clocks: [true, true, true],
+            positive: true
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "C11 C21 C31 ");
     }
 
     #[test]
     fn encode_ascii_gate_edges_negative() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::GateEdge {
+        encoder.encode_ascii(&PtmProtocolMessage::GateEdge {
             gates: [true, true, true], positive: false }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "G10 G20 G30");
+        assert_eq!(String::from_utf8_lossy(&out), "G10 G20 G30 ");
     }
 
     #[test]
     fn encode_ascii_gate_edges_positive() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::GateEdge {
+        encoder.encode_ascii(&PtmProtocolMessage::GateEdge {
             gates: [true, true, true], positive: true }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "G11 G21 G31");
+        assert_eq!(String::from_utf8_lossy(&out), "G11 G21 G31 ");
     }
 
     #[test]
     fn encode_ascii_clock_state_t1() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::ClockState {
+        encoder.encode_ascii(&PtmProtocolMessage::ClockState {
             clocks: [true, false, false] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "T100");
+        assert_eq!(String::from_utf8_lossy(&out), "T100 ");
     }
 
     #[test]
     fn encode_ascii_clock_state_t2() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::ClockState {
+        encoder.encode_ascii(&PtmProtocolMessage::ClockState {
             clocks: [false, true, false] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "T010");
+        assert_eq!(String::from_utf8_lossy(&out), "T010 ");
     }
 
     #[test]
     fn encode_ascii_clock_state_t3() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::ClockState {
-            clocks: [false, false, true] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "T001");
+        encoder.encode_ascii(&PtmProtocolMessage::ClockState {
+            clocks: [false, false, true]
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "T001 ");
     }
 
     #[test]
     fn encode_ascii_gate_state_t1() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::GateState {
-            gates: [true, false, false] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "U100");
+        encoder.encode_ascii(&PtmProtocolMessage::GateState {
+            gates: [true, false, false]
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "U100 ");
     }
 
     #[test]
     fn encode_ascii_gate_state_t2() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::GateState {
-            gates: [false, true, false] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "U010");
+        encoder.encode_ascii(&PtmProtocolMessage::GateState {
+            gates: [false, true, false]
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "U010 ");
     }
 
     #[test]
     fn encode_ascii_gate_state_t3() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::GateState {
-            gates: [false, false, true] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "U001");
+        encoder.encode_ascii(&PtmProtocolMessage::GateState {
+            gates: [false, false, true]
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "U001 ");
     }
 
     #[test]
     fn encode_ascii_output_state_t1() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::OutputState {
-            outputs: [true, false, false] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "V100");
+        encoder.encode_ascii(&PtmProtocolMessage::OutputState {
+            outputs: [true, false, false]
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "V100 ");
     }
 
     #[test]
     fn encode_ascii_output_state_t2() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::OutputState {
-            outputs: [false, true, false] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "V010");
+        encoder.encode_ascii(&PtmProtocolMessage::OutputState {
+            outputs: [false, true, false]
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "V010 ");
     }
 
     #[test]
     fn encode_ascii_output_state_t3() {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
-        encoder.encode_ascii(PtmProtocolMessage::OutputState {
-            outputs: [false, false, true] }, &mut out);
-        assert_eq!(String::from_utf8_lossy(&out), "V001");
+        encoder.encode_ascii(&PtmProtocolMessage::OutputState {
+            outputs: [false, false, true]
+        }, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "V001 ");
     }
 
     #[test]
@@ -634,15 +664,19 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         let mut expected: String = String::new();
-        for i in 0..=(72 / 4) {
-            encoder.encode_ascii(PtmProtocolMessage::ClockEdge {
-                clocks: [true, false, false], positive: false }, &mut out);
-            expected.push_str(if i == 0 { "C10" } else { " C10" });
+        for _ in 0..(72 / 4) {
+            encoder.encode_ascii(&PtmProtocolMessage::ClockEdge {
+                clocks: [true, false, false],
+                positive: false
+            }, &mut out);
+            expected.push_str("C10 ");
         }
         assert_eq!(out, expected.as_bytes());
-        encoder.encode_ascii(PtmProtocolMessage::ClockEdge {
-            clocks: [true, false, false], positive: false }, &mut out);
-        expected.push_str("\r\nC10");
+        encoder.encode_ascii(&PtmProtocolMessage::ClockEdge {
+            clocks: [true, false, false],
+            positive: false
+        }, &mut out);
+        expected.push_str("\r\nC10 ");
         assert_eq!(out, expected.as_bytes());
     }
 
@@ -651,8 +685,10 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::ClockEdge {
-            clocks: [true, false, false], positive: false }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::ClockEdge {
+            clocks: [true, false, false],
+            positive: false
+        }, &mut out);
         assert_eq!(out[0], 0b10000001);
     }
 
@@ -661,8 +697,10 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::ClockEdge {
-            clocks: [false, true, false], positive: false }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::ClockEdge {
+            clocks: [false, true, false],
+            positive: false
+        }, &mut out);
         assert_eq!(out[0], 0b10000010);
     }
 
@@ -671,8 +709,10 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::ClockEdge {
-            clocks: [false, false, true], positive: false }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::ClockEdge {
+            clocks: [false, false, true],
+            positive: false
+        }, &mut out);
         assert_eq!(out[0], 0b10000100);
     }
 
@@ -681,8 +721,10 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::ClockEdge {
-            clocks: [true, false, false], positive: true }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::ClockEdge {
+            clocks: [true, false, false],
+            positive: true
+        }, &mut out);
         assert_eq!(out[0], 0b10001001);
     }
 
@@ -691,8 +733,10 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::GateEdge {
-            gates: [true, false, false], positive: false }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::GateEdge {
+            gates: [true, false, false],
+            positive: false
+        }, &mut out);
         assert_eq!(out[0], 0b10010001);
     }
 
@@ -701,8 +745,10 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::GateEdge {
-            gates: [false, true, false], positive: false }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::GateEdge {
+            gates: [false, true, false],
+            positive: false
+        }, &mut out);
         assert_eq!(out[0], 0b10010010);
     }
 
@@ -711,8 +757,10 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::GateEdge {
-            gates: [false, false, true], positive: false }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::GateEdge {
+            gates: [false, false, true],
+            positive: false
+        }, &mut out);
         assert_eq!(out[0], 0b10010100);
     }
 
@@ -721,8 +769,10 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::GateEdge {
-            gates: [true, false, false], positive: true }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::GateEdge {
+            gates: [true, false, false],
+            positive: true
+        }, &mut out);
         assert_eq!(out[0], 0b10011001);
     }
 
@@ -731,8 +781,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::ClockState {
-            clocks: [true, false, false] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::ClockState {
+            clocks: [true, false, false]
+        }, &mut out);
         assert_eq!(out[0], 0b10100001);
     }
 
@@ -741,8 +792,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::ClockState {
-            clocks: [false, true, false] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::ClockState {
+            clocks: [false, true, false]
+        }, &mut out);
         assert_eq!(out[0], 0b10100010);
     }
 
@@ -751,8 +803,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::ClockState {
-            clocks: [false, false, true] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::ClockState {
+            clocks: [false, false, true]
+        }, &mut out);
         assert_eq!(out[0], 0b10100100);
     }
 
@@ -761,8 +814,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::GateState {
-            gates: [true, false, false] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::GateState {
+            gates: [true, false, false]
+        }, &mut out);
         assert_eq!(out[0], 0b10110001);
     }
 
@@ -771,8 +825,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::GateState {
-            gates: [false, true, false] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::GateState {
+            gates: [false, true, false]
+        }, &mut out);
         assert_eq!(out[0], 0b10110010);
     }
 
@@ -781,8 +836,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::GateState {
-            gates: [false, false, true] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::GateState {
+            gates: [false, false, true]
+        }, &mut out);
         assert_eq!(out[0], 0b10110100);
     }
 
@@ -791,8 +847,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::OutputState {
-            outputs: [true, false, false] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::OutputState {
+            outputs: [true, false, false]
+        }, &mut out);
         assert_eq!(out[0], 0b11000001);
     }
 
@@ -801,8 +858,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::OutputState {
-            outputs: [false, true, false] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::OutputState {
+            outputs: [false, true, false]
+        }, &mut out);
         assert_eq!(out[0], 0b11000010);
     }
 
@@ -811,8 +869,9 @@ mod tests {
         let mut encoder = PtmProtocolEncoder::new();
         let mut out: Vec<u8> = Vec::new();
         encoder.select_binary();
-        encoder.encode_binary(PtmProtocolMessage::OutputState {
-            outputs: [false, false, true] }, &mut out);
+        encoder.encode_binary(&PtmProtocolMessage::OutputState {
+            outputs: [false, false, true]
+        }, &mut out);
         assert_eq!(out[0], 0b11000100);
     }
 
