@@ -3,8 +3,8 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::emulator::{PtyTransport, TcpTransport, Transport, TransportError, UnixSocketTransport};
 use super::ExpandedPathBuf;
+use crate::emulator::{PtyTransport, TcpSocketTransport, Transport, TransportError, UnixSocketTransport};
 
 /// A transport configuration spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +22,7 @@ impl TransportSpec {
         match self {
             TransportSpec::Tcp { port, address} => {
                 let addr = SocketAddr::new(*address, *port);
-                let transport = TcpTransport::listen(addr).await;
+                let transport = TcpSocketTransport::listen(addr).await;
                 match transport {
                     Ok(transport) => Ok(Box::new(transport)),
                     Err(e) => Err(TransportError::Io(e))
@@ -109,7 +109,6 @@ impl TryFrom<TransportSpecFormat> for TransportSpec {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use std::net::Ipv6Addr;
 

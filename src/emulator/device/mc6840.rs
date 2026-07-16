@@ -406,7 +406,7 @@ pub struct Mc6840 {
     name: &'static str,
     address: u16,
     protocol: ProtocolMessageEncoding,
-    transport_manager: ProtocolManager<PtmProtocolMessage>,
+    protocol_manager: Option<ProtocolManager<PtmProtocolMessage>>,
     error_sender: Option<ErrorSender>,
     device_id: Option<DeviceId>,
 
@@ -425,7 +425,7 @@ impl Mc6840 {
             name,
             address: 0,
             protocol: ProtocolMessageEncoding::Ascii,
-            transport_manager: ProtocolManager::new(),
+            protocol_manager: None,
             error_sender: None,
             device_id: None,
             latched_status: 0,
@@ -456,8 +456,8 @@ impl Mc6840 {
     /// Attaches a transport. All attached transports receive every port and control-signal
     /// state change; any number of peripherals may be connected simultaneously.
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        let (encoder, decoder) = ptm_protocol::new_codecs(self.protocol);
-        self.transport_manager.attach_transport(transport, encoder, decoder);
+        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport,
+            ptm_protocol::new_encoder, ptm_protocol::new_decoder));
     }
 
     /// Sets the error sender for async transport event reporting.
@@ -473,23 +473,8 @@ impl Mc6840 {
         }
     }
 
-    fn send_state_update(&mut self, before: &AsyncIoState, after: &AsyncIoState) -> Result<(), TransportError>{
-        if before.clocks != after.clocks {
-            self.transport_manager.send_to_all(
-                &PtmProtocolMessage::ClockState { clocks: after.clocks })?;
-        }
-        if before.gates != after.gates {
-            self.transport_manager.send_to_all(
-                &PtmProtocolMessage::GateState { gates: after.gates })?;
-        }
-        if before.outputs != after.outputs {
-            self.transport_manager.send_to_all(
-                &PtmProtocolMessage::OutputState { outputs: after.outputs })?;
-        }
-        Ok(())
-    }
 
-    fn dump_state(&self) -> Vec<PtmProtocolMessage> {
+    fn current_state(&self) -> Vec<PtmProtocolMessage> {
         let state = AsyncIoState::new(&self.timers);
         let messages = vec![
             PtmProtocolMessage::ClockState { clocks: state.clocks },
@@ -499,17 +484,40 @@ impl Mc6840 {
         messages
     }
 
+    fn updated_state(&self, before: &AsyncIoState, after: &AsyncIoState) -> Vec<PtmProtocolMessage> {
+        let mut messages = Vec::new();
+        if before.clocks != after.clocks {
+            messages.push(PtmProtocolMessage::ClockState { clocks: after.clocks });
+        }
+        if before.gates != after.gates {
+            messages.push(PtmProtocolMessage::GateState { gates: after.gates });
+        }
+        if before.outputs != after.outputs {
+            messages.push(PtmProtocolMessage::OutputState { outputs: after.outputs });
+        }
+        messages
+    }
+
     fn poll_transports(&mut self) {
-        let state = self.dump_state();
-        loop {
-            match self.transport_manager.poll_transports(&state) {
-                Ok(Some(m)) => self.apply_message(m),
-                Ok(None) => break,
-                Err(e) => {
-                    self.report_error(e);
-                    break;
+        if self.protocol_manager.is_some() {
+            let state = self.current_state();
+            loop {
+                match self.protocol_manager.as_mut().unwrap().poll_transport(&state) {
+                    Ok(Some(m)) => self.apply_message(m),
+                    Ok(None) => break,
+                    Err(e) => {
+                        self.report_error(e);
+                        break;
+                    }
                 }
             }
+        }
+    }
+
+    fn send_state_to_all(&mut self, messages: Vec<PtmProtocolMessage>) {
+        if self.protocol_manager.is_some()
+            && let Err(e) = self.protocol_manager.as_mut().unwrap().send_all_to_all(&messages) {
+                self.report_error(e);
         }
     }
 
@@ -647,26 +655,22 @@ impl IoDevice for Mc6840 {
             }
         }
         let after = AsyncIoState::new(&self.timers);
-        if let Err(e) = self.send_state_update(&before, &after) {
-            self.report_error(e);
-        }
+        self.send_state_to_all(self.updated_state(&before, &after));
     }
 
     fn reset(&mut self) {
         let address = self.address;
-        let transport_manager = std::mem::take(&mut self.transport_manager);
+        let protocol_manager = std::mem::take(&mut self.protocol_manager);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
         *self = Self::new(self.name);
         self.address = address;
-        self.transport_manager = transport_manager;
+        self.protocol_manager = protocol_manager;
         self.error_sender = error_sender;
         self.device_id = device_id;
         debug!("{} {} reset", self.name(), device_id.unwrap());
         self.internal_reset();
-        if let Err(e) = self.transport_manager.send_all_to_all(&self.dump_state()) {
-            self.report_error(e);
-        }
+        self.send_state_to_all(self.current_state());
     }
 
     fn irq_active(&self) -> bool {

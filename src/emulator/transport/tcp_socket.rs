@@ -1,55 +1,53 @@
-//! Transport that listens for incoming Unix domain socket connections.
+//! Transport that listens for incoming TCP connections.
 //!
-//! A Tokio task owns the `UnixListener` and accepts connections in a loop,
+//! A Tokio task owns the `TcpListener` and accepts connections in a loop,
 //! spawning a per-client task for each one so multiple clients can be
 //! connected concurrently. Outbound bytes are fanned out to every connected
 //! client; inbound bytes are tagged with their originating connection ID so
 //! they can be demultiplexed downstream.
 
-use std::path::{Path, PathBuf};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use super::{pump_outbound, run_client_task, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, BROADCAST_CAPACITY};
 use crossbeam_channel::{Receiver, Sender};
-use tokio::net::UnixListener;
+use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot, watch};
 
-use super::{pump_outbound, run_client_task, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, BROADCAST_CAPACITY};
-
-/// Transport that listens for incoming Unix-domain socket connections.
-pub struct UnixSocketTransport {
+/// Transport that listens for incoming TCP socket connections.
+pub struct TcpSocketTransport {
     bridge: ChannelBridge<TransportEvent>,
     client_count: Arc<AtomicUsize>,
-    path: PathBuf,
+    local_addr: SocketAddr,
 }
 
-impl UnixSocketTransport {
-    pub async fn listen(path: impl Into<PathBuf>) -> std::io::Result<Self> {
-        let path = path.into();
-        let _ = std::fs::remove_file(&path);
-        let listener = UnixListener::bind(&path)?;
+impl TcpSocketTransport {
+    pub async fn listen(addr: SocketAddr) -> std::io::Result<Self> {
+        let listener = TcpListener::bind(addr).await?;
+        let local_addr = listener.local_addr()?;
         let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
         let client_count = Arc::new(AtomicUsize::new(0));
 
         let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
         tokio::spawn(propagate_shutdown(shutdown_rx, shutdown_watch_tx));
 
-        tokio::spawn(run_unix_task(
+        tokio::spawn(run_tcp_task(
             listener,
             in_tx,
             out_rx,
             shutdown_watch_rx,
             Arc::clone(&client_count),
         ));
-        Ok(Self { bridge, client_count, path })
+        Ok(Self { bridge, client_count, local_addr })
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 }
 
-impl Transport for UnixSocketTransport {
+impl Transport for TcpSocketTransport {
     fn try_recv(&mut self) -> Option<u8> {
         loop {
             match self.bridge.try_recv()? {
@@ -84,8 +82,8 @@ async fn propagate_shutdown(shutdown_rx: oneshot::Receiver<()>, shutdown_tx: wat
     let _ = shutdown_tx.send(true);
 }
 
-async fn run_unix_task(
-    listener: UnixListener,
+async fn run_tcp_task(
+    listener: TcpListener,
     in_tx: Sender<TransportEvent>,
     out_rx: Receiver<u8>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -132,23 +130,19 @@ async fn run_unix_task(
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::UnixStream;
+    use tokio::net::TcpStream;
 
-    fn tmp_socket_path(name: &str) -> PathBuf {
-        PathBuf::from(format!("/tmp/emma65_test_{}.sock", name))
-    }
-
-    async fn make_transport(name: &str) -> UnixSocketTransport {
-        let path = tmp_socket_path(name);
-        UnixSocketTransport::listen(&path).await.unwrap()
+    async fn make_transport() -> (TcpSocketTransport, SocketAddr) {
+        let t = TcpSocketTransport::listen("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let addr = t.local_addr();
+        (t, addr)
     }
 
     #[tokio::test]
     async fn listen_accept_send_recv() {
-        let mut transport = make_transport("unix_listen_send_recv").await;
-        let path = transport.path().to_path_buf();
+        let (mut transport, addr) = make_transport().await;
 
-        let mut client = UnixStream::connect(&path).await.unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         client.write_all(&[0xAB]).await.unwrap();
@@ -160,16 +154,13 @@ mod tests {
         let mut buf = [0u8; 1];
         client.read_exact(&mut buf).await.unwrap();
         assert_eq!(buf[0], 0xCD);
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn reconnection() {
-        let mut transport = make_transport("unix_reconnection").await;
-        let path = transport.path().to_path_buf();
+        let (mut transport, addr) = make_transport().await;
 
-        let mut c1 = UnixStream::connect(&path).await.unwrap();
+        let mut c1 = TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         c1.write_all(&[0x01]).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -177,66 +168,54 @@ mod tests {
         drop(c1);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
-        let mut c2 = UnixStream::connect(&path).await.unwrap();
+        let mut c2 = TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         c2.write_all(&[0x02]).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(transport.try_recv(), Some(0x02));
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn send_while_no_client() {
-        let mut transport = make_transport("unix_no_client").await;
-        let path = transport.path().to_path_buf();
+        let (mut transport, _addr) = make_transport().await;
 
         assert!(!transport.is_connected());
         assert!(transport.send(0xFF).is_ok());
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn is_connected_reflects_client_state() {
-        let transport = make_transport("unix_is_connected").await;
-        let path = transport.path().to_path_buf();
+        let (transport, addr) = make_transport().await;
 
         assert!(!transport.is_connected());
 
-        let client = UnixStream::connect(&path).await.unwrap();
+        let client = TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert!(transport.is_connected());
 
         drop(client);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(!transport.is_connected());
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn shutdown() {
-        let mut transport = make_transport("unix_shutdown").await;
-        let path = transport.path().to_path_buf();
+        let (mut transport, addr) = make_transport().await;
 
-        let _client = UnixStream::connect(&path).await.unwrap();
+        let _client = TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         transport.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(!transport.is_connected());
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn concurrent_clients_are_tagged_and_counted() {
-        let mut transport = make_transport("unix_concurrent").await;
-        let path = transport.path().to_path_buf();
+        let (mut transport, addr) = make_transport().await;
 
-        let mut c1 = UnixStream::connect(&path).await.unwrap();
-        let mut c2 = UnixStream::connect(&path).await.unwrap();
+        let mut c1 = TcpStream::connect(addr).await.unwrap();
+        let mut c2 = TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(transport.is_connected());
 
@@ -257,14 +236,14 @@ mod tests {
             .collect();
 
         assert_eq!(connected_tags.len(), 2, "expected a Connected event for each client");
-        // Different clients must be tagged with different connection IDs.
         assert_ne!(connected_tags[0], connected_tags[1]);
 
         assert_eq!(data.len(), 2);
         assert_ne!(data[0].0, data[1].0);
-        assert!(data.contains(&(connected_tags[0], if connected_tags[0] == data[0].0 { data[0].1 } else { data[1].1 })));
+        for (tag, _) in &data {
+            assert!(connected_tags.contains(tag));
+        }
 
-        // Fan-out: a single send() reaches both clients.
         transport.send(0xEE).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let mut b1 = [0u8; 1];
@@ -276,10 +255,8 @@ mod tests {
 
         drop(c1);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        // c2 still connected, so is_connected() should remain true.
         assert!(transport.is_connected());
 
-        // The dropped client's Disconnected event should now be available.
         let mut saw_disconnect = false;
         while let Some(event) = transport.try_recv_tagged() {
             if let TransportEvent::Disconnected(tag) = event {
@@ -292,7 +269,6 @@ mod tests {
         drop(c2);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(!transport.is_connected());
-
-        let _ = std::fs::remove_file(&path);
     }
+
 }

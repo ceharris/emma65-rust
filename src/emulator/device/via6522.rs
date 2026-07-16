@@ -1,6 +1,6 @@
 //! WDC 65C22 Versatile Interface Adapter (VIA).
 //!
-//! Provides 16 addressable registers (offsets 0x0–0xF):
+//! Provides 16 addressable registers (offsets 0x0-0xF):
 //!
 //! | Offset | Name  | Description                            |
 //! |--------|-------|----------------------------------------|
@@ -48,9 +48,7 @@
 //! # Virtual peripheral connections
 //!
 //! Virtual peripherals connect to the VIA over byte-stream transports using the
-//! [`crate::emulator::device::via_protocol`] message protocol. Any number of transports may
-//! be attached with [`Via6522::attach_transport`]; each undergoes an independent format
-//! negotiation handshake.
+//! [`via_protocol`] message protocol.
 //!
 //! **Handshake.** The peripheral opens the connection by sending a single format-selector byte.
 //! On the next [`IoDevice::tick`] call that receives it, the VIA completes the handshake and
@@ -120,7 +118,7 @@ pub struct Via6522 {
     name: &'static str,
     address: u16,
     protocol: ProtocolMessageEncoding,
-    transport_manager: ProtocolManager<ViaProtocolMessage>,
+    protocol_manager: Option<ProtocolManager<ViaProtocolMessage>>,
     error_sender: Option<ErrorSender>,
     device_id: Option<DeviceId>,
 
@@ -206,7 +204,7 @@ impl Via6522 {
             name,
             address: 0,
             protocol: ProtocolMessageEncoding::Ascii,
-            transport_manager: ProtocolManager::new(),
+            protocol_manager: None,
             error_sender: None,
             device_id: None,
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
@@ -234,8 +232,9 @@ impl Via6522 {
     /// Attaches a transport. All attached transports receive every port and control-signal
     /// state change; any number of peripherals may be connected simultaneously.
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        let (encoder, decoder) = via_protocol::new_codecs(self.protocol);
-        self.transport_manager.attach_transport(transport, encoder, decoder);
+        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport,
+                                                          via_protocol::new_encoder,
+                                                          via_protocol::new_decoder))
     }
 
     /// Sets the error sender for async transport event reporting.
@@ -292,7 +291,7 @@ impl Via6522 {
         (self.ora & self.ddra) | (input & !self.ddra)
     }
 
-    fn dump_state(&mut self) -> Vec<ViaProtocolMessage> {
+    fn current_state(&mut self) -> Vec<ViaProtocolMessage> {
         let port_a = self.read_port_a();
         let port_b = self.read_port_b();
         let (ca1, ca2, cb1, cb2) = (self.ca1, self.ca2, self.cb1, self.cb2);
@@ -309,21 +308,30 @@ impl Via6522 {
     }
 
     fn send_to_all(&mut self, message: ViaProtocolMessage) {
-        if let Err(e) = self.transport_manager.send_to_all(&message) {
+        if self.protocol_manager.is_some()
+                && let Err(e) = self.protocol_manager.as_mut().unwrap().send_to_all(&message) {
             self.report_error(e);
         }
     }
 
-    /// Polls all transport connections for incoming bytes and processes decoded messages.
+    fn send_state_to_all(&mut self, messages: Vec<ViaProtocolMessage>) {
+        if self.protocol_manager.is_some()
+                && let Err(e) = self.protocol_manager.as_mut().unwrap().send_all_to_all(&messages) {
+            self.report_error(e);
+        }
+    }
+
     fn poll_transports(&mut self) {
-        let state = self.dump_state();
-        loop {
-            match self.transport_manager.poll_transports(&state) {
-                Ok(Some(m)) => self.apply_message(m),
-                Ok(None) => break,
-                Err(e) => {
-                    self.report_error(e);
-                    break;
+        if self.protocol_manager.is_some() {
+            let state = self.current_state();
+            loop {
+                match self.protocol_manager.as_mut().unwrap().poll_transport(&state) {
+                    Ok(Some(m)) => self.apply_message(m),
+                    Ok(None) => break,
+                    Err(e) => {
+                        self.report_error(e);
+                        break;
+                    }
                 }
             }
         }
@@ -750,7 +758,7 @@ impl IoDevice for Via6522 {
             0xB => {
                 // NOTE: Changing SR mode bits or timer-control bits while a shift register
                 // operation or timer is actively running produces undefined behavior. The
-                // datasheet does not specify mid-operation ACR writes and this implementation
+                // datasheet does not specify mid-operation ACR writes, and this implementation
                 // makes no attempt to handle them (a running SR continues with its existing
                 // sr_count/sr_shifting_out/sr_external state). Real software should stop any
                 // active operation before reconfiguring the ACR.
@@ -767,7 +775,7 @@ impl IoDevice for Via6522 {
             }
             0xC => {
                 self.pcr = value;
-                // Manual output modes take effect immediately on PCR write.
+                // Manual output modes take effect immediately when PCR is written.
                 let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
                 match ca2_mode {
                     6 if self.ca2 => { // manual low
@@ -857,7 +865,7 @@ impl IoDevice for Via6522 {
 
     fn reset(&mut self) {
         let address = self.address;
-        let transport_manager = std::mem::take(&mut self.transport_manager);
+        let protocol_manager = std::mem::take(&mut self.protocol_manager);
         let error_sender = self.error_sender.take();
         let device_id = self.device_id;
         // state that must be preserved because it is under peripheral control
@@ -876,7 +884,7 @@ impl IoDevice for Via6522 {
         let sr = self.sr;
         *self = Self::new(self.name);
         self.address = address;
-        self.transport_manager = transport_manager;
+        self.protocol_manager = protocol_manager;
         self.error_sender = error_sender;
         self.device_id = device_id;
         // restore state under peripheral control
@@ -894,10 +902,8 @@ impl IoDevice for Via6522 {
         self.t2_counter = t2_counter;
         self.sr = sr;
         debug!("{} {} reset", self.name(), device_id.unwrap());
-        let state = self.dump_state();
-        if let Err(e) = self.transport_manager.send_all_to_all(&state) {
-            self.report_error(e);
-        }
+        let current_state = self.current_state();
+        self.send_state_to_all(current_state);
     }
 
     fn irq_active(&self) -> bool {
@@ -1853,7 +1859,7 @@ mod tests {
     fn ca2_output_mode_does_not_update_ca2_state() {
         let (mut via, mut remote) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
-        // Write PCR first (ca2 is false by default so no immediate transition).
+        // Write PCR first (ca2 is false by default, so no immediate transition).
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
         // A peripheral message asserting CA2 high must not overwrite the driven-low state.
         send_bytes(&mut remote, "CA21");
@@ -1898,7 +1904,7 @@ mod tests {
     fn cb2_output_mode_does_not_update_cb2_state() {
         let (mut via, mut remote) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
-        // Write PCR first (cb2 is false by default so no immediate transition).
+        // Write PCR first (cb2 is false by default, so no immediate transition).
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
         // A peripheral message asserting CB2 high must not overwrite the driven-low state.
         send_bytes(&mut remote, "CB21");
@@ -2336,7 +2342,7 @@ mod tests {
 
     #[test]
     fn pa_latch_holds_value_after_subsequent_port_update() {
-        // Validates that the latch retains its captured value when input_a changes afterwards.
+        // Validates that the latch retains its captured value when input_a subsequently changes.
         let (mut via, mut remote) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PA_LATCH_ENABLE);
@@ -2514,7 +2520,7 @@ mod tests {
         via.write(0xA, 0x00); // start SR shift-in
 
         // Clock in byte 0b10110010 by toggling CB2 then sending CB1 rising edge.
-        // Bit order: MSB first, so bit7=1, bit6=0, bit5=1, bit4=1, bit3=0, bit2=0, bit1=1, bit0=0
+        // Order: MSB first, so bit7=1, bit6=0, bit5=1, bit4=1, bit3=0, bit2=0, bit1=1, bit0=0
         let bits = [1u8, 0, 1, 1, 0, 0, 1, 0];
         for bit in bits {
             // CB1 back low (not a clock).
@@ -2883,38 +2889,6 @@ mod tests {
 
         // Counter should still be near 100 (only a tick or two from handshake).
         assert!(via.t2_counter >= 98, "timed T2 must not be decremented by PB6 transitions");
-    }
-
-    #[test]
-    fn multiple_transports_both_receive_port_state_change() {
-        let (local1, mut remote1) = PipeTransport::pair().unwrap();
-        let (local2, mut remote2) = PipeTransport::pair().unwrap();
-        let mut via = device();
-        via.attach_transport(Box::new(local1));
-        via.attach_transport(Box::new(local2));
-
-        remote1.send(0x20).unwrap();
-        remote2.send(0x20).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
-        via.tick(1);
-
-        // Drain state dumps.
-        std::thread::sleep(Duration::from_millis(1));
-        collect_bytes(&mut remote1);
-        collect_bytes(&mut remote2);
-
-        // Drive PA0 high.
-        via.write(0x3, 0x01); // DDRA: PA0 = output
-        via.write(0x1, 0x01); // ORA: PA0 high
-
-        std::thread::sleep(Duration::from_millis(1));
-        let r1 = collect_bytes(&mut remote1);
-        let r2 = collect_bytes(&mut remote2);
-
-        assert!(r1.windows(3).any(|w| w == b"A01"),
-            "transport 1 missing A01: {:?}", String::from_utf8_lossy(&r1));
-        assert!(r2.windows(3).any(|w| w == b"A01"),
-            "transport 2 missing A01: {:?}", String::from_utf8_lossy(&r2));
     }
 
     #[test]

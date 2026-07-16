@@ -16,14 +16,14 @@ const BINARY_POLARITY_BIT: u8 = 0b00001000;
 /// A decoded PTM protocol message
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtmProtocolMessage {
-    /// State of one or more clock inputs has changed
+    /// One or more clock inputs have changed
     ClockEdge {
         /// For each clock (C1, C2, C3), indicates whether the clock changed state
         clocks: [bool; 3],
         /// Indicates whether transition for indicated clocks was negative or positive
         positive: bool,
     },
-    /// State of one or more gate inputs has changed
+    /// One or more gate inputs have changed
     GateEdge {
         /// For each gate (G1, G2, G3), indicates whether the gate changed state
         gates: [bool; 3],
@@ -47,22 +47,28 @@ pub enum PtmProtocolMessage {
     },
 }
 
-/// Creates a new encoder/decoder pair.
-pub fn new_codecs(encoding: ProtocolMessageEncoding)
-                  -> (Box<dyn ProtocolMessageEncoder<PtmProtocolMessage>>,
-                      Box<dyn ProtocolMessageDecoder<PtmProtocolMessage>>) {
+/// Creates a new encoder for protocol format `encoding`.
+pub fn new_encoder(encoding: ProtocolMessageEncoding)
+                   -> Box<dyn ProtocolMessageEncoder<PtmProtocolMessage>> {
     match encoding {
-        ProtocolMessageEncoding::Ascii =>
-            (Box::new(PtmAsciiProtocolEncoder::new()), Box::new(PtmAsciiProtocolDecoder::new())),
-        ProtocolMessageEncoding::Binary =>
-            (Box::new(PtmBinaryProtocolEncoder::new()), Box::new(PtmBinaryProtocolDecoder::new())),
+        ProtocolMessageEncoding::Ascii => Box::new(PtmAsciiProtocolEncoder::new()),
+        ProtocolMessageEncoding::Binary => Box::new(PtmBinaryProtocolEncoder::new())
+    }
+}
+
+/// Creates a new decoder for protocol format `encoding`.
+pub fn new_decoder(encoding: ProtocolMessageEncoding)
+                   -> Box<dyn ProtocolMessageDecoder<PtmProtocolMessage>> {
+    match encoding {
+        ProtocolMessageEncoding::Ascii => Box::new(PtmAsciiProtocolDecoder::new()),
+        ProtocolMessageEncoding::Binary => Box::new(PtmBinaryProtocolDecoder::new())
     }
 }
 
 /// Encodes [`PtmProtocolMessage`] values into ASCII format for transmission.
 ///
 /// A space is inserted between messages for human readability, and a
-/// carriage return + line feed pair is output each time the length of
+/// carriage return plus line feed pair is output each time the length of
 /// the current output line exceeds 72 bytes.
 pub struct PtmAsciiProtocolEncoder {
     line_length: u8,
@@ -119,10 +125,6 @@ impl ProtocolMessageEncoder<PtmProtocolMessage> for PtmAsciiProtocolEncoder {
                 self.encode_ascii_space(out);
             },
         }
-    }
-
-    fn reset(&mut self) {
-        self.line_length = 0;
     }
 
 }
@@ -198,8 +200,6 @@ impl ProtocolMessageEncoder<PtmProtocolMessage> for PtmBinaryProtocolEncoder {
         }
     }
 
-    fn reset(&mut self) {}
-
 }
 
 impl PtmBinaryProtocolEncoder {
@@ -274,11 +274,6 @@ impl ProtocolMessageDecoder<PtmProtocolMessage> for PtmAsciiProtocolDecoder {
         let result = self.feed_ascii(b);
         self.state = self.next_state;
         result
-    }
-
-    fn reset(&mut self) {
-        self.state = AsciiDecoderState::Idle;
-        self.next_state = AsciiDecoderState::Idle;
     }
 
 }
@@ -471,8 +466,6 @@ impl ProtocolMessageDecoder<PtmProtocolMessage> for PtmBinaryProtocolDecoder {
     fn feed(&mut self, b: u8) -> Option<PtmProtocolMessage> {
         self.feed_binary(b)
     }
-
-    fn reset(&mut self) {}
 
 }
 

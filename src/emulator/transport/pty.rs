@@ -13,45 +13,49 @@ use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::pty::{openpty, OpenptyResult};
+use nix::sys::termios::{self, cfmakeraw, SetArg};
 use nix::unistd;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
-use super::{ChannelBridge, Transport, TransportError};
+use super::{ChannelBridge, Transport, TransportError, TransportEvent};
 
 /// Transport over a pseudo-terminal (PTY).
 pub struct PtyTransport {
-    bridge: ChannelBridge,
-    // Path to the slave side of the PTY (e.g. `/dev/pts/N`).
+    bridge: ChannelBridge<TransportEvent>,
     slave_path: Option<String>,
-    // Keeps the slave fd open so the devpts node remains valid for the transport's lifetime.
     _slave: OwnedFd,
-    // Reflects whether an external process is currently connected; shared with the Tokio task.
+    // Reflects whether an external process is currently confirmed connected
+    // (i.e. has actually read a byte); shared with the Tokio task. Note this
+    // no longer gates `send()` — see its doc comment.
     client_connected: Arc<AtomicBool>,
-    // Incremented each time an external process opens the slave; shared with the Tokio task.
-    connection_counter: Arc<AtomicU64>,
-    // Optional stable symlink pointing to the slave device node.
     symlink_path: Option<PathBuf>,
 }
 
 impl PtyTransport {
-    /// Opens a new PTY pair and starts the Tokio IO task on the master side.
-    ///
-    /// If `symlink_path` is `Some(path)`, a symlink is created at `path` pointing to
-    /// the slave device node, giving external programs a predictable port name.
-    /// If a symlink already exists at `path`, it is removed before creating the new one.
-    /// The symlink is removed when the transport is shut down or dropped.
     pub fn open(symlink_path: Option<&Path>) -> std::io::Result<Self> {
         let OpenptyResult { master, slave } = openpty(None, None)
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
-        // SAFETY: slave is valid for the duration of this call.
+        // Put the slave into raw mode. Default termios is cooked (interactive
+        // terminal) mode: ICANON line-buffers input until a newline, ECHO
+        // mirrors master writes straight back to master reads (so the
+        // emulator would see its own output as if it were peripheral input),
+        // ISIG turns control bytes into signals, and OPOST rewrites output
+        // bytes (e.g. \n -> \r\n). None of that is appropriate for a raw
+        // binary byte-stream transport.
+        let mut term = termios::tcgetattr(&slave)
+            .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+        cfmakeraw(&mut term);
+        termios::tcsetattr(&slave, SetArg::TCSANOW, &term)
+            .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+
         let slave_path = unsafe {
             tty_name(BorrowedFd::borrow_raw(slave.as_raw_fd()))
         };
@@ -66,7 +70,6 @@ impl PtyTransport {
             None
         };
 
-        // Set master non-blocking for AsyncFd/epoll integration.
         let raw = master.as_raw_fd();
         let flags = fcntl(raw, FcntlArg::F_GETFL)
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
@@ -74,11 +77,10 @@ impl PtyTransport {
         fcntl(raw, FcntlArg::F_SETFL(new_flags))
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
-        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::new();
+        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
         let client_connected = Arc::new(AtomicBool::new(false));
         let connection_counter = Arc::new(AtomicU64::new(0));
 
-        // SAFETY: we own master; forget prevents double-close.
         let master_std = unsafe { File::from_raw_fd(raw) };
         std::mem::forget(master);
         let async_fd = AsyncFd::new(master_std)?;
@@ -92,23 +94,34 @@ impl PtyTransport {
             Arc::clone(&connection_counter),
         ));
 
-        Ok(Self { bridge, slave_path, _slave: slave, client_connected, connection_counter, symlink_path })
+        Ok(Self { bridge, slave_path, _slave: slave, client_connected, symlink_path })
     }
 
-    /// Returns the path of the slave PTY device (e.g. `/dev/pts/3`), if available.
     pub fn slave_path(&self) -> Option<&str> {
         self.slave_path.as_deref()
     }
 }
 
 impl Transport for PtyTransport {
-    fn try_recv(&mut self) -> Option<u8> { self.bridge.try_recv() }
-
-    /// Sends a byte. Returns `Ok(())` silently if no external process has the slave open.
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        if !self.client_connected.load(Ordering::Acquire) {
-            return Ok(());
+    fn try_recv(&mut self) -> Option<u8> {
+        loop {
+            match self.bridge.try_recv()? {
+                TransportEvent::Data(_, byte) => return Some(byte),
+                TransportEvent::Connected(_) | TransportEvent::Disconnected(_) => continue,
+            }
         }
+    }
+
+    /// Sends a byte to the PTY master.
+    ///
+    /// Unlike the previous implementation, this does not gate on whether an
+    /// external process has the slave open yet: PTY masters accept writes
+    /// regardless of whether anyone has opened the slave side (the kernel
+    /// buffers the output). Dropping writes here would silently discard the
+    /// protocol layer's initial state dump, which is now sent proactively
+    /// as soon as `Connected` fires — before we can know a real reader
+    /// exists. `is_connected()` still reflects true external attachment.
+    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
         self.bridge.send(byte)
     }
 
@@ -116,8 +129,8 @@ impl Transport for PtyTransport {
         self.client_connected.load(Ordering::Acquire)
     }
 
-    fn connection_id(&self) -> u64 {
-        self.connection_counter.load(Ordering::Acquire)
+    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
+        self.bridge.try_recv()
     }
 
     fn shutdown(&mut self) {
@@ -138,17 +151,24 @@ impl Drop for PtyTransport {
 
 /// Tokio task: bridges the async PTY master to sync crossbeam channels.
 ///
-/// Sets `client_connected` to `true` on the first successful read (an external
-/// process opened the slave), and back to `false` on EIO (all external openers
-/// have closed). Outbound bytes are dropped silently while disconnected.
+/// Emits `Connected(0)` once at startup (the transport is ready to accept
+/// writes immediately — see `Transport::send`'s doc comment), `Data(0, _)`
+/// for each byte read, and `Disconnected(0)` once when the task exits.
+/// `client_connected`/`connection_counter` still track real external
+/// attach/detach (via first successful read / EIO) for `is_connected()` and
+/// `connection_id()`, independent of the event stream above.
 async fn run_pty_task(
     async_fd: AsyncFd<File>,
-    in_tx: Sender<u8>,
+    in_tx: Sender<TransportEvent>,
     out_rx: Receiver<u8>,
     mut shutdown_rx: oneshot::Receiver<()>,
     client_connected: Arc<AtomicBool>,
     connection_counter: Arc<AtomicU64>,
 ) {
+    if in_tx.send(TransportEvent::Connected(0)).is_err() {
+        return;
+    }
+
     let mut buf = [0u8; 1];
     loop {
         tokio::select! {
@@ -162,28 +182,27 @@ async fn run_pty_task(
                             connection_counter.fetch_add(1, Ordering::Release);
                             client_connected.store(true, Ordering::Release);
                         }
-                        if in_tx.send(buf[0]).is_err() {
+                        if in_tx.send(TransportEvent::Data(0, buf[0])).is_err() {
                             break;
                         }
                     }
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) if e.raw_os_error() == Some(nix::libc::EIO) => {
-                        // All external slave openers closed; drain stale outbound bytes.
                         while out_rx.try_recv().is_ok() {}
                         client_connected.store(false, Ordering::Release);
                     }
                     Ok(Err(_)) => break,
-                    Err(_) => { guard.clear_ready(); } // WouldBlock — wait for next epoll event
+                    Err(_) => { guard.clear_ready(); }
                 }
             }
 
-            _ = drain_outbound(async_fd.get_ref(), &out_rx), if client_connected.load(Ordering::Acquire) => {}
+            _ = drain_outbound(async_fd.get_ref(), &out_rx) => {}
         }
     }
     client_connected.store(false, Ordering::Release);
+    let _ = in_tx.send(TransportEvent::Disconnected(0));
 }
 
-/// Flushes all pending outbound bytes from `out_rx` into the PTY master fd.
 async fn drain_outbound(mut file: &File, out_rx: &Receiver<u8>) {
     while let Ok(byte) = out_rx.try_recv() {
         if file.write_all(&[byte]).is_err() {
@@ -193,7 +212,6 @@ async fn drain_outbound(mut file: &File, out_rx: &Receiver<u8>) {
     tokio::task::yield_now().await;
 }
 
-/// Returns the slave PTY device name, or `None` on error.
 fn tty_name(fd: BorrowedFd<'_>) -> Option<String> {
     match unistd::ttyname(fd) {
         Ok(path) => path.to_str().map(String::from),
@@ -210,12 +228,8 @@ mod tests {
         let mut transport = PtyTransport::open(None).unwrap();
         assert!(transport.slave_path().is_some());
 
-        // Write directly to the slave side to simulate external input.
         let slave_path = transport.slave_path().unwrap().to_owned();
-        let slave_file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&slave_path)
-            .unwrap();
+        let slave_file = std::fs::OpenOptions::new().write(true).open(&slave_path).unwrap();
         use std::io::Write;
         { let mut f = slave_file; f.write_all(&[0xBB]).unwrap(); }
 
@@ -231,10 +245,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_while_no_client() {
+    async fn send_before_any_external_attach_succeeds() {
         let mut transport = PtyTransport::open(None).unwrap();
 
-        // No external process connected; send should succeed silently.
+        // No external process connected yet; send must not be silently dropped.
         assert!(!transport.is_connected());
         assert!(transport.send(0xFF).is_ok());
     }
@@ -246,11 +260,7 @@ mod tests {
 
         assert!(!transport.is_connected());
 
-        // Open slave and write a byte to trigger client_connected = true.
-        let slave = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&slave_path)
-            .unwrap();
+        let slave = std::fs::OpenOptions::new().write(true).open(&slave_path).unwrap();
         use std::io::Write;
         { let mut f = slave; f.write_all(&[0x01]).unwrap(); }
 
@@ -264,9 +274,56 @@ mod tests {
         let _ = std::fs::remove_file(&link_path);
 
         let transport = PtyTransport::open(Some(&link_path)).unwrap();
-        assert!(link_path.exists(), "symlink should exist after open");
+        assert!(link_path.exists());
 
         drop(transport);
-        assert!(!link_path.exists(), "symlink should be removed after drop");
+        assert!(!link_path.exists());
     }
+
+    #[tokio::test]
+    async fn try_recv_tagged_emits_connected_on_creation() {
+        let mut transport = PtyTransport::open(None).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+        assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Connected(0)));
+    }
+
+    #[tokio::test]
+    async fn initial_dump_reaches_client_that_attaches_later() {
+        let mut transport = PtyTransport::open(None).unwrap();
+        let slave_path = transport.slave_path().unwrap().to_owned();
+
+        // Give the spawned task a chance to run before checking for its
+        // startup event — `open()` is synchronous and returns before the
+        // task has been polled even once.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+        // Consume the Connected event and write a "dump" before anyone
+        // has opened the slave side.
+        assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Connected(0)));
+        transport.send(0xD0).unwrap();
+        transport.send(0xD1).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // Now a reader attaches and should still see the buffered bytes.
+        let mut slave = std::fs::OpenOptions::new().read(true).open(&slave_path).unwrap();
+        use std::io::Read;
+        let mut buf = [0u8; 2];
+        slave.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, [0xD0, 0xD1]);
+    }
+
+    #[tokio::test]
+    async fn send_is_not_echoed_back_as_received_data() {
+        let mut transport = PtyTransport::open(None).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let _ = transport.try_recv_tagged(); // consume Connected
+
+        transport.send(0xAB).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // In cooked mode this would incorrectly come back as received data.
+        assert_eq!(transport.try_recv(), None);
+    }
+
 }
