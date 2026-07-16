@@ -69,8 +69,8 @@
 //! control-signal lines (CA1, CA2, CB1, CB2). If the resulting edge matches the PCR
 //! configuration, the corresponding IFR bit is set and an IRQ may be asserted.
 
-use super::via_protocol::ViaProtocolMessage;
 use super::via_protocol;
+use super::via_protocol::ViaProtocolMessage;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::{ProtocolManager, ProtocolMessageEncoding, Transport, TransportError};
 use log::debug;
@@ -232,7 +232,9 @@ impl Via6522 {
     /// Attaches a transport. All attached transports receive every port and control-signal
     /// state change; any number of peripherals may be connected simultaneously.
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport, via_protocol::new_codecs));
+        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport,
+                                                          via_protocol::new_encoder,
+                                                          via_protocol::new_decoder))
     }
 
     /// Sets the error sender for async transport event reporting.

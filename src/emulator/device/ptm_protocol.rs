@@ -47,15 +47,21 @@ pub enum PtmProtocolMessage {
     },
 }
 
-/// Creates a new encoder/decoder pair.
-pub fn new_codecs(encoding: ProtocolMessageEncoding)
-                  -> (Box<dyn ProtocolMessageEncoder<PtmProtocolMessage>>,
-                      Box<dyn ProtocolMessageDecoder<PtmProtocolMessage>>) {
+/// Creates a new encoder for protocol format `encoding`.
+pub fn new_encoder(encoding: ProtocolMessageEncoding)
+                   -> Box<dyn ProtocolMessageEncoder<PtmProtocolMessage>> {
     match encoding {
-        ProtocolMessageEncoding::Ascii =>
-            (Box::new(PtmAsciiProtocolEncoder::new()), Box::new(PtmAsciiProtocolDecoder::new())),
-        ProtocolMessageEncoding::Binary =>
-            (Box::new(PtmBinaryProtocolEncoder::new()), Box::new(PtmBinaryProtocolDecoder::new())),
+        ProtocolMessageEncoding::Ascii => Box::new(PtmAsciiProtocolEncoder::new()),
+        ProtocolMessageEncoding::Binary => Box::new(PtmBinaryProtocolEncoder::new())
+    }
+}
+
+/// Creates a new decoder for protocol format `encoding`.
+pub fn new_decoder(encoding: ProtocolMessageEncoding)
+                   -> Box<dyn ProtocolMessageDecoder<PtmProtocolMessage>> {
+    match encoding {
+        ProtocolMessageEncoding::Ascii => Box::new(PtmAsciiProtocolDecoder::new()),
+        ProtocolMessageEncoding::Binary => Box::new(PtmBinaryProtocolDecoder::new())
     }
 }
 

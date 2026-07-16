@@ -90,21 +90,6 @@ impl Transport for PipeTransport {
         }
     }
 
-    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
-        if self.connect_event_pending {
-            self.connect_event_pending = false;
-            return Some(TransportEvent::Connected(0));
-        }
-        if let Some(byte) = self.try_recv() {
-            return Some(TransportEvent::Data(0, byte));
-        }
-        if self.disconnect_event_pending {
-            self.disconnect_event_pending = false;
-            return Some(TransportEvent::Disconnected(0));
-        }
-        None
-    }
-
     fn send(&mut self, byte: u8) -> Result<(), TransportError> {
         if !self.connected {
             return Err(TransportError::Disconnected);
@@ -125,6 +110,21 @@ impl Transport for PipeTransport {
 
     fn is_connected(&self) -> bool {
         self.connected
+    }
+
+    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
+        if self.connect_event_pending {
+            self.connect_event_pending = false;
+            return Some(TransportEvent::Connected(0));
+        }
+        if let Some(byte) = self.try_recv() {
+            return Some(TransportEvent::Data(0, byte));
+        }
+        if self.disconnect_event_pending {
+            self.disconnect_event_pending = false;
+            return Some(TransportEvent::Disconnected(0));
+        }
+        None
     }
 
     fn shutdown(&mut self) {

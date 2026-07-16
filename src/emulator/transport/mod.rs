@@ -6,7 +6,7 @@ pub mod pty;
 
 pub use self::pipe::PipeTransport;
 pub use self::pty::PtyTransport;
-pub use self::tcp_socket::TcpTransport;
+pub use self::tcp_socket::TcpSocketTransport;
 pub use self::unix_socket::UnixSocketTransport;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -146,8 +146,6 @@ impl<R: Send + 'static> ChannelBridge<R> {
     }
 }
 
-// ... TransportError, ChannelBridge<R> unchanged from before ...
-
 pub trait Transport: Send {
     fn try_recv(&mut self) -> Option<u8>;
 
@@ -159,19 +157,8 @@ pub trait Transport: Send {
     /// For a transport type that accepts multiple client connections, the sequence of events for
     /// any given client tag starts with a [`Connected`](TransportEvent::Connected) event,
     /// followed by zero or more [`Data`](TransportEvent::Data) events, followed by a
-    /// [`Disconnected`](TransportEvent::Disconnected) event. Because the space of client tags
-    /// is small, in the unlikely event of a very long-running client connection in conjunction
-    /// with a large sequence of short-lived client connections, the client tag may wrap. When
-    /// this happens the existing cl
+    /// [`Disconnected`](TransportEvent::Disconnected) event.
     ///
-    /// came from, or `None` if no byte is available.
-    ///
-    /// This tag is a truncated, wrapping view of [`connection_id`](Transport::connection_id)
-    /// (kept to a single byte to minimize per-byte channel overhead), intended only to
-    /// distinguish between the handful of clients that might be concurrently connected
-    /// at once — not as a durable session identifier. Transports with at most one
-    /// logical connection (pipe, PTY) use the default implementation, which tags
-    /// every byte `0`.
     fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
         self.try_recv().map(|b| TransportEvent::Data(0, b))
     }
@@ -184,8 +171,7 @@ pub trait Transport: Send {
 pub(crate) async fn pump_outbound(
     out_rx: Receiver<u8>,
     fanout_tx: broadcast::Sender<u8>,
-    mut shutdown_rx: watch::Receiver<bool>,
-) {
+    mut shutdown_rx: watch::Receiver<bool>) {
     loop {
         tokio::select! {
             _ = shutdown_rx.changed() => break,
@@ -217,11 +203,9 @@ pub(crate) struct ClientSession {
 /// fanned out via `session.fanout_rx` to the client. Generic over any
 /// split-able async stream, so it's shared between `TcpTransport` and
 /// `UnixSocketTransport`.
-pub(crate) async fn run_client_task<R, W>(
-    mut reader: R,
-    mut writer: W,
-    session: ClientSession,
-) where
+pub(crate) async fn run_client_task<R, W>(mut reader: R, mut writer: W,
+    session: ClientSession)
+where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send,
 {

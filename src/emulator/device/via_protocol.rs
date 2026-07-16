@@ -20,14 +20,21 @@ pub enum ViaProtocolMessage {
     },
 }
 
-pub fn new_codecs(encoding: ProtocolMessageEncoding)
-                  -> (Box<dyn ProtocolMessageEncoder<ViaProtocolMessage>>,
-                      Box<dyn ProtocolMessageDecoder<ViaProtocolMessage>>) {
+/// Creates a new encoder for protocol format `encoding`.
+pub fn new_encoder(encoding: ProtocolMessageEncoding)
+                   -> Box<dyn ProtocolMessageEncoder<ViaProtocolMessage>> {
     match encoding {
-        ProtocolMessageEncoding::Ascii =>
-            (Box::new(ViaAsciiProtocolEncoder::new()), Box::new(ViaAsciiProtocolDecoder::new())),
-        ProtocolMessageEncoding::Binary =>
-            (Box::new(ViaBinaryProtocolEncoder::new()), Box::new(ViaBinaryProtocolDecoder::new())),
+        ProtocolMessageEncoding::Ascii => Box::new(ViaAsciiProtocolEncoder::new()),
+        ProtocolMessageEncoding::Binary => Box::new(ViaBinaryProtocolEncoder::new())
+    }
+}
+
+/// Creates a new decoder for protocol format `encoding`.
+pub fn new_decoder(encoding: ProtocolMessageEncoding)
+                   -> Box<dyn ProtocolMessageDecoder<ViaProtocolMessage>> {
+    match encoding {
+        ProtocolMessageEncoding::Ascii => Box::new(ViaAsciiProtocolDecoder::new()),
+        ProtocolMessageEncoding::Binary => Box::new(ViaBinaryProtocolDecoder::new())
     }
 }
 

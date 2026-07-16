@@ -16,11 +16,7 @@ use tokio::sync::{broadcast, oneshot, watch};
 
 use super::{pump_outbound, run_client_task, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, BROADCAST_CAPACITY};
 
-/// Transport that listens for incoming TCP connections.
-///
-/// Supports multiple concurrently connected clients. All clients receive the
-/// same outbound byte stream (fan-out); inbound bytes are tagged with the ID
-/// of the connection they came from (see [`Transport::try_recv_tagged`]).
+/// Transport that listens for incoming Unix-domain socket connections.
 pub struct UnixSocketTransport {
     bridge: ChannelBridge<TransportEvent>,
     client_count: Arc<AtomicUsize>,

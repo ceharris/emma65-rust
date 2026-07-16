@@ -66,12 +66,17 @@ pub trait ProtocolMessageDecoder<T>: Send {
 
 }
 
-type CodecSupplier<T> = fn(ProtocolMessageEncoding)
-    -> (Box<dyn ProtocolMessageEncoder<T>>, Box<dyn ProtocolMessageDecoder<T>>);
+type EncoderSupplier<T> = fn(encoding: ProtocolMessageEncoding) -> Box<dyn ProtocolMessageEncoder<T>>;
+type DecoderSupplier<T> = fn(encoding: ProtocolMessageEncoding) -> Box<dyn ProtocolMessageDecoder<T>>;
 
+/// Per-connection decode state. Encoding is stateless across connections
+/// (every slot shares the same `ProtocolMessageEncoding`), so only the
+/// decoder — which must track partial-message state per connection to
+/// demultiplex correctly — lives here. Outgoing messages are encoded once,
+/// centrally, by [`ProtocolManager`] and relayed to all clients via the
+/// transport's own fan-out.
 struct ProtocolSlot<T> {
     client_tag: u8,
-    encoder: Box<dyn ProtocolMessageEncoder<T>>,
     decoder: Box<dyn ProtocolMessageDecoder<T>>,
     initial_dump_sent: bool,
 }
@@ -80,38 +85,17 @@ impl<T> ProtocolSlot<T> {
 
     fn new(client_tag: u8,
            encoding: ProtocolMessageEncoding,
-           codec_supplier: CodecSupplier<T>) -> Self {
-        let (encoder, decoder) = codec_supplier(encoding);
+           decoder_supplier: DecoderSupplier<T>) -> Self {
+        let decoder = decoder_supplier(encoding);
         Self {
             client_tag,
-            encoder,
             decoder,
             initial_dump_sent: false,
         }
     }
 
-    fn send(&mut self, message: &T, transport: &mut Box<dyn Transport>) -> Result<(), TransportError> {
-        let mut bytes = Vec::new();
-        self.encoder.encode(message, &mut bytes);
-        for b in bytes {
-            transport.send(b)?;
-        }
-        Ok(())
-    }
-
-     fn send_all(&mut self, messages: &[T], transport: &mut Box<dyn Transport>) -> Result<(), TransportError> {
-        for message in messages.iter() {
-            self.send(message, transport)?
-        }
-        Ok(())
-    }
-
     fn feed(&mut self, b: u8) -> Option<T> {
-        let msg = self.decoder.feed(b);
-        if let Some(m) = msg {
-            return Some(m)
-        }
-        None
+        self.decoder.feed(b)
     }
 
 }
@@ -120,33 +104,40 @@ impl<T> ProtocolSlot<T> {
 /// messages between peripherals connected via a transport protocol and an
 /// I/O device that accepts multiple concurrently connected peripherals.
 ///
-/// For each transport connection, the manager provides a state dump from the 
-/// I/O device. Subsequently, on each call to the [`poll_transports`] method, it 
-/// checks for a valid message from any connected peripheral. Messages can be 
-/// delivered to peripherals using either the [`send_to_all`] or [`send_all_to_all`] 
+/// For each transport connection, the manager provides a state dump from the
+/// I/O device. Subsequently, on each call to the [`poll_transports`] method, it
+/// checks for a valid message from any connected peripheral. Messages can be
+/// delivered to peripherals using either the [`send_to_all`] or [`send_all_to_all`]
 /// methods.
 pub struct ProtocolManager<T> {
     encoding: ProtocolMessageEncoding,
     transport: Box<dyn Transport>,
-    codec_supplier: CodecSupplier<T>,
+    decoder_supplier: DecoderSupplier<T>,
+    encoder: Box<dyn ProtocolMessageEncoder<T>>,
     slots: Vec<ProtocolSlot<T>>,
 }
 
 impl<T> ProtocolManager<T> {
     pub fn new(encoding: ProtocolMessageEncoding,
                transport: Box<dyn Transport>,
-               codec_supplier: CodecSupplier<T>) -> Self {
+               encoder_supplier: EncoderSupplier<T>,
+               decoder_supplier: DecoderSupplier<T>) -> Self {
         Self {
             encoding,
             transport,
-            codec_supplier,
+            decoder_supplier,
+            encoder: encoder_supplier(encoding),
             slots: Vec::new(),
         }
     }
 
+    /// Encodes `message` once and sends it via the transport, which fans it
+    /// out to every currently connected client.
     pub fn send_to_all(&mut self, message: &T) -> Result<(), TransportError> {
-        for slot in self.slots.iter_mut() {
-            slot.send(message, &mut self.transport)?
+        let mut bytes = Vec::new();
+        self.encoder.encode(message, &mut bytes);
+        for b in bytes {
+            self.transport.send(b)?;
         }
         Ok(())
     }
@@ -166,10 +157,10 @@ impl<T> ProtocolManager<T> {
                     // guards against the (rare) case of a wrapped/reassigned tag
                     // aliasing onto a still-referenced old connection.
                     self.slots.retain(|s| s.client_tag != tag);
-                    let mut slot = ProtocolSlot::new(tag, self.encoding, self.codec_supplier);
-                    slot.send_all(init_state, &mut self.transport)?;
+                    let mut slot = ProtocolSlot::new(tag, self.encoding, self.decoder_supplier);
                     slot.initial_dump_sent = true;
                     self.slots.push(slot);
+                    self.send_all_to_all(init_state)?;
                 }
                 TransportEvent::Data(tag, byte) => {
                     let slot = Self::find_slot(tag, &mut self.slots)
@@ -195,43 +186,213 @@ impl<T> ProtocolManager<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::UnixSocketTransport;
-    use std::path::PathBuf;
-    use tempfile::TempDir;
-    use tokio::io::AsyncWriteExt;
-    use tokio::net::UnixStream;
-    use tokio::time::{sleep, Duration};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
 
-    async fn unix_listener(path: &PathBuf) -> Result<Box<dyn Transport>, TransportError> {
-        let transport = UnixSocketTransport::listen(path).await;
-        match transport {
-            Ok(transport) => Ok(Box::new(transport)),
-            Err(e) => Err(TransportError::Io(e))
+    // --- Mock transport: scripted events in, captured bytes out ---
+
+    struct MockTransport {
+        events: VecDeque<TransportEvent>,
+        sent: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MockTransport {
+        /// Returns the transport plus a handle to its captured output, since
+        /// the transport itself gets moved into the `ProtocolManager`.
+        fn new(events: Vec<TransportEvent>) -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let sent = Arc::new(Mutex::new(Vec::new()));
+            (Self { events: events.into(), sent: Arc::clone(&sent) }, sent)
         }
     }
 
-    async fn unix_connection(path: &PathBuf) -> Result<UnixStream, Box<dyn std::error::Error>> {
-        Ok(UnixStream::connect(path).await?)
+    impl Transport for MockTransport {
+        fn try_recv(&mut self) -> Option<u8> {
+            loop {
+                match self.events.pop_front()? {
+                    TransportEvent::Data(_, b) => return Some(b),
+                    _ => continue,
+                }
+            }
+        }
+
+        fn send(&mut self, byte: u8) -> Result<(), TransportError> {
+            self.sent.lock().unwrap().push(byte);
+            Ok(())
+        }
+
+        fn is_connected(&self) -> bool { true }
+
+        fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
+            self.events.pop_front()
+        }
+
+        fn shutdown(&mut self) {}
     }
 
-    #[tokio::test]
-    async fn test() {
-        // TODO this needs to wait until the transport layer is fixed to handle
-        //      multiple concurrent clients
-        let tmp_dir = TempDir::new().unwrap();
-        let socket_path = tmp_dir.path().join("test.sock");
-        let mut listener = unix_listener(&socket_path).await.unwrap();
-        let mut connection1 = unix_connection(&socket_path).await.unwrap();
-        let mut connection2 = unix_connection(&socket_path).await.unwrap();
+    // --- Toy codec: a "message" is exactly two bytes ---
 
-        connection1.write_all("hello1".as_bytes()).await.unwrap();
-        connection1.flush().await.unwrap();
-        connection2.write_all("hello2".as_bytes()).await.unwrap();
-        connection2.flush().await.unwrap();
-        sleep(Duration::from_millis(1)).await;
-        while let Some(b) = listener.try_recv() {
-            eprint!("{}", b as char);
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct TwoByteMsg(u8, u8);
+
+    struct TwoByteEncoder;
+    impl ProtocolMessageEncoder<TwoByteMsg> for TwoByteEncoder {
+        fn encode(&mut self, message: &TwoByteMsg, out: &mut Vec<u8>) {
+            out.push(message.0);
+            out.push(message.1);
         }
-        eprintln!();
+    }
+
+    #[derive(Default)]
+    struct TwoByteDecoder {
+        first: Option<u8>,
+    }
+    impl ProtocolMessageDecoder<TwoByteMsg> for TwoByteDecoder {
+        fn feed(&mut self, b: u8) -> Option<TwoByteMsg> {
+            match self.first.take() {
+                None => { self.first = Some(b); None }
+                Some(first) => Some(TwoByteMsg(first, b)),
+            }
+        }
+    }
+
+    fn two_byte_encoder(_encoding: ProtocolMessageEncoding)
+                        -> Box<dyn ProtocolMessageEncoder<TwoByteMsg>> {
+        Box::new(TwoByteEncoder)
+    }
+
+    fn two_byte_decoder(_encoding: ProtocolMessageEncoding)
+                        -> Box<dyn ProtocolMessageDecoder<TwoByteMsg>> {
+        Box::new(TwoByteDecoder::default())
+    }
+
+    fn manager(events: Vec<TransportEvent>) -> (ProtocolManager<TwoByteMsg>, Arc<Mutex<Vec<u8>>>) {
+        let (transport, sent) = MockTransport::new(events);
+        (ProtocolManager::new(ProtocolMessageEncoding::Binary, Box::new(transport),
+                              two_byte_encoder, two_byte_decoder), sent)
+    }
+
+    // --- Tests ---
+
+    #[test]
+    fn connected_sends_initial_dump() {
+        let (mut mgr, sent) = manager(vec![TransportEvent::Connected(1)]);
+        let init_state = [TwoByteMsg(0xAA, 0xBB)];
+
+        assert_eq!(mgr.poll_transport(&init_state).unwrap(), None);
+        assert_eq!(*sent.lock().unwrap(), vec![0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn connected_sends_dump_once_per_new_connection_not_per_slot_count() {
+        // Two clients connecting in turn: each Connected event should
+        // trigger exactly one dump broadcast (relying on the transport's
+        // own fan-out to reach everyone) — not one dump per currently
+        // known slot.
+        let (mut mgr, sent) = manager(vec![
+            TransportEvent::Connected(1),
+            TransportEvent::Connected(2),
+        ]);
+        let init_state = [TwoByteMsg(0xAA, 0xBB)];
+
+        assert_eq!(mgr.poll_transport(&init_state).unwrap(), None);
+        // Two Connected events => two broadcasts of the two-byte dump,
+        // not four bytes duplicated per slot or eight bytes (2 events * 2 slots).
+        assert_eq!(*sent.lock().unwrap(), vec![0xAA, 0xBB, 0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn data_is_demultiplexed_per_tag() {
+        let (mut mgr, _sent) = manager(vec![
+            TransportEvent::Connected(1),
+            TransportEvent::Connected(2),
+            TransportEvent::Data(1, 0x01),
+            TransportEvent::Data(2, 0x10),
+            TransportEvent::Data(1, 0x02), // completes tag 1's message
+            TransportEvent::Data(2, 0x20), // completes tag 2's message
+        ]);
+
+        // First call stops at the first completed message (tag 1's).
+        assert_eq!(mgr.poll_transport(&[]).unwrap(), Some(TwoByteMsg(0x01, 0x02)));
+        // Second call drains the rest and completes tag 2's message.
+        assert_eq!(mgr.poll_transport(&[]).unwrap(), Some(TwoByteMsg(0x10, 0x20)));
+    }
+
+    #[test]
+    #[should_panic(expected = "Data event for tag with no prior Connected event")]
+    fn data_without_prior_connected_panics() {
+        let (mut mgr, _sent) = manager(vec![TransportEvent::Data(1, 0x01)]);
+        let _ = mgr.poll_transport(&[]);
+    }
+
+    #[test]
+    fn disconnected_discards_slot_and_partial_state() {
+        let (mut mgr, _sent) = manager(vec![
+            TransportEvent::Connected(1),
+            TransportEvent::Data(1, 0x01),   // partial message, never completed
+            TransportEvent::Disconnected(1),
+            TransportEvent::Connected(1),    // tag reused by a new connection
+            TransportEvent::Data(1, 0x02),
+            TransportEvent::Data(1, 0x03),
+        ]);
+
+        // The stray 0x01 from the old session must not leak into the new
+        // session's decoder — if it did, this would incorrectly complete
+        // as (0x01, 0x02) instead of (0x02, 0x03).
+        assert_eq!(mgr.poll_transport(&[]).unwrap(), Some(TwoByteMsg(0x02, 0x03)));
+    }
+
+    #[test]
+    fn reconnect_without_disconnect_still_replaces_stale_slot() {
+        // Simulates a wrapped/reused tag arriving via Connected before this
+        // transport ever emitted a matching Disconnected for the old session.
+        let (mut mgr, _sent) = manager(vec![
+            TransportEvent::Connected(1),
+            TransportEvent::Data(1, 0x01),
+            TransportEvent::Connected(1),
+            TransportEvent::Data(1, 0x02),
+            TransportEvent::Data(1, 0x03),
+        ]);
+
+        assert_eq!(mgr.poll_transport(&[]).unwrap(), Some(TwoByteMsg(0x02, 0x03)));
+    }
+
+    #[test]
+    fn send_to_all_encodes_and_sends_exactly_once_regardless_of_slot_count() {
+        // send_to_all no longer iterates slots at all — it encodes once and
+        // relies on the transport's own fan-out. Slot count (0, 1, or many)
+        // must not affect how many times the message is encoded/sent.
+        let (mut mgr, sent) = manager(vec![
+            TransportEvent::Connected(1),
+            TransportEvent::Connected(2),
+            TransportEvent::Connected(3),
+        ]);
+        mgr.poll_transport(&[]).unwrap(); // establish 3 slots, dumps go out (ignored below)
+
+        sent.lock().unwrap().clear();
+        mgr.send_to_all(&TwoByteMsg(0x99, 0x77)).unwrap();
+
+        assert_eq!(*sent.lock().unwrap(), vec![0x99, 0x77]);
+    }
+
+    #[test]
+    fn send_to_all_with_no_slots_still_sends() {
+        // Sending doesn't depend on slot bookkeeping at all — even with zero
+        // known connections, the manager still encodes and forwards to the
+        // transport (which is free to drop it if nothing is connected).
+        let (mut mgr, sent) = manager(vec![]);
+
+        mgr.send_to_all(&TwoByteMsg(0x11, 0x22)).unwrap();
+
+        assert_eq!(*sent.lock().unwrap(), vec![0x11, 0x22]);
+    }
+
+    #[test]
+    fn send_all_to_all_sends_each_message_once_in_order() {
+        let (mut mgr, sent) = manager(vec![]);
+        let messages = [TwoByteMsg(0x01, 0x02), TwoByteMsg(0x03, 0x04)];
+
+        mgr.send_all_to_all(&messages).unwrap();
+
+        assert_eq!(*sent.lock().unwrap(), vec![0x01, 0x02, 0x03, 0x04]);
     }
 }

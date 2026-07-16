@@ -456,7 +456,8 @@ impl Mc6840 {
     /// Attaches a transport. All attached transports receive every port and control-signal
     /// state change; any number of peripherals may be connected simultaneously.
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport, ptm_protocol::new_codecs));
+        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport,
+            ptm_protocol::new_encoder, ptm_protocol::new_decoder));
     }
 
     /// Sets the error sender for async transport event reporting.

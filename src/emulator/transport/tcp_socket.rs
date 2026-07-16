@@ -15,18 +15,14 @@ use crossbeam_channel::{Receiver, Sender};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot, watch};
 
-/// Transport that listens for incoming TCP connections.
-///
-/// Supports multiple concurrently connected clients. All clients receive the
-/// same outbound byte stream (fan-out); inbound bytes are tagged with the ID
-/// of the connection they came from (see [`Transport::try_recv_tagged`]).
-pub struct TcpTransport {
+/// Transport that listens for incoming TCP socket connections.
+pub struct TcpSocketTransport {
     bridge: ChannelBridge<TransportEvent>,
     client_count: Arc<AtomicUsize>,
     local_addr: SocketAddr,
 }
 
-impl TcpTransport {
+impl TcpSocketTransport {
     pub async fn listen(addr: SocketAddr) -> std::io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
@@ -51,7 +47,7 @@ impl TcpTransport {
     }
 }
 
-impl Transport for TcpTransport {
+impl Transport for TcpSocketTransport {
     fn try_recv(&mut self) -> Option<u8> {
         loop {
             match self.bridge.try_recv()? {
@@ -136,8 +132,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    async fn make_transport() -> (TcpTransport, SocketAddr) {
-        let t = TcpTransport::listen("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    async fn make_transport() -> (TcpSocketTransport, SocketAddr) {
+        let t = TcpSocketTransport::listen("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let addr = t.local_addr();
         (t, addr)
     }
