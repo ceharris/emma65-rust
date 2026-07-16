@@ -1,4 +1,4 @@
-//! Protocol codec for the virtual 6522 VIA peripheral interface.
+//! Protocol codec for the peripheral interface of the virtual 6522 VIA.
 use crate::emulator::{ProtocolMessageDecoder, ProtocolMessageEncoder, ProtocolMessageEncoding};
 
 /// A decoded VIA protocol message.
@@ -21,8 +21,8 @@ pub enum ViaProtocolMessage {
 }
 
 pub fn new_codecs(encoding: ProtocolMessageEncoding)
-                  -> (Box::<dyn ProtocolMessageEncoder<ViaProtocolMessage>>,
-                      Box::<dyn ProtocolMessageDecoder<ViaProtocolMessage>>) {
+                  -> (Box<dyn ProtocolMessageEncoder<ViaProtocolMessage>>,
+                      Box<dyn ProtocolMessageDecoder<ViaProtocolMessage>>) {
     match encoding {
         ProtocolMessageEncoding::Ascii =>
             (Box::new(ViaAsciiProtocolEncoder::new()), Box::new(ViaAsciiProtocolDecoder::new())),
@@ -52,10 +52,6 @@ impl ProtocolMessageEncoder<ViaProtocolMessage> for ViaAsciiProtocolEncoder {
     /// In ASCII mode a space separator is prepended before every message after the first.
     fn encode(&mut self, message: &ViaProtocolMessage, out: &mut Vec<u8>) {
         self.encode_ascii(message, out);
-    }
-
-    fn reset(&mut self) {
-        self.has_prior = false;
     }
 
 }
@@ -94,13 +90,8 @@ impl ViaAsciiProtocolEncoder {
     }
 }
 
-/// Encodes [`ViaProtocolMessage`] values into ASCII format for transmission.
-///
-/// A space is inserted between messages as a human readability aid.
-pub struct ViaBinaryProtocolEncoder {
-    /// Whether at least one message has been encoded (used to insert inter-message spaces).
-    has_prior: bool,
-}
+/// Encodes [`ViaProtocolMessage`] values into binary format for transmission.
+pub struct ViaBinaryProtocolEncoder;
 
 impl Default for ViaBinaryProtocolEncoder {
     fn default() -> Self {
@@ -117,16 +108,12 @@ impl ProtocolMessageEncoder<ViaProtocolMessage> for ViaBinaryProtocolEncoder {
         self.encode_binary(message, out);
     }
 
-    fn reset(&mut self) {
-        self.has_prior = false;
-    }
-
 }
 
 impl ViaBinaryProtocolEncoder {
     /// Creates a new encoder in ASCII mode.
     pub fn new() -> Self {
-        Self { has_prior: false }
+        Self {}
     }
 
     fn encode_binary(&self, message: &ViaProtocolMessage, out: &mut Vec<u8>) {
@@ -184,10 +171,6 @@ impl ProtocolMessageDecoder<ViaProtocolMessage> for ViaAsciiProtocolDecoder {
     /// if more bytes are needed or the byte was ignored.
     fn feed(&mut self, byte: u8) -> Option<ViaProtocolMessage> {
         self.feed_ascii(byte)
-    }
-
-    fn reset(&mut self) {
-        self.state = AsciiDecoderState::Idle;
     }
 
 }
@@ -301,8 +284,6 @@ impl ProtocolMessageDecoder<ViaProtocolMessage> for ViaBinaryProtocolDecoder {
     fn feed(&mut self, byte: u8) -> Option<ViaProtocolMessage> {
         self.feed_binary(byte)
     }
-
-    fn reset(&mut self) {}
 
 }
 
@@ -618,7 +599,7 @@ mod tests {
         // 'G' and 'Z' are not valid hex digits; full message length must still be consumed.
         let mut out = Vec::new();
         feed_all_ascii(&mut dec, b"AGZB12", &mut out);
-        // The A message is consumed (3 chars) then discarded; B12 is decoded normally.
+        // The `A` message is consumed (3 chars) then discarded; B12 is decoded normally.
         assert_eq!(out, vec![ViaProtocolMessage::PortStateChange { port: 'B', value: 0x12 }]);
     }
 
@@ -680,7 +661,7 @@ mod tests {
         for &m in &messages {
             enc.encode(&m, &mut bytes);
         }
-        // The encoded bytes start with 'A' (ASCII, high bit clear) → decoder selects ASCII.
+        // The encoded bytes start with 'A' (ASCII, high-bit clear) → decoder selects ASCII.
         let mut dec = ViaAsciiProtocolDecoder::new();
         let mut decoded = Vec::new();
         feed_all_ascii(&mut dec, &bytes, &mut decoded);

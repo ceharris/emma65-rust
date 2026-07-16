@@ -1,4 +1,4 @@
-use crate::emulator::{Transport, TransportError};
+use crate::emulator::{Transport, TransportError, TransportEvent};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
@@ -55,9 +55,6 @@ pub trait ProtocolMessageEncoder<T>: Send {
     /// Encodes `message` appending the encoded form to `out`.
     fn encode(&mut self, message: &T, out: &mut Vec<u8>);
 
-    /// Resets this encoder to its initial state.
-    fn reset(&mut self);
-
 }
 
 /// A message protocol decoder.
@@ -67,77 +64,56 @@ pub trait ProtocolMessageDecoder<T>: Send {
     /// Returns `Some(T)` if the state machine outputs a valid message, otherwise `None`.
     fn feed(&mut self, b: u8) -> Option<T>;
 
-    /// Resets this decoder its to initial state.
-    fn reset(&mut self);
-
 }
 
+type CodecSupplier<T> = fn(ProtocolMessageEncoding)
+    -> (Box<dyn ProtocolMessageEncoder<T>>, Box<dyn ProtocolMessageDecoder<T>>);
+
 struct ProtocolSlot<T> {
-    transport: Box<dyn Transport>,
+    client_tag: u8,
     encoder: Box<dyn ProtocolMessageEncoder<T>>,
     decoder: Box<dyn ProtocolMessageDecoder<T>>,
     initial_dump_sent: bool,
-    last_connection_id: u64,
 }
 
 impl<T> ProtocolSlot<T> {
 
-    fn new(transport: Box<dyn Transport>,
-           encoder: Box<dyn ProtocolMessageEncoder<T>>,
-           decoder: Box<dyn ProtocolMessageDecoder<T>>) -> Self {
-        let last_connection_id = transport.connection_id();
+    fn new(client_tag: u8,
+           encoding: ProtocolMessageEncoding,
+           codec_supplier: CodecSupplier<T>) -> Self {
+        let (encoder, decoder) = codec_supplier(encoding);
         Self {
-            transport,
+            client_tag,
             encoder,
             decoder,
             initial_dump_sent: false,
-            last_connection_id,
         }
     }
 
-    /// Resets codec state for a new peripheral session.
-    fn reset(&mut self) {
-        self.encoder.reset();
-        self.decoder.reset();
-    }
-
-    /// Sends `message` to the connected peripheral if the handshake has
-    /// been completed.
-    fn send(&mut self, message: &T) -> Result<(), TransportError> {
+    fn send(&mut self, message: &T, transport: &mut Box<dyn Transport>) -> Result<(), TransportError> {
         let mut bytes = Vec::new();
         self.encoder.encode(message, &mut bytes);
         for b in bytes {
-            self.transport.send(b)?;
+            transport.send(b)?;
         }
         Ok(())
     }
 
-    /// Sends `messages` to the connected peripheral.
-    fn send_all(&mut self, messages: &[T]) -> Result<(), TransportError> {
+     fn send_all(&mut self, messages: &[T], transport: &mut Box<dyn Transport>) -> Result<(), TransportError> {
         for message in messages.iter() {
-            self.send(message)?
+            self.send(message, transport)?
         }
         Ok(())
     }
 
-    fn poll(&mut self, state: &[T]) -> Result<Option<T>, TransportError> {
-        let current_id = self.transport.connection_id();
-        if current_id != self.last_connection_id || !self.initial_dump_sent {
-            self.last_connection_id = current_id;
-            self.initial_dump_sent = true;
-            self.reset();
-            self.send_all(state)?;
+    fn feed(&mut self, b: u8) -> Option<T> {
+        let msg = self.decoder.feed(b);
+        if let Some(m) = msg {
+            return Some(m)
         }
-
-        while let Some(byte) = self.transport.try_recv() {
-            let msg = self.decoder.feed(byte);
-
-            if let Some(m) = msg {
-                return Ok(Some(m))
-            }
-        }
-        Ok(None)
+        None
     }
+
 }
 
 /// A protocol manager takes responsibility for relaying peripheral protocol
@@ -150,32 +126,27 @@ impl<T> ProtocolSlot<T> {
 /// delivered to peripherals using either the [`send_to_all`] or [`send_all_to_all`] 
 /// methods.
 pub struct ProtocolManager<T> {
+    encoding: ProtocolMessageEncoding,
+    transport: Box<dyn Transport>,
+    codec_supplier: CodecSupplier<T>,
     slots: Vec<ProtocolSlot<T>>,
 }
 
-impl<T> Default for ProtocolManager<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<T> ProtocolManager<T> {
-
-    pub fn new() -> Self {
+    pub fn new(encoding: ProtocolMessageEncoding,
+               transport: Box<dyn Transport>,
+               codec_supplier: CodecSupplier<T>) -> Self {
         Self {
+            encoding,
+            transport,
+            codec_supplier,
             slots: Vec::new(),
         }
     }
 
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>,
-                            encoder: Box<dyn ProtocolMessageEncoder<T>>,
-                            decoder: Box<dyn ProtocolMessageDecoder<T>>) {
-        self.slots.push(ProtocolSlot::new(transport, encoder, decoder));
-    }
-
     pub fn send_to_all(&mut self, message: &T) -> Result<(), TransportError> {
         for slot in self.slots.iter_mut() {
-            slot.send(message)?
+            slot.send(message, &mut self.transport)?
         }
         Ok(())
     }
@@ -187,13 +158,36 @@ impl<T> ProtocolManager<T> {
         Ok(())
     }
 
-    pub fn poll_transports(&mut self, state: &[T]) -> Result<Option<T>, TransportError> {
-        for slot in self.slots.iter_mut() {
-            if let Some(message) = slot.poll(state)? {
-                return Ok(Some(message))
+    pub fn poll_transport(&mut self, init_state: &[T]) -> Result<Option<T>, TransportError> {
+        while let Some(event) = self.transport.try_recv_tagged() {
+            match event {
+                TransportEvent::Connected(tag) => {
+                    // Drop any stale slot for this tag before creating a fresh one —
+                    // guards against the (rare) case of a wrapped/reassigned tag
+                    // aliasing onto a still-referenced old connection.
+                    self.slots.retain(|s| s.client_tag != tag);
+                    let mut slot = ProtocolSlot::new(tag, self.encoding, self.codec_supplier);
+                    slot.send_all(init_state, &mut self.transport)?;
+                    slot.initial_dump_sent = true;
+                    self.slots.push(slot);
+                }
+                TransportEvent::Data(tag, byte) => {
+                    let slot = Self::find_slot(tag, &mut self.slots)
+                        .expect("Data event for tag with no prior Connected event");
+                    if let Some(message) = slot.feed(byte) {
+                        return Ok(Some(message));
+                    }
+                }
+                TransportEvent::Disconnected(tag) => {
+                    self.slots.retain(|s| s.client_tag != tag);
+                }
             }
         }
         Ok(None)
+    }
+
+    fn find_slot(tag: u8, slots: &mut [ProtocolSlot<T>]) -> Option<&mut ProtocolSlot<T>> {
+        slots.iter_mut().find(|s| s.client_tag == tag)
     }
 
 }

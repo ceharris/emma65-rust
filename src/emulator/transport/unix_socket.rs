@@ -1,53 +1,58 @@
 //! Transport that listens for incoming Unix domain socket connections.
 //!
-//! A Tokio task owns the `UnixListener`; it accepts one client at a time, exchanges
-//! bytes via bounded `crossbeam` channels, and loops back to waiting when the client
-//! disconnects. The CPU thread never blocks on async IO.
+//! A Tokio task owns the `UnixListener` and accepts connections in a loop,
+//! spawning a per-client task for each one so multiple clients can be
+//! connected concurrently. Outbound bytes are fanned out to every connected
+//! client; inbound bytes are tagged with their originating connection ID so
+//! they can be demultiplexed downstream.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot, watch};
 
-use super::{ChannelBridge, Transport, TransportError};
+use super::{pump_outbound, run_client_task, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, BROADCAST_CAPACITY};
 
-/// Transport that listens for incoming Unix domain socket connections.
+/// Transport that listens for incoming TCP connections.
+///
+/// Supports multiple concurrently connected clients. All clients receive the
+/// same outbound byte stream (fan-out); inbound bytes are tagged with the ID
+/// of the connection they came from (see [`Transport::try_recv_tagged`]).
 pub struct UnixSocketTransport {
-    bridge: ChannelBridge,
-    // Reflects whether a client is currently connected; shared with the Tokio task.
-    client_connected: Arc<AtomicBool>,
-    // Incremented each time a new client connects; shared with the Tokio task.
+    bridge: ChannelBridge<TransportEvent>,
+    client_count: Arc<AtomicUsize>,
+    // Monotonic, non-wrapping; source of truth for `connection_id()`.
+    // The per-byte wire tag is a truncated (`as u8`) view of this value.
     connection_counter: Arc<AtomicU64>,
     path: PathBuf,
 }
 
 impl UnixSocketTransport {
-    /// Binds a Unix domain socket listener at `path` and begins accepting connections.
-    ///
-    /// Any stale socket file at `path` is removed before binding.
     pub async fn listen(path: impl Into<PathBuf>) -> std::io::Result<Self> {
         let path = path.into();
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path)?;
-        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::new();
-        let client_connected = Arc::new(AtomicBool::new(false));
+        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
+        let client_count = Arc::new(AtomicUsize::new(0));
         let connection_counter = Arc::new(AtomicU64::new(0));
+
+        let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
+        tokio::spawn(propagate_shutdown(shutdown_rx, shutdown_watch_tx));
+
         tokio::spawn(run_unix_task(
             listener,
             in_tx,
             out_rx,
-            shutdown_rx,
-            Arc::clone(&client_connected),
+            shutdown_watch_rx,
+            Arc::clone(&client_count),
             Arc::clone(&connection_counter),
         ));
-        Ok(Self { bridge, client_connected, connection_counter, path })
+        Ok(Self { bridge, client_count, connection_counter, path })
     }
 
-    /// Returns the path this transport is listening on.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -55,92 +60,87 @@ impl UnixSocketTransport {
 
 impl Transport for UnixSocketTransport {
     fn try_recv(&mut self) -> Option<u8> {
-        self.bridge.try_recv()
+        loop {
+            match self.bridge.try_recv()? {
+                TransportEvent::Data(_, byte) => return Some(byte),
+                TransportEvent::Connected(_) | TransportEvent::Disconnected(_) => continue,
+            }
+        }
     }
 
-    /// Sends a byte. Returns `Ok(())` silently if no client is connected.
     fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        if !self.client_connected.load(Ordering::Acquire) {
+        if self.client_count.load(Ordering::Acquire) == 0 {
             return Ok(());
         }
         self.bridge.send(byte)
     }
 
     fn is_connected(&self) -> bool {
-        self.client_connected.load(Ordering::Acquire)
+        self.client_count.load(Ordering::Acquire) > 0
     }
 
     fn connection_id(&self) -> u64 {
         self.connection_counter.load(Ordering::Acquire)
     }
 
+    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
+        self.bridge.try_recv()
+    }
+
     fn shutdown(&mut self) {
         self.bridge.shutdown();
-        self.client_connected.store(false, Ordering::Release);
     }
 }
 
-/// Tokio task: listens for Unix socket clients and bridges each connection to sync channels.
+async fn propagate_shutdown(shutdown_rx: oneshot::Receiver<()>, shutdown_tx: watch::Sender<bool>) {
+    let _ = shutdown_rx.await;
+    let _ = shutdown_tx.send(true);
+}
+
 async fn run_unix_task(
     listener: UnixListener,
-    in_tx: Sender<u8>,
+    in_tx: Sender<TransportEvent>,
     out_rx: Receiver<u8>,
-    mut shutdown_rx: oneshot::Receiver<()>,
-    client_connected: Arc<AtomicBool>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    client_count: Arc<AtomicUsize>,
     connection_counter: Arc<AtomicU64>,
 ) {
-    'outer: loop {
-        // Phase 1: waiting for a client
+    let (fanout_tx, _) = broadcast::channel::<u8>(BROADCAST_CAPACITY);
+    tokio::spawn(pump_outbound(out_rx, fanout_tx.clone(), shutdown_rx.clone()));
+
+    let tag_allocator = Arc::new(TagAllocator::new());
+
+    loop {
         let stream = tokio::select! {
-            _ = &mut shutdown_rx => break,
+            _ = shutdown_rx.changed() => break,
             result = listener.accept() => match result {
                 Ok((stream, _)) => stream,
-                Err(_) => break,
+                Err(_) => continue,
             },
         };
 
-        // Drain any stale outbound bytes before the new client sees them.
-        while out_rx.try_recv().is_ok() {}
+        let conn_tag = match tag_allocator.allocate() {
+            Some(tag) => tag,
+            None => continue,
+        };
+
         connection_counter.fetch_add(1, Ordering::Release);
-        client_connected.store(true, Ordering::Release);
+        client_count.fetch_add(1, Ordering::Release);
 
-        // Phase 2: connected I/O
-        let (mut reader, mut writer) = stream.into_split();
-        let mut buf = [0u8; 1];
-        loop {
-            tokio::select! {
-                _ = &mut shutdown_rx => break 'outer,
-
-                result = reader.read(&mut buf) => {
-                    match result {
-                        Ok(1) => {
-                            if in_tx.send(buf[0]).is_err() {
-                                break 'outer;
-                            }
-                        }
-                        _ => break, // EOF or error → back to waiting phase
-                    }
-                }
-
-                _ = drain_outbound(&mut writer, &out_rx) => {}
-            }
-        }
-
-        client_connected.store(false, Ordering::Release);
+        let (reader, writer) = stream.into_split();
+        tokio::spawn(run_client_task(
+            reader,
+            writer,
+            ClientSession {
+                conn_tag,
+                in_tx: in_tx.clone(),
+                fanout_rx: fanout_tx.subscribe(),
+                shutdown_rx: shutdown_rx.clone(),
+                client_count: Arc::clone(&client_count),
+                tag_allocator: Arc::clone(&tag_allocator),
+            },
+        ));
     }
-}
-
-/// Flushes all pending outbound bytes from `out_rx` into `writer`.
-async fn drain_outbound(
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
-    out_rx: &Receiver<u8>,
-) {
-    while let Ok(byte) = out_rx.try_recv() {
-        if writer.write_all(&[byte]).await.is_err() {
-            return;
-        }
-    }
-    tokio::task::yield_now().await;
 }
 
 #[cfg(test)]
@@ -166,12 +166,10 @@ mod tests {
         let mut client = UnixStream::connect(&path).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-        // client → transport
         client.write_all(&[0xAB]).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(transport.try_recv(), Some(0xAB));
 
-        // transport → client
         transport.send(0xCD).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let mut buf = [0u8; 1];
@@ -186,7 +184,6 @@ mod tests {
         let mut transport = make_transport("unix_reconnection").await;
         let path = transport.path().to_path_buf();
 
-        // First client session
         let mut c1 = UnixStream::connect(&path).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         c1.write_all(&[0x01]).await.unwrap();
@@ -195,7 +192,6 @@ mod tests {
         drop(c1);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
-        // Second client session
         let mut c2 = UnixStream::connect(&path).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         c2.write_all(&[0x02]).await.unwrap();
@@ -210,7 +206,6 @@ mod tests {
         let mut transport = make_transport("unix_no_client").await;
         let path = transport.path().to_path_buf();
 
-        // No client connected; send should succeed silently
         assert!(!transport.is_connected());
         assert!(transport.send(0xFF).is_ok());
 
@@ -244,6 +239,72 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         transport.shutdown();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(!transport.is_connected());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn concurrent_clients_are_tagged_and_counted() {
+        let mut transport = make_transport("unix_concurrent").await;
+        let path = transport.path().to_path_buf();
+
+        let mut c1 = UnixStream::connect(&path).await.unwrap();
+        let mut c2 = UnixStream::connect(&path).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(transport.is_connected());
+
+        c1.write_all(&[0x11]).await.unwrap();
+        c2.write_all(&[0x22]).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let mut events = Vec::new();
+        while let Some(event) = transport.try_recv_tagged() {
+            events.push(event);
+        }
+
+        let connected_tags: Vec<u8> = events.iter()
+            .filter_map(|e| match e { TransportEvent::Connected(tag) => Some(*tag), _ => None })
+            .collect();
+        let data: Vec<(u8, u8)> = events.iter()
+            .filter_map(|e| match e { TransportEvent::Data(tag, byte) => Some((*tag, *byte)), _ => None })
+            .collect();
+
+        assert_eq!(connected_tags.len(), 2, "expected a Connected event for each client");
+        // Different clients must be tagged with different connection IDs.
+        assert_ne!(connected_tags[0], connected_tags[1]);
+
+        assert_eq!(data.len(), 2);
+        assert_ne!(data[0].0, data[1].0);
+        assert!(data.contains(&(connected_tags[0], if connected_tags[0] == data[0].0 { data[0].1 } else { data[1].1 })));
+
+        // Fan-out: a single send() reaches both clients.
+        transport.send(0xEE).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let mut b1 = [0u8; 1];
+        let mut b2 = [0u8; 1];
+        c1.read_exact(&mut b1).await.unwrap();
+        c2.read_exact(&mut b2).await.unwrap();
+        assert_eq!(b1[0], 0xEE);
+        assert_eq!(b2[0], 0xEE);
+
+        drop(c1);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // c2 still connected, so is_connected() should remain true.
+        assert!(transport.is_connected());
+
+        // The dropped client's Disconnected event should now be available.
+        let mut saw_disconnect = false;
+        while let Some(event) = transport.try_recv_tagged() {
+            if let TransportEvent::Disconnected(tag) = event {
+                assert!(connected_tags.contains(&tag));
+                saw_disconnect = true;
+            }
+        }
+        assert!(saw_disconnect, "expected a Disconnected event after dropping c1");
+
+        drop(c2);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(!transport.is_connected());
 

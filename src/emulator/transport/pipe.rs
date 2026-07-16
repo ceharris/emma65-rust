@@ -4,26 +4,25 @@
 //! outbound bytes (we write, remote reads). Both ends are set non-blocking so
 //! `try_recv` and `send` never block the CPU thread.
 
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
-use std::fs::File;
 
-use super::{Transport, TransportError};
+use super::{Transport, TransportError, TransportEvent};
 
 /// Bidirectional transport over a pair of OS pipes with non-blocking IO.
 pub struct PipeTransport {
-    // Read end of the inbound pipe (we read from this).
     rx: File,
-    // Write end of the outbound pipe (we write to this).
     tx: File,
     connected: bool,
+    // Set on construction; consumed (once) by the first `try_recv_tagged` call.
+    connect_event_pending: bool,
+    // Set when `connected` transitions true -> false; consumed (once) by
+    // `try_recv_tagged` after all buffered data has been drained.
+    disconnect_event_pending: bool,
 }
 
 impl PipeTransport {
-    /// Creates a `PipeTransport` from two already-opened OS file descriptors.
-    ///
-    /// `rx_fd` must be readable; `tx_fd` must be writable. Both are set non-blocking.
-    ///
     /// # Safety
     /// The caller must ensure the file descriptors are valid and exclusively owned.
     pub unsafe fn from_raw_fds(rx_fd: std::os::unix::io::RawFd, tx_fd: std::os::unix::io::RawFd) -> io::Result<Self> {
@@ -34,14 +33,9 @@ impl PipeTransport {
         };
         set_nonblocking(&rx)?;
         set_nonblocking(&tx)?;
-        Ok(Self { rx, tx, connected: true })
+        Ok(Self { rx, tx, connected: true, connect_event_pending: true, disconnect_event_pending: false })
     }
 
-    /// Creates a `PipeTransport` connected to the process's own stdin and stdout.
-    ///
-    /// Duplicates fd 0 and fd 1 so this transport owns independent descriptors: dropping it
-    /// (or its underlying files) closes only the duplicates, leaving the process's real
-    /// stdin/stdout usable for anything else (e.g. `println!`).
     pub fn stdio() -> io::Result<Self> {
         let rx_fd = dup_fd(0)?;
         let tx_fd = dup_fd(1)?;
@@ -49,29 +43,30 @@ impl PipeTransport {
         unsafe { Self::from_raw_fds(rx_fd, tx_fd) }
     }
 
-    /// Consumes this transport and returns the underlying `(rx, tx)` files.
-    ///
-    /// Both files remain non-blocking. The caller takes ownership and is
-    /// responsible for all further I/O. The `connected` flag is discarded.
     pub fn into_split(self) -> (File, File) {
         (self.rx, self.tx)
     }
 
-    /// Creates a connected `PipeTransport` pair backed by two OS pipe(2) calls.
-    ///
-    /// Returns `(local, remote)` — both ends are `PipeTransport`s. The local end
-    /// reads from one pipe and writes to the other; the remote end is the mirror.
     pub fn pair() -> io::Result<(Self, Self)> {
         let (a_rx, a_tx) = os_pipe()?;
         let (b_rx, b_tx) = os_pipe()?;
-        // local reads from a, writes to b; remote reads from b, writes to a
-        let local = Self { rx: a_rx, tx: b_tx, connected: true };
-        let remote = Self { rx: b_rx, tx: a_tx, connected: true };
+        let local = Self { rx: a_rx, tx: b_tx, connected: true, connect_event_pending: true, disconnect_event_pending: false };
+        let remote = Self { rx: b_rx, tx: a_tx, connected: true, connect_event_pending: true, disconnect_event_pending: false };
         set_nonblocking(&local.rx)?;
         set_nonblocking(&local.tx)?;
         set_nonblocking(&remote.rx)?;
         set_nonblocking(&remote.tx)?;
         Ok((local, remote))
+    }
+
+    /// Marks this transport disconnected, queuing a `Disconnected` event to
+    /// be delivered on the next `try_recv_tagged` call — unless it's already
+    /// disconnected, in which case there's nothing new to report.
+    fn mark_disconnected(&mut self) {
+        if self.connected {
+            self.connected = false;
+            self.disconnect_event_pending = true;
+        }
     }
 }
 
@@ -84,15 +79,30 @@ impl Transport for PipeTransport {
         match self.rx.read(&mut buf) {
             Ok(1) => Some(buf[0]),
             Ok(_) => {
-                self.connected = false;
+                self.mark_disconnected();
                 None
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => None,
             Err(_) => {
-                self.connected = false;
+                self.mark_disconnected();
                 None
             }
         }
+    }
+
+    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
+        if self.connect_event_pending {
+            self.connect_event_pending = false;
+            return Some(TransportEvent::Connected(0));
+        }
+        if let Some(byte) = self.try_recv() {
+            return Some(TransportEvent::Data(0, byte));
+        }
+        if self.disconnect_event_pending {
+            self.disconnect_event_pending = false;
+            return Some(TransportEvent::Disconnected(0));
+        }
+        None
     }
 
     fn send(&mut self, byte: u8) -> Result<(), TransportError> {
@@ -103,11 +113,11 @@ impl Transport for PipeTransport {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(TransportError::Full),
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
-                self.connected = false;
+                self.mark_disconnected();
                 Err(TransportError::Disconnected)
             }
             Err(e) => {
-                self.connected = false;
+                self.mark_disconnected();
                 Err(TransportError::Io(e))
             }
         }
@@ -122,14 +132,13 @@ impl Transport for PipeTransport {
     }
 
     fn shutdown(&mut self) {
-        self.connected = false;
+        self.mark_disconnected();
     }
 }
 
 fn os_pipe() -> io::Result<(File, File)> {
     use std::os::unix::io::FromRawFd;
     let mut fds = [0i32; 2];
-    // SAFETY: pipe2 fills fds with valid file descriptors on success.
     let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
     if rc != 0 {
         return Err(io::Error::last_os_error());
@@ -140,7 +149,6 @@ fn os_pipe() -> io::Result<(File, File)> {
 }
 
 fn dup_fd(fd: RawFd) -> io::Result<RawFd> {
-    // SAFETY: dup() with a valid fd either returns a new, exclusively-owned descriptor or -1.
     let rc = unsafe { libc::dup(fd) };
     if rc < 0 {
         return Err(io::Error::last_os_error());
@@ -150,7 +158,6 @@ fn dup_fd(fd: RawFd) -> io::Result<RawFd> {
 
 fn set_nonblocking(file: &File) -> io::Result<()> {
     use std::os::unix::io::AsRawFd;
-    // SAFETY: fcntl with F_GETFL/F_SETFL on a valid fd.
     unsafe {
         let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
         if flags < 0 {
@@ -172,7 +179,6 @@ mod tests {
     fn send_recv_round_trip() {
         let (mut local, mut remote) = PipeTransport::pair().unwrap();
         local.send(0x42).unwrap();
-        // Give the kernel a moment to move the byte across the pipe.
         std::thread::sleep(std::time::Duration::from_millis(1));
         assert_eq!(remote.try_recv(), Some(0x42));
     }
@@ -194,5 +200,27 @@ mod tests {
         let (mut local, _remote) = PipeTransport::pair().unwrap();
         local.shutdown();
         assert!(!local.is_connected());
+    }
+
+    #[test]
+    fn try_recv_tagged_emits_connected_before_data() {
+        let (mut local, mut remote) = PipeTransport::pair().unwrap();
+
+        assert_eq!(local.try_recv_tagged(), Some(TransportEvent::Connected(0)));
+
+        remote.send(0x7A).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert_eq!(local.try_recv_tagged(), Some(TransportEvent::Data(0, 0x7A)));
+        assert_eq!(local.try_recv_tagged(), None);
+    }
+
+    #[test]
+    fn try_recv_tagged_emits_disconnected_once() {
+        let (mut local, _remote) = PipeTransport::pair().unwrap();
+        let _ = local.try_recv_tagged(); // consume Connected
+        local.shutdown();
+
+        assert_eq!(local.try_recv_tagged(), Some(TransportEvent::Disconnected(0)));
+        assert_eq!(local.try_recv_tagged(), None);
     }
 }
