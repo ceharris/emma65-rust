@@ -35,7 +35,6 @@ pub struct PtyTransport {
     // (i.e. has actually read a byte); shared with the Tokio task. Note this
     // no longer gates `send()` — see its doc comment.
     client_connected: Arc<AtomicBool>,
-    connection_counter: Arc<AtomicU64>,
     symlink_path: Option<PathBuf>,
 }
 
@@ -95,7 +94,7 @@ impl PtyTransport {
             Arc::clone(&connection_counter),
         ));
 
-        Ok(Self { bridge, slave_path, _slave: slave, client_connected, connection_counter, symlink_path })
+        Ok(Self { bridge, slave_path, _slave: slave, client_connected, symlink_path })
     }
 
     pub fn slave_path(&self) -> Option<&str> {
@@ -111,10 +110,6 @@ impl Transport for PtyTransport {
                 TransportEvent::Connected(_) | TransportEvent::Disconnected(_) => continue,
             }
         }
-    }
-
-    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
-        self.bridge.try_recv()
     }
 
     /// Sends a byte to the PTY master.
@@ -134,8 +129,8 @@ impl Transport for PtyTransport {
         self.client_connected.load(Ordering::Acquire)
     }
 
-    fn connection_id(&self) -> u64 {
-        self.connection_counter.load(Ordering::Acquire)
+    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
+        self.bridge.try_recv()
     }
 
     fn shutdown(&mut self) {

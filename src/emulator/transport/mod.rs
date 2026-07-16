@@ -1,12 +1,12 @@
 //! Transport abstraction and implementations for device IO.
 pub mod pipe;
-pub mod tcp;
+pub mod tcp_socket;
 pub mod unix_socket;
 pub mod pty;
 
 pub use self::pipe::PipeTransport;
 pub use self::pty::PtyTransport;
-pub use self::tcp::TcpTransport;
+pub use self::tcp_socket::TcpTransport;
 pub use self::unix_socket::UnixSocketTransport;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -150,15 +150,10 @@ impl<R: Send + 'static> ChannelBridge<R> {
 
 pub trait Transport: Send {
     fn try_recv(&mut self) -> Option<u8>;
+
     fn send(&mut self, byte: u8) -> Result<(), TransportError>;
+
     fn is_connected(&self) -> bool;
-    /// Returns a monotonically increasing ID that increments each time a new client connects.
-    ///
-    /// Unlike the tag returned by [`try_recv_tagged`](Transport::try_recv_tagged), this
-    /// never wraps, so it remains a reliable reconnection signal for the lifetime of
-    /// the transport regardless of how many connections it has served.
-    /// Transports that do not support reconnection (e.g. [`PipeTransport`]) always return 0.
-    fn connection_id(&self) -> u64;
 
     /// Returns the next event from the channel.
     /// For a transport type that accepts multiple client connections, the sequence of events for

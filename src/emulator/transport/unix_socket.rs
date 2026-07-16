@@ -7,7 +7,7 @@
 //! they can be demultiplexed downstream.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -24,9 +24,6 @@ use super::{pump_outbound, run_client_task, ChannelBridge, ClientSession, TagAll
 pub struct UnixSocketTransport {
     bridge: ChannelBridge<TransportEvent>,
     client_count: Arc<AtomicUsize>,
-    // Monotonic, non-wrapping; source of truth for `connection_id()`.
-    // The per-byte wire tag is a truncated (`as u8`) view of this value.
-    connection_counter: Arc<AtomicU64>,
     path: PathBuf,
 }
 
@@ -37,7 +34,6 @@ impl UnixSocketTransport {
         let listener = UnixListener::bind(&path)?;
         let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
         let client_count = Arc::new(AtomicUsize::new(0));
-        let connection_counter = Arc::new(AtomicU64::new(0));
 
         let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
         tokio::spawn(propagate_shutdown(shutdown_rx, shutdown_watch_tx));
@@ -48,9 +44,8 @@ impl UnixSocketTransport {
             out_rx,
             shutdown_watch_rx,
             Arc::clone(&client_count),
-            Arc::clone(&connection_counter),
         ));
-        Ok(Self { bridge, client_count, connection_counter, path })
+        Ok(Self { bridge, client_count, path })
     }
 
     pub fn path(&self) -> &Path {
@@ -79,10 +74,6 @@ impl Transport for UnixSocketTransport {
         self.client_count.load(Ordering::Acquire) > 0
     }
 
-    fn connection_id(&self) -> u64 {
-        self.connection_counter.load(Ordering::Acquire)
-    }
-
     fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
         self.bridge.try_recv()
     }
@@ -103,7 +94,6 @@ async fn run_unix_task(
     out_rx: Receiver<u8>,
     mut shutdown_rx: watch::Receiver<bool>,
     client_count: Arc<AtomicUsize>,
-    connection_counter: Arc<AtomicU64>,
 ) {
     let (fanout_tx, _) = broadcast::channel::<u8>(BROADCAST_CAPACITY);
     tokio::spawn(pump_outbound(out_rx, fanout_tx.clone(), shutdown_rx.clone()));
@@ -124,7 +114,6 @@ async fn run_unix_task(
             None => continue,
         };
 
-        connection_counter.fetch_add(1, Ordering::Release);
         client_count.fetch_add(1, Ordering::Release);
 
         let (reader, writer) = stream.into_split();

@@ -7,7 +7,7 @@
 //! they can be demultiplexed downstream.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use super::{pump_outbound, run_client_task, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, BROADCAST_CAPACITY};
@@ -23,7 +23,6 @@ use tokio::sync::{broadcast, oneshot, watch};
 pub struct TcpTransport {
     bridge: ChannelBridge<TransportEvent>,
     client_count: Arc<AtomicUsize>,
-    connection_counter: Arc<AtomicU64>,
     local_addr: SocketAddr,
 }
 
@@ -33,7 +32,6 @@ impl TcpTransport {
         let local_addr = listener.local_addr()?;
         let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
         let client_count = Arc::new(AtomicUsize::new(0));
-        let connection_counter = Arc::new(AtomicU64::new(0));
 
         let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
         tokio::spawn(propagate_shutdown(shutdown_rx, shutdown_watch_tx));
@@ -44,9 +42,8 @@ impl TcpTransport {
             out_rx,
             shutdown_watch_rx,
             Arc::clone(&client_count),
-            Arc::clone(&connection_counter),
         ));
-        Ok(Self { bridge, client_count, connection_counter, local_addr })
+        Ok(Self { bridge, client_count, local_addr })
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -75,10 +72,6 @@ impl Transport for TcpTransport {
         self.client_count.load(Ordering::Acquire) > 0
     }
 
-    fn connection_id(&self) -> u64 {
-        self.connection_counter.load(Ordering::Acquire)
-    }
-
     fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
         self.bridge.try_recv()
     }
@@ -99,7 +92,6 @@ async fn run_tcp_task(
     out_rx: Receiver<u8>,
     mut shutdown_rx: watch::Receiver<bool>,
     client_count: Arc<AtomicUsize>,
-    connection_counter: Arc<AtomicU64>,
 ) {
     let (fanout_tx, _) = broadcast::channel::<u8>(BROADCAST_CAPACITY);
     tokio::spawn(pump_outbound(out_rx, fanout_tx.clone(), shutdown_rx.clone()));
@@ -120,7 +112,6 @@ async fn run_tcp_task(
             None => continue,
         };
 
-        connection_counter.fetch_add(1, Ordering::Release);
         client_count.fetch_add(1, Ordering::Release);
 
         let (reader, writer) = stream.into_split();
