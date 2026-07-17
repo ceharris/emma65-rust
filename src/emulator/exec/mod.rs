@@ -1,5 +1,6 @@
 //! Execution control; provides the main entry points for execution on the emulated CPU.
 
+use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
 use std::time::Instant;
 use tokio::sync::{oneshot, watch};
 use crate::emulator::cpu::{Cpu, Registers};
@@ -25,12 +26,23 @@ pub struct CpuLiveSnapshot {
     pub cpu_stopped: bool,
     /// True when the CPU executed WAI and is waiting for an interrupt.
     pub cpu_waiting: bool,
+    /// Paragraph-aligned start address of the memory page captured in `memory_page`.
+    pub memory_page_addr: u16,
+    /// 256 bytes of memory starting at `memory_page_addr`.
+    pub memory_page: Vec<u8>,
 }
 
 /// Builds a [`CpuLiveSnapshot`] from the current state of `cpu`.
-fn build_live_snapshot(cpu: &Cpu) -> CpuLiveSnapshot {
+///
+/// `mem_addr` is the address currently displayed in the memory panel; it is
+/// paragraph-aligned (`& 0xfff0`) before the read so the stored page always
+/// starts on a paragraph boundary.
+fn build_live_snapshot(cpu: &Cpu, mem_addr: u16) -> CpuLiveSnapshot {
     let mut stack_page = vec![0u8; 256];
     let _ = cpu.bus().peek_range(0x0100, &mut stack_page);
+    let memory_page_addr = mem_addr & 0xfff0;
+    let mut memory_page = vec![0u8; 256];
+    let _ = cpu.bus().peek_range(memory_page_addr, &mut memory_page);
     CpuLiveSnapshot {
         registers: *cpu.registers(),
         stack_page,
@@ -39,6 +51,8 @@ fn build_live_snapshot(cpu: &Cpu) -> CpuLiveSnapshot {
         nmi_pending: cpu.interrupts().nmi_pending(),
         cpu_stopped: cpu.is_stopped(),
         cpu_waiting: cpu.is_waiting(),
+        memory_page_addr,
+        memory_page,
     }
 }
 
@@ -228,11 +242,13 @@ pub fn step_over_breakpoint(cpu: &mut Cpu, skip_pc: u16) -> StepResult {
 ///
 /// If `live_tx` is `Some`, a [`CpuLiveSnapshot`] is published periodically
 /// (based on a fixed batch size) so callers can display live state while a long
-/// subroutine runs.
+/// subroutine runs. `mem_view_addr` selects which 256-byte page is captured in
+/// each snapshot; pass `Arc::new(AtomicU16::new(0))` if not needed.
 pub fn step_over_subroutine(
     cpu: &mut Cpu,
     stop_rx: &watch::Receiver<bool>,
     live_tx: Option<&watch::Sender<Option<CpuLiveSnapshot>>>,
+    mem_view_addr: &Arc<AtomicU16>,
 ) -> Option<StepResult> {
     let pc = cpu.registers().pc;
     let opcode = cpu.bus().peek(pc).unwrap_or(0);
@@ -264,7 +280,7 @@ pub fn step_over_subroutine(
         };
         steps += 1;
         if let Some(tx) = live_tx.filter(|_| steps.is_multiple_of(BATCH_SIZE)) {
-            let _ = tx.send(Some(build_live_snapshot(cpu)));
+            let _ = tx.send(Some(build_live_snapshot(cpu, mem_view_addr.load(Ordering::Relaxed))));
         }
         match res {
             StepResult::Executed(op) => {
@@ -313,11 +329,13 @@ pub fn step_over_subroutine(
 ///
 /// If `live_tx` is `Some`, a [`CpuLiveSnapshot`] is published periodically
 /// (based on a fixed batch size) so callers can display live state while a long
-/// subroutine runs.
+/// subroutine runs. `mem_view_addr` selects which 256-byte page is captured in
+/// each snapshot; pass `Arc::new(AtomicU16::new(0))` if not needed.
 pub fn step_return(
     cpu: &mut Cpu,
     stop_rx: &watch::Receiver<bool>,
     live_tx: Option<&watch::Sender<Option<CpuLiveSnapshot>>>,
+    mem_view_addr: &Arc<AtomicU16>,
 ) -> Option<StepResult> {
     let initial_s = cpu.registers().s;
     // The first iteration skips the breakpoint/watch check at the current PC so
@@ -337,7 +355,7 @@ pub fn step_return(
         };
         steps += 1;
         if let Some(tx) = live_tx.filter(|_| steps.is_multiple_of(BATCH_SIZE)) {
-            let _ = tx.send(Some(build_live_snapshot(cpu)));
+            let _ = tx.send(Some(build_live_snapshot(cpu, mem_view_addr.load(Ordering::Relaxed))));
         }
         match res {
             StepResult::Executed(op)
@@ -363,20 +381,25 @@ pub fn step_return(
 /// match the target frequency. Throttling is batched over ~1000 instructions
 /// to avoid per-instruction syscall overhead.
 pub fn run(cpu: Cpu) -> RunHandle {
-    run_from(cpu, None)
+    run_from(cpu, None, Arc::new(AtomicU16::new(0)))
 }
 
 /// Like [`run`], but skips the breakpoint/watch check at `skip_pc` on the
 /// first instruction. Use this when the CPU is already halted at a breakpoint
 /// and the caller wants execution to continue past it without disabling it.
-pub fn run_from(cpu: Cpu, skip_pc: Option<u16>) -> RunHandle {
+///
+/// `mem_view_addr` is an atomically-updated address that controls which 256-byte
+/// memory page is captured in each live snapshot. The caller should store the
+/// paragraph-aligned address currently shown in the memory panel, and may update
+/// it at any time while running.
+pub fn run_from(cpu: Cpu, skip_pc: Option<u16>, mem_view_addr: Arc<AtomicU16>) -> RunHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
     let (result_tx, result_rx) = oneshot::channel();
     let (cpu_tx, cpu_rx) = oneshot::channel();
     let (live_tx, live_rx) = watch::channel(None);
 
     std::thread::spawn(move || {
-        run_loop(cpu, skip_pc, stop_rx, live_tx, result_tx, cpu_tx);
+        run_loop(cpu, skip_pc, mem_view_addr, stop_rx, live_tx, result_tx, cpu_tx);
     });
 
     RunHandle { stop_tx, result_rx, cpu_rx, live_rx }
@@ -385,6 +408,7 @@ pub fn run_from(cpu: Cpu, skip_pc: Option<u16>) -> RunHandle {
 fn run_loop(
     mut cpu: Cpu,
     skip_pc: Option<u16>,
+    mem_view_addr: Arc<AtomicU16>,
     stop_rx: watch::Receiver<bool>,
     live_tx: watch::Sender<Option<CpuLiveSnapshot>>,
     result_tx: oneshot::Sender<StepResult>,
@@ -415,7 +439,7 @@ fn run_loop(
 
         // Publish a live snapshot after each batch so the frontend can display
         // current state without stopping the CPU.
-        let _ = live_tx.send(Some(build_live_snapshot(&cpu)));
+        let _ = live_tx.send(Some(build_live_snapshot(&cpu, mem_view_addr.load(Ordering::Relaxed))));
 
         if let Some(hz) = hz {
             let elapsed_ns = start.elapsed().as_nanos() as u64;
@@ -595,7 +619,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0xEA, 0xEA, 0xDB]); // NOP, NOP, STP
         cpu.add_breakpoint(0x0200);
 
-        let handle = run_from(cpu, Some(0x0200));
+        let handle = run_from(cpu, Some(0x0200), no_mem());
         let (result, cpu) = handle.take_cpu_with_result().await;
 
         assert!(matches!(result, StepResult::Stopped), "expected Stopped result");
@@ -623,6 +647,11 @@ mod tests {
     /// Returns a stop receiver that never fires, for use in tests that don't need interruption.
     fn no_stop() -> watch::Receiver<bool> {
         watch::channel(false).1
+    }
+
+    /// Returns a dummy memory-view-address arc for tests that don't exercise live snapshots.
+    fn no_mem() -> Arc<AtomicU16> {
+        Arc::new(AtomicU16::new(0))
     }
 
     fn make_cpu_at(start: u16) -> Cpu {
@@ -655,7 +684,7 @@ mod tests {
         // NOP at $0200; step_over should execute it and advance PC by 1.
         let mut cpu = make_cpu_at(0x0200);
         write(&mut cpu, 0x0200, &[0xEA]); // NOP
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0201);
     }
@@ -667,7 +696,7 @@ mod tests {
         let mut cpu = make_cpu_at(0x0200);
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -681,7 +710,7 @@ mod tests {
         write(&mut cpu, 0x0300, &[0x20, 0x00, 0x04]); // JSR $0400
         write(&mut cpu, 0x0303, &[0x60]);               // RTS
         write(&mut cpu, 0x0400, &[0x60]);               // RTS
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -693,7 +722,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
         cpu.add_breakpoint(0x0300);
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Breakpoint(0x0300)));
         assert_eq!(cpu.registers().pc, 0x0300);
     }
@@ -706,7 +735,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
         cpu.add_breakpoint(0x0203);
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         // Must surface as Breakpoint since caller owns it.
         assert!(matches!(result, StepResult::Breakpoint(0x0203)));
         // Breakpoint must still be present after step_over returns.
@@ -719,7 +748,7 @@ mod tests {
         let mut cpu = make_cpu_at(0x0200);
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xDB]);               // STP
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Stopped));
     }
 
@@ -733,7 +762,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0x60]); // NOP, NOP, RTS
         step_into(&mut cpu); // JSR — now at $0300, S = 0xFD
-        let result = step_return(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -749,7 +778,7 @@ mod tests {
         cpu.bus_mut().write(0x0100 | s.wrapping_sub(2) as u16, 0x24).unwrap(); // P
         cpu.registers_mut().s = s.wrapping_sub(3);
         write(&mut cpu, 0x0200, &[0x40]); // RTI
-        let result = step_return(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0300);
     }
@@ -774,7 +803,7 @@ mod tests {
         cpu.registers_mut().s = 0x00;               // so S+1=0x01, S+2=0x02
         // initial_s for step_return will be 0x00; after RTS, S = 0x02 (wrapped).
         // (0x02_u8.wrapping_sub(0x00) as i8) = 2 > 0 ✓
-        let result = step_return(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -786,7 +815,7 @@ mod tests {
         write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0x60]); // NOP, NOP, RTS
         step_into(&mut cpu); // JSR — now inside subroutine
         cpu.add_breakpoint(0x0301);
-        let result = step_return(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Breakpoint(0x0301)));
     }
 
@@ -796,7 +825,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xDB]);               // STP before RTS
         step_into(&mut cpu); // JSR
-        let result = step_return(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Stopped));
     }
 
@@ -811,7 +840,7 @@ mod tests {
         step_into(&mut cpu); // JSR $0300
         step_into(&mut cpu); // JSR $0400 — now inside inner subroutine
         let s_inside = cpu.registers().s;
-        let result = step_return(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         // Returned to $0303 (after inner JSR).
         assert_eq!(cpu.registers().pc, 0x0303);
@@ -836,7 +865,7 @@ mod tests {
         write(&mut cpu, 0x0400, &[0x40]); // ISR: RTI
         step_into(&mut cpu); // JSR $0300 — S = 0xFD
         cpu.interrupts_mut().signal_nmi();
-        let result = step_return(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -877,7 +906,7 @@ mod tests {
         let mut cpu = make_cpu_at(0x0200);
         write(&mut cpu, 0x0200, &[0xEA]); // NOP
         cpu.add_breakpoint(0x0200);
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0201);
         assert!(cpu.breakpoints().contains(&0x0200));
@@ -893,7 +922,7 @@ mod tests {
         write(&mut cpu, 0x0203, &[0xEA]);              // NOP
         write(&mut cpu, 0x0300, &[0x60]);              // RTS
         cpu.add_breakpoint(0x0200);
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
         assert!(cpu.breakpoints().contains(&0x0200));
@@ -918,7 +947,7 @@ mod tests {
 
         // Place a breakpoint at the subroutine entry (current PC) and call step_return.
         cpu.add_breakpoint(0x0300);
-        let result = step_return(&mut cpu, &no_stop(), None).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
         // Should execute the RTS and return to $0203, not re-fire the breakpoint.
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
