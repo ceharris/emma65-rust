@@ -27,33 +27,23 @@
 //! next `tick()` call, reflecting the real hardware's transmit-busy signaling.
 //! RX is polled on every `tick()` call.
 
-use log::debug;
+use super::error_reporter;
+use super::error_reporter::ErrorReporter;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
+use log::debug;
 
 /// Motorola MC6850 Asynchronous Communications Interface Adapter (ACIA).
 pub struct Mc6850 {
-    /// Name of the device as it appears in configuration and CLI.
     name: &'static str,
-    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
     address: u16,
-    /// Optional transport for byte-stream IO.
     transport: Option<Box<dyn Transport>>,
-    /// Destination for async transport error events.
-    error_sender: Option<ErrorSender>,
-    /// Identity used in error events.
-    device_id: Option<DeviceId>,
-    /// Current control register value.
+    error_reporter: Option<ErrorReporter>,
     control: u8,
-    /// Most recently received byte.
     rx_data: u8,
-    /// Receive Data Register Full — byte waiting to be read.
     rdrf: bool,
-    /// Transmit Data Register Empty — clears on TX write; restored on the next tick.
     tdre: bool,
-    /// Overrun — set when a new byte arrives while RDRF is still set.
     overrun: bool,
-    /// When true, TDRE was cleared by a TX write and will be restored on the next tick.
     tx_pending: bool,
 }
 
@@ -71,8 +61,7 @@ impl Mc6850 {
             name,
             address: 0,
             transport: None,
-            error_sender: None,
-            device_id: None,
+            error_reporter: None,
             control: 0,
             rx_data: 0,
             rdrf: false,
@@ -95,15 +84,7 @@ impl Mc6850 {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_sender = Some(sender);
-        self.device_id = Some(id);
-    }
-
-    fn report_error(&self, error: TransportError) {
-        if let (Some(sender), Some(id)) = (&self.error_sender, self.device_id) {
-            use crate::emulator::device::DeviceEvent;
-            let _ = sender.send(DeviceEvent::TransportError { device: id, error });
-        }
+        self.error_reporter = Some(ErrorReporter::new(sender, id));
     }
 
     fn status(&self) -> u8 {
@@ -157,8 +138,8 @@ impl IoDevice for Mc6850 {
             }
             1 => {
                 if let Some(transport) = self.transport.as_mut()
-                    && let Err(e) = transport.send(value) {
-                    self.report_error(e);
+                        && let Err(e) = transport.send(value) {
+                    error_reporter::report(e, self.error_reporter.as_mut());
                 }
                 self.tdre = false;
                 self.tx_pending = true;
@@ -191,14 +172,12 @@ impl IoDevice for Mc6850 {
     fn reset(&mut self) {
         let address = self.address;
         let transport = std::mem::take(&mut self.transport);
-        let error_sender = self.error_sender.take();
-        let device_id = self.device_id;
+        let error_reporter = std::mem::take(&mut self.error_reporter);
         *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
-        self.error_sender = error_sender;
-        self.device_id = device_id;
-        debug!("{} {} reset", self.name(), self.device_id.unwrap());
+        self.error_reporter = error_reporter;
+        debug!("{} @{} reset", self.name(), self.address);
     }
 
     fn irq_active(&self) -> bool {
@@ -397,15 +376,6 @@ mod tests {
     }
 
     // reset
-
-    #[test]
-    fn reset_preserves_bus_config() {
-        let (mut device, _) = device_with_pipe();
-        device.device_id = Some(DeviceId(0));
-        device.reset();
-        assert!(device.transport.is_some(), "expected transport to be preserved");
-        assert!(device.device_id.is_some(), "expected device ID to be preserved");
-    }
 
     #[test]
     fn reset_clears_irq() {

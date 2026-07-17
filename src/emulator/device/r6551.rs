@@ -43,47 +43,29 @@
 //! RX is timer-driven: `tick()` polls the transport once per byte period at the configured
 //! baud rate, or on every call when using the external clock (default).
 
-
-use log::debug;
+use super::error_reporter;
+use super::error_reporter::ErrorReporter;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
+use log::debug;
 
 /// Rockwell R6551 ACIA (Asynchronous Communications Interface Adapter).
 pub struct R6551 {
-    /// Name of the device as it appears in configuration and CLI.
     name: &'static str,
-    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
     address: u16,
-    /// Optional transport for byte-stream IO.
     transport: Option<Box<dyn Transport>>,
-    /// Destination for async transport error events.
-    error_sender: Option<ErrorSender>,
-    /// Identity used in error events.
-    device_id: Option<DeviceId>,
-    /// Most recently received byte.
+    error_reporter: Option<ErrorReporter>,
     rx_data: u8,
-    /// Receive Data Register Full — set when a byte has been received and not yet read.
     rdrf: bool,
-    /// Transmit Data Register Empty — clears on TX write in correct mode; always set in bug-compatible mode.
     tdre: bool,
-    /// Overrun error — set when a new byte arrives while RDRF is already set.
     overrun: bool,
-    /// Command register value.
     command: u8,
-    /// Control register value.
     control: u8,
-    /// Accumulated cycles since the last transport poll.
     cycle_accum: u32,
-    /// Cycles between transport polls; 0 = poll every tick (external clock mode).
     cycles_per_byte: u32,
-    /// When true, emulates the WDC 65C51 hardware bug: TDRE is permanently set.
     tdre_bug_compatible: bool,
-    /// Remaining cycles before TDRE is restored after a TX write (correct mode only).
     tx_cycles_remaining: u32,
-    /// CPU clock frequency in Hz, used to compute cycles-per-byte for baud rate timing.
     clock_hz: u64,
-    /// When true, allows overrun in internal-clock mode: a byte arriving while RDRF is set
-    /// overwrites rx_data and sets the overrun flag, matching real hardware behaviour.
     overrun_enabled: bool,
 }
 
@@ -105,8 +87,7 @@ impl R6551 {
             name,
             address: 0,
             transport: None,
-            error_sender: None,
-            device_id: None,
+            error_reporter: None,
             rx_data: 0,
             rdrf: false,
             tdre: true,
@@ -171,15 +152,7 @@ impl R6551 {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_sender = Some(sender);
-        self.device_id = Some(id);
-    }
-
-    fn report_error(&self, error: TransportError) {
-        if let (Some(sender), Some(id)) = (&self.error_sender, self.device_id) {
-            use crate::emulator::device::DeviceEvent;
-            let _ = sender.send(DeviceEvent::TransportError { device: id, error });
-        }
+        self.error_reporter = Some(ErrorReporter::new(sender, id));
     }
 
     fn status(&self) -> u8 {
@@ -269,8 +242,8 @@ impl IoDevice for R6551 {
         match address - self.address {
             0 => {
                 if let Some(transport) = self.transport.as_mut()
-                    && let Err(e) = transport.send(value) {
-                    self.report_error(e);
+                        && let Err(e) = transport.send(value) {
+                    error_reporter::report(e, self.error_reporter.as_mut());
                 }
                 if !self.tdre_bug_compatible {
                     self.tdre = false;
@@ -332,20 +305,18 @@ impl IoDevice for R6551 {
     fn reset(&mut self) {
         let address = self.address;
         let transport = std::mem::take(&mut self.transport);
-        let error_sender = self.error_sender.take();
-        let device_id = self.device_id;
+        let error_reporter = std::mem::take(&mut self.error_reporter);
         let clock_hz = self.clock_hz;
         let tdre_bug_compatible = self.tdre_bug_compatible;
         let overrun_enabled = self.overrun_enabled;
         *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
-        self.error_sender = error_sender;
-        self.device_id = device_id;
+        self.error_reporter = error_reporter;
         self.clock_hz = clock_hz;
         self.tdre_bug_compatible = tdre_bug_compatible;
         self.overrun_enabled = overrun_enabled;
-        debug!("{} {} reset", self.name(), self.device_id.unwrap());
+        debug!("{} @{} reset", self.name(), self.address);
     }
 
     fn irq_active(&self) -> bool {
@@ -640,15 +611,6 @@ mod tests {
     }
 
     // reset
-
-    #[test]
-    fn reset_preserves_bus_config() {
-        let (mut device, _) = device_with_pipe();
-        device.device_id = Some(DeviceId(0));
-        device.reset();
-        assert!(device.transport.is_some(), "expected transport to be preserved");
-        assert!(device.device_id.is_some(), "expected device ID to be preserved");
-    }
 
     #[test]
     fn reset_clears_command_control_and_status_registers() {

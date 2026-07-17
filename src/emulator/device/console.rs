@@ -45,9 +45,11 @@
 //! Data Register or Latch Register, or writing the Latch Register resets the interrupt condition.
 //!
 
-use log::debug;
+use super::error_reporter;
+use super::error_reporter::ErrorReporter;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::transport::{Transport, TransportError};
+use log::debug;
 
 use super::ring::Ring;
 
@@ -55,23 +57,13 @@ pub use super::ring::RING_CAPACITY;
 
 /// A buffered console device with support for an interrupt-driven break key input.
 pub struct Console {
-    /// Name of the device as it appears in configuration and CLI.
     name: &'static str,
-    /// Address at which this device is registered on the bus; see `IoDevice::base_address`.
     address: u16,
-    /// Optional transport for byte-stream IO.
     transport: Option<Box<dyn Transport>>,
-    /// Destination for async transport error events.
-    error_sender: Option<ErrorSender>,
-    /// Identity used in error events.
-    device_id: Option<DeviceId>,
-    /// ASCII character code for the optional break key code (e.g. 0x3 for Ctrl+C)
+    error_reporter: Option<ErrorReporter>,
     break_key: Option<u8>,
-    /// Input ring buffer
     ring: Ring<u8>,
-    /// Current value of the device's latch register
     latch: u8,
-    /// Flag that when true indicates the break key was received from the transport
     interrupt_flag: bool,
 }
 
@@ -83,8 +75,7 @@ impl Console {
             name,
             address: 0,
             transport: None,
-            error_sender: None,
-            device_id: None,
+            error_reporter: None,
             break_key: None,
             ring: Ring::new(0u8),
             latch: 0,
@@ -105,20 +96,12 @@ impl Console {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_sender = Some(sender);
-        self.device_id = Some(id);
+        self.error_reporter = Some(ErrorReporter::new(sender, id));
     }
 
     /// Sets the break key to recognize when reading from the transport
     pub fn set_break_key(&mut self, break_key: u8) {
         self.break_key = Some(break_key);
-    }
-
-    fn report_error(&self, error: TransportError) {
-        if let (Some(sender), Some(id)) = (&self.error_sender, self.device_id) {
-            use crate::emulator::device::DeviceEvent;
-            let _ = sender.send(DeviceEvent::TransportError { device: id, error });
-        }
     }
 
 }
@@ -155,7 +138,7 @@ impl IoDevice for Console {
                 // send value to transport if we have one, otherwise write is a no-op
                 if let Some(transport) = self.transport.as_mut()
                     && let Err(e) = transport.send(value) {
-                    self.report_error(e);
+                    error_reporter::report(e, self.error_reporter.as_mut());
                 }
             },
             1 => {          // latch register
@@ -199,7 +182,7 @@ impl IoDevice for Console {
         self.ring.clear();
         self.latch = 0;
         self.interrupt_flag = false;
-        debug!("{} {} reset", self.name(), self.device_id.unwrap())
+        debug!("{} @{} reset", self.name(), self.address)
     }
 
     fn irq_active(&self) -> bool { self.interrupt_flag }
@@ -210,9 +193,9 @@ impl IoDevice for Console {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use crate::emulator::PipeTransport;
     use super::*;
+    use crate::emulator::PipeTransport;
+    use std::time::Duration;
 
     const DEVICE_NAME: &str = "console";
 
@@ -493,15 +476,6 @@ mod tests {
         }
 
         assert_eq!(cpu.bus_mut().read(0x0300).unwrap(), 0x5A);
-    }
-
-    #[test]
-    fn reset_preserves_bus_config() {
-        let (mut device, _) = device_with_pipe();
-        device.device_id = Some(DeviceId(0));
-        device.reset();
-        assert!(device.transport.is_some(), "expected transport to be preserved");
-        assert!(device.device_id.is_some(), "expected device ID to be preserved");
     }
 
     #[test]

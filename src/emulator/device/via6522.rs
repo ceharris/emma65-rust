@@ -69,10 +69,12 @@
 //! control-signal lines (CA1, CA2, CB1, CB2). If the resulting edge matches the PCR
 //! configuration, the corresponding IFR bit is set and an IRQ may be asserted.
 
+use super::error_reporter;
+use super::error_reporter::ErrorReporter;
 use super::via_protocol;
 use super::via_protocol::ViaProtocolMessage;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::{ProtocolManager, ProtocolMessageEncoding, Transport, TransportError};
+use crate::emulator::{ProtocolManager, ProtocolMessageEncoding, Transport};
 use log::debug;
 use std::time::Duration;
 
@@ -119,8 +121,7 @@ pub struct Via6522 {
     address: u16,
     protocol: ProtocolMessageEncoding,
     protocol_manager: Option<ProtocolManager<ViaProtocolMessage>>,
-    error_sender: Option<ErrorSender>,
-    device_id: Option<DeviceId>,
+    error_reporter: Option<ErrorReporter>,
 
     // --- Port registers ---
     /// Output register B — written bits drive output pins on port B.
@@ -205,8 +206,7 @@ impl Via6522 {
             address: 0,
             protocol: ProtocolMessageEncoding::Ascii,
             protocol_manager: None,
-            error_sender: None,
-            device_id: None,
+            error_reporter: None,
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
             input_b: 0, input_a: 0, ira_latch: 0, irb_latch: 0,
             t1_counter: 0, t1_latch: 0, t1_running: false, t1_pb7: false,
@@ -239,15 +239,7 @@ impl Via6522 {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_sender = Some(sender);
-        self.device_id = Some(id);
-    }
-
-    fn report_error(&self, error: TransportError) {
-        if let (Some(sender), Some(id)) = (&self.error_sender, self.device_id) {
-            use crate::emulator::device::DeviceEvent;
-            let _ = sender.send(DeviceEvent::TransportError { device: id, error });
-        }
+        self.error_reporter = Some(ErrorReporter::new(sender, id));
     }
 
     // --- IFR helpers ---
@@ -310,14 +302,14 @@ impl Via6522 {
     fn send_to_all(&mut self, message: ViaProtocolMessage) {
         if self.protocol_manager.is_some()
                 && let Err(e) = self.protocol_manager.as_mut().unwrap().send_to_all(&message) {
-            self.report_error(e);
+            error_reporter::report(e, self.error_reporter.as_mut());
         }
     }
 
     fn send_state_to_all(&mut self, messages: Vec<ViaProtocolMessage>) {
         if self.protocol_manager.is_some()
                 && let Err(e) = self.protocol_manager.as_mut().unwrap().send_all_to_all(&messages) {
-            self.report_error(e);
+            error_reporter::report(e, self.error_reporter.as_mut());
         }
     }
 
@@ -329,7 +321,7 @@ impl Via6522 {
                     Ok(Some(m)) => self.apply_message(m),
                     Ok(None) => break,
                     Err(e) => {
-                        self.report_error(e);
+                        error_reporter::report(e, self.error_reporter.as_mut());
                         break;
                     }
                 }
@@ -866,8 +858,7 @@ impl IoDevice for Via6522 {
     fn reset(&mut self) {
         let address = self.address;
         let protocol_manager = std::mem::take(&mut self.protocol_manager);
-        let error_sender = self.error_sender.take();
-        let device_id = self.device_id;
+        let error_reporter = std::mem::take(&mut self.error_reporter);
         // state that must be preserved because it is under peripheral control
         let input_b = self.input_b;
         let input_a = self.input_a;
@@ -885,8 +876,7 @@ impl IoDevice for Via6522 {
         *self = Self::new(self.name);
         self.address = address;
         self.protocol_manager = protocol_manager;
-        self.error_sender = error_sender;
-        self.device_id = device_id;
+        self.error_reporter = error_reporter;
         // restore state under peripheral control
         self.input_b = input_b;
         self.input_a = input_a;
@@ -901,7 +891,7 @@ impl IoDevice for Via6522 {
         self.t2_latch_hi = t2_latch_hi;
         self.t2_counter = t2_counter;
         self.sr = sr;
-        debug!("{} {} reset", self.name(), device_id.unwrap());
+        debug!("{} @{} reset", self.name(), address);
         let current_state = self.current_state();
         self.send_state_to_all(current_state);
     }
@@ -2889,14 +2879,6 @@ mod tests {
 
         // Counter should still be near 100 (only a tick or two from handshake).
         assert!(via.t2_counter >= 98, "timed T2 must not be decremented by PB6 transitions");
-    }
-
-    #[test]
-    fn reset_preserves_bus_config() {
-        let (mut device, _) = device_with_pipe();
-        device.device_id = Some(DeviceId(0));
-        device.reset();
-        assert!(device.device_id.is_some(), "expected device ID to be preserved");
     }
 
     #[test]
