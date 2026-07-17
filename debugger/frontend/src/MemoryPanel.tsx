@@ -73,15 +73,21 @@ export default function MemoryPanel() {
     [fetchPage],
   );
 
-  // Initial load and refresh on each halt.
+  // Initial load and refresh on each halt or running tick.
   useEffect(() => {
     fetchPage(0x0000).then(() => setReady(true));
 
     const unlistenHalted = listen("debugger-halted", () => {
       fetchPage(pageAddrRef.current);
     });
+    const unlistenTick = listen("debugger-running-tick", () => {
+      fetchPage(pageAddrRef.current);
+    });
 
-    return () => { unlistenHalted.then((f) => f()); };
+    return () => {
+      unlistenHalted.then((f) => f());
+      unlistenTick.then((f) => f());
+    };
   }, [fetchPage]);
 
   /** Navigate on Enter in the address input. */

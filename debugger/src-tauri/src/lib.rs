@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use figment::{Figment, providers::{Format, Toml, Env}};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -98,6 +99,11 @@ fn breakpoint_list(bps: &BTreeMap<u16, bool>) -> Vec<BreakpointInfo> {
 /// Set when `run_cpu` starts; cleared when the run completes. Commands that
 /// need CPU state while running read from this instead of `CpuState`.
 pub struct LiveSnapshotRx(pub Mutex<Option<tokio::sync::watch::Receiver<Option<CpuLiveSnapshot>>>>);
+
+/// Paragraph-aligned address of the memory page currently displayed in the
+/// memory panel. Updated by `get_memory` so the live snapshot always captures
+/// the right page during free-run.
+pub struct MemoryViewAddr(pub Arc<AtomicU16>);
 
 /// Cached CPU/bus state (IRQ, NMI, cycle count) for use when the CPU is free-running.
 ///
@@ -667,16 +673,28 @@ fn get_breakpoints(breakpoint_state: State<BreakpointState>) -> Vec<BreakpointIn
 /// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xfff0 for paragraph alignment).
 ///
 /// Reads are performed via `Bus::peek_range` so no device side effects occur.
+/// While the CPU is free-running, returns the most recently captured snapshot
+/// page from `LiveSnapshotRx` so the memory panel stays live.
 #[tauri::command]
-fn get_memory(addr: u16, cpu_state: State<CpuState>) -> Result<Vec<u8>, String> {
+fn get_memory(
+    addr: u16,
+    cpu_state: State<CpuState>,
+    live_snapshot_rx: State<LiveSnapshotRx>,
+    mem_view_addr: State<MemoryViewAddr>,
+) -> Result<Vec<u8>, String> {
+    mem_view_addr.0.store(addr & 0xfff0, Ordering::Relaxed);
     let guard = cpu_state.0.lock().unwrap();
-    let cpu = guard.as_ref().ok_or("CPU not ready")?;
-    let page_start = addr & 0xfff0;
-    let mut buf = vec![0u8; 256];
-    cpu.bus()
-        .peek_range(page_start, &mut buf)
-        .map_err(|e| e.to_string())?;
-    Ok(buf)
+    if let Some(cpu) = guard.as_ref() {
+        let page_start = addr & 0xfff0;
+        let mut buf = vec![0u8; 256];
+        cpu.bus().peek_range(page_start, &mut buf).map_err(|e| e.to_string())?;
+        return Ok(buf);
+    }
+    let live = live_snapshot_rx.0.lock().unwrap()
+        .as_ref()
+        .and_then(|rx| rx.borrow().clone())
+        .ok_or("CPU not ready")?;
+    Ok(live.memory_page)
 }
 
 /// Returns disassembled instructions starting at `addr`, up to `count` rows.
@@ -734,10 +752,11 @@ fn run_cpu(
     cpu_state: State<CpuState>,
     run_stopper_state: State<RunStopperState>,
     skip_breakpoint_pc: State<SkipBreakpointPc>,
+    mem_view_addr: State<MemoryViewAddr>,
 ) -> Result<(), String> {
     let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
     let skip_pc = skip_breakpoint_pc.0.lock().unwrap().take();
-    let handle = exec_run_from(cpu, skip_pc);
+    let handle = exec_run_from(cpu, skip_pc, Arc::clone(&mem_view_addr.0));
     let stopper = handle.stopper();
     *run_stopper_state.0.lock().unwrap() = Some(stopper);
     *app.state::<LiveSnapshotRx>().0.lock().unwrap() =
@@ -779,6 +798,7 @@ fn step_over(
     cpu_state: State<CpuState>,
     run_stopper_state: State<RunStopperState>,
     skip_breakpoint_pc: State<SkipBreakpointPc>,
+    mem_view_addr: State<MemoryViewAddr>,
 ) -> Result<(), String> {
     // Consume the skip state; exec_step_over handles the skip internally.
     skip_breakpoint_pc.0.lock().unwrap().take();
@@ -791,9 +811,10 @@ fn step_over(
     *app.state::<LiveSnapshotRx>().0.lock().unwrap() = Some(live_rx);
     spawn_running_tick(app.clone());
 
+    let addr_arc = Arc::clone(&mem_view_addr.0);
     std::thread::spawn(move || {
         let mut cpu = cpu;
-        let result = exec_step_over_subroutine(&mut cpu, &stop_rx, Some(&live_tx));
+        let result = exec_step_over_subroutine(&mut cpu, &stop_rx, Some(&live_tx), &addr_arc);
         let pc = cpu.registers().pc;
         let changed = p_before ^ cpu.registers().p.to_byte();
         let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
@@ -814,6 +835,7 @@ fn step_return(
     cpu_state: State<CpuState>,
     run_stopper_state: State<RunStopperState>,
     skip_breakpoint_pc: State<SkipBreakpointPc>,
+    mem_view_addr: State<MemoryViewAddr>,
 ) -> Result<(), String> {
     // Consume the skip state; exec_step_return handles the skip internally.
     skip_breakpoint_pc.0.lock().unwrap().take();
@@ -826,9 +848,10 @@ fn step_return(
     *app.state::<LiveSnapshotRx>().0.lock().unwrap() = Some(live_rx);
     spawn_running_tick(app.clone());
 
+    let addr_arc = Arc::clone(&mem_view_addr.0);
     std::thread::spawn(move || {
         let mut cpu = cpu;
-        let result = exec_step_return(&mut cpu, &stop_rx, Some(&live_tx));
+        let result = exec_step_return(&mut cpu, &stop_rx, Some(&live_tx), &addr_arc);
         let pc = cpu.registers().pc;
         let changed = p_before ^ cpu.registers().p.to_byte();
         let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
@@ -999,6 +1022,7 @@ pub fn run() {
         .manage(SkipBreakpointPc(Mutex::new(None)))
         .manage(BreakpointState(Mutex::new(BTreeMap::new())))
         .manage(LiveSnapshotRx(Mutex::new(None)))
+        .manage(MemoryViewAddr(Arc::new(AtomicU16::new(0))))
         .manage(CpuBusCache(Mutex::new(CpuBusSnapshot {
             irq_active: false,
             nmi_pending: false,
