@@ -45,13 +45,11 @@
 //! Data Register or Latch Register, or writing the Latch Register resets the interrupt condition.
 //!
 
-use super::error_reporter;
-use super::error_reporter::ErrorReporter;
+use super::ring::Ring;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
+use crate::emulator::transport;
 use crate::emulator::transport::{Transport, TransportError};
 use log::debug;
-
-use super::ring::Ring;
 
 pub use super::ring::RING_CAPACITY;
 
@@ -60,7 +58,7 @@ pub struct Console {
     name: &'static str,
     address: u16,
     transport: Option<Box<dyn Transport>>,
-    error_reporter: Option<ErrorReporter>,
+    report_error: Box<dyn Fn(TransportError) + Send>,
     break_key: Option<u8>,
     ring: Ring<u8>,
     latch: u8,
@@ -75,7 +73,7 @@ impl Console {
             name,
             address: 0,
             transport: None,
-            error_reporter: None,
+            report_error: transport::no_op_reporter(),
             break_key: None,
             ring: Ring::new(0u8),
             latch: 0,
@@ -96,7 +94,7 @@ impl Console {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_reporter = Some(ErrorReporter::new(sender, id));
+        self.report_error = transport::reporter(sender, id);
     }
 
     /// Sets the break key to recognize when reading from the transport
@@ -138,7 +136,7 @@ impl IoDevice for Console {
                 // send value to transport if we have one, otherwise write is a no-op
                 if let Some(transport) = self.transport.as_mut()
                     && let Err(e) = transport.send(value) {
-                    error_reporter::report(e, self.error_reporter.as_mut());
+                    (self.report_error)(e);
                 }
             },
             1 => {          // latch register

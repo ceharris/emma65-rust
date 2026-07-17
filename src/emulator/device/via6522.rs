@@ -69,12 +69,10 @@
 //! control-signal lines (CA1, CA2, CB1, CB2). If the resulting edge matches the PCR
 //! configuration, the corresponding IFR bit is set and an IRQ may be asserted.
 
-use super::error_reporter;
-use super::error_reporter::ErrorReporter;
 use super::via_protocol;
 use super::via_protocol::ViaProtocolMessage;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::{ProtocolManager, ProtocolMessageEncoding, Transport};
+use crate::emulator::{transport, ProtocolManager, ProtocolMessageEncoding, Transport, TransportError};
 use log::debug;
 use std::time::Duration;
 
@@ -121,7 +119,7 @@ pub struct Via6522 {
     address: u16,
     protocol: ProtocolMessageEncoding,
     protocol_manager: Option<ProtocolManager<ViaProtocolMessage>>,
-    error_reporter: Option<ErrorReporter>,
+    report_error: Box<dyn Fn(TransportError) + Send>,
 
     // --- Port registers ---
     /// Output register B — written bits drive output pins on port B.
@@ -206,7 +204,7 @@ impl Via6522 {
             address: 0,
             protocol: ProtocolMessageEncoding::Ascii,
             protocol_manager: None,
-            error_reporter: None,
+            report_error: transport::no_op_reporter(),
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
             input_b: 0, input_a: 0, ira_latch: 0, irb_latch: 0,
             t1_counter: 0, t1_latch: 0, t1_running: false, t1_pb7: false,
@@ -239,7 +237,7 @@ impl Via6522 {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_reporter = Some(ErrorReporter::new(sender, id));
+        self.report_error = transport::reporter(sender, id);
     }
 
     // --- IFR helpers ---
@@ -302,14 +300,14 @@ impl Via6522 {
     fn send_to_all(&mut self, message: ViaProtocolMessage) {
         if self.protocol_manager.is_some()
                 && let Err(e) = self.protocol_manager.as_mut().unwrap().send_to_all(&message) {
-            error_reporter::report(e, self.error_reporter.as_mut());
+            (self.report_error)(e);
         }
     }
 
     fn send_state_to_all(&mut self, messages: Vec<ViaProtocolMessage>) {
         if self.protocol_manager.is_some()
                 && let Err(e) = self.protocol_manager.as_mut().unwrap().send_all_to_all(&messages) {
-            error_reporter::report(e, self.error_reporter.as_mut());
+            (self.report_error)(e);
         }
     }
 
@@ -321,7 +319,7 @@ impl Via6522 {
                     Ok(Some(m)) => self.apply_message(m),
                     Ok(None) => break,
                     Err(e) => {
-                        error_reporter::report(e, self.error_reporter.as_mut());
+                        (self.report_error)(e);
                         break;
                     }
                 }
@@ -858,7 +856,7 @@ impl IoDevice for Via6522 {
     fn reset(&mut self) {
         let address = self.address;
         let protocol_manager = std::mem::take(&mut self.protocol_manager);
-        let error_reporter = std::mem::take(&mut self.error_reporter);
+        let report_error = std::mem::replace(&mut self.report_error, transport::no_op_reporter());
         // state that must be preserved because it is under peripheral control
         let input_b = self.input_b;
         let input_a = self.input_a;
@@ -876,7 +874,7 @@ impl IoDevice for Via6522 {
         *self = Self::new(self.name);
         self.address = address;
         self.protocol_manager = protocol_manager;
-        self.error_reporter = error_reporter;
+        self.report_error = report_error;
         // restore state under peripheral control
         self.input_b = input_b;
         self.input_a = input_a;

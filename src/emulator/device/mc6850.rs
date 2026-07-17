@@ -27,9 +27,8 @@
 //! next `tick()` call, reflecting the real hardware's transmit-busy signaling.
 //! RX is polled on every `tick()` call.
 
-use super::error_reporter;
-use super::error_reporter::ErrorReporter;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
+use crate::emulator::transport;
 use crate::emulator::transport::{Transport, TransportError};
 use log::debug;
 
@@ -38,7 +37,7 @@ pub struct Mc6850 {
     name: &'static str,
     address: u16,
     transport: Option<Box<dyn Transport>>,
-    error_reporter: Option<ErrorReporter>,
+    error_reporter: Box<dyn Fn(TransportError) + Send>,
     control: u8,
     rx_data: u8,
     rdrf: bool,
@@ -61,7 +60,7 @@ impl Mc6850 {
             name,
             address: 0,
             transport: None,
-            error_reporter: None,
+            error_reporter: transport::no_op_reporter(),
             control: 0,
             rx_data: 0,
             rdrf: false,
@@ -84,7 +83,7 @@ impl Mc6850 {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_reporter = Some(ErrorReporter::new(sender, id));
+        self.error_reporter = transport::reporter(sender, id);
     }
 
     fn status(&self) -> u8 {
@@ -139,7 +138,7 @@ impl IoDevice for Mc6850 {
             1 => {
                 if let Some(transport) = self.transport.as_mut()
                         && let Err(e) = transport.send(value) {
-                    error_reporter::report(e, self.error_reporter.as_mut());
+                    (self.error_reporter)(e);
                 }
                 self.tdre = false;
                 self.tx_pending = true;
@@ -172,11 +171,11 @@ impl IoDevice for Mc6850 {
     fn reset(&mut self) {
         let address = self.address;
         let transport = std::mem::take(&mut self.transport);
-        let error_reporter = std::mem::take(&mut self.error_reporter);
+        let report_error = std::mem::replace(&mut self.error_reporter, transport::no_op_reporter());
         *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
-        self.error_reporter = error_reporter;
+        self.error_reporter = report_error;
         debug!("{} @{} reset", self.name(), self.address);
     }
 

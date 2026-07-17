@@ -43,9 +43,8 @@
 //! RX is timer-driven: `tick()` polls the transport once per byte period at the configured
 //! baud rate, or on every call when using the external clock (default).
 
-use super::error_reporter;
-use super::error_reporter::ErrorReporter;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
+use crate::emulator::transport;
 use crate::emulator::transport::{Transport, TransportError};
 use log::debug;
 
@@ -54,7 +53,7 @@ pub struct R6551 {
     name: &'static str,
     address: u16,
     transport: Option<Box<dyn Transport>>,
-    error_reporter: Option<ErrorReporter>,
+    report_error: Box<dyn Fn(TransportError) + Send>,
     rx_data: u8,
     rdrf: bool,
     tdre: bool,
@@ -87,7 +86,7 @@ impl R6551 {
             name,
             address: 0,
             transport: None,
-            error_reporter: None,
+            report_error: transport::no_op_reporter(),
             rx_data: 0,
             rdrf: false,
             tdre: true,
@@ -152,7 +151,7 @@ impl R6551 {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_reporter = Some(ErrorReporter::new(sender, id));
+        self.report_error = transport::reporter(sender, id);
     }
 
     fn status(&self) -> u8 {
@@ -243,7 +242,7 @@ impl IoDevice for R6551 {
             0 => {
                 if let Some(transport) = self.transport.as_mut()
                         && let Err(e) = transport.send(value) {
-                    error_reporter::report(e, self.error_reporter.as_mut());
+                    (self.report_error)(e);
                 }
                 if !self.tdre_bug_compatible {
                     self.tdre = false;
@@ -305,14 +304,14 @@ impl IoDevice for R6551 {
     fn reset(&mut self) {
         let address = self.address;
         let transport = std::mem::take(&mut self.transport);
-        let error_reporter = std::mem::take(&mut self.error_reporter);
+        let report_error = std::mem::replace(&mut self.report_error, transport::no_op_reporter());
         let clock_hz = self.clock_hz;
         let tdre_bug_compatible = self.tdre_bug_compatible;
         let overrun_enabled = self.overrun_enabled;
         *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
-        self.error_reporter = error_reporter;
+        self.report_error = report_error;
         self.clock_hz = clock_hz;
         self.tdre_bug_compatible = tdre_bug_compatible;
         self.overrun_enabled = overrun_enabled;

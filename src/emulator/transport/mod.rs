@@ -12,7 +12,9 @@ pub use self::unix_socket::UnixSocketTransport;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use crate::emulator::{DeviceEvent, DeviceId, ErrorSender};
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use std::sync::Mutex;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, oneshot, watch};
@@ -38,6 +40,16 @@ pub enum TransportError {
     Full,
 }
 
+pub(crate) fn no_op_reporter() -> Box<impl Fn(TransportError) + Send> {
+    Box::new(|_error| {})
+}
+
+pub(crate) fn reporter(sender: ErrorSender, id: DeviceId) -> Box<impl Fn(TransportError) + Send> {
+    Box::new(move |error| {
+        let _ = sender.send(DeviceEvent::TransportError { device: id, error });
+    })
+}
+
 /// An event yielded by [`Transport::try_recv_tagged`] for transports that
 /// support multiple concurrent connections.
 ///
@@ -57,7 +69,6 @@ pub enum TransportEvent {
     /// by a new `Connected` event.
     Disconnected(u8),
 }
-use std::sync::Mutex;
 
 /// Allocates small tags used to identify live connections, guaranteeing no
 /// two *live* connections ever share a tag. Freed tags become available for

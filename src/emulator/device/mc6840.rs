@@ -59,11 +59,9 @@
 //! positive-edge transitions for any of the three clock input and three gate input signals.
 //!
 
-use super::error_reporter;
-use super::error_reporter::ErrorReporter;
 use super::ptm_protocol;
 use super::ptm_protocol::PtmProtocolMessage;
-use crate::emulator::{DeviceId, ErrorSender, IoDevice, ProtocolManager, ProtocolMessageEncoding, Transport};
+use crate::emulator::{transport, DeviceId, ErrorSender, IoDevice, ProtocolManager, ProtocolMessageEncoding, Transport, TransportError};
 use log::debug;
 
 const T1: usize = 0;
@@ -408,7 +406,7 @@ pub struct Mc6840 {
     address: u16,
     protocol: ProtocolMessageEncoding,
     protocol_manager: Option<ProtocolManager<PtmProtocolMessage>>,
-    error_reporter: Option<ErrorReporter>,
+    report_error: Box<dyn Fn(TransportError) + Send>,
 
     latched_status: u8,
     lsb_buffer: u8,
@@ -426,7 +424,7 @@ impl Mc6840 {
             address: 0,
             protocol: ProtocolMessageEncoding::Ascii,
             protocol_manager: None,
-            error_reporter: None,
+            report_error: Box::new(transport::no_op_reporter()),
             latched_status: 0,
             lsb_buffer: 0,
             msb_buffer: 0,
@@ -461,7 +459,7 @@ impl Mc6840 {
 
     /// Sets the error sender for async transport event reporting.
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_reporter = Some(ErrorReporter::new(sender, id));
+        self.report_error = transport::reporter(sender, id);
     }
 
     fn current_state(&self) -> Vec<PtmProtocolMessage> {
@@ -496,7 +494,7 @@ impl Mc6840 {
                     Ok(Some(m)) => self.apply_message(m),
                     Ok(None) => break,
                     Err(e) => {
-                        error_reporter::report(e, self.error_reporter.as_mut());
+                        (self.report_error)(e);
                         break;
                     }
                 }
@@ -507,7 +505,7 @@ impl Mc6840 {
     fn send_state_to_all(&mut self, messages: Vec<PtmProtocolMessage>) {
         if self.protocol_manager.is_some()
                 && let Err(e) = self.protocol_manager.as_mut().unwrap().send_all_to_all(&messages) {
-            error_reporter::report(e, self.error_reporter.as_mut());
+            (self.report_error)(e);
         }
     }
 
@@ -651,11 +649,11 @@ impl IoDevice for Mc6840 {
     fn reset(&mut self) {
         let address = self.address;
         let protocol_manager = std::mem::take(&mut self.protocol_manager);
-        let error_reporter = std::mem::take(&mut self.error_reporter);
+        let report_error = std::mem::replace(&mut self.report_error, transport::no_op_reporter());
         *self = Self::new(self.name);
         self.address = address;
         self.protocol_manager = protocol_manager;
-        self.error_reporter = error_reporter;
+        self.report_error = report_error;
         debug!("{} @{:04x} reset", self.name(), self.address);
         self.internal_reset();
         self.send_state_to_all(self.current_state());
