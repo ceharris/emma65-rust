@@ -9,7 +9,6 @@ pub mod via_protocol;
 mod ring;
 mod ptm_protocol;
 mod protocol_manager;
-mod error_reporter;
 
 pub use self::console::Console;
 pub use self::mc6840::Mc6840;
