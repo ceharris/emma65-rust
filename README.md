@@ -87,10 +87,10 @@ build time.
 
 ```rust
 let bus = Bus::config()
-.ram(AddressRange::new(0x0000, 0x7FFF)) ?
-.rom(AddressRange::new(0xC000, 0xFFFF), rom_data) ?
-.device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(my_device)) ?
-.build();
+    .ram(AddressRange::new(0x0000, 0x7FFF)) ?
+    .rom(AddressRange::new(0xC000, 0xFFFF), rom_data) ?
+    .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(my_device)) ?
+    .build();
 ```
 
 Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
@@ -103,9 +103,30 @@ into any address range on the bus. Each integrates with the interrupt
 controller via `irq_active()`
 and `take_nmi()`, and with the transport system for byte-stream I/O.
 
-#### 6522 VIA (`Via6522`)
+#### Console (`Console`)
 
-A comprehensive implementation of the WDC 65C22 Versatile Interface Adapter:
+A simple polling console device for byte-stream I/O:
+
+- Input buffering via a 64 kilobyte ring buffer
+- Two addressable registers: data input/output (offset 0) and data
+  latch (offset 1)
+- The data latch register latches an incoming byte in a single read, providing
+  a non-blocking one-byte look-ahead and making it easy to write polling loops
+  without separate status and data registers
+- Support for configuring a break key code (e.g. ASCII Ctrl+C) which, when
+  recognized in input from the transport, drains the input buffer, latches
+  the break key code, and asserts the CPU's IRQ signal
+- Reading the data or latch register clears interrupt status. Writing the
+  break key code simulates break key input under program control. Writing any
+  other value to the latch clears interrupt status, drains the input
+  buffer, and stores the value in the latch register for subsequent read
+  (useful for simulating input under program control).
+- Designed as the backend for the debugger's built-in terminal emulator
+
+#### 6522 Versatile Interface Adapter (`Via6522`)
+
+A comprehensive implementation of the WDC 65C22 Versatile Interface 
+Adapter (VIA):
 
 - All 16 addressable registers (offsets `$0`–`$F`)
 - Two independent 8-bit I/O ports (A and B), each with a data direction
@@ -123,16 +144,46 @@ A comprehensive implementation of the WDC 65C22 Versatile Interface Adapter:
 
 The VIA uses a GPIO communication protocol over any attached `Transport` to
 exchange port state and control signal transitions with real or emulated
-peripherals. On connection the VIA performs a format-negotiation handshake and
-sends a full state dump so the peripheral starts with an accurate picture of
-all pins and control lines.
+peripherals. On connection the VIA sends a full state dump so the 
+peripheral starts with an accurate picture of all pins and control lines.
 
-#### Rockwell 6551 ACIA (`R6551`)
+#### MC6840 Programmable Timer Module (`Mc6840`)
+
+A comprehensive implementation of the Motorola MC6840 Programmable Timer 
+Module (PTM).
+
+- Three independent timers supporting continuous or single-shot 
+  generation modes as well as frequency/period or pulse width measurement 
+  modes
+- Flexible transport options allowing virtual peripheral connection via
+  common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket.
+- Support for external gate and clock inputs and timer output
+
+The PTM uses a communication protocol over any attached `Transport` to
+exchange port state and control signal transitions with real or emulated
+peripherals. On connection, the PTM sends a full state dump so the
+peripheral starts with an accurate picture of all pins and control lines.
+
+#### MC6850 Asynchronous Communications Adapter (`Mc6850`)
+
+An comprehensive implementation of the Motorola MC6850 Asynchronous 
+Communications Interface Adapter (ACIA):
+
+- Two addressable registers: status/control and RX/TX data
+- RDRF and TDRE status with IRQ support for both receive and transmit
+- Master reset via control register bits
+- TX is immediate: bytes are forwarded to the transport on write; TDRE is
+  restored on the next CPU tick 
+
+Flexible transport options allowing virtual peripheral connection via
+common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
+
+#### R6551 Asynchronous Communication Adapter (`R6551`)
 
 An implementation of the Rockwell 6551 Asynchronous Communications Interface
-Adapter:
+Adapter (ACIA):
 
-- 4 addressable registers: RX data, TX data, status, and command/control
+- Four addressable registers: RX data, TX data, status, and command/control
 - RDRF (Receive Data Register Full) and TDRE (Transmit Data Register Empty)
   status bits
 - Interrupt-driven I/O with separate RX and TX interrupt enables
@@ -142,36 +193,8 @@ Adapter:
   permanently set, matching the behavior of the WDC 65C51 variant for software
   that uses timed delays rather than TDRE polling
 
-#### MC6850 ACIA (`Mc6850`)
-
-An implementation of the Motorola MC6850 Asynchronous Communications Interface
-Adapter:
-
-- 2 addressable registers: status/control and RX/TX data
-- RDRF and TDRE status with IRQ support for both receive and transmit
-- Master reset via control register bits
-- TX is immediate: bytes are forwarded to the transport on write; TDRE is
-  restored on the next CPU tick
-
-#### Console (`Console`)
-
-A simple polling console device for byte-stream I/O:
-
-- Input buffering via a 128-byte ring buffer
-- Two addressable registers: data input/output (offset 0) and data
-  latch (offset 1)
-- The data latch register latches an incoming byte in a single read, providing
-  a non-blocking one-byte look-ahead and making it easy to write polling loops
-  without separate status and data registers
-- Support for configuring a break key code (e.g. ASCII Ctrl+C) which, when
-  recognized in input from the transport, drains the input buffer, latches
-  the break key code, and asserts the CPU's IRQ signal
-- Reading the data or latch register clears interrupt status. Writing the
-  break key code simulates break key input under program control. Writing any
-  other value to the latch clears interrupt status, drains the input 
-  buffer, and stores the value in the latch register for subsequent read 
-  (useful for simulating input under program control).
-- Designed as the backend for the debugger's built-in terminal emulator
+Flexible transport options allowing virtual peripheral connection via
+common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
 
 ### Transport Options
 
@@ -195,13 +218,14 @@ Custom devices implement the `IoDevice` trait. Only three methods are
 required:
 
 ```rust
-fn read(&mut self, offset: u16) -> u8;
-fn write(&mut self, offset: u16, value: u8);
-fn peek(&self, offset: u16) -> u8;  // Side-effect-free read (watchpoints, disassembler)
+/// Read and return a byte from the specified absolute `address`.
+fn read(&mut self, address: u16) -> u8;
+/// Write a byte to the specified absolute `address`.
+fn write(&mut self, address: u16, value: u8);
+/// Read and return a byte from the specified absolute `address` while
+/// inhibiting side effects; used by the debugger.
+fn peek(&self, address: u16) -> u8;
 ```
-
-The remaining methods — `tick`, `irq_active`, `take_nmi`, and `name` — have
-default no-op implementations and can be added as needed.
 
 ### Watchpoint Expressions
 
@@ -223,21 +247,11 @@ When launched with no arguments, the emulator runs with a built-in
 
 - 32 KB RAM at `0x0000`–`0x7FFF`
 - TaliForth ROM at `0x8000`–`0xFFFF`
-- Console device at `0xFFF8`–`0xFFF9` with a PTY transport symlinked at
-  `~/.emma/dev/ttyS0`
+- Console device at `0xFFF8`–`0xFFF9` with a pipe transport connected
+  to the process input and output
 - WDC 65C02 variant at 1.8432 MHz
 
-Connect any TTY program to the PTY symlink to reach the Forth REPL:
-
-```
-screen ~/.emma/dev/ttyS0
-```
-
-A notice is printed to stderr confirming the default is in use:
-
-```
-notice: using default configuration; connect terminal to ~/.emma/dev/ttyS0
-```
+Interact with the Forth interpreter via standard input and output.
 
 ### TOML configuration file
 
