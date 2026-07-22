@@ -121,22 +121,6 @@ enum Edge {
     Falling,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CompareStatus {
-    Idle,
-    Started,
-    Stopped,
-}
-
-<<<<<<< Updated upstream
-=======
-/// Which transition an edge-triggered `Synchronizer` recognizes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Edge {
-    Rising,
-    Falling,
-}
-
 // Status of a comparison mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CompareStatus {
@@ -145,7 +129,6 @@ enum CompareStatus {
     Stopped,
 }
 
->>>>>>> Stashed changes
 /// Synchronizes an asynchronous input to the E clock through a pipeline,
 /// delaying either a detected falling edge (Clock/Gate) or the raw level
 /// itself (Reset) by `depth` E cycles.
