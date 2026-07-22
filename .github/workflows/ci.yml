@@ -8,10 +8,23 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      debugger: ${{ steps.filter.outputs.debugger }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            debugger:
+              - 'debugger/**'
+
   ci:
     name: Build, Clippy, Test
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v7
 
@@ -28,6 +41,36 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Build
+        run: cargo build -p emma65
+
+      - name: Clippy
+        run: cargo clippy -p emma65 -- -D warnings
+
+      - name: Test
+        run: cargo test -p emma65
+
+  ci-debugger:
+    name: Debugger Build and Clippy
+    needs: changes
+    if: needs.changes.outputs.debugger == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-debugger-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-debugger-
+
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -39,14 +82,8 @@ jobs:
             librsvg2-dev
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build -p emma65-debugger
 
-      - name: Clippy (emma65)
-        run: cargo clippy -p emma65 -- -D warnings
-
-      - name: Clippy (debugger)
+      - name: Clippy
         working-directory: debugger/src-tauri
         run: cargo clippy -- -D warnings
-
-      - name: Test
-        run: cargo test --workspace
