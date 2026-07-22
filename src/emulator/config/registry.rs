@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use figment::value::Value;
-use crate::emulator::{BusConfig, ErrorSender};
-use crate::emulator::transport::Transport;
+use crate::emulator::{BusConfig, DeviceEvent, DeviceId, ErrorSender};
+use crate::emulator::transport::{Transport, TransportError};
 use super::{DeviceModule, DeviceModuleError, RamModule, RomModule, ConsoleModule, R6551Module, Mc6840Module, Mc6850Module, PhoebeModule, Via6522Module};
 
 /// A shareable slot holding an optional transport, suitable for one-time consumption.
@@ -22,6 +22,22 @@ pub struct InstantiationContext {
     /// constructing one from a `TransportSpec`. The transport is taken (consumed)
     /// on first use, leaving `None` in its place.
     pub console_transport: Option<TransportSlot>,
+}
+
+impl InstantiationContext {
+    /// Returns a callback suitable for [`TransportSpec::to_transport_with_reporter`] that
+    /// reports child-process exit as a [`DeviceEvent::TransportError`] for the given device.
+    pub fn pipe_exit_reporter(&self, device_id: DeviceId) -> impl FnOnce(std::io::Error) + Send + 'static {
+        let sender = self.error_sender.clone();
+        move |e: std::io::Error| {
+            if let Some(sender) = sender {
+                let _ = sender.send(DeviceEvent::TransportError {
+                    device: device_id,
+                    error: TransportError::Io(e),
+                });
+            }
+        }
+    }
 }
 
 type InstantiateFn = Box<

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use crate::config::{AppConfig, apply_default_if_unconfigured};
-use emma65::emulator::{DeviceEvent, InstantiationContext, PipeTransport, StepResult, Transport};
+use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, StepResult, Transport};
 
 const DEFAULT_ROM: &[u8] = include_bytes!("default.bin");
 
@@ -22,7 +22,7 @@ async fn main() -> ExitCode {
     // The default (no-config) layout has no `transport=` attribute on its console device;
     // attach it directly to this process's stdin/stdout instead.
     let session = if default_rom_file.is_some() {
-        let transport = PipeTransport::stdio().unwrap_or_else(|e| {
+        let transport = InternalPipeTransport::stdio().unwrap_or_else(|e| {
             eprintln!("error: failed to attach console to stdin/stdout: {e}");
             std::process::exit(1);
         });

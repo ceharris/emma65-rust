@@ -192,7 +192,7 @@ impl IoDevice for Mc6850 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::transport::PipeTransport;
+    use crate::emulator::transport::InternalPipeTransport;
     use std::time::Duration;
 
     const DEVICE_NAME: &str = "mc6850";
@@ -201,8 +201,8 @@ mod tests {
         Mc6850::new(DEVICE_NAME)    
     }
     
-    fn device_with_pipe() -> (Mc6850, PipeTransport) {
-        let (local, remote) = PipeTransport::pair().unwrap();
+    fn device_with_pipe() -> (Mc6850, InternalPipeTransport) {
+        let (local, remote) = InternalPipeTransport::pair().unwrap();
         let mut device = device();
         device.attach_transport(Box::new(local));
         (device, remote)

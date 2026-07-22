@@ -1,4 +1,4 @@
-use emma65::emulator::{AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InvalidOpcodePolicy, Mnemonic, PipeTransport, StepResult, Transport};
+use emma65::emulator::{AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InvalidOpcodePolicy, Mnemonic, InternalPipeTransport, StepResult, Transport};
 use emma65::emulator::device::{R6551, Console, Mc6850, Via6522};
 
 const MAX_STEPS: u32 = 10_000;
@@ -117,7 +117,7 @@ fn page_crossing_adds_cycle() {
 /// echoes it back, verifying end-to-end transport I/O.
 #[test]
 fn console_full_system_echo() {
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut console = Console::new("console").with_address(0xDF00);
     console.attach_transport(Box::new(local));
 
@@ -170,7 +170,7 @@ fn console_full_system_echo() {
 /// CPU writes a byte to R6551 TX register; byte appears on the remote transport.
 #[test]
 fn _transmit() {
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut acia = R6551::new("").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
@@ -207,7 +207,7 @@ fn _transmit() {
 /// Remote sends a byte; CPU polls R6551 RDRF status and reads the received byte.
 #[test]
 fn _receive() {
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut acia = R6551::new("").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
@@ -267,7 +267,7 @@ fn _receive() {
 fn mc6850_transmit_and_receive() {
     // --- TX ---
     {
-        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
         mc.attach_transport(Box::new(local));
 
@@ -312,7 +312,7 @@ fn mc6850_transmit_and_receive() {
 
     // --- RX ---
     {
-        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
         mc.attach_transport(Box::new(local));
 
@@ -374,7 +374,7 @@ fn mc6850_transmit_and_receive() {
 /// ISR: LDA $DF00 (clears RDRF, deasserts IRQ); STA $0300; RTI.
 #[test]
 fn _irq_driven_receive() {
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut acia = R6551::new("").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
@@ -447,7 +447,7 @@ fn _irq_driven_receive() {
 /// Main program spins on a zero-page counter until all bytes are sent, then STPs.
 #[test]
 fn _irq_driven_transmit() {
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut acia = R6551::new("").with_address(0xDF00);
     acia.attach_transport(Box::new(local));
 
@@ -544,7 +544,7 @@ fn _irq_driven_transmit() {
 /// ISR: LDA $DF01 (clears RDRF, deasserts IRQ); STA $0300; RTI.
 #[test]
 fn mc6850_irq_driven_receive() {
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
     mc.attach_transport(Box::new(local));
 
@@ -617,7 +617,7 @@ fn mc6850_irq_driven_receive() {
 /// Main program spins on a zero-page counter until all bytes are sent, then STPs.
 #[test]
 fn mc6850_irq_driven_transmit() {
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
     mc.attach_transport(Box::new(local));
 
