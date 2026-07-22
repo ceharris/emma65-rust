@@ -1,5 +1,8 @@
 # emma65
 
+[![CI](https://github.com/ceharris/emma65-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/ceharris/emma65-rust/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Emma65 is a software emulator for the 65C02-family of 8-bit microprocessors.
 It provides a complete execution environment suitable for running and
 debugging programs written for classic 65C02-based systems, with support for
