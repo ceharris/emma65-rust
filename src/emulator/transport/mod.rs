@@ -1,9 +1,11 @@
 //! Transport abstraction and implementations for device IO.
+pub mod internal_pipe;
 pub mod pipe;
 pub mod tcp_socket;
 pub mod unix_socket;
 pub mod pty;
 
+pub use self::internal_pipe::InternalPipeTransport;
 pub use self::pipe::PipeTransport;
 pub use self::pty::PtyTransport;
 pub use self::tcp_socket::TcpSocketTransport;

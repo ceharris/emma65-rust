@@ -1,91 +1,77 @@
-//! Bidirectional transport over a pair of OS pipes with non-blocking IO.
+//! Transport that connects a device to the stdin/stdout of a child process.
 //!
-//! Holds two pipes: one for inbound bytes (remote writes, we read) and one for
-//! outbound bytes (we write, remote reads). Both ends are set nonblocking so
-//! `try_recv` and `send` never block the CPU thread.
+//! Spawns a command and bridges the device's byte stream to the child's stdin
+//! (device → child) and the child's stdout (child → device). The child's
+//! stderr is inherited from the emulator process. When the child exits for any
+//! reason, the supplied `on_exit` callback is called with a describing
+//! [`io::Error`] so the event can be surfaced as an emulator-level error.
 
-use std::fs::File;
-use std::io::{self, Read, Write};
-use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
+use std::io;
+use std::process::Stdio;
 
-use super::{Transport, TransportError, TransportEvent};
+use crossbeam_channel::{Receiver, Sender};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
+use tokio::sync::oneshot;
 
-/// Bidirectional transport over a pair of OS pipes with non-blocking IO.
+use super::{ChannelBridge, Transport, TransportError, TransportEvent};
+
+/// Transport that connects a device to the stdin/stdout of a child process.
+///
+/// Created via [`PipeTransport::spawn`]. The child's stderr is inherited from
+/// the emulator process. Any exit of the child process — normal or otherwise —
+/// triggers the `on_exit` callback supplied at construction.
+///
+/// `Connected(0)` and `Disconnected(0)` events are emitted by the background
+/// task and flow through the bridge unchanged; `is_connected` tracks the latest
+/// state seen via `try_recv_tagged` or `try_recv`.
 pub struct PipeTransport {
-    rx: File,
-    tx: File,
+    bridge: ChannelBridge<TransportEvent>,
     connected: bool,
-    // Set on construction; consumed (once) by the first `try_recv_tagged` call.
-    connect_event_pending: bool,
-    // Set when `connected` transitions true -> false; consumed (once) by
-    // `try_recv_tagged` after all buffered data has been drained.
-    disconnect_event_pending: bool,
 }
 
 impl PipeTransport {
-    /// # Safety
-    /// The caller must ensure the file descriptors are valid and exclusively owned.
-    pub unsafe fn from_raw_fds(rx_fd: RawFd, tx_fd: RawFd) -> io::Result<Self> {
-        let (rx, tx) = unsafe {
-            let rx_owned = OwnedFd::from_raw_fd(rx_fd);
-            let tx_owned = OwnedFd::from_raw_fd(tx_fd);
-            (File::from(rx_owned), File::from(tx_owned))
-        };
-        set_nonblocking(&rx)?;
-        set_nonblocking(&tx)?;
-        Ok(Self { rx, tx, connected: true, connect_event_pending: true, disconnect_event_pending: false })
-    }
-
-    pub fn stdio() -> io::Result<Self> {
-        let rx_fd = dup_fd(0)?;
-        let tx_fd = dup_fd(1)?;
-        // SAFETY: dup_fd returns a fresh, exclusively owned descriptor each call.
-        unsafe { Self::from_raw_fds(rx_fd, tx_fd) }
-    }
-
-    pub fn into_split(self) -> (File, File) {
-        (self.rx, self.tx)
-    }
-
-    pub fn pair() -> io::Result<(Self, Self)> {
-        let (a_rx, a_tx) = os_pipe()?;
-        let (b_rx, b_tx) = os_pipe()?;
-        let local = Self { rx: a_rx, tx: b_tx, connected: true, connect_event_pending: true, disconnect_event_pending: false };
-        let remote = Self { rx: b_rx, tx: a_tx, connected: true, connect_event_pending: true, disconnect_event_pending: false };
-        set_nonblocking(&local.rx)?;
-        set_nonblocking(&local.tx)?;
-        set_nonblocking(&remote.rx)?;
-        set_nonblocking(&remote.tx)?;
-        Ok((local, remote))
-    }
-
-    /// Marks this transport disconnected, queuing a `Disconnected` event to
-    /// be delivered on the next `try_recv_tagged` call — unless it's already
-    /// disconnected, in which case there's nothing new to report.
-    fn mark_disconnected(&mut self) {
-        if self.connected {
-            self.connected = false;
-            self.disconnect_event_pending = true;
+    /// Spawns `command[0]` with `command[1..]` as arguments, connecting its
+    /// stdin/stdout to this transport. `on_exit` is called exactly once when
+    /// the child process exits or its IO fails.
+    pub async fn spawn<F>(command: &[String], on_exit: F) -> io::Result<Self>
+    where
+        F: FnOnce(io::Error) + Send + 'static,
+    {
+        if command.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "command must not be empty"));
         }
+        let mut child = Command::new(&command[0])
+            .args(&command[1..])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+
+        let stdin = child.stdin.take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdin unavailable"))?;
+        let stdout = child.stdout.take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdout unavailable"))?;
+
+        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
+
+        tokio::spawn(run_pipe_task(stdin, stdout, child, in_tx, out_rx, shutdown_rx, on_exit));
+
+        Ok(Self { bridge, connected: true })
     }
+
 }
 
 impl Transport for PipeTransport {
     fn try_recv(&mut self) -> Option<u8> {
-        if !self.connected {
-            return None;
-        }
-        let mut buf = [0u8; 1];
-        match self.rx.read(&mut buf) {
-            Ok(1) => Some(buf[0]),
-            Ok(_) => {
-                self.mark_disconnected();
-                None
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => None,
-            Err(_) => {
-                self.mark_disconnected();
-                None
+        loop {
+            match self.bridge.try_recv()? {
+                TransportEvent::Data(_, byte) => return Some(byte),
+                TransportEvent::Disconnected(_) => {
+                    self.connected = false;
+                    return None;
+                }
+                TransportEvent::Connected(_) => continue,
             }
         }
     }
@@ -94,18 +80,7 @@ impl Transport for PipeTransport {
         if !self.connected {
             return Err(TransportError::Disconnected);
         }
-        match self.tx.write_all(&[byte]) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(TransportError::Full),
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
-                self.mark_disconnected();
-                Err(TransportError::Disconnected)
-            }
-            Err(e) => {
-                self.mark_disconnected();
-                Err(TransportError::Io(e))
-            }
-        }
+        self.bridge.send(byte)
     }
 
     fn is_connected(&self) -> bool {
@@ -113,110 +88,147 @@ impl Transport for PipeTransport {
     }
 
     fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
-        if self.connect_event_pending {
-            self.connect_event_pending = false;
-            return Some(TransportEvent::Connected(0));
+        let event = self.bridge.try_recv()?;
+        if matches!(event, TransportEvent::Disconnected(_)) {
+            self.connected = false;
         }
-        if let Some(byte) = self.try_recv() {
-            return Some(TransportEvent::Data(0, byte));
-        }
-        if self.disconnect_event_pending {
-            self.disconnect_event_pending = false;
-            return Some(TransportEvent::Disconnected(0));
-        }
-        None
+        Some(event)
     }
 
     fn shutdown(&mut self) {
-        self.mark_disconnected();
+        self.bridge.shutdown();
+        self.connected = false;
     }
 }
 
-fn os_pipe() -> io::Result<(File, File)> {
-    use std::os::unix::io::FromRawFd;
-    let mut fds = [0i32; 2];
-    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
-    if rc != 0 {
-        return Err(io::Error::last_os_error());
+/// Tokio task: bridges child process stdin/stdout to the sync `ChannelBridge`.
+///
+/// Sends `Connected(0)` immediately, then relays bytes between the child and
+/// the bridge. On any exit — IO error, child process termination, or shutdown
+/// signal — calls `on_exit` with a describing error and sends `Disconnected(0)`.
+async fn run_pipe_task<F>(
+    mut stdin: tokio::process::ChildStdin,
+    mut stdout: tokio::process::ChildStdout,
+    mut child: tokio::process::Child,
+    in_tx: Sender<TransportEvent>,
+    out_rx: Receiver<u8>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+    on_exit: F,
+) where
+    F: FnOnce(io::Error) + Send + 'static,
+{
+    if in_tx.send(TransportEvent::Connected(0)).is_err() {
+        return;
     }
-    let read_end = unsafe { File::from_raw_fd(fds[0]) };
-    let write_end = unsafe { File::from_raw_fd(fds[1]) };
-    Ok((read_end, write_end))
-}
 
-fn dup_fd(fd: RawFd) -> io::Result<RawFd> {
-    let rc = unsafe { libc::dup(fd) };
-    if rc < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(rc)
-}
+    let exit_error = loop {
+        let mut buf = [0u8; 1];
+        tokio::select! {
+            _ = &mut shutdown_rx => {
+                break io::Error::new(io::ErrorKind::Interrupted, "transport shut down");
+            }
 
-fn set_nonblocking(file: &File) -> io::Result<()> {
-    use std::os::unix::io::AsRawFd;
-    unsafe {
-        let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
-        if flags < 0 {
-            return Err(io::Error::last_os_error());
+            result = stdout.read(&mut buf) => match result {
+                Ok(1) => {
+                    if in_tx.send(TransportEvent::Data(0, buf[0])).is_err() {
+                        break io::Error::new(io::ErrorKind::BrokenPipe, "device channel closed");
+                    }
+                }
+                Ok(_) => {
+                    // stdout closed; wait for the process to fully exit
+                    let status = child.wait().await;
+                    break match status {
+                        Ok(s) if s.success() => {
+                            io::Error::new(io::ErrorKind::UnexpectedEof, "child process exited")
+                        }
+                        Ok(s) => {
+                            io::Error::other(format!("child process exited with {s}"))
+                        }
+                        Err(e) => e,
+                    };
+                }
+                Err(e) => break e,
+            },
+
+            _ = drain_outbound(&mut stdin, &out_rx) => {}
         }
-        let rc = libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
-        if rc < 0 {
-            return Err(io::Error::last_os_error());
+    };
+
+    on_exit(exit_error);
+    let _ = in_tx.send(TransportEvent::Disconnected(0));
+}
+
+async fn drain_outbound(stdin: &mut tokio::process::ChildStdin, out_rx: &Receiver<u8>) {
+    while let Ok(byte) = out_rx.try_recv() {
+        if stdin.write_all(&[byte]).await.is_err() {
+            return;
         }
     }
-    Ok(())
+    tokio::task::yield_now().await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn send_recv_round_trip() {
-        let (mut local, mut remote) = PipeTransport::pair().unwrap();
-        local.send(0x42).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        assert_eq!(remote.try_recv(), Some(0x42));
+    #[tokio::test]
+    async fn spawn_cat_and_echo_byte() {
+        let received_exit = Arc::new(Mutex::new(None::<String>));
+        let received_exit_clone = Arc::clone(&received_exit);
+
+        let mut transport = PipeTransport::spawn(
+            &["cat".to_string()],
+            move |e| *received_exit_clone.lock().unwrap() = Some(e.to_string()),
+        ).await.unwrap();
+
+        // Allow the Tokio task to send the Connected event
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+        transport.send(0x42).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert_eq!(transport.try_recv(), Some(0x42));
     }
 
-    #[test]
-    fn try_recv_returns_none_when_empty() {
-        let (_, mut remote) = PipeTransport::pair().unwrap();
-        assert_eq!(remote.try_recv(), None);
+    #[tokio::test]
+    async fn try_recv_tagged_emits_connected_before_data() {
+        let mut transport = PipeTransport::spawn(
+            &["cat".to_string()],
+            |_| {},
+        ).await.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Connected(0)));
+
+        transport.send(0x7A).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Data(0, 0x7A)));
     }
 
-    #[test]
-    fn is_connected_initially_true() {
-        let (local, _remote) = PipeTransport::pair().unwrap();
-        assert!(local.is_connected());
+    #[tokio::test]
+    async fn exit_calls_on_exit_callback() {
+        let received_exit = Arc::new(Mutex::new(false));
+        let received_exit_clone = Arc::clone(&received_exit);
+
+        // `true` exits immediately with status 0
+        let _transport = PipeTransport::spawn(
+            &["true".to_string()],
+            move |_| *received_exit_clone.lock().unwrap() = true,
+        ).await.unwrap();
+
+        // Give the task time to detect child exit and call on_exit
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(*received_exit.lock().unwrap(), "on_exit should have been called");
     }
 
-    #[test]
-    fn shutdown_marks_disconnected() {
-        let (mut local, _remote) = PipeTransport::pair().unwrap();
-        local.shutdown();
-        assert!(!local.is_connected());
-    }
+    #[tokio::test]
+    async fn shutdown_marks_disconnected() {
+        let mut transport = PipeTransport::spawn(
+            &["cat".to_string()],
+            |_| {},
+        ).await.unwrap();
 
-    #[test]
-    fn try_recv_tagged_emits_connected_before_data() {
-        let (mut local, mut remote) = PipeTransport::pair().unwrap();
-
-        assert_eq!(local.try_recv_tagged(), Some(TransportEvent::Connected(0)));
-
-        remote.send(0x7A).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        assert_eq!(local.try_recv_tagged(), Some(TransportEvent::Data(0, 0x7A)));
-        assert_eq!(local.try_recv_tagged(), None);
-    }
-
-    #[test]
-    fn try_recv_tagged_emits_disconnected_once() {
-        let (mut local, _remote) = PipeTransport::pair().unwrap();
-        let _ = local.try_recv_tagged(); // consume Connected
-        local.shutdown();
-
-        assert_eq!(local.try_recv_tagged(), Some(TransportEvent::Disconnected(0)));
-        assert_eq!(local.try_recv_tagged(), None);
+        transport.shutdown();
+        assert!(!transport.is_connected());
     }
 }

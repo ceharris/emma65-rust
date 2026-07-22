@@ -192,7 +192,7 @@ impl IoDevice for Console {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::PipeTransport;
+    use crate::emulator::InternalPipeTransport;
     use std::time::Duration;
 
     const DEVICE_NAME: &str = "console";
@@ -201,8 +201,8 @@ mod tests {
         Console::new(DEVICE_NAME)
     }
 
-    fn device_with_pipe() -> (Console, PipeTransport) {
-        let (local, remote) = PipeTransport::pair().unwrap();
+    fn device_with_pipe() -> (Console, InternalPipeTransport) {
+        let (local, remote) = InternalPipeTransport::pair().unwrap();
         let mut device = device();
         device.attach_transport(Box::new(local));
         (device, remote)
@@ -366,11 +366,11 @@ mod tests {
     #[test]
     fn integration_cpu_program_writes_appear_on_transport() {
         use crate::emulator::{
-            AddressRange, BusConfig, CpuVariant, DeviceId, PipeTransport,
+            AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };
         use crate::emulator::exec::StepResult;
 
-        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let mut console = device().with_address(0xF000);
         console.attach_transport(Box::new(local));
 
@@ -424,11 +424,11 @@ mod tests {
     #[test]
     fn integration_transport_input_readable_by_cpu() {
         use crate::emulator::{
-            AddressRange, BusConfig, CpuVariant, DeviceId, PipeTransport,
+            AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };
         use crate::emulator::exec::StepResult;
 
-        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let mut console = device().with_address(0xF000);
         console.attach_transport(Box::new(local));
 

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use emma65::emulator::{
     AddressRange, Bus, BusOp, BusTraceCallback, ClockSpeed, CpuBuilder,
-    CpuVariant, DeviceId, InvalidOpcodePolicy, PipeTransport, StepResult, TraceRecord,
+    CpuVariant, DeviceId, InvalidOpcodePolicy, InternalPipeTransport, StepResult, TraceRecord,
     Transport, run,
 };
 
@@ -20,7 +20,7 @@ impl BusTraceCallback for CapturingCallback {
 }
 
 /// Verifies that bytes written by a free-running CPU to a Console device appear on the
-/// remote end of a PipeTransport.
+/// remote end of a InternalPipeTransport.
 ///
 /// The program writes 'A' ($41) and 'B' ($42) to the console output register then loops
 /// forever. The test polls the remote pipe until both bytes arrive, then stops the CPU.
@@ -28,7 +28,7 @@ impl BusTraceCallback for CapturingCallback {
 async fn free_run_console_output() {
     use emma65::emulator::{Bus, Transport};
 
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut console = Console::new("console").with_address(0xF000);
     console.attach_transport(Box::new(local));
 
@@ -214,7 +214,7 @@ fn build_acia_cpu(acia: R6551, prog: &[u8]) -> emma65::emulator::Cpu {
 async fn _external_clock_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut acia = R6551::new(""); // control defaults to 0x00 → external clock
     acia.attach_transport(Box::new(local));
 
@@ -285,7 +285,7 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
     const CLOCK_HZ: u64 = 1_843_200;
     const CYCLES_PER_BYTE: u64 = CLOCK_HZ * 10 / BAUD; // 960
 
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut acia = R6551::new("")
         .with_clock_hz(CLOCK_HZ);
     acia.attach_transport(Box::new(local));
@@ -372,7 +372,7 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
 async fn mc6850_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
-    let (local, mut remote) = PipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
     let mut mc = Mc6850::new("mc6580").with_address(0xDF00);
     mc.attach_transport(Box::new(local));
 

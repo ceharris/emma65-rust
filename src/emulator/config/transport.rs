@@ -4,7 +4,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use super::ExpandedPathBuf;
-use crate::emulator::{PtyTransport, TcpSocketTransport, Transport, TransportError, UnixSocketTransport};
+use crate::emulator::{PipeTransport, PtyTransport, TcpSocketTransport, Transport, TransportError, UnixSocketTransport};
 
 /// A transport configuration spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,11 +13,44 @@ pub enum TransportSpec {
     Tcp { port: u16, address: IpAddr },
     Unix { path: ExpandedPathBuf },
     Pty { path: Option<ExpandedPathBuf> },
+    /// Spawn a child process and bridge the device's byte stream to its stdin/stdout.
+    ///
+    /// `command[0]` is the executable path; `command[1..]` are arguments.
+    /// The child's stderr is inherited from the emulator process.
+    /// Any exit of the child process triggers the error reporter supplied to
+    /// [`TransportSpec::to_transport_with_reporter`].
+    ///
+    /// CLI shorthand: `pipe:/path/to/exe,arg1,arg2`
+    /// TOML: `transport = { pipe = { command = ["/path/to/exe", "arg1"] } }`
+    Pipe { command: Vec<String> },
 }
 
 impl TransportSpec {
     const DEFAULT_BIND_IP_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
+    /// Creates the transport, calling `on_child_exit` if the child process spawned by a
+    /// [`Pipe`](TransportSpec::Pipe) variant exits for any reason. For all other variants
+    /// the callback is never invoked.
+    pub async fn to_transport_with_reporter<F>(
+        &self,
+        on_child_exit: F,
+    ) -> Result<Box<dyn Transport>, TransportError>
+    where
+        F: FnOnce(std::io::Error) + Send + 'static,
+    {
+        match self {
+            TransportSpec::Pipe { command } => {
+                let transport = PipeTransport::spawn(command, on_child_exit).await
+                    .map_err(TransportError::Io)?;
+                Ok(Box::new(transport))
+            }
+            other => other.to_transport().await,
+        }
+    }
+
+    /// Creates the transport. For [`Pipe`](TransportSpec::Pipe) variants, child process
+    /// exit is silently ignored; use [`to_transport_with_reporter`](Self::to_transport_with_reporter)
+    /// to surface exit events as emulator errors.
     pub async fn to_transport(&self) -> Result<Box<dyn Transport>, TransportError> {
         match self {
             TransportSpec::Tcp { port, address} => {
@@ -41,6 +74,11 @@ impl TransportSpec {
                 } else {
                     PtyTransport::open(None)
                 }?;
+                Ok(Box::new(transport))
+            }
+            TransportSpec::Pipe { command } => {
+                let transport = PipeTransport::spawn(command, |_| {}).await
+                    .map_err(TransportError::Io)?;
                 Ok(Box::new(transport))
             }
         }
@@ -79,6 +117,15 @@ impl FromStr for TransportSpec {
             },
             "pty" if parts.len() == 1 => Ok(TransportSpec::Pty { path: None }),
             "pty" => Err("PTY transport spec format is 'pty[:SYMLINK-NAME]'".to_string()),
+            "pipe" if parts.len() == 2 => {
+                let args_str = parts[1].trim();
+                if args_str.is_empty() {
+                    return Err("Pipe transport spec format is 'pipe:EXECUTABLE[,ARG,...]'".to_string());
+                }
+                let command: Vec<String> = args_str.split(',').map(str::to_owned).collect();
+                Ok(TransportSpec::Pipe { command })
+            }
+            "pipe" => Err("Pipe transport spec format is 'pipe:EXECUTABLE[,ARG,...]'".to_string()),
             "" => Err("Transport spec expected".to_string()),
             _ => Err(format!("Invalid transport type or arguments: '{}'", s))
         }
@@ -244,6 +291,44 @@ mod tests {
     #[should_panic(expected = "required")]
     fn from_str_with_pty_no_empty() {
         TransportSpec::from_str("pty:").unwrap();
+    }
+
+    #[test]
+    fn from_str_with_pipe_and_executable_only() {
+        let spec = TransportSpec::from_str("pipe:/usr/bin/cat").unwrap();
+        match spec {
+            TransportSpec::Pipe { command } => {
+                assert_eq!(command, vec!["/usr/bin/cat".to_string()]);
+            }
+            _ => panic!("expected Pipe transport")
+        }
+    }
+
+    #[test]
+    fn from_str_with_pipe_and_arguments() {
+        let spec = TransportSpec::from_str("pipe:/usr/bin/foo,--bar,baz").unwrap();
+        match spec {
+            TransportSpec::Pipe { command } => {
+                assert_eq!(command, vec![
+                    "/usr/bin/foo".to_string(),
+                    "--bar".to_string(),
+                    "baz".to_string(),
+                ]);
+            }
+            _ => panic!("expected Pipe transport")
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "format")]
+    fn from_str_with_pipe_and_no_arguments() {
+        TransportSpec::from_str("pipe").unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "format")]
+    fn from_str_with_pipe_and_empty_command() {
+        TransportSpec::from_str("pipe:").unwrap();
     }
 
 }

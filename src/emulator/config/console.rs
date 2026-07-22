@@ -51,7 +51,7 @@ impl DeviceModule for ConsoleModule {
                 dev.attach_transport(transport);
             } else if let Some(transport_spec) = transport_spec {
                 let transport = transport_spec
-                    .to_transport().await
+                    .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport);
             }
@@ -76,11 +76,11 @@ impl DeviceModule for ConsoleModule {
 mod tests {
     use std::sync::{Arc, Mutex};
     use super::*;
-    use crate::emulator::transport::{PipeTransport, Transport};
+    use crate::emulator::transport::{InternalPipeTransport, Transport};
 
     #[tokio::test]
     async fn instantiate_with_injected_transport() {
-        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
@@ -98,7 +98,7 @@ mod tests {
 
     #[tokio::test]
     async fn injected_transport_is_consumed() {
-        let (local, _remote) = PipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair().unwrap();
         let slot = Arc::new(Mutex::new(Some(Box::new(local) as Box<dyn crate::emulator::transport::Transport>)));
         let context = InstantiationContext {
             clock_hz: None,

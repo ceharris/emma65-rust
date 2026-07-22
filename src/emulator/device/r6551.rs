@@ -330,7 +330,7 @@ impl IoDevice for R6551 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::transport::PipeTransport;
+    use crate::emulator::transport::InternalPipeTransport;
     use std::time::Duration;
 
     const DEVICE_NAME: &str = "";
@@ -339,8 +339,8 @@ mod tests {
         R6551::new(DEVICE_NAME)
     }
     
-    fn device_with_pipe() -> (R6551, PipeTransport) {
-        let (local, remote) = PipeTransport::pair().unwrap();
+    fn device_with_pipe() -> (R6551, InternalPipeTransport) {
+        let (local, remote) = InternalPipeTransport::pair().unwrap();
         let mut device = device();
         device.attach_transport(Box::new(local));
         (device, remote)
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn overrun_set_in_internal_clock_mode_with_overrun_enabled() {
-        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let mut device = device()
             .with_clock_hz(1_000_000)
             .with_overrun(true);
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn no_overrun_in_external_clock_mode_even_with_flag() {
-        let (local, mut remote) = PipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let mut device = device()
             .with_overrun(true);
         device.attach_transport(Box::new(local));
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn tdre_always_set_in_bug_compatible_mode() {
-        let (local, _remote) = PipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair().unwrap();
         let mut device = device().with_tdre_bug(true);
         device.attach_transport(Box::new(local));
         device.write(0, 0x41); // TX write — should NOT clear TDRE

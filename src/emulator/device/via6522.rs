@@ -907,7 +907,7 @@ impl IoDevice for Via6522 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::transport::PipeTransport;
+    use crate::emulator::transport::InternalPipeTransport;
     use std::time::Duration;
 
     const DEVICE_NAME: &str = "via6522";
@@ -916,21 +916,21 @@ mod tests {
         Via6522::new(DEVICE_NAME)
     }
 
-    fn device_with_pipe() -> (Via6522, PipeTransport) {
-        let (local, remote) = PipeTransport::pair().unwrap();
+    fn device_with_pipe() -> (Via6522, InternalPipeTransport) {
+        let (local, remote) = InternalPipeTransport::pair().unwrap();
         let mut via = Via6522::new(DEVICE_NAME);
         via.attach_transport(Box::new(local));
         (via, remote)
     }
 
-    fn send_bytes(remote: &mut PipeTransport, s: &str) {
+    fn send_bytes(remote: &mut InternalPipeTransport, s: &str) {
         for c in s.as_bytes() {
             let b = *c;
             remote.send(b).unwrap();
         }
     }
 
-    fn collect_bytes(remote: &mut PipeTransport) -> Vec<u8> {
+    fn collect_bytes(remote: &mut InternalPipeTransport) -> Vec<u8> {
         let mut buf = Vec::new();
         while let Some(b) = remote.try_recv() {
             buf.push(b);
@@ -2371,13 +2371,13 @@ mod tests {
 
     // --- Shift register ---
 
-    fn sr_device_with_pipe_and_mode(acr: u8) -> (Via6522, PipeTransport) {
+    fn sr_device_with_pipe_and_mode(acr: u8) -> (Via6522, InternalPipeTransport) {
         let (mut via, remote) = device_with_pipe();
         via.write(0xB, acr);
         (via, remote)
     }
 
-    fn drain_state_dump(via: &mut Via6522, remote: &mut PipeTransport) {
+    fn drain_state_dump(via: &mut Via6522, remote: &mut InternalPipeTransport) {
         via.tick(1);
         std::thread::sleep(Duration::from_millis(1));
         collect_bytes(remote);
