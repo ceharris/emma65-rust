@@ -88,6 +88,7 @@ const RESET_COUNT: u16 = 0xFFFF;
 
 const IRQ_COMPOSITE: u8 = 0b10000000;
 
+/// A prescaler (divider) used by Timer 3.
 struct Prescaler {
     divisor: u8,
     count: u8,
@@ -127,6 +128,24 @@ enum CompareStatus {
     Stopped,
 }
 
+<<<<<<< Updated upstream
+=======
+/// Which transition an edge-triggered `Synchronizer` recognizes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edge {
+    Rising,
+    Falling,
+}
+
+// Status of a comparison mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompareStatus {
+    Idle,
+    Started,
+    Stopped,
+}
+
+>>>>>>> Stashed changes
 /// Synchronizes an asynchronous input to the E clock through a pipeline,
 /// delaying either a detected falling edge (Clock/Gate) or the raw level
 /// itself (Reset) by `depth` E cycles.
