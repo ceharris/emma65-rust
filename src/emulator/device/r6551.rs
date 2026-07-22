@@ -315,7 +315,7 @@ impl IoDevice for R6551 {
         self.clock_hz = clock_hz;
         self.tdre_bug_compatible = tdre_bug_compatible;
         self.overrun_enabled = overrun_enabled;
-        debug!("{} @{} reset", self.name(), self.address);
+        debug!("{} @0x{:04x} reset", self.name(), self.address);
     }
 
     fn irq_active(&self) -> bool {

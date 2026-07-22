@@ -176,7 +176,7 @@ impl IoDevice for Mc6850 {
         self.address = address;
         self.transport = transport;
         self.error_reporter = report_error;
-        debug!("{} @{} reset", self.name(), self.address);
+        debug!("{} @0x{:04x} reset", self.name(), self.address);
     }
 
     fn irq_active(&self) -> bool {

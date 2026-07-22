@@ -61,7 +61,7 @@
 
 use super::ptm_protocol;
 use super::ptm_protocol::PtmProtocolMessage;
-use crate::emulator::{transport, DeviceId, ErrorSender, IoDevice, ProtocolManager, ProtocolMessageEncoding, Transport, TransportError};
+use crate::emulator::{DeviceId, ErrorSender, IoDevice, ProtocolManager, ProtocolMessageEncoding, Transport, TransportError, transport};
 use log::debug;
 
 const T1: usize = 0;
@@ -724,7 +724,7 @@ impl IoDevice for Mc6840 {
         self.address = address;
         self.protocol_manager = protocol_manager;
         self.report_error = report_error;
-        debug!("{} @{:04x} reset", self.name(), self.address);
+        debug!("{} @0x{:04x} reset", self.name(), self.address);
         self.internal_reset();
         self.send_state_to_all(self.current_state());
     }

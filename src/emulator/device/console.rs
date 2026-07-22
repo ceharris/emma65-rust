@@ -180,7 +180,7 @@ impl IoDevice for Console {
         self.ring.clear();
         self.latch = 0;
         self.interrupt_flag = false;
-        debug!("{} @{} reset", self.name(), self.address)
+        debug!("{} @0x{:04x} reset", self.name(), self.address)
     }
 
     fn irq_active(&self) -> bool { self.interrupt_flag }
@@ -365,10 +365,10 @@ mod tests {
 
     #[test]
     fn integration_cpu_program_writes_appear_on_transport() {
+        use crate::emulator::exec::StepResult;
         use crate::emulator::{
             AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };
-        use crate::emulator::exec::StepResult;
 
         let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let mut console = device().with_address(0xF000);
@@ -423,10 +423,10 @@ mod tests {
 
     #[test]
     fn integration_transport_input_readable_by_cpu() {
+        use crate::emulator::exec::StepResult;
         use crate::emulator::{
             AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };
-        use crate::emulator::exec::StepResult;
 
         let (local, mut remote) = InternalPipeTransport::pair().unwrap();
         let mut console = device().with_address(0xF000);

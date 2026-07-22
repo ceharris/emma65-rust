@@ -72,7 +72,7 @@
 use super::via_protocol;
 use super::via_protocol::ViaProtocolMessage;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::{transport, ProtocolManager, ProtocolMessageEncoding, Transport, TransportError};
+use crate::emulator::{ProtocolManager, ProtocolMessageEncoding, Transport, TransportError, transport};
 use log::debug;
 use std::time::Duration;
 
@@ -889,7 +889,7 @@ impl IoDevice for Via6522 {
         self.t2_latch_hi = t2_latch_hi;
         self.t2_counter = t2_counter;
         self.sr = sr;
-        debug!("{} @{} reset", self.name(), address);
+        debug!("{} @0x{:04x} reset", self.name(), address);
         let current_state = self.current_state();
         self.send_state_to_all(current_state);
     }
