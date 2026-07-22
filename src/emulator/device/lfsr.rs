@@ -1,5 +1,11 @@
 //! 16-bit Galois LFSR pseudo-random number generator device.
 
+/// Default Galois tap mask: x¹⁶ + x¹⁴ + x¹³ + x¹¹ + 1 (maximal-length, 65535-state cycle).
+const DEFAULT_TAPS: u16 = 0xB400;
+
+/// Default initial LFSR state used at construction and after reset.
+const DEFAULT_STATE: u16 = 0xACE1;
+
 /// A memory-mapped 16-bit Galois LFSR pseudo-random number generator.
 ///
 /// Occupies 2 bytes of address space:
@@ -28,13 +34,13 @@ pub struct Lfsr16 {
 }
 
 impl Lfsr16 {
-    /// Creates a new `Lfsr16` with default taps (`0xB400`) and continuous advance mode.
+    /// Creates a new `Lfsr16` with default taps ([`DEFAULT_TAPS`]) and continuous advance mode.
     pub fn new(name: &'static str) -> Self {
         Self {
             name,
             address: 0,
-            taps: 0xB400,
-            state: 0xACE1,
+            taps: DEFAULT_TAPS,
+            state: DEFAULT_STATE,
             seed_buf: 0,
             latch: 0,
             continuous: true,
@@ -112,7 +118,7 @@ impl super::IoDevice for Lfsr16 {
     }
 
     fn reset(&mut self) {
-        self.state = 0xACE1;
+        self.state = DEFAULT_STATE;
         self.latch = 0;
         self.seed_buf = 0;
     }
