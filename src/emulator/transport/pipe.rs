@@ -1,7 +1,7 @@
 //! Bidirectional transport over a pair of OS pipes with non-blocking IO.
 //!
 //! Holds two pipes: one for inbound bytes (remote writes, we read) and one for
-//! outbound bytes (we write, remote reads). Both ends are set non-blocking so
+//! outbound bytes (we write, remote reads). Both ends are set nonblocking so
 //! `try_recv` and `send` never block the CPU thread.
 
 use std::fs::File;
@@ -25,7 +25,7 @@ pub struct PipeTransport {
 impl PipeTransport {
     /// # Safety
     /// The caller must ensure the file descriptors are valid and exclusively owned.
-    pub unsafe fn from_raw_fds(rx_fd: std::os::unix::io::RawFd, tx_fd: std::os::unix::io::RawFd) -> io::Result<Self> {
+    pub unsafe fn from_raw_fds(rx_fd: RawFd, tx_fd: RawFd) -> io::Result<Self> {
         let (rx, tx) = unsafe {
             let rx_owned = OwnedFd::from_raw_fd(rx_fd);
             let tx_owned = OwnedFd::from_raw_fd(tx_fd);
@@ -39,7 +39,7 @@ impl PipeTransport {
     pub fn stdio() -> io::Result<Self> {
         let rx_fd = dup_fd(0)?;
         let tx_fd = dup_fd(1)?;
-        // SAFETY: dup_fd returns a fresh, exclusively-owned descriptor each call.
+        // SAFETY: dup_fd returns a fresh, exclusively owned descriptor each call.
         unsafe { Self::from_raw_fds(rx_fd, tx_fd) }
     }
 
