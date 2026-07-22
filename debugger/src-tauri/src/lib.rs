@@ -1,25 +1,16 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 
-use figment::{Figment, providers::{Format, Toml, Env}};
+use figment::{Figment, providers::{Env, Format, Toml}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_log::{Target, TargetKind};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
-use emma65::emulator::{
-    run_from as exec_run_from,
-    step_into as exec_step_into,
-    step_over_breakpoint as exec_step_over_breakpoint,
-    step_over_subroutine as exec_step_over_subroutine,
-    step_return as exec_step_return,
-    Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession,
-    InstantiationContext, IrqSource, PipeTransport, RunStopper, StatusRegister, StepResult,
-    TransportSlot,
-};
+use emma65::emulator::{Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, RunStopper, StatusRegister, StepResult, TransportSlot, run_from as exec_run_from, step_into as exec_step_into, step_over_breakpoint as exec_step_over_breakpoint, step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return};
 
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
@@ -39,7 +30,7 @@ const RUNNING_TICK_INTERVAL_MS: u64 = 100;
 /// Holds the tx end of the remote pipe so `write_terminal` can send bytes to the console.
 pub struct TerminalTx(pub Mutex<File>);
 
-/// One-shot sender signalling that the terminal window is ready to receive output.
+/// One-shot sender signaling that the terminal window is ready to receive output.
 pub struct TerminalReadyTx(pub Mutex<Option<oneshot::Sender<()>>>);
 
 /// Holds the CPU once the session is ready.
@@ -180,7 +171,7 @@ pub struct RegisterSnapshot {
 /// Loads emulator config from `~/.emma/debugger/default/emulator.toml`,
 /// builds the session with an injected pipe transport for the console,
 /// and returns the session along with the remote end of the pipe.
-async fn load_session() -> Result<(EmulatorSession, PipeTransport), String> {
+async fn load_session() -> Result<(EmulatorSession, InternalPipeTransport), String> {
     let config_path = theme::debugger_config_dir()?.join("emulator.toml");
 
     let config: Config = Figment::new()
@@ -189,10 +180,10 @@ async fn load_session() -> Result<(EmulatorSession, PipeTransport), String> {
         .extract()
         .map_err(|e| format!("Configuration error: {e}"))?;
 
-    let (local, remote) = PipeTransport::pair()
+    let (local, remote) = InternalPipeTransport::pair()
         .map_err(|e| format!("Failed to create console transport: {e}"))?;
 
-    let transport_slot: TransportSlot = std::sync::Arc::new(Mutex::new(Some(Box::new(local))));
+    let transport_slot: TransportSlot = Arc::new(Mutex::new(Some(Box::new(local))));
     let context = InstantiationContext {
         clock_hz: config.clock_speed_hz,
         error_sender: None,
