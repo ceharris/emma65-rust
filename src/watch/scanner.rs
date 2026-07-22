@@ -25,14 +25,12 @@ impl <'a> Scanner<'a> {
     pub fn scan(&mut self) -> Result<Vec<Token<'a>>, Error> {
         let mut tokens: Vec<Token<'a>> = Vec::new();
         loop {
-            match self.next_token() {
-                Ok(result) => {
-                    match result {
-                        None => return Ok(tokens),
-                        Some(token) => tokens.push(token),
-                    }
+            {
+                let result = self.next_token()?;
+                match result {
+                    None => return Ok(tokens),
+                    Some(token) => tokens.push(token),
                 }
-                Err(error) => return Err(error),
             }
         }
     }
@@ -326,9 +324,9 @@ impl <'a> Scanner<'a> {
             let c = self.source.advance();
             match c {
                 Some(b'\\') => {
-                    match self.unescape() {
-                        Ok(ch) => s.push(ch as char),
-                        Err(error) => return Err(error),
+                    {
+                        let ch = self.unescape()?;
+                        s.push(ch as char)
                     }
                 }
                 Some(b'"') => break,
