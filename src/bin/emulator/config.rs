@@ -1,7 +1,7 @@
 use clap::Parser;
-use figment::{Figment, providers::{Format, Toml, Env, Serialized}};
-use serde::{Deserialize, Serialize};
 use emma65::emulator::CpuVariantSpec;
+use figment::{Figment, providers::{Env, Format, Serialized, Toml}};
+use serde::{Deserialize, Serialize};
 
 // CLI args.
 // This struct exists solely to capture the `--config` option before Figment runs. It must not
@@ -67,8 +67,10 @@ pub fn apply_default_if_unconfigured(config: &mut AppConfig, default_rom: &[u8])
                 .parse()
                 .unwrap(),
             "via/6522@0xff80,transport=unix:~/.emma/sock/via6522".parse().unwrap(),
+            "ptm/6840@0xff90,transport=unix:~/.emma/sock/mc6840".parse().unwrap(),
             "acia/6551@0xfff0,transport=pty:~/.emma/dev/ttyS0".parse().unwrap(),
             "acia/6850@0xfff4,transport=pty:~/.emma/dev/ttyS1".parse().unwrap(),
+            "lfsr@0xfff6,mode=step".parse().unwrap(),
             "console@0xfff8,break=0x3".parse().unwrap(),
         ]);
         Some(f)
