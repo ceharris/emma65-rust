@@ -113,14 +113,28 @@ impl Prescaler {
 
 }
 
+/// Which transition an edge-triggered `Synchronizer` recognizes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edge {
+    Rising,
+    Falling,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompareStatus {
+    Idle,
+    Started,
+    Stopped,
+}
+
 /// Synchronizes an asynchronous input to the E clock through a pipeline,
 /// delaying either a detected falling edge (Clock/Gate) or the raw level
 /// itself (Reset) by `depth` E cycles.
 struct Synchronizer {
-    prev_level: bool,
-    // Fixed-capacity buffer sized to the deepest case (Clock/Gate = 4).
-    // Only indices 0..depth are ever read or written.
     pipeline: [bool; 4],
+    // The pipeline's output as of the previous call, used to detect a
+    // transition in the already-synchronized signal.
+    prev_recognized: bool,
     depth: usize,
     edge_triggered: bool,
 }
@@ -135,35 +149,52 @@ impl Synchronizer {
     fn new(depth: usize, prev_level: bool, edge_triggered: bool) -> Self {
         assert!((1..=4).contains(&depth));
         Self {
-            prev_level,
-            pipeline: [if edge_triggered { false } else { prev_level }; 4],
+            pipeline: [prev_level; 4],
+            prev_recognized: prev_level,
             depth,
             edge_triggered,
         }
     }
 
     /// Call once per full system clock cycle (E) with the current raw pin level.
+    /// recognizing the given `edge`. For level-triggered instances (Reset),
+    /// `edge` is ignored and the raw level is piped through.
     ///
     /// Returns whether the input is *recognized* on this tick, delayed by
     /// `depth` E cycles from the underlying transition/level:
-    /// - edge_triggered: a one-cycle pulse, true only on the tick a
-    ///   falling edge finishes propagating through the pipeline.
+    /// - edge_triggered: a one-cycle pulse, true only on the tick that the selected
+    ///   edge finishes propagating through the pipeline.
     /// - level-triggered: tracks the raw level itself, delayed by
     ///   `depth` cycles — true for as long as the (delayed) level is
     ///   asserted, not just a single pulse.
     ///
-    fn sample(&mut self, level: bool) -> bool {
-        let falling_edge = self.prev_level && !level;
-        self.prev_level = level;
-
-        let value_to_pipe = if self.edge_triggered { falling_edge } else { level };
-
-        let recognized = self.pipeline[self.depth - 1];
+    fn sample_for(&mut self, level: bool, edge: Edge) -> bool {
+        // Read the pipeline's current output before shifting
+        let recognized_level = self.pipeline[self.depth - 1];
+        // Push in the new level
         for i in (1..self.depth).rev() {
             self.pipeline[i] = self.pipeline[i - 1];
         }
-        self.pipeline[0] = value_to_pipe;
-        recognized
+        self.pipeline[0] = level;
+
+        // determine whether we need to detect an edge or simply report a level
+        let result = if self.edge_triggered {
+            match edge {
+                Edge::Falling => self.prev_recognized && !recognized_level,
+                Edge::Rising => !self.prev_recognized && recognized_level,
+            }
+        } else {
+            recognized_level
+        };
+
+        self.prev_recognized = recognized_level;
+        result
+    }
+
+    /// Call once per full system clock cycle (E) with the current raw pin level.
+    /// Equivalent to `sample_for(level, Edge::Falling)`.
+    fn sample(&mut self, level: bool) -> bool {
+        self.sample_for(level, Edge::Falling)
     }
 
 }
@@ -196,6 +227,8 @@ struct Timer {
     output_enabled: bool,
     // true if this timer wants to assert CPU's IRQ
     irq_active: bool,
+    compare_status: CompareStatus,
+    awaiting_edge: Edge,
     // state of the output pin (Ox)
     output_state: bool,
     // raw level of the clock pin (Cx) last received from transport
@@ -222,6 +255,8 @@ impl Timer {
             dual8bit_mode: false,
             irq_enabled: false,
             irq_active: false,
+            compare_status: CompareStatus::Idle,
+            awaiting_edge: Edge::Falling,
             output_enabled: false,
             output_state: false,
             clock_level: true,
@@ -255,15 +290,12 @@ impl Timer {
         self.is_comparing() && self.mode & CTRL_MODE_PULSE_WIDTH == 0
     }
 
-    fn is_pulse_width(&self) -> bool {
-        self.is_comparing() && self.mode & CTRL_MODE_PULSE_WIDTH != 0
-    }
-
     fn is_compare_greater(&self) -> bool {
         self.is_comparing() && self.mode & CTRL_MODE_GREATER != 0
     }
 
     fn set_control_register(&mut self, value: u8) {
+        self.compare_status = CompareStatus::Idle;
         self.mode = value & CTRL_MODE_MASK;
         self.dual8bit_mode = value & CTRL_COUNTER_DUAL_8BIT != 0;
         self.external_clock = value & CTRL_USE_EXTERNAL_CLOCK != 0;
@@ -299,6 +331,16 @@ impl Timer {
         self.irq_active = false;
         self.output_state = false;
         self.triggered = true;
+        self.compare_status = if self.is_comparing() {
+            CompareStatus::Started
+        } else {
+            CompareStatus::Idle
+        };
+        self.awaiting_edge = if self.is_comparing() && !self.is_frequency() {
+            Edge::Rising
+        } else {
+            Edge::Falling
+        }
     }
 
     fn decrement(&mut self) {
@@ -318,7 +360,7 @@ impl Timer {
             }
             self.counter = u16::from_le_bytes([lsb, msb])
         } else {
-            assert!(self.carry_in || self.counter > 0, "expected non-zero counter");
+            assert!(self.is_comparing() || self.carry_in || self.counter > 0, "expected non-zero counter");
             self.counter = self.counter.wrapping_sub(1);
         }
     }
@@ -330,8 +372,8 @@ impl Timer {
         if self.is_continuous() && self.gate_level {
             return;
         }
-        if self.is_zero() {
-            if self.is_continuous() || self.is_comparing() {
+        if self.is_zero() && self.is_generating() {
+            if self.is_continuous() {
                 self.load()
             } else {
                 self.triggered = false;
@@ -343,6 +385,10 @@ impl Timer {
                 !self.output_state
             }
         } else {
+            if self.is_zero() && self.is_comparing() {
+                self.compare_status = CompareStatus::Idle;
+                self.awaiting_edge = Edge::Falling;
+            }
             self.decrement();
             self.carry_in = false;
             if self.is_single_shot() {
@@ -362,11 +408,33 @@ impl Timer {
         }
     }
 
+    fn check_comparison(&mut self, edge_detected: bool) {
+        let stop = if self.is_compare_greater() {
+            self.counter == 0
+        } else {
+            edge_detected
+        };
+        if stop {
+            self.compare_status = CompareStatus::Stopped;
+            self.irq_active = self.irq_enabled;
+            self.awaiting_edge = Edge::Falling;
+        } else if self.is_compare_greater() && edge_detected {
+            self.compare_status = CompareStatus::Idle;
+        }
+    }
+
     fn tick(&mut self) {
-        let gate_triggered = self.gate_sync.sample(self.gate_level);
-        if gate_triggered {
+        let edge_detected = self.gate_sync.sample_for(self.gate_level, self.awaiting_edge);
+        let gate_triggered = edge_detected && self.awaiting_edge == Edge::Falling;
+        let init_compare = !self.irq_active && (
+            self.compare_status != CompareStatus::Started || self.is_compare_greater());
+        let init_counter = self.is_generating() || init_compare;
+        if gate_triggered && init_counter {
             self.init();
         } else {
+            if self.is_comparing() && self.compare_status == CompareStatus::Started && !self.irq_active() {
+                self.check_comparison(edge_detected);
+            }
             let clock_triggered = self.clock_sync.sample(self.clock_level);
             if !self.external_clock || clock_triggered {
                 self.clock();
@@ -867,7 +935,8 @@ mod tests {
     fn write_mode_compare_pulse_width_less() {
         let mut device = device();
         device.write(1, CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_LESS);
-        assert!(device.timers[T2].is_pulse_width());
+        assert!(device.timers[T2].is_comparing());
+        assert!(!device.timers[T2].is_frequency());
         assert!(!device.timers[T2].is_compare_greater());
     }
 
@@ -899,7 +968,8 @@ mod tests {
     fn write_mode_compare_pulse_width_greater() {
         let mut device = device();
         device.write(1, CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_GREATER);
-        assert!(device.timers[T2].is_pulse_width());
+        assert!(device.timers[T2].is_comparing());
+        assert!(!device.timers[T2].is_frequency());
         assert!(device.timers[T2].is_compare_greater());
     }
 
@@ -1176,4 +1246,279 @@ mod tests {
         timer.tick();
         assert_eq!(timer.counter, 0);
     }
+
+    #[test]
+    fn compare_frequency_lt_when_lt() {
+        let mut timer = Timer::new();
+        timer.irq_enabled = true;
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_LESS);
+        timer.latch = 3;
+        timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
+        timer.gate_level = false; timer.tick();     // ?, ?, H, L
+        timer.gate_level = true;  timer.tick();     // ?, H, L, H
+        timer.gate_level = false; timer.tick();     // H, L, H, L
+        timer.gate_level = true;  timer.tick();     // L, H, L, H
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        timer.gate_level = true;  timer.tick();     // H, L, H, H (falling edge detected)
+        // falling edge should init counter to start measurement
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert_eq!(timer.counter, 3);
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.counter, 2);
+        timer.gate_level = true;  timer.tick();     // H, H, H, H (falling edge detected)
+        // not timeout => compare satisfied, raise interrupt
+        assert_eq!(timer.compare_status, CompareStatus::Stopped);
+        assert_eq!(timer.counter, 1);
+        assert!(timer.irq_active());
+        // timer should continue to decrement
+        timer.gate_level = false; timer.tick();     // H, H, H, L
+        assert_eq!(timer.counter, 0);
+        timer.clear_irq();
+        timer.gate_level = true;  timer.tick();     // H, H, L, H
+        // even after IRQ cleared must continue to decrement
+        // until the next negative edge of the gate is recognized
+        assert_eq!(timer.counter, 0xFFFF);
+        timer.gate_level = true;  timer.tick();     // H, L, H, H
+        assert_eq!(timer.counter, 0xFFFE);
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.counter, 0xFFFD);
+        timer.gate_level = true;  timer.tick();     // H, H, H, H (falling edge detected)
+        // falling edge should init counter to start measurement
+        assert_eq!(timer.counter, 3);
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+    }
+
+    #[test]
+    fn compare_frequency_lt_when_ge() {
+        let mut timer = Timer::new();
+        timer.irq_enabled = true;
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_LESS);
+        timer.latch = 3;
+        timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
+        timer.gate_level = false; timer.tick();     // ?, ?, H, L
+        timer.gate_level = true;  timer.tick();     // ?, H, L, H
+        timer.gate_level = true;  timer.tick();     // H, L, H, H
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        timer.gate_level = true;  timer.tick();     // H, H, H, H (falling edge detected)
+        // falling edge should init counter to start measurement
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert_eq!(timer.counter, 3);
+        timer.gate_level = false; timer.tick();     // H, H, H, L
+        assert_eq!(timer.counter, 2);
+        timer.gate_level = true;  timer.tick();     // H, H, L, H
+        assert_eq!(timer.counter, 1);
+        timer.gate_level = true;  timer.tick();     // H, L, H, H
+        assert_eq!(timer.counter, 0);
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        assert_eq!(timer.counter, 0xFFFF);
+        assert!(!timer.irq_active());
+        timer.gate_level = true;  timer.tick();     // H, H, H, H (falling edge detected)
+        // falling edge should init counter to start measurement
+        assert_eq!(timer.counter, 3);
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+    }
+
+    #[test]
+    fn compare_frequency_gt_when_gt() {
+        let mut timer = Timer::new();
+        timer.irq_enabled = true;
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_GREATER);
+        timer.latch = 3;
+        timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
+        timer.gate_level = false; timer.tick();     // ?, ?, H, L
+        timer.gate_level = true;  timer.tick();     // ?, H, L, H
+        timer.gate_level = true;  timer.tick();     // H, L, H, H
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        timer.gate_level = true;  timer.tick();     // H, H, H, H (falling edge detected)
+        // falling edge should init counter to start measurement
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert_eq!(timer.counter, 3);
+        timer.gate_level = false; timer.tick();     // H, H, H, L
+        assert_eq!(timer.counter, 2);
+        timer.gate_level = true;  timer.tick();     // H, H, L, H
+        assert_eq!(timer.counter, 1);
+        timer.gate_level = false; timer.tick();     // H, L, H, L
+        assert_eq!(timer.counter, 0);
+        timer.gate_level = true;  timer.tick();     // L, H, L, H
+        assert_eq!(timer.counter, 0xFFFF);
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        assert!(timer.irq_active());
+        timer.gate_level = true;  timer.tick();     // H, L, H, H (falling edge detected)
+        // even after IRQ cleared must continue to decrement
+        // until the next negative edge of the gate is recognized
+        assert_eq!(timer.counter, 0xFFFE);
+        timer.clear_irq();
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.counter, 0xFFFD);
+        timer.gate_level = true;  timer.tick();     // H, H, H, H (falling edge detected)
+        // falling edge should init timer for measurement
+        assert_eq!(timer.counter, 3);
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+    }
+
+    #[test]
+    fn compare_frequency_gt_when_le() {
+        let mut timer = Timer::new();
+        timer.irq_enabled = true;
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_GREATER);
+        timer.latch = 3;
+        timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
+        timer.gate_level = false; timer.tick();     // ?, ?, H, L
+        timer.gate_level = true;  timer.tick();     // ?, H, L, H
+        timer.gate_level = true;  timer.tick();     // H, L, H, H
+        timer.gate_level = false;  timer.tick();    // L, H, H, L
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        timer.gate_level = true;  timer.tick();     // H, H, L, H (falling edge detected)
+        // falling edge should init counter to start measurement
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert_eq!(timer.counter, 3);
+        timer.gate_level = false; timer.tick();     // H, L, H, L
+        assert_eq!(timer.counter, 2);
+        timer.gate_level = true;  timer.tick();     // L, H, L, H
+        assert_eq!(timer.counter, 1);
+        timer.gate_level = true;  timer.tick();     // H, L, H, H (falling edge detected)
+        // falling edge before timeout should simply reset for another measurement
+        assert_eq!(timer.counter, 3);
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert!(!timer.irq_active());
+    }
+
+    #[test]
+    fn compare_pulse_width_lt_when_lt() {
+        let mut timer = Timer::new();
+        timer.irq_enabled = true;
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_LESS);
+        timer.latch = 4;
+        timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
+        timer.gate_level = false; timer.tick();     // ?, ?, H, L
+        timer.gate_level = false; timer.tick();     // ?, H, L, L
+        timer.gate_level = false; timer.tick();     // H, L, L, L
+        timer.gate_level = true;  timer.tick();     // L, L, L, H
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        timer.gate_level = true;  timer.tick();     // L, L, H, H (falling edge detected)
+        // falling edge should init counter for measurement
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert_eq!(timer.counter, 4);
+        timer.gate_level = false; timer.tick();     // L, H, H, L
+        assert_eq!(timer.counter, 3);
+        timer.gate_level = false; timer.tick();     // H, H, L, L
+        assert_eq!(timer.counter, 2);
+        timer.gate_level = false; timer.tick();     // H, L, L, L (rising edge detected)
+        // not timeout => compare satisfied, raise interrupt
+        assert_eq!(timer.counter, 1);
+        assert_eq!(timer.compare_status, CompareStatus::Stopped);
+        assert!(timer.irq_active());
+        timer.gate_level = false; timer.tick();     // L, L, L, L
+        // timer should continue to decrement
+        timer.clear_irq();
+        assert_eq!(timer.counter, 0);
+        timer.gate_level = false; timer.tick();     // L, L, L, L (falling edge detected)
+        // falling edge should init counter for measurement
+        assert_eq!(timer.counter, 4);
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+    }
+
+    #[test]
+    fn compare_pulse_width_lt_when_ge() {
+        let mut timer = Timer::new();
+        timer.irq_enabled = true;
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_LESS);
+        timer.latch = 2;
+        timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
+        timer.gate_level = false; timer.tick();     // ?, ?, H, L
+        timer.gate_level = false; timer.tick();     // ?, H, L, L
+        timer.gate_level = false; timer.tick();     // H, L, L, L
+        timer.gate_level = false;  timer.tick();    // L, L, L, L
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        timer.gate_level = true;  timer.tick();     // L, L, L, H (falling edge detected)
+        // falling edge should init counter for measurement
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert_eq!(timer.counter, 2);
+        timer.gate_level = false; timer.tick();     // L, L, H, L
+        assert_eq!(timer.counter, 1);
+        timer.gate_level = false; timer.tick();     // L, H, L, L
+        assert_eq!(timer.counter, 0);
+        timer.gate_level = false; timer.tick();     // H, L, L, L
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        assert!(!timer.irq_active());
+        assert_eq!(timer.counter, 0xFFFF);
+        timer.gate_level = false; timer.tick();     // L, L, L, L (rising edge detected)
+        // rising edge doesn't init counter
+        assert_eq!(timer.counter, 0xFFFE);
+        timer.gate_level = false; timer.tick();     // L, L, L, L (falling edge detected)
+        // falling edge should init counter for measurement
+        assert_eq!(timer.counter, 2);
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+    }
+
+    #[test]
+    fn compare_pulse_width_gt_when_gt() {
+        let mut timer = Timer::new();
+        timer.irq_enabled = true;
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_GREATER);
+        timer.latch = 3;
+        timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
+        timer.gate_level = false; timer.tick();     // ?, ?, H, L
+        timer.gate_level = false; timer.tick();     // ?, H, L, L
+        timer.gate_level = false; timer.tick();     // H, L, L, L
+        timer.gate_level = false; timer.tick();     // L, L, L, L
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        timer.gate_level = false; timer.tick();     // L, L, L, L (falling edge detected)
+        // falling edge should init counter for measurement
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert_eq!(timer.counter, 3);
+        timer.gate_level = true;  timer.tick();     // L, L, L, H
+        assert_eq!(timer.counter, 2);
+        timer.gate_level = false; timer.tick();     // L, L, H, L
+        assert_eq!(timer.counter, 1);
+        timer.gate_level = true;  timer.tick();     // L, H, L, H
+        assert_eq!(timer.counter, 0);
+        timer.gate_level = true;  timer.tick();     // H, L, H, H (rising edge detected)
+        assert_eq!(timer.counter, 0xFFFF);
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        assert!(timer.irq_active());
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.counter, 0xFFFE);
+        timer.clear_irq();
+        timer.gate_level = true;  timer.tick();     // H, H, H, H (falling edge detected)
+        assert_eq!(timer.counter, 3);
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+    }
+
+    #[test]
+    fn compare_pulse_width_gt_when_le() {
+        let mut timer = Timer::new();
+        timer.irq_enabled = true;
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_GREATER);
+        timer.latch = 3;
+        timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
+        timer.gate_level = false; timer.tick();     // ?, ?, H, L
+        timer.gate_level = false; timer.tick();     // ?, H, L, L
+        timer.gate_level = false; timer.tick();     // H, L, L, L
+        timer.gate_level = true;  timer.tick();     // L, L, L, H
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        timer.gate_level = true;  timer.tick();     // L, L, H, H (falling edge detected)
+        // falling edge should init counter for measurement
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+        assert_eq!(timer.counter, 3);
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.counter, 2);
+        timer.gate_level = false; timer.tick();     // H, H, H, L
+        assert_eq!(timer.counter, 1);
+        timer.gate_level = true;  timer.tick();     // H, H, L, H (rising edge detected)
+        assert_eq!(timer.counter, 0);
+        assert_eq!(timer.compare_status, CompareStatus::Idle);
+        assert!(!timer.irq_active());
+        timer.gate_level = true;  timer.tick();     // H, L, H, H
+        assert_eq!(timer.counter, 0xFFFF);
+        timer.gate_level = true;  timer.tick();     // L, H, H, H
+        assert_eq!(timer.counter, 0xFFFE);
+        timer.gate_level = true;  timer.tick();     // H, H, H, H (falling edge detected)
+        assert_eq!(timer.counter, 3);
+        assert_eq!(timer.compare_status, CompareStatus::Started);
+    }
+
 }
