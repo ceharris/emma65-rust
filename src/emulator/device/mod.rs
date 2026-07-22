@@ -1,6 +1,7 @@
 //! IO device trait, device identification, and async device event channel, built-in devices.
 pub mod r6551;
 pub mod console;
+pub mod lfsr;
 pub mod mc6840;
 pub mod mc6850;
 pub mod phoebe;
@@ -11,6 +12,7 @@ mod ptm_protocol;
 mod protocol_manager;
 
 pub use self::console::Console;
+pub use self::lfsr::Lfsr16;
 pub use self::mc6840::Mc6840;
 pub use self::mc6850::Mc6850;
 pub use self::phoebe::Phoebe;
