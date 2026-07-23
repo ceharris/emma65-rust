@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use figment::value::{Dict, Value};
 use figment::providers::Serialized;
+use figment::value::{Dict, Value};
 use serde::Deserialize;
+use std::collections::HashMap;
 
+use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
 use crate::emulator::{AddressRange, BusConfig};
-use super::{loader, DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext};
 
 // Type name used in registering RAM as a device
 const RAM_DEVICE_TYPE: &str = "ram";
@@ -38,7 +38,7 @@ impl MemoryAttributes {
     }
 }
 
-fn make_buffer(size: usize, fill_value: Option<u8>) -> Vec<u8> {
+pub fn make_buffer(size: usize, fill_value: Option<u8>) -> Vec<u8> {
     match fill_value {
         Some(v) => vec![v; size],
         None => (0..size).map(|_| rand::random::<u8>()).collect(),

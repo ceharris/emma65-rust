@@ -81,7 +81,7 @@ pub async fn load_image(path: &Path, mem: &mut [u8], offset: usize)
     match suffix {
         Some("hex") | Some("ihx") | Some("ihex") => load_intel_hex(&data, mem, offset),
         Some("s19") | Some("srec") => load_motorola_srec(&data, mem, offset),
-        Some("bin") | Some("rom") => load_binary(&data, mem),
+        Some("bin") | Some("rom") => load_binary(&data, mem, offset),
         Some(_) => Err(LoadError::UnknownFormat(format!("Filename suffix '{}' not recognized", suffix.unwrap()))),
         None => Err(LoadError::UnknownFormat("Filename suffix cannot be decoded".to_string())),
     }
@@ -183,9 +183,9 @@ fn load_motorola_srec(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Opti
     Ok(start_addr)
 }
 
-fn load_binary(data: &[u8], mem: &mut [u8]) -> Result<Option<u16>, LoadError> {
-    if data.len() == mem.len() {
-        mem[0..data.len()].copy_from_slice(data);
+fn load_binary(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Option<u16>, LoadError> {
+    if offset + data.len() == mem.len() {
+        mem[offset..offset + data.len()].copy_from_slice(data);
         Ok(None)
     } else {
         Err(LoadError::SizeMismatch { actual: data.len(), expected: mem.len() })
@@ -333,8 +333,8 @@ impl Checksum {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::NamedTempFile;
     use super::*;
+    use tempfile::NamedTempFile;
 
     const IHEX_EXAMPLE: &str = "
 :10010000214601360121470136007EFE09D2190140
@@ -527,7 +527,7 @@ S9030000FC
     fn load_binary_success() {
         let bin_data: [u8; 8] = BIN_EXAMPLE;
         let mut mem: [u8; 8] = [0xff; 8];
-        let start_addr = load_binary(&bin_data, &mut mem[..]).unwrap();
+        let start_addr = load_binary(&bin_data, &mut mem[..], 0).unwrap();
         assert!(start_addr.is_none());
         assert_eq!(mem[0x0..0x8], vec![0x00u8, 0xffu8, 0x55u8, 0xaau8, 0xdeu8, 0xadu8, 0xbeu8, 0xefu8]);
     }
@@ -536,7 +536,7 @@ S9030000FC
     fn load_binary_when_size_mismatch() {
         let bin_data: [u8; 8] = [0x00u8, 0xffu8, 0x55u8, 0xaau8, 0xdeu8, 0xadu8, 0xbeu8, 0xefu8];
         let mut mem: [u8; 0] = [];
-        let err = load_binary(&bin_data, &mut mem[..]).unwrap_err();
+        let err = load_binary(&bin_data, &mut mem[..], 0).unwrap_err();
         assert!(matches!(err, LoadError::SizeMismatch { actual: a, expected: e} if a == 8 && e == 0));
     }
 

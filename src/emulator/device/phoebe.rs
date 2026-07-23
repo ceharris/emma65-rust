@@ -28,10 +28,10 @@
 //! |   1   |   0   | Bank 2        |
 //! |   1   |   1   | none          |
 //!
-use log::debug;
 use crate::emulator::AddressRange;
 use crate::emulator::bus::RomWritePolicy;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
+use log::debug;
 
 const NUM_BANKS: u8 = 4;
 const BANK_SIZE: u16 = 8192;
@@ -64,7 +64,7 @@ pub struct Phoebe {
 
 impl Phoebe {
 
-    /// Constructs a new `RomPhoebe` device mapped to the given region and register address.
+    /// Constructs a new `Phoebe` device mapped to the given region and register address.
     pub fn new(name: &'static str, rom_region: AddressRange, register_address: u16) -> Self {
         Self {
             name,
@@ -78,7 +78,7 @@ impl Phoebe {
         }
     }
 
-    /// Constructs a new `RomPhoebe` device mapped to the given region and loaded with the
+    /// Constructs a new `Phoebe` device mapped to the given region and loaded with the
     /// specified data. Panics if the length of `data` is not equal to the fixed size of the ROM.
     pub fn with_data(name: &'static str, rom_region: AddressRange, register_address: u16, data: Vec<u8>) -> Self {
         assert_eq!(data.len(), (NUM_BANKS as u16 * BANK_SIZE) as usize,
@@ -151,7 +151,7 @@ impl IoDevice for Phoebe {
 
     fn reset(&mut self) {
         self.selected_bank = 0;
-        debug!("{} {} reset", self.name(), self.device_id.unwrap())
+        debug!("{} @0x{:04x} reset", self.name(), self.register_address);
     }
 
     fn name(&self) -> &str { self.name }
@@ -161,9 +161,9 @@ impl IoDevice for Phoebe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::{AddressRange, IoDevice, RomWritePolicy};
-    use crate::emulator::device::phoebe::Phoebe;
     use crate::emulator::device::DeviceEvent;
+    use crate::emulator::device::phoebe::Phoebe;
+    use crate::emulator::{AddressRange, IoDevice, RomWritePolicy};
     use tokio::sync::mpsc;
 
     const START_ADDR: u16 = 0xC000;

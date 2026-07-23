@@ -62,10 +62,13 @@ pub fn apply_default_if_unconfigured(config: &mut AppConfig, default_rom: &[u8])
         config.emulator.cpu_variant_spec.get_or_insert(DEFAULT_CPU_VARIANT);
         config.emulator.clock_speed_hz.get_or_insert(DEFAULT_CLOCK_SPEED);
         config.emulator.devices = Some(vec![
-            "ram@0x0000,size=32768,fill=0".parse().unwrap(),
-            format!("rom@0x8000,size=32768,image={}", rom_path.display())
+            format!("mmu/finch@0x0000,banks=0xffc0,ctrl=0xffd8,image={}", rom_path.display())
                 .parse()
                 .unwrap(),
+            // "ram@0x0000,size=32768,fill=0".parse().unwrap(),
+            // format!("rom@0x8000,size=32768,image={}", rom_path.display())
+            //     .parse()
+            //     .unwrap(),
             "via/6522@0xff80,transport=unix:~/.emma/sock/via6522".parse().unwrap(),
             "ptm/6840@0xff90,transport=unix:~/.emma/sock/mc6840".parse().unwrap(),
             "acia/6551@0xfff0,transport=pty:~/.emma/dev/ttyS0".parse().unwrap(),

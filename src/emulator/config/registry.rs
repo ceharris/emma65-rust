@@ -1,10 +1,10 @@
+use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrModule, Mc6840Module, Mc6850Module, PhoebeModule, R6551Module, RamModule, RomModule, Via6522Module};
+use crate::emulator::transport::{Transport, TransportError};
+use crate::emulator::{BusConfig, DeviceEvent, DeviceId, ErrorSender};
+use figment::value::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use figment::value::Value;
-use crate::emulator::{BusConfig, DeviceEvent, DeviceId, ErrorSender};
-use crate::emulator::transport::{Transport, TransportError};
-use super::{DeviceModule, DeviceModuleError, RamModule, RomModule, ConsoleModule, LfsrModule, R6551Module, Mc6840Module, Mc6850Module, PhoebeModule, Via6522Module};
 
 /// A shareable slot holding an optional transport, suitable for one-time consumption.
 pub type TransportSlot = Arc<Mutex<Option<Box<dyn Transport>>>>;
@@ -71,6 +71,7 @@ impl DeviceRegistry {
         r.register(RamModule);
         r.register(RomModule);
         r.register(ConsoleModule);
+        r.register(FinchModule);
         r.register(LfsrModule);
         r.register(R6551Module);
         r.register(Mc6840Module);
