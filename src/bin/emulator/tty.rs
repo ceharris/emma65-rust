@@ -1,9 +1,9 @@
 //! Best-effort raw-mode handling for the process's controlling terminal.
 //!
-//! Used only when the emulator's console is attached directly to this process's own
-//! stdin/stdout (the default, no-config layout): with no external terminal program to put
-//! the line discipline into raw mode, the emulator has to do it itself so that input reaches
-//! the emulated console byte-by-byte instead of line-buffered and echoed by the kernel.
+//! Used when the emulator's console is attached directly to this process's own stdin/stdout:
+//! with no external terminal program to put the line discipline into raw mode, the emulator
+//! has to do it itself so that input reaches the emulated console byte-by-byte instead of
+//! line-buffered and echoed by the kernel.
 
 use std::io::{self, IsTerminal};
 

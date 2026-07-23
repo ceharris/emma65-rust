@@ -16,26 +16,24 @@ async fn main() -> ExitCode {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
-    let default_rom_file = apply_default_if_unconfigured(&mut config, DEFAULT_ROM);
+    // Hold the temp file reference until after build so the ROM image isn't deleted too early.
+    let _default_rom_file = apply_default_if_unconfigured(&mut config, DEFAULT_ROM);
     let registry = emma65::emulator::DeviceRegistry::with_builtins();
 
-    // The default (no-config) layout has no `transport=` attribute on its console device;
-    // attach it directly to this process's stdin/stdout instead.
-    let session = if default_rom_file.is_some() {
-        let transport = InternalPipeTransport::stdio().unwrap_or_else(|e| {
-            eprintln!("error: failed to attach console to stdin/stdout: {e}");
-            std::process::exit(1);
-        });
-        let context = InstantiationContext {
-            clock_hz: config.emulator.clock_speed_hz,
-            error_sender: None,
-            console_transport: Some(Arc::new(Mutex::new(Some(Box::new(transport) as Box<dyn Transport>)))),
-        };
-        config.emulator.build_with_context(&registry, context).await
-    } else {
-        config.emulator.build(&registry).await
+    // Always offer stdin/stdout to the console via the context. If the console has no
+    // `transport=` attribute it will take this transport; if it does have one it will ignore it.
+    // Checking whether the slot was consumed after build tells us whether to enter raw mode.
+    let transport = InternalPipeTransport::stdio().unwrap_or_else(|e| {
+        eprintln!("error: failed to attach console to stdin/stdout: {e}");
+        std::process::exit(1);
+    });
+    let console_transport_slot = Arc::new(Mutex::new(Some(Box::new(transport) as Box<dyn Transport>)));
+    let context = InstantiationContext {
+        clock_hz: config.emulator.clock_speed_hz,
+        error_sender: None,
+        console_transport: Some(Arc::clone(&console_transport_slot)),
     };
-    let session = match session {
+    let session = match config.emulator.build_with_context(&registry, context).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("startup error: {e}");
@@ -49,9 +47,10 @@ async fn main() -> ExitCode {
         std::process::exit(1);
     }
 
-    // Only enter raw mode once startup has fully succeeded, and only when the console is
-    // attached to this terminal, so no error exit above ever needs to restore it first.
-    let _raw_mode_guard = if default_rom_file.is_some() {
+    // Enter raw mode only if the console took the stdio transport — and only after startup has
+    // fully succeeded, so no error exit above ever needs to restore the terminal first.
+    let stdio_in_use = console_transport_slot.lock().is_ok_and(|slot| slot.is_none());
+    let _raw_mode_guard = if stdio_in_use {
         tty::enter_raw_mode()
     } else {
         None
