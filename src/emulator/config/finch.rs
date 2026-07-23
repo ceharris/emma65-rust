@@ -53,9 +53,9 @@ impl DeviceModule for FinchModule {
                          -> Result<BusConfig, DeviceModuleError> {
         let config = FinchAttributes::from_attributes(attributes)?;
         let device_id = DeviceId(address as u32);
-        let offset = config.offset.unwrap_or(0) as usize;
+        let offset = finch::ROM_START + config.offset.unwrap_or(0) as usize;
         let mut data = super::memory::make_buffer(finch::MEMORY_SIZE, config.fill);
-        loader::load_image(&config.image, &mut data, finch::ROM_START + offset).await.map_err(DeviceModuleError::Load)?;
+        loader::load_image(&config.image, &mut data, offset).await.map_err(DeviceModuleError::Load)?;
         let device = {
             let mut dev = Finch::with_data(DEVICE_NAME, config.bank_register_address, config.control_register_address, data);
             if let Some(write_policy) = config.write_policy {

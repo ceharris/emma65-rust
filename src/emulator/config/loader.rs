@@ -188,7 +188,7 @@ fn load_binary(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Option<u16>
         mem[offset..offset + data.len()].copy_from_slice(data);
         Ok(None)
     } else {
-        Err(LoadError::SizeMismatch { actual: data.len(), expected: mem.len() })
+        Err(LoadError::SizeMismatch { actual: offset + data.len(), expected: mem.len() })
     }
 }
 
