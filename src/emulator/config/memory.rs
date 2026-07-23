@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use figment::value::{Dict, Value};
 use figment::providers::Serialized;
+use figment::value::{Dict, Value};
 use serde::Deserialize;
+use std::collections::HashMap;
 
+use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
 use crate::emulator::{AddressRange, BusConfig};
-use super::{loader, DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext};
 
 // Type name used in registering RAM as a device
 const RAM_DEVICE_TYPE: &str = "ram";
@@ -23,6 +23,7 @@ pub struct RomModule;
 #[derive(Deserialize)]
 pub struct MemoryAttributes {
     size: u32,
+    offset: Option<u16>,
     fill: Option<u8>,
     image: Option<ExpandedPathBuf>,
 }
@@ -38,7 +39,7 @@ impl MemoryAttributes {
     }
 }
 
-fn make_buffer(size: usize, fill_value: Option<u8>) -> Vec<u8> {
+pub fn make_buffer(size: usize, fill_value: Option<u8>) -> Vec<u8> {
     match fill_value {
         Some(v) => vec![v; size],
         None => (0..size).map(|_| rand::random::<u8>()).collect(),
@@ -56,9 +57,10 @@ impl DeviceModule for RamModule {
 
         let config = MemoryAttributes::from_attributes(attributes)?;
         let range = AddressRange::new(address, address + (config.size - 1) as u16);
+        let offset = config.offset.unwrap_or(0);
         if let Some(filename) = config.image {
             let mut data = make_buffer(config.size as usize, config.fill);
-            loader::load_image(&filename, &mut data, address as usize).await.map_err(DeviceModuleError::Load)?;
+            loader::load_image(&filename, &mut data, offset as usize).await.map_err(DeviceModuleError::Load)?;
             bus_config.ram_with_data(range, data).map_err(DeviceModuleError::BusConfig)
         } else if let Some(fill) = config.fill {
             bus_config.ram_with_fill(range, fill).map_err(DeviceModuleError::BusConfig)
@@ -78,9 +80,10 @@ impl DeviceModule for RomModule {
                          -> Result<BusConfig, DeviceModuleError> {
         let config = MemoryAttributes::from_attributes(attributes)?;
         let range = AddressRange::new(address, address + (config.size - 1) as u16);
+        let offset = config.offset.unwrap_or(0);
         if let Some(filename) = config.image {
             let mut data = make_buffer(config.size as usize, config.fill);
-            loader::load_image(&filename, &mut data, address as usize).await.map_err(DeviceModuleError::Load)?;
+            loader::load_image(&filename, &mut data, offset as usize).await.map_err(DeviceModuleError::Load)?;
             bus_config.rom(range, data).map_err(DeviceModuleError::BusConfig)
         }
         else {
