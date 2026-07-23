@@ -45,15 +45,14 @@ impl DeviceModule for ConsoleModule {
 
         let console = {
             let mut dev = Console::new(self.name()).with_address(address);
-            let injected = context.console_transport.as_ref()
-                .and_then(|slot| slot.lock().ok()?.take());
-            if let Some(transport) = injected {
-                dev.attach_transport(transport);
-            } else if let Some(transport_spec) = transport_spec {
+            if let Some(transport_spec) = transport_spec {
                 let transport = transport_spec
                     .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport);
+            } else if let Some(injected) = context.console_transport.as_ref()
+                    .and_then(|slot| slot.lock().ok()?.take()) {
+                dev.attach_transport(injected);
             }
             if let Some(sender) = &context.error_sender {
                 dev.set_error_sender(sender.clone(), device_id);
@@ -110,6 +109,30 @@ mod tests {
         ).await.unwrap();
 
         assert!(slot.lock().unwrap().is_none(), "transport should be taken after instantiation");
+    }
+
+    #[tokio::test]
+    async fn injected_transport_ignored_when_transport_spec_is_set() {
+        // When a transport= attribute is configured, the context transport must not be consumed,
+        // so that the caller can detect whether stdio will be used (e.g. to enter raw mode).
+        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let slot = Arc::new(Mutex::new(Some(Box::new(local) as Box<dyn crate::emulator::transport::Transport>)));
+        let mut attributes = HashMap::new();
+        // pipe transport is the only variant we can create without an OS resource in a unit test
+        attributes.insert(
+            "transport".to_string(),
+            Value::from("pipe:/usr/bin/cat"),
+        );
+        let context = InstantiationContext {
+            clock_hz: None,
+            error_sender: None,
+            console_transport: Some(Arc::clone(&slot)),
+        };
+        let _result = ConsoleModule.instantiate(
+            BusConfig::new(), 0xFFF8, &attributes, &context,
+        ).await;
+
+        assert!(slot.lock().unwrap().is_some(), "context transport should not be consumed when transport_spec is set");
     }
 
     #[tokio::test]
