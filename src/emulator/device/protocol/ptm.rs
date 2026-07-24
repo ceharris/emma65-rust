@@ -1,8 +1,8 @@
 //! Protocol codec for the MC6840 peripheral interface.
 //!
 
-use crate::emulator::device::protocol_manager::{ProtocolMessageDecoder, ProtocolMessageEncoder};
 use crate::emulator::ProtocolMessageEncoding;
+use crate::emulator::device::protocol_manager::{ProtocolMessageDecoder, ProtocolMessageEncoder};
 
 const BINARY_TYPE_MASK: u8 = 0b11110000;
 const BINARY_CLOCK_EDGE: u8   = 0b10000000;

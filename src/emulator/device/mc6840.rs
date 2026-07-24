@@ -58,8 +58,8 @@
 //! positive-edge transitions for any of the three clock input and three gate input signals.
 //!
 
-use super::ptm_protocol;
-use super::ptm_protocol::PtmProtocolMessage;
+use crate::emulator::device::protocol::ptm;
+use crate::emulator::device::protocol::ptm::PtmProtocolMessage;
 use crate::emulator::{DeviceId, ErrorSender, IoDevice, ProtocolManager, ProtocolMessageEncoding, Transport, TransportError, transport};
 use log::debug;
 
@@ -523,7 +523,7 @@ impl Mc6840 {
     /// state change; any number of peripherals may be connected simultaneously.
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
         self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport,
-            ptm_protocol::new_encoder, ptm_protocol::new_decoder));
+                                                          ptm::new_encoder, ptm::new_decoder));
     }
 
     /// Sets the error sender for async transport event reporting.

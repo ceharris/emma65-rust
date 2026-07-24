@@ -7,11 +7,10 @@ pub mod mc6840;
 pub mod mc6850;
 pub mod phoebe;
 pub mod via6522;
-pub mod via_protocol;
-pub mod ptm_protocol;
 mod ring;
 mod protocol_manager;
 pub mod vireo;
+pub mod protocol;
 
 pub use self::console::Console;
 pub use self::finch::Finch;
@@ -20,10 +19,10 @@ pub use self::mc6840::Mc6840;
 pub use self::mc6850::Mc6850;
 pub use self::phoebe::Phoebe;
 pub use self::protocol_manager::{ProtocolManager, ProtocolMessageDecoder, ProtocolMessageEncoder, ProtocolMessageEncoding};
-pub use self::ptm_protocol::{PtmAsciiProtocolDecoder, PtmAsciiProtocolEncoder, PtmBinaryProtocolDecoder, PtmBinaryProtocolEncoder, PtmProtocolMessage};
+pub use protocol::ptm::{PtmAsciiProtocolDecoder, PtmAsciiProtocolEncoder, PtmBinaryProtocolDecoder, PtmBinaryProtocolEncoder, PtmProtocolMessage};
 pub use self::r6551::R6551;
 pub use self::via6522::Via6522;
-pub use self::via_protocol::{ViaAsciiProtocolDecoder, ViaAsciiProtocolEncoder, ViaBinaryProtocolDecoder, ViaBinaryProtocolEncoder, ViaProtocolMessage};
+pub use protocol::via::{ViaAsciiProtocolDecoder, ViaAsciiProtocolEncoder, ViaBinaryProtocolDecoder, ViaBinaryProtocolEncoder, ViaProtocolMessage};
 pub use self::vireo::Vireo;
 
 use std::fmt::{Display, Formatter, Result};
