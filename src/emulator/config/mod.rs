@@ -14,6 +14,7 @@ mod memory;
 mod loader;
 mod phoebe;
 mod write_policy;
+mod vireo;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
 pub use registry::{DeviceRegistry, InstantiationContext, TransportSlot};
@@ -29,5 +30,5 @@ pub use mc6840::Mc6840Module;
 pub use mc6850::Mc6850Module;
 pub use phoebe::PhoebeModule;
 pub use via6522::Via6522Module;
-
+pub use vireo::VireoModule;
 

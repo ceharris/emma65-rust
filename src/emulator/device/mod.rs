@@ -11,6 +11,7 @@ pub mod via_protocol;
 mod ring;
 mod ptm_protocol;
 mod protocol_manager;
+pub mod vireo;
 
 pub use self::console::Console;
 pub use self::finch::Finch;
@@ -23,6 +24,7 @@ pub use self::ptm_protocol::{PtmAsciiProtocolDecoder, PtmAsciiProtocolEncoder, P
 pub use self::r6551::R6551;
 pub use self::via6522::Via6522;
 pub use self::via_protocol::{ViaAsciiProtocolDecoder, ViaAsciiProtocolEncoder, ViaBinaryProtocolDecoder, ViaBinaryProtocolEncoder, ViaProtocolMessage};
+pub use self::vireo::Vireo;
 
 use std::fmt::{Display, Formatter, Result};
 use tokio::sync::mpsc;
