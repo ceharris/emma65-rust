@@ -241,7 +241,7 @@ impl IoDevice for Finch {
 
     fn reset(&mut self) {
         self.control_register &= !MMUE_MASK;
-        debug!("{} @0x{:04x} reset", self.name(), self.control_register);
+        debug!("{} @0x{:04x} reset", self.name(), self.control_register_address);
     }
 
     fn name(&self) -> &str { self.name }
@@ -361,14 +361,18 @@ mod tests {
     #[test]
     fn write_rom_ignored_when_policy_is_none() {
         let mut device = device();
+        device.data[0x87FFF] = 0xFF;
         device.write(0xFFFF, 0);
+        assert_eq!(device.data[0x87FFF], 0xFF);
     }
 
     #[test]
     fn write_rom_ignored_when_policy_is_ignore() {
         let mut device = device();
         device.set_write_policy(RomWritePolicy::Ignore);
+        device.data[0x87FFF] = 0xFF;
         device.write(0xFFFF, 0);
+        assert_eq!(device.data[0x87FFF], 0xFF);
     }
 
     #[tokio::test]
