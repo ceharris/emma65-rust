@@ -105,10 +105,10 @@ impl<T> ProtocolSlot<T> {
 /// I/O device that accepts multiple concurrently connected peripherals.
 ///
 /// For each transport connection, the manager provides a state dump from the
-/// I/O device. Subsequently, on each call to the [`poll_transports`] method, it
+/// I/O device. Subsequently, on each call to the [`poll_transport`](ProtocolManager::poll_transport) method, it
 /// checks for a valid message from any connected peripheral. Messages can be
-/// delivered to peripherals using either the [`send_to_all`] or [`send_all_to_all`]
-/// methods.
+/// delivered to peripherals using either the [`send_to_all`](ProtocolManager::send_to_all) or
+/// [`send_all_to_all`](ProtocolManager::send_all_to_all) methods.
 pub struct ProtocolManager<T> {
     encoding: ProtocolMessageEncoding,
     transport: Box<dyn Transport>,

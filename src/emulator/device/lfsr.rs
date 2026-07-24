@@ -17,9 +17,9 @@ const DEFAULT_STATE: u16 = 0xACE1;
 /// | 0 (LOW) | Latch/advance state; return low byte | Buffer low seed byte |
 /// | 1 (HIGH) | Return latched high byte | Load seed from `(seed_buf \| value << 8)` |
 ///
-/// In **continuous** mode (default), the LFSR advances once per CPU clock cycle via
-/// [`IoDevice::tick`]; reading only latches and returns the current state. In **step** mode,
-/// the LFSR advances only when the LOW register is read.
+/// In **continuous** mode (default), the LFSR advances once per CPU clock cycle; reading
+/// latches and returns the current state. In **step** mode, the LFSR advances only when the LOW
+/// register is read.
 ///
 /// Seeding: write LOW byte first (buffered), then write HIGH byte (loads the LFSR). A seed
 /// of `0x0000` is clamped to `0x0001` to prevent a stuck state.
@@ -36,7 +36,7 @@ pub struct Lfsr16 {
 }
 
 impl Lfsr16 {
-    /// Creates a new `Lfsr16` with default taps ([`DEFAULT_TAPS`]) and continuous advance mode.
+    /// Creates a new `Lfsr16` with default taps and continuous advance mode.
     pub fn new(name: &'static str) -> Self {
         Self {
             name,

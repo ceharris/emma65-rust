@@ -1,4 +1,4 @@
-//! A bank-switched memory module (designed for the Vireo SBC).
+//! A bank-switched memory module designed for the Vireo SBC.
 //!
 //! This device combines 128K RAM and 32K ROM with an elegant bank switching mechanism to
 //! allow sophisticated program loading strategies and/or program use of RAM beyond the limits
@@ -31,7 +31,7 @@
 //! The fields of the control register are as follows. Note that bit 7 is ignored on write and
 //! always reads as zero.
 //!
-//! ```ignore
+//! ```text
 //!     ┌────┬────┬────────┬────────────────┐
 //!     │ -- │ WI │ M1  M0 │ S3  S2  S1  S0 │
 //!     └────┴────┴────────┴────────────────┘

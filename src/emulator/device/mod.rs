@@ -8,8 +8,8 @@ pub mod mc6850;
 pub mod phoebe;
 pub mod via6522;
 pub mod via_protocol;
+pub mod ptm_protocol;
 mod ring;
-mod ptm_protocol;
 mod protocol_manager;
 pub mod vireo;
 

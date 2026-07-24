@@ -1,4 +1,4 @@
-//! A bank-switched memory module (designed for the Phoebe SBC).
+//! A bank-switched memory module designed for the Phoebe SBC.
 //!
 //! This device provides 56K RAM and 32K ROM. The ROM is designed to be bank-switched into a 16K
 //! region in the address space (at `0xC000`). It divides the switchable region in half, and maps a
@@ -10,7 +10,7 @@
 //! space of the physical ROM; Bank 0 = offset `0x0000`, Bank 1 = offset `0x2000`, Bank 2 = offset
 //! `0x4000`, Bank 3 = offset `0x6000`.
 //!
-//! Bank 3 mapped to the upper half of the 16K switchable region, and cannot be switched out.
+//! Bank 3 is mapped to the upper half of the 16K switchable region, and cannot be switched out.
 //! The program image in Bank 3 must include appropriate target addresses for the 6502 machine
 //! vectors; NMI vector at `0x7FFA`, Reset vector at `0x7FFC`, IRQ vector at `0x7FFE`.
 //!

@@ -4,7 +4,7 @@
 //!
 //! The MC6840 has three 16-bit counters, three corresponding control registers (CR1, CR2, and CR3)
 //! and a status register. Under software control the counters can be used to generate interrupts
-//! and/or generate output signals for peripherals connected via a supported [Transport](crate::emulator::Transport).
+//! and/or generate output signals for peripherals connected via a supported [Transport].
 //! Supported wave generation modes via virtual outputs include square-wave and pulse-width
 //! modulation, in both continuous and single-shot modes. Supported measurement operations include
 //! event counting, frequency measurement, and interval (pulse width measurement).
@@ -41,9 +41,8 @@
 //! # Virtual peripheral connections
 //!
 //! Virtual peripherals connect to the MC6840 PTM over byte-stream transports using the
-//! [`crate::emulator::device::ptm_protocol`] message protocol. Any number of transports may
-//! be attached using [`Mc6840::attach_transport`]; each undergoes an independent format
-//! negotiation handshake.
+//! PTM message protocol. Any number of transports may be attached using [`Mc6840::attach_transport`]; each
+//! undergoes an independent format negotiation handshake.
 //!
 //! **Handshake.** The peripheral opens the connection by sending a single format-selector byte.
 //! On the next [`IoDevice::tick`] call that receives it, the PTM completes the handshake and

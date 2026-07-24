@@ -1,4 +1,4 @@
-//! A bank-switched ROM (designed for the Finch SBC).
+//! A bank-switched memory module with a simple MMU designed for the Finch SBC.
 //!
 //! This device combines 512K RAM and 512K ROM and a very basic memory management unit (MMU) that
 //! allows the entire 64K address space for the 6502 to be mapped to any combination of 4K segments
@@ -11,7 +11,7 @@
 //! of the 12 least significant bits from the 6502 address bus (bits `A0..A11`) concatenated with
 //! the 8-bit bank address (`B0..B7`) stored in the register addressed by `A12..A15`.
 //!
-//! ```ignore
+//! ```text
 //!                                     6 5 0 2   A d d r e s s   B u s
 //!                     A15 A14 A13 A12 A11 A10  A9  A8  A7  A6  A5  A4  A3  A2  A1  A0
 //!                       │   │   │   │   │   │   │   │   │   │   │   │   │   │   │   │
@@ -74,7 +74,7 @@
 //! modify the MMUE bit in the accumulator, then write the result back to the register. For
 //! example, to set the MMUE bit (assuming that the register is mapped at `0xFFD8`):
 //!
-//! ```ignore
+//! ```text
 //!         LDA $FFD8       ; fetch the config register state
 //!         ORA #$80        ; set the high order bit (MMUE)
 //!         STA $FFD8       ; store the new config register state

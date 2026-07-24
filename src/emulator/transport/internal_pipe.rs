@@ -7,7 +7,7 @@
 //! This is an internal transport used to connect devices to in-process pipe
 //! pairs (e.g. the default console attached to the emulator's own stdin/stdout,
 //! or test harnesses that need synchronous byte-level access). For connecting
-//! a device to an external child process, see [`PipeTransport`].
+//! a device to an external child process, see [`PipeTransport`](super::pipe::PipeTransport).
 
 use std::fs::File;
 use std::io::{self, Read, Write};

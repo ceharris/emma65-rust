@@ -25,7 +25,7 @@ pub struct InstantiationContext {
 }
 
 impl InstantiationContext {
-    /// Returns a callback suitable for [`TransportSpec::to_transport_with_reporter`] that
+    /// Returns a callback suitable for [`TransportSpec::to_transport_with_reporter`](super::TransportSpec::to_transport_with_reporter) that
     /// reports child-process exit as a [`DeviceEvent::TransportError`] for the given device.
     pub fn pipe_exit_reporter(&self, device_id: DeviceId) -> impl FnOnce(std::io::Error) + Send + 'static {
         let sender = self.error_sender.clone();
