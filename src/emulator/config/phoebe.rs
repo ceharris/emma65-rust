@@ -8,18 +8,18 @@ use crate::emulator::config::write_policy::WritePolicySpec;
 use crate::emulator::device::{Phoebe, phoebe};
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
 
-const DEVICE_NAME: &str = "rom/phoebe";
+const DEVICE_NAME: &str = "mem/phoebe";
 
-/// Phoebe bank-switched ROM module.
+/// Phoebe bank-switched memory module.
 #[derive(Clone)]
 pub struct PhoebeModule;
 
-/// Configuration attributes for the Phoebe bank-switched ROM module.
+/// Configuration attributes for the Phoebe bank-switched memory module.
 #[derive(Deserialize)]
 pub struct PhoebeAttributes {
     /// Address of the bank selection register.
-    #[serde(rename = "bank-register", alias="select")]
-    bank_register_address: u16,
+    #[serde(rename = "control-register", alias="ctrl")]
+    control_register_address: u16,
     /// Write policy
     #[serde(rename = "write-policy", skip_serializing_if = "Option::is_none")]
     write_policy: Option<WritePolicySpec>,
@@ -29,6 +29,8 @@ pub struct PhoebeAttributes {
     offset: Option<u16>,
     /// Path to an image to load into the ROM
     image: ExpandedPathBuf,
+    /// Value used to fill RAM
+    ram_fill: Option<u8>,
 }
 
 impl PhoebeAttributes {
@@ -49,13 +51,13 @@ impl DeviceModule for PhoebeModule {
                          attributes: &HashMap<String, Value>, context: &InstantiationContext)
                          -> Result<BusConfig, DeviceModuleError> {
         let config = PhoebeAttributes::from_attributes(attributes)?;
-        let range = AddressRange::new(address, address.wrapping_add(phoebe::REGION_SIZE).wrapping_sub(1));
         let device_id = DeviceId(address as u32);
         let offset = config.offset.unwrap_or(0) as usize;
-        let mut data = super::memory::make_buffer(phoebe::MEMORY_SIZE as usize, config.fill);
-        loader::load_image(&config.image, &mut data, offset).await.map_err(DeviceModuleError::Load)?;
+        let mut rom_data = super::memory::make_buffer(phoebe::ROM_SIZE, config.fill);
+        let ram_data = super::memory::make_buffer(phoebe::ROM_SIZE, config.ram_fill);
+        loader::load_image(&config.image, &mut rom_data, offset).await.map_err(DeviceModuleError::Load)?;
         let device = {
-            let mut dev = Phoebe::with_data(DEVICE_NAME, range, config.bank_register_address, data);
+            let mut dev = Phoebe::with_data(DEVICE_NAME, config.control_register_address, rom_data, ram_data);
             if let Some(write_policy) = config.write_policy {
                 dev.set_write_policy(write_policy.to_rom_write_policy());
             }
@@ -65,7 +67,7 @@ impl DeviceModule for PhoebeModule {
             dev
         };
 
-        bus_config.device(range, device_id, Box::new(device))
+        bus_config.device(AddressRange::new(0, 0xFFFF), device_id, Box::new(device))
             .map_err(DeviceModuleError::BusConfig)
     }
 }
