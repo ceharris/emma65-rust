@@ -1,4 +1,4 @@
-//! A bank-switched ROM (designed for the Vireo SBC).
+//! A bank-switched memory module (designed for the Vireo SBC).
 //!
 //! This device combines 128K RAM and 32K ROM with an elegant bank switching mechanism to
 //! allow sophisticated program loading strategies and/or program use of RAM beyond the limits
@@ -134,7 +134,6 @@ impl Vireo {
     /// Constructs a new `Vireo` device whose memory is loaded with the given data.
     ///
     /// ## Arguments
-    /// - `bank_register_address` - base address for the sixteen bank registers
     /// - `control_register_address` - address for the control register
     /// - `rom_data` - data to load into ROM; panics if the length of `rom_data` is not 32K
     /// - `ram_data` - data to load into RAM; panics if the length of `ram_data` is not 128K

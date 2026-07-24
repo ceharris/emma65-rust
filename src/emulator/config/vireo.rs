@@ -8,13 +8,13 @@ use crate::emulator::config::write_policy::WritePolicySpec;
 use crate::emulator::device::{Vireo, vireo};
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
 
-const DEVICE_NAME: &str = "mmu/vireo";
+const DEVICE_NAME: &str = "mem/vireo";
 
-/// Finch bank-switched MMU module.
+/// Vireo bank-switched memory module.
 #[derive(Clone)]
 pub struct VireoModule;
 
-/// Configuration attributes for the Vireo bank-switched MMU module.
+/// Configuration attributes for the Vireo bank-switched memory module.
 #[derive(Deserialize)]
 pub struct VireoAttributes {
     /// Address of the control register.

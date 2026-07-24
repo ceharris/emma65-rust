@@ -8,7 +8,7 @@ use crate::emulator::config::write_policy::WritePolicySpec;
 use crate::emulator::device::{Finch, finch};
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
 
-const DEVICE_NAME: &str = "mmu/finch";
+const DEVICE_NAME: &str = "mem/finch";
 
 /// Finch bank-switched MMU module.
 #[derive(Clone)]
