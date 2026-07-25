@@ -69,10 +69,11 @@
 //! control-signal lines (CA1, CA2, CB1, CB2). If the resulting edge matches the PCR
 //! configuration, the corresponding IFR bit is set and an IRQ may be asserted.
 
-use crate::emulator::device::protocol::via;
-use crate::emulator::device::protocol::via::ViaProtocolMessage;
-use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::{ProtocolManager, ProtocolMessageEncoding, Transport, TransportError, transport};
+use super::protocol::manager::ProtocolManager;
+use super::protocol::via::ViaProtocolMessage;
+use super::protocol::{ProtocolMessageEncoding, via};
+use super::{DeviceId, ErrorSender, IoDevice};
+use crate::emulator::{Transport, TransportError, transport};
 use log::debug;
 use std::time::Duration;
 

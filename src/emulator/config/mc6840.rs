@@ -4,8 +4,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
-use crate::emulator::device::Mc6840;
-use crate::emulator::{AddressRange, BusConfig, DeviceId, ProtocolMessageEncoding};
+use crate::emulator::device::{Mc6840, ProtocolMessageEncoding};
+use crate::emulator::{AddressRange, BusConfig, DeviceId};
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 8;

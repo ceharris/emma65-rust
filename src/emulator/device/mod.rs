@@ -8,7 +8,6 @@ pub mod mc6850;
 pub mod phoebe;
 pub mod via6522;
 mod ring;
-mod protocol_manager;
 pub mod vireo;
 pub mod protocol;
 
@@ -18,7 +17,7 @@ pub use self::lfsr::Lfsr16;
 pub use self::mc6840::Mc6840;
 pub use self::mc6850::Mc6850;
 pub use self::phoebe::Phoebe;
-pub use self::protocol_manager::{ProtocolManager, ProtocolMessageDecoder, ProtocolMessageEncoder, ProtocolMessageEncoding};
+pub use protocol::{ProtocolMessageDecoder, ProtocolMessageEncoder, ProtocolMessageEncoding};
 pub use protocol::ptm::{PtmAsciiProtocolDecoder, PtmAsciiProtocolEncoder, PtmBinaryProtocolDecoder, PtmBinaryProtocolEncoder, PtmProtocolMessage};
 pub use self::r6551::R6551;
 pub use self::via6522::Via6522;

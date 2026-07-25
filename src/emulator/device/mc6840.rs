@@ -58,9 +58,10 @@
 //! positive-edge transitions for any of the three clock input and three gate input signals.
 //!
 
-use crate::emulator::device::protocol::ptm;
-use crate::emulator::device::protocol::ptm::PtmProtocolMessage;
-use crate::emulator::{DeviceId, ErrorSender, IoDevice, ProtocolManager, ProtocolMessageEncoding, Transport, TransportError, transport};
+use super::protocol::manager::ProtocolManager;
+use super::protocol::ptm::PtmProtocolMessage;
+use super::protocol::{ProtocolMessageEncoding, ptm};
+use crate::emulator::{DeviceId, ErrorSender, IoDevice, Transport, TransportError, transport};
 use log::debug;
 
 const T1: usize = 0;
