@@ -1,8 +1,58 @@
-//! Protocol codec for the MC6840 peripheral interface.
+//! Protocol codecs for the MC6840 peripheral interface.
+//!
+//! This module provides encoders and decoders for the protocol used to communicate between
+//! a peripheral and the MC6840 device over a [Transport](crate::emulator::transport::Transport).
+//! The MC6840 device supports multiple concurrent peripheral attachments via distinct transport
+//! connections. Just as is the case with real hardware, care must be taken to ensure that
+//! connected peripherals don't interfere with each other.
+//!
+//! When a peripheral connects to the MC6840 transport endpoint, the current state of the MC6840
+//! is immediately sent to the peripheral. Subsequently, when any connected peripheral changes the
+//! state of the MC6840, every peripheral is informed of the change.
+//!
+//! The MC6840 accepts only those messages designated as being sent by the peripheral; clock and
+//! gate edge transitions. The peripheral will receive from the MC6840 only those messages
+//! designated as being sent by the MC6840; clock, gate, and output state updates. Unrecognized
+//! messages are silently ignored by the MC6840.
+//!
+//! Two protocol message encodings are supported; ASCII and Binary. The ASCII protocol is useful
+//! for interactive sessions using a terminal or socket utility program, for the purpose of
+//! education or debugging. The binary protocol is compact and efficient.
+//!
+//! ## ASCII Protocol
+//!
+//! The ASCII protocol consists of short strings of printable ASCII characters. As an aid to
+//! human readability, distinct messages are separated by a single space character when sent
+//! by the MC6840. When more than 72 characters of messages and spaces have been sent by the
+//! MC6840, it will output a canonical ASCII CR (`0xD`) LF (`0xA`) sequence. The MC6840 ignores
+//! non-printable ASCII control characters (`0x00..0x1F`) and spaces (`0x20`) on input. The
+//! MC6840 does not distinguish between upper case and lower case letters.
+//!
+//! | Message Type | Sent By    | Format | Example | Description                                                                                                              |
+//! |--------------|------------|--------|---------|--------------------------------------------------------------------------------------------------------------------------|
+//! | Clock Edge   | Peripheral | Cnp    | C21     | Change the state of an input clock signal; _n_ is the subject timer (1..3); _p_ is the polarity (0=negative, 1=positive) |
+//! | Gate Edge    | Peripheral | Gnp    | G30     | Change the state of an input gate signal; _n_ is the subject timer (1..3); _p_ is the polarity (0=negative, 1=positive)  |
+//! | Clock State  | MC6840     | Txyz   | T010    | Clock input state; _x_, _y_, and _z_ are the state (0 or 1) of timer 1, 2, and 3, respectively                           |
+//! | Gate State   | MC6840     | Uxyz   | U101    | Gate input state; _x_, _y_, and _z_ are the state (0 or 1) of timer 1, 2, and 3, respectively                            |
+//! | Output State | MC6840     | Vxyz   | V001    | Timer output state; _x_, _y_, and _z_ are the state (0 or 1) of timer 1, 2, and 3, respectively                          |
+//!
+//! ## Binary Protocol
+//! Each message in the binary protocol consists of a single bit-mapped byte. The high order bit
+//! is set in each message. Subsequent bits determine the message type and additional parameters.
+//!
+//! A receiver (peripheral or MC6840) must ignore any received byte which the upper nibble
+//! (bits 4..7) does not contain a recognized pattern according to the following table.
+//!
+//! | Message Type | Sent By    | b7 | b6 | b5 | b4 | b3 | b2 | b1 | b0 | Description                                                                                                             |
+//! |--------------|------------|----|----|----|----|----|----|----|----|-------------------------------------------------------------------------------------------------------------------------|
+//! | Clock Edge   | Peripheral |  1 |  0 |  0 |  0 |  P | C3 | C2 | C1 | _P_ is the polarity (0=negative, 1=positive), _Cx_ is set to 1 to signal a transition of clock input _Cx_ (_x_ in 1..3) |
+//! | Gate Edge    | Peripheral |  1 |  0 |  0 |  1 |  P | G3 | G2 | G1 | _P_ is the polarity (0=negative, 1=positive), _Gx_ is set to 1 to signal a transition of gate input _Gx_ (_x_ in 1..3)  |                      |
+//! | Clock State  | MC6840     |  1 |  0 |  1 |  0 |  0 | C3 | C2 | C1 | _P_ is the polarity (0=negative, 1=positive), _Cx_ is the state of clock input _Cx_ (_x_ in 1..3)                       |
+//! | Gate State   | MC6840     |  1 |  0 |  1 |  1 |  0 | G3 | G2 | G1 | _P_ is the polarity (0=negative, 1=positive), _Gx_ is the state of gate input _Cx_ (_x_ in 1..3)                        |
+//! | Output State | MC6840     |  1 |  1 |  0 |  0 |  0 | O3 | O2 | O1 | _P_ is the polarity (0=negative, 1=positive), _Ox_ is the state of timer output _Ox_ (_x_ in 1..3)                      |
 //!
 
-use crate::emulator::ProtocolMessageEncoding;
-use crate::emulator::device::protocol_manager::{ProtocolMessageDecoder, ProtocolMessageEncoder};
+use crate::emulator::device::protocol::{ProtocolMessageDecoder, ProtocolMessageEncoder, ProtocolMessageEncoding};
 
 const BINARY_TYPE_MASK: u8 = 0b11110000;
 const BINARY_CLOCK_EDGE: u8   = 0b10000000;
