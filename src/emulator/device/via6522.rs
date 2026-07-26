@@ -48,29 +48,22 @@
 //! # Virtual peripheral connections
 //!
 //! Virtual peripherals connect to the VIA over byte-stream transports using the
-//! [`via`] message protocol.
+//! [`via`] message protocol. Any of the available transports may be
+//! attached to the device; socket-based transports have the advantage of allowing multiple
+//! peripherals to attach to the device. As is the case with real hardware, when multiple
+//! peripherals share the GPIO pins of the VIA, care must be taken to avoid conflict.
 //!
-//! **Handshake.** The peripheral opens the connection by sending a single format-selector byte.
-//! On the next [`IoDevice::tick`] call that receives it, the VIA completes the handshake and
-//! immediately sends a six-message state dump (port A value, port B value, CA1, CA2, CB1,
-//! CB2), giving the peripheral the current GPIO state before any further exchange.
+//! All messages sent by the VIA are conveyed to all connected peripherals by the underlying
+//! transport implementation. Any change in the VIA's state by a peripheral will be conveyed to
+//! all peripherals. When a peripheral connects, a state dump is triggered such that the newly
+//! connected peripheral will be aware of the current state.
 //!
-//! **VIA → peripheral (outgoing).** After the handshake the VIA sends a
-//! [`ViaProtocolMessage::PortStateChange`] or [`ViaProtocolMessage::ControlSignalChange`]
-//! message whenever the observable GPIO state changes:
-//! - Writes to ORB/ORA or the DDR registers that alter output-pin state.
-//! - Timer 1 PB7 toggles (when `ACR_T1_PB7_OUTPUT` is set and messages are not suppressed).
+//! Inbound messages from peripherals are serviced at each `tick` on the bus, and before the
+//! VIA's timers are updated.
 //!
-//! Every attached transport that has completed its handshake receives the message.
-//!
-//! **Peripheral → VIA (incoming).** The peripheral drives the VIA's input pins by sending
-//! `PortStateChange` and `ControlSignalChange` messages at any time after the handshake.
-//! Incoming messages update the VIA's latched input state (`input_a`/`input_b`) and the
-//! control-signal lines (CA1, CA2, CB1, CB2). If the resulting edge matches the PCR
-//! configuration, the corresponding IFR bit is set and an IRQ may be asserted.
 
 use super::protocol::manager::ProtocolManager;
-use super::protocol::via::ViaProtocolMessage;
+use super::protocol::via::{VIA_CTRL1_MASK, VIA_CTRL2_MASK, ViaProtocolMessage};
 use super::protocol::{ProtocolMessageEncoding, via};
 use super::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::{Transport, TransportError, transport};
@@ -259,6 +252,16 @@ impl Via6522 {
         }
     }
 
+    fn port_a_ctrl_state(&self) -> u8 {
+        (if self.ca1 { VIA_CTRL1_MASK } else { 0 })
+            | (if self.ca2 { VIA_CTRL2_MASK } else { 0 })
+    }
+
+    fn port_b_ctrl_state(&self) -> u8 {
+        (if self.cb1 { VIA_CTRL1_MASK } else { 0 })
+            | (if self.cb2 { VIA_CTRL2_MASK } else { 0 })
+    }
+
     // --- Port read helpers ---
 
     /// Reads the effective state of port B: output pins from ORB, input pins from input_b or
@@ -285,15 +288,23 @@ impl Via6522 {
     fn current_state(&mut self) -> Vec<ViaProtocolMessage> {
         let port_a = self.read_port_a();
         let port_b = self.read_port_b();
-        let (ca1, ca2, cb1, cb2) = (self.ca1, self.ca2, self.cb1, self.cb2);
-        // Control signal bit layout: CA1=bit1, CA2=bit0, CB1=bit3, CB2=bit2.
-        let messages = vec![
-            ViaProtocolMessage::PortStateChange { port: 'A', value: port_a },
-            ViaProtocolMessage::PortStateChange { port: 'B', value: port_b },
-            ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: ca1 },
-            ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: ca2 },
-            ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: cb1 },
-            ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: cb2 },
+        let messages: Vec<ViaProtocolMessage> = vec![
+            ViaProtocolMessage::PortState {
+                port: b'A',
+                port_state: port_a
+            },
+            ViaProtocolMessage::CtrlState {
+                port: b'A',
+                ctrl_state: self.port_a_ctrl_state(),
+            },
+            ViaProtocolMessage::PortState {
+                port: b'B',
+                port_state: port_b,
+            },
+            ViaProtocolMessage::CtrlState {
+                port: b'B',
+                ctrl_state: self.port_b_ctrl_state(),
+            },
         ];
         messages
     }
@@ -327,119 +338,233 @@ impl Via6522 {
             }
         }
     }
+    
+    fn update_port_a(&mut self, value: u8) {
+        let old = self.input_a;
+        self.input_a = value;
+        if old != value {
+            // CA1 latches on configured edge.
+            let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
+            let triggered = if pos_edge {
+                (old & !value) != 0 || (!old & value) != 0
+            } else {
+                true
+            };
+            if triggered { self.set_ifr(IRQ_CA1); }
+        }
+    }
+
+    fn reset_port_a(&mut self, port_mask: u8) { 
+        self.update_port_a(self.input_a & !port_mask);
+    }
+
+    fn set_port_a(&mut self, port_mask: u8) {
+        self.update_port_a(self.input_a | port_mask);
+    }
+
+    fn update_ca1(&mut self, state: bool) {
+        let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
+        if self.ca1 != state && state == pos_edge {
+            self.set_ifr(IRQ_CA1);
+            // Capture IRA latch on CA1 active edge when PA latch enable is set.
+            if self.acr & ACR_PA_LATCH_ENABLE != 0 {
+                self.ira_latch = self.input_a;
+            }
+            // CA1 active edge releases CA2 handshake output.
+            let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
+            if ca2_mode == 4 && !self.ca2 {
+                self.ca2 = true;
+                self.send_to_all(ViaProtocolMessage::SetCtrl {
+                    port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+            }
+        }
+        self.ca1 = state;
+    }
+
+    fn update_ca2(&mut self, state: bool) {
+        let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
+        if ca2_mode < 4 { // input modes
+            let pos_edge = ca2_mode & 0x02 != 0;
+            if self.ca2 != state && state == pos_edge { self.set_ifr(IRQ_CA2); }
+            self.ca2 = state;
+        }
+    }
+    
+    fn update_port_a_ctrl(&mut self, ctrl_state: u8) {
+        self.update_ca1(ctrl_state & VIA_CTRL1_MASK != 0);
+        self.update_ca2(ctrl_state & VIA_CTRL2_MASK != 0);
+    }
+    
+    fn reset_port_a_ctrl(&mut self, ctrl_mask: u8) {
+        if ctrl_mask & VIA_CTRL1_MASK != 0 {
+            self.update_ca1(false);
+        }
+        if ctrl_mask & VIA_CTRL2_MASK != 0 {
+            self.update_ca2(false);
+        }
+    }
+
+    fn set_port_a_ctrl(&mut self, ctrl_mask: u8) {
+        if ctrl_mask & VIA_CTRL1_MASK != 0 {
+            self.update_ca1(true);
+        }
+        if ctrl_mask & VIA_CTRL2_MASK != 0 {
+            self.update_ca2(true);
+        }
+    }
+
+    fn update_port_b(&mut self, value: u8) {
+        let old = self.input_b;
+        self.input_b = value;
+        if old != value {
+            let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
+            let triggered = if pos_edge {
+                (!old & value) != 0
+            } else {
+                (old & !value) != 0
+            };
+            if triggered { self.set_ifr(IRQ_CB1); }
+        }
+        // T2 pulse-counting mode: count negative PB6 transitions.
+        if self.acr & ACR_T2_PB6_COUNT != 0 && self.t2_running {
+            let old_pb6 = (old >> 6) & 1 != 0;
+            let new_pb6 = (value >> 6) & 1 != 0;
+            if old_pb6 && !new_pb6 {
+                let (new_counter, wrapped) = self.t2_counter.overflowing_sub(1);
+                if wrapped || new_counter == 0 {
+                    if self.t2_irq_armed {
+                        self.set_ifr(IRQ_T2);
+                        self.t2_irq_armed = false;
+                    }
+                    self.t2_counter = new_counter; // wraps naturally to 0xFFFF; counter keeps running
+                } else {
+                    self.t2_counter = new_counter;
+                }
+            }
+        }
+    }
+
+    fn reset_port_b(&mut self, port_mask: u8) {
+        self.update_port_b(self.input_b & !port_mask);
+    }
+
+    fn set_port_b(&mut self, port_mask: u8) {
+        self.update_port_b(self.input_b | port_mask);
+    }
+
+    fn update_cb1(&mut self, state: bool) {
+        if matches!(self.sr_mode(), SR_MODE_IN_EXT | SR_MODE_OUT_EXT)  {
+            self.sr_update(state);
+        } else if self.cb1 != state {
+            self.cb1 = state;
+            let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
+            if state == pos_edge {
+                self.set_ifr(IRQ_CB1);
+                // Capture IRB latch on CB1 active edge when PB latch enable is set.
+                if self.acr & ACR_PB_LATCH_ENABLE != 0 {
+                    self.irb_latch = self.input_b;
+                }
+                // CB1 active edge releases CB2 handshake output.
+                let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
+                if cb2_mode == 4 && !self.cb2 {
+                    self.cb2 = true;
+                    self.send_to_all(ViaProtocolMessage::SetCtrl { 
+                        port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                }
+            }
+        }
+    }
+    
+    fn update_cb2(&mut self, state: bool) {
+        let mode = self.sr_mode();
+        if !matches!(mode, SR_MODE_DISABLED) {
+            if matches!(mode, SR_MODE_IN_T2 | SR_MODE_IN_PHI2 | SR_MODE_IN_EXT) {
+                self.cb2 = state;
+            }
+        } else {
+            let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
+            if cb2_mode < 4 && self.cb2 != state { // input modes only
+                self.cb2 = state;
+                let pos_edge = cb2_mode & 0x02 != 0;
+                if state == pos_edge {
+                    self.set_ifr(IRQ_CB2);
+                }
+            }
+        }
+    }
+
+    fn update_port_b_ctrl(&mut self, ctrl_state: u8) {
+        self.update_cb1(ctrl_state & VIA_CTRL1_MASK != 0);
+        self.update_cb2(ctrl_state & VIA_CTRL2_MASK != 0);
+    }
+
+    fn reset_port_b_ctrl(&mut self, ctrl_mask: u8) {
+        if ctrl_mask & VIA_CTRL1_MASK != 0 {
+            self.update_cb1(false);
+        }
+        if ctrl_mask & VIA_CTRL2_MASK != 0 {
+            self.update_cb2(false);
+        }
+    }
+
+    fn set_port_b_ctrl(&mut self, ctrl_mask: u8) {
+        if ctrl_mask & VIA_CTRL1_MASK != 0 {
+            self.update_cb1(true);
+        }
+        if ctrl_mask & VIA_CTRL2_MASK != 0 {
+            self.update_cb2(true);
+        }
+    }
+    
 
     fn apply_message(&mut self, msg: ViaProtocolMessage) {
         match msg {
-            ViaProtocolMessage::PortStateChange { port: 'A', value } => {
-                let old = self.input_a;
-                self.input_a = value;
-                if old != value {
-                    // CA1 latches on configured edge.
-                    let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
-                    let triggered = if pos_edge {
-                        (old & !value) != 0 || (!old & value) != 0
-                    } else {
-                        true
-                    };
-                    if triggered { self.set_ifr(IRQ_CA1); }
+            ViaProtocolMessage::PortState { port, port_state } => {
+                if port == b'A' {
+                    self.update_port_a(port_state);
+                } else {
+                    self.update_port_b(port_state);
                 }
             }
-            ViaProtocolMessage::PortStateChange { port: 'B', value } => {
-                let old = self.input_b;
-                self.input_b = value;
-                if old != value {
-                    let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
-                    let triggered = if pos_edge {
-                        (!old & value) != 0
-                    } else {
-                        (old & !value) != 0
-                    };
-                    if triggered { self.set_ifr(IRQ_CB1); }
-                }
-                // T2 pulse-counting mode: count negative PB6 transitions.
-                if self.acr & ACR_T2_PB6_COUNT != 0 && self.t2_running {
-                    let old_pb6 = (old >> 6) & 1 != 0;
-                    let new_pb6 = (value >> 6) & 1 != 0;
-                    if old_pb6 && !new_pb6 {
-                        let (new_counter, wrapped) = self.t2_counter.overflowing_sub(1);
-                        if wrapped || new_counter == 0 {
-                            if self.t2_irq_armed {
-                                self.set_ifr(IRQ_T2);
-                                self.t2_irq_armed = false;
-                            }
-                            self.t2_counter = new_counter; // wraps naturally to 0xFFFF; counter keeps running
-                        } else {
-                            self.t2_counter = new_counter;
-                        }
-                    }
+            ViaProtocolMessage::ResetPort { port, port_mask, ctrl_mask} => {
+                if port == b'A' {
+                    self.reset_port_a(port_mask);
+                    self.reset_port_a_ctrl(ctrl_mask);
+                } else {
+                    self.reset_port_b(port_mask);
+                    self.reset_port_b_ctrl(ctrl_mask);
                 }
             }
-            ViaProtocolMessage::ControlSignalChange { signals, state } => {
-                if signals & 0x02 != 0 { // CA1
-                    let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
-                    if self.ca1 != state && state == pos_edge {
-                        self.set_ifr(IRQ_CA1);
-                        // Capture IRA latch on CA1 active edge when PA latch enable is set.
-                        if self.acr & ACR_PA_LATCH_ENABLE != 0 {
-                            self.ira_latch = self.input_a;
-                        }
-                        // CA1 active edge releases CA2 handshake output.
-                        let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
-                        if ca2_mode == 4 && !self.ca2 {
-                            self.ca2 = true;
-                            self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
-                        }
-                    }
-                    self.ca1 = state;
-                }
-                if signals & 0x01 != 0 { // CA2 (when configured as input)
-                    let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
-                    if ca2_mode < 4 { // input modes
-                        let pos_edge = ca2_mode & 0x02 != 0;
-                        if self.ca2 != state && state == pos_edge { self.set_ifr(IRQ_CA2); }
-                        self.ca2 = state;
-                    }
-                }
-                if signals & 0x08 != 0 { // CB1
-                    if matches!(self.sr_mode(), SR_MODE_IN_EXT | SR_MODE_OUT_EXT)  {
-                        self.sr_update(state);
-                    } else if self.cb1 != state {
-                        self.cb1 = state;
-                        let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
-                        if state == pos_edge {
-                            self.set_ifr(IRQ_CB1);
-                            // Capture IRB latch on CB1 active edge when PB latch enable is set.
-                            if self.acr & ACR_PB_LATCH_ENABLE != 0 {
-                                self.irb_latch = self.input_b;
-                            }
-                            // CB1 active edge releases CB2 handshake output.
-                            let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
-                            if cb2_mode == 4 && !self.cb2 {
-                                self.cb2 = true;
-                                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
-                            }
-                        }
-                    }
-                }
-                if signals & 0x04 != 0 { // CB2 (when configured as input)
-                    let mode = self.sr_mode();
-                    if !matches!(mode, SR_MODE_DISABLED) {
-                        if matches!(mode, SR_MODE_IN_T2 | SR_MODE_IN_PHI2 | SR_MODE_IN_EXT) {
-                            self.cb2 = state;
-                        }
-                    } else {
-                        let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
-                        if cb2_mode < 4 && self.cb2 != state { // input modes only
-                            self.cb2 = state;
-                            let pos_edge = cb2_mode & 0x02 != 0;
-                            if state == pos_edge {
-                                self.set_ifr(IRQ_CB2);
-                            }
-                        }
-                    }
+            ViaProtocolMessage::SetPort { port, port_mask, ctrl_mask} => {
+                if port == b'A' {
+                    self.set_port_a(port_mask);
+                    self.set_port_a_ctrl(ctrl_mask);
+                } else {
+                    self.set_port_b(port_mask);
+                    self.set_port_b_ctrl(ctrl_mask);
                 }
             }
-            _ => {}
+            ViaProtocolMessage::CtrlState { port, ctrl_state } => {
+                if port == b'A' {
+                    self.update_port_a_ctrl(ctrl_state);
+                } else {
+                    self.update_port_b_ctrl(ctrl_state);
+                }
+            }
+            ViaProtocolMessage::ResetCtrl { port, ctrl_mask } => {
+                if port == b'A' {
+                    self.reset_port_a_ctrl(ctrl_mask);
+                } else {
+                    self.reset_port_b_ctrl(ctrl_mask);
+                }
+            }
+            ViaProtocolMessage::SetCtrl { port, ctrl_mask } => {
+                if port == b'A' {
+                    self.set_port_a_ctrl(ctrl_mask);
+                } else {
+                    self.set_port_b_ctrl(ctrl_mask);
+                }
+            }
         }
     }
 
@@ -454,11 +579,14 @@ impl Via6522 {
         match ca2_mode {
             4 if self.ca2 => { // handshake: assert low; released by CA1 active edge
                 self.ca2 = false;
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+                self.send_to_all(ViaProtocolMessage::ResetCtrl { 
+                    port: b'A', ctrl_mask: VIA_CTRL2_MASK });
             }
             5 => { // pulse: low then immediately high
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+                self.send_to_all(ViaProtocolMessage::ResetCtrl { 
+                    port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+                self.send_to_all(ViaProtocolMessage::SetCtrl { 
+                    port: b'A', ctrl_mask: VIA_CTRL2_MASK });
             }
             _ => {}
         }
@@ -471,11 +599,14 @@ impl Via6522 {
         match cb2_mode {
             4 if self.cb2 => { // handshake: assert low; released by CB1 active edge
                 self.cb2 = false;
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+                self.send_to_all(ViaProtocolMessage::ResetCtrl { 
+                    port: b'B', ctrl_mask: VIA_CTRL2_MASK });
             }
             5 => { // pulse: low then immediately high
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
+                self.send_to_all(ViaProtocolMessage::ResetCtrl { 
+                    port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                self.send_to_all(ViaProtocolMessage::SetCtrl { 
+                    port: b'B', ctrl_mask: VIA_CTRL2_MASK });
             }
             _ => {}
         }
@@ -485,17 +616,25 @@ impl Via6522 {
         if self.sr_count == 0 { return };
         if !rising {
             if !self.sr_external {
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+                self.send_to_all(ViaProtocolMessage::ResetCtrl { 
+                    port: b'B', ctrl_mask: VIA_CTRL1_MASK });
             }
             if self.sr_shifting_out {
                 let bit = (self.sr >> (self.sr_count - 1)) & 1 != 0;
                 self.cb2 = bit;
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: bit });
+                if bit {
+                    self.send_to_all(ViaProtocolMessage::SetCtrl { 
+                        port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                } else {
+                    self.send_to_all(ViaProtocolMessage::ResetCtrl { 
+                        port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                }
             }
         }
         if rising {
             if !self.sr_external {
-                self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
+                self.send_to_all(ViaProtocolMessage::SetCtrl {
+                    port: b'B', ctrl_mask: VIA_CTRL1_MASK });
             }
             if !self.sr_shifting_out {
                 let bit = self.cb2;
@@ -553,7 +692,7 @@ impl Via6522 {
                     self.t1_pb7 = !self.t1_pb7;
                     // read_port_b() reflects the updated t1_pb7.
                     let pb = self.read_port_b();
-                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: pb });
+                    self.send_to_all(ViaProtocolMessage::PortState { port: b'B', port_state: pb });
                 }
                 if self.acr & T1_MODE_FREE_RUN != 0 {
                     // Reload from latch; account for any cycles past zero.
@@ -662,7 +801,7 @@ impl IoDevice for Via6522 {
                 let old_b = (old_orb & self.ddrb) | (self.input_b & !self.ddrb);
                 let new_b = self.read_port_b();
                 if old_b != new_b {
-                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_b });
+                    self.send_to_all(ViaProtocolMessage::PortState { port: b'B', port_state: new_b });
                 }
                 self.assert_cb2_handshake_or_pulse();
             }
@@ -676,7 +815,8 @@ impl IoDevice for Via6522 {
                 let old_a = (old_ora & self.ddra) | (self.input_a & !self.ddra);
                 let new_a = self.read_port_a();
                 if old_a != new_a {
-                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
+                    self.send_to_all(ViaProtocolMessage::PortState { 
+                        port: b'A', port_state: new_a });
                 }
                 self.assert_ca2_handshake_or_pulse();
             }
@@ -687,7 +827,8 @@ impl IoDevice for Via6522 {
                 let old_b = (self.orb & old_ddrb) | (self.input_b & !old_ddrb);
                 let new_b = self.read_port_b();
                 if old_b != new_b {
-                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: new_b });
+                    self.send_to_all(ViaProtocolMessage::PortState { 
+                        port: b'B', port_state: new_b });
                 }
             }
             0x3 => {
@@ -696,7 +837,8 @@ impl IoDevice for Via6522 {
                 let old_a = (self.ora & old_ddra) | (self.input_a & !old_ddra);
                 let new_a = self.read_port_a();
                 if old_a != new_a {
-                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
+                    self.send_to_all(ViaProtocolMessage::PortState { 
+                        port: b'A', port_state: new_a });
                 }
             }
             0x4 => {
@@ -719,7 +861,8 @@ impl IoDevice for Via6522 {
                     // Send a message only if PB7 was previously high or Timer 1 was holding PB7 high
                     if prev_pb7 || prev_t1_pb7  {
                         let pb = self.read_port_b();
-                        self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: pb });
+                        self.send_to_all(ViaProtocolMessage::PortState { 
+                            port: b'B', port_state: pb });
                     }
                 }
             }
@@ -761,7 +904,7 @@ impl IoDevice for Via6522 {
                 let pb7_output_disabled = (prev_acr & ACR_T1_PB7_OUTPUT) != 0 && (self.acr & ACR_T1_PB7_OUTPUT) == 0;
                 let pb7_output_low = (self.ddrb & 0x80) != 0 && (self.orb & 0x80) == 0;
                 if pb7_output_disabled && self.t1_pb7 && pb7_output_low {
-                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'B', value: self.orb });
+                    self.send_to_all(ViaProtocolMessage::PortState { port: b'B', port_state: self.orb });
                 }
             }
             0xC => {
@@ -771,11 +914,13 @@ impl IoDevice for Via6522 {
                 match ca2_mode {
                     6 if self.ca2 => { // manual low
                         self.ca2 = false;
-                        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+                        self.send_to_all(ViaProtocolMessage::ResetCtrl { 
+                            port: b'A', ctrl_mask: VIA_CTRL2_MASK });
                     }
                     7 if !self.ca2 => { // manual high
                         self.ca2 = true;
-                        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+                        self.send_to_all(ViaProtocolMessage::SetCtrl { 
+                            port: b'A', ctrl_mask: VIA_CTRL2_MASK });
                     }
                     _ => {}
                 }
@@ -783,11 +928,11 @@ impl IoDevice for Via6522 {
                 match cb2_mode {
                     6 if self.cb2 => { // manual low
                         self.cb2 = false;
-                        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+                        self.send_to_all(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL2_MASK });
                     }
                     7 if !self.cb2 => { // manual high
                         self.cb2 = true;
-                        self.send_to_all(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
+                        self.send_to_all(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL2_MASK });
                     }
                     _ => {}
                 }
@@ -811,7 +956,7 @@ impl IoDevice for Via6522 {
                 let old_a = (old_ora & self.ddra) | (self.input_a & !self.ddra);
                 let new_a = self.read_port_a();
                 if old_a != new_a {
-                    self.send_to_all(ViaProtocolMessage::PortStateChange { port: 'A', value: new_a });
+                    self.send_to_all(ViaProtocolMessage::PortState { port: b'A', port_state: new_a });
                 }
             }
             _ => {}
@@ -1471,7 +1616,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        for b in b"CA10".iter() { remote.send(*b).unwrap(); }
+        for b in b"RCA1".iter() { remote.send(*b).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1508,7 +1653,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"CA20".iter() { remote.send(*b).unwrap(); }
+        for b in b"RCA2".iter() { remote.send(*b).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1526,7 +1671,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"CB10".iter() { remote.send(*b).unwrap(); }
+        for b in b"RCB1".iter() { remote.send(*b).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1545,7 +1690,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"CB20".iter() { remote.send(*b).unwrap(); }
+        for b in b"RCB2".iter() { remote.send(*b).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1580,7 +1725,7 @@ mod tests {
     // --- State dump on handshake ---
 
     #[test]
-    fn state_dump_sends_all_six_messages() {
+    fn state_dump_sends_expected_messages() {
         let (mut via, mut remote) = device_with_pipe();
         via.ca1 = true;
         via.cb2 = true;
@@ -1594,10 +1739,8 @@ mod tests {
 
         assert!(s.contains("A00"), "expected A00 in state dump, got: {s}");
         assert!(s.contains("B00"), "expected B00 in state dump, got: {s}");
-        assert!(s.contains("CA11"), "expected CA11 in state dump, got: {s}");
-        assert!(s.contains("CA20"), "expected CA20 in state dump, got: {s}");
-        assert!(s.contains("CB10"), "expected CB10 in state dump, got: {s}");
-        assert!(s.contains("CB21"), "expected CB21 in state dump, got: {s}");
+        assert!(s.contains("CA10"), "expected CA10 in state dump, got: {s}");
+        assert!(s.contains("CB01"), "expected CB01 in state dump, got: {s}");
     }
 
     // --- Interrupts for CA1, CA2, CB1, CB2  ---
@@ -1626,7 +1769,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = true;
         via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA1, 0);
@@ -1637,7 +1780,7 @@ mod tests {
         let (mut via, _) = device_with_pipe();
         via.ca1 = false;
         via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA1, 0);
@@ -1649,7 +1792,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = false;
         via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: true });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA1, 0);
@@ -1661,7 +1804,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = true;
         via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: true });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA1, 0);
@@ -1673,7 +1816,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = true;
         via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB1, 0);
@@ -1685,7 +1828,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = false;
         via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB1, 0);
@@ -1697,7 +1840,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = false;
         via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB1, 0);
@@ -1709,7 +1852,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = true;
         via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB1, 0);
@@ -1721,7 +1864,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL2_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA2, 0);
@@ -1733,7 +1876,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL2_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA2, 0);
@@ -1745,7 +1888,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', ctrl_mask: VIA_CTRL2_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA2, 0);
@@ -1757,7 +1900,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x01, state: true });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', ctrl_mask: VIA_CTRL2_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA2, 0);
@@ -1769,7 +1912,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL2_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB2, 0);
@@ -1781,7 +1924,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB2, 0);
@@ -1793,7 +1936,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL2_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB2, 0);
@@ -1805,7 +1948,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x04, state: true });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB2, 0);
@@ -1817,7 +1960,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
-        send_bytes(&mut remote, "CA20");
+        send_bytes(&mut remote, "RCA2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
@@ -1828,7 +1971,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xC, PCR_CA2_INPUT_POSITIVE_EDGE);
-        send_bytes(&mut remote, "CA21");
+        send_bytes(&mut remote, "SCA2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
@@ -1839,7 +1982,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
-        send_bytes(&mut remote, "CA20");
+        send_bytes(&mut remote, "RCA2");
         via.tick(1);
         assert_eq!(via.peek(0xD) & IRQ_CA2, 0);
     }
@@ -1851,7 +1994,7 @@ mod tests {
         // Write PCR first (ca2 is false by default, so no immediate transition).
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
         // A peripheral message asserting CA2 high must not overwrite the driven-low state.
-        send_bytes(&mut remote, "CA21");
+        send_bytes(&mut remote, "SCA2");
         via.tick(1);
         assert!(!via.ca2, "ca2 must not be overwritten by peripheral message in output mode");
     }
@@ -1862,7 +2005,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
-        send_bytes(&mut remote, "CB20");
+        send_bytes(&mut remote, "RCB2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
@@ -1873,7 +2016,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xC, PCR_CB2_INPUT_POSITIVE_EDGE);
-        send_bytes(&mut remote, "CB21");
+        send_bytes(&mut remote, "SCB2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
@@ -1884,7 +2027,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
-        send_bytes(&mut remote, "CB20");
+        send_bytes(&mut remote, "RCB2");
         via.tick(1);
         assert_eq!(via.peek(0xD) & IRQ_CB2, 0);
     }
@@ -1896,7 +2039,7 @@ mod tests {
         // Write PCR first (cb2 is false by default, so no immediate transition).
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
         // A peripheral message asserting CB2 high must not overwrite the driven-low state.
-        send_bytes(&mut remote, "CB21");
+        send_bytes(&mut remote, "SCB2");
         via.tick(1);
         assert!(!via.cb2, "cb2 must not be overwritten by peripheral message in output mode");
     }
@@ -1994,7 +2137,7 @@ mod tests {
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CA20"), "expected CA20 after PCR manual-low write, got: {s}");
+        assert!(s.contains("RCA2"), "expected RCA2 after PCR manual-low write, got: {s}");
         assert!(!via.ca2);
     }
 
@@ -2006,7 +2149,7 @@ mod tests {
         via.write(0xC, PCR_CA2_MANUAL_HIGH_OUTPUT);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CA21"), "expected CA21 after PCR manual-high write, got: {s}");
+        assert!(s.contains("SCA2"), "expected SCA2 after PCR manual-high write, got: {s}");
         assert!(via.ca2);
     }
 
@@ -2018,7 +2161,7 @@ mod tests {
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CB20"), "expected CB20 after PCR manual-low write, got: {s}");
+        assert!(s.contains("RCB2"), "expected RCB2 after PCR manual-low write, got: {s}");
         assert!(!via.cb2);
     }
 
@@ -2030,7 +2173,7 @@ mod tests {
         via.write(0xC, PCR_CB2_MANUAL_HIGH_OUTPUT);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CB21"), "expected CB21 after PCR manual-high write, got: {s}");
+        assert!(s.contains("SCB2"), "expected SCB2 after PCR manual-high write, got: {s}");
         assert!(via.cb2);
     }
 
@@ -2046,7 +2189,7 @@ mod tests {
         via.read(0x1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CA20"), "expected CA20 after ORA read in handshake mode, got: {s}");
+        assert!(s.contains("RCA2"), "expected RCA2 after ORA read in handshake mode, got: {s}");
         assert!(!via.ca2);
     }
 
@@ -2059,12 +2202,12 @@ mod tests {
         via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT | PCR_CA1_INPUT_NEGATIVE_EDGE);
         collect_bytes(&mut remote);
         via.read(0x1); // assert CA2 low
-        collect_bytes(&mut remote); // drain CA20
-        send_bytes(&mut remote, "CA10"); // CA1 falling edge — active edge in neg-edge mode
+        collect_bytes(&mut remote); // drain RCA2
+        send_bytes(&mut remote, "RCA1"); // CA1 falling edge — active edge in neg-edge mode
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CA21"), "expected CA21 after CA1 active edge releases handshake, got: {s}");
+        assert!(s.contains("SCA2"), "expected SCA2 after CA1 active edge releases handshake, got: {s}");
         assert!(via.ca2);
     }
 
@@ -2078,7 +2221,7 @@ mod tests {
         via.read(0xF); // ORA no-handshake
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(!s.contains("CA20"), "CA20 must not be sent on ORA_NH read, got: {s}");
+        assert!(!s.contains("RCA2"), "RCA2 must not be sent on ORA_NH read, got: {s}");
         assert!(via.ca2, "ca2 must remain high after ORA_NH read");
     }
 
@@ -2092,7 +2235,7 @@ mod tests {
         via.read(0x1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(!s.contains("CA20"), "CA20 must not be sent redundantly when already low, got: {s}");
+        assert!(!s.contains("RCA2"), "RCA2 must not be sent redundantly when already low, got: {s}");
     }
 
     // --- CA2 write handshake ---
@@ -2107,7 +2250,7 @@ mod tests {
         via.write(0x1, 0x00);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CA20"), "expected CA20 after ORA write in handshake mode, got: {s}");
+        assert!(s.contains("RCA2"), "expected RCA2 after ORA write in handshake mode, got: {s}");
         assert!(!via.ca2);
     }
 
@@ -2121,11 +2264,11 @@ mod tests {
         collect_bytes(&mut remote);
         via.write(0x1, 0x00); // assert CA2 low
         collect_bytes(&mut remote);
-        send_bytes(&mut remote, "CA10");
+        send_bytes(&mut remote, "RCA1");
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CA21"), "expected CA21 after CA1 active edge, got: {s}");
+        assert!(s.contains("SCA2"), "expected SCA2 after CA1 active edge, got: {s}");
         assert!(via.ca2);
     }
 
@@ -2140,9 +2283,9 @@ mod tests {
         via.read(0x1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        let low_pos  = s.find("CA20").expect("expected CA20 in pulse output");
-        let high_pos = s.find("CA21").expect("expected CA21 in pulse output");
-        assert!(low_pos < high_pos, "CA20 must precede CA21 in pulse sequence");
+        let low_pos  = s.find("RCA2").expect("expected RCA2 in pulse output");
+        let high_pos = s.find("SCA2").expect("expected SCA2 in pulse output");
+        assert!(low_pos < high_pos, "RCA2 must precede SCA2 in pulse sequence");
     }
 
     #[test]
@@ -2154,9 +2297,9 @@ mod tests {
         via.write(0x1, 0x00);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        let low_pos  = s.find("CA20").expect("expected CA20 in pulse output");
-        let high_pos = s.find("CA21").expect("expected CA21 in pulse output");
-        assert!(low_pos < high_pos, "CA20 must precede CA21 in pulse sequence");
+        let low_pos  = s.find("RCA2").expect("expected RCA2 in pulse output");
+        let high_pos = s.find("SCA2").expect("expected SCA2 in pulse output");
+        assert!(low_pos < high_pos, "RCA2 must precede SCA2 in pulse sequence");
     }
 
     #[test]
@@ -2168,8 +2311,8 @@ mod tests {
         via.read(0xF); // ORA no-handshake
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(!s.contains("CA20"), "CA20 must not be sent on ORA_NH read, got: {s}");
-        assert!(!s.contains("CA21"), "CA21 must not be sent on ORA_NH read, got: {s}");
+        assert!(!s.contains("RCA2"), "RCA2 must not be sent on ORA_NH read, got: {s}");
+        assert!(!s.contains("SCA2"), "SCA2 must not be sent on ORA_NH read, got: {s}");
     }
 
     // --- CB2 write handshake ---
@@ -2184,7 +2327,7 @@ mod tests {
         via.write(0x0, 0x00);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CB20"), "expected CB20 after ORB write in handshake mode, got: {s}");
+        assert!(s.contains("RCB2"), "expected RCB2 after ORB write in handshake mode, got: {s}");
         assert!(!via.cb2);
     }
 
@@ -2198,11 +2341,11 @@ mod tests {
         collect_bytes(&mut remote);
         via.write(0x0, 0x00); // assert CB2 low
         collect_bytes(&mut remote);
-        send_bytes(&mut remote, "CB10"); // CB1 falling edge — active in neg-edge mode
+        send_bytes(&mut remote, "RCB1"); // CB1 falling edge — active in neg-edge mode
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CB21"), "expected CB21 after CB1 active edge releases handshake, got: {s}");
+        assert!(s.contains("SCB2"), "expected SCB2 after CB1 active edge releases handshake, got: {s}");
         assert!(via.cb2);
     }
 
@@ -2216,7 +2359,7 @@ mod tests {
         via.read(0x0); // ORB read — must NOT trigger CB2
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(!s.contains("CB20"), "CB20 must not be sent on ORB read, got: {s}");
+        assert!(!s.contains("RCB2"), "RCB2 must not be sent on ORB read, got: {s}");
         assert!(via.cb2, "cb2 must remain high after ORB read");
     }
 
@@ -2231,9 +2374,9 @@ mod tests {
         via.write(0x0, 0x00);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        let low_pos  = s.find("CB20").expect("expected CB20 in pulse output");
-        let high_pos = s.find("CB21").expect("expected CB21 in pulse output");
-        assert!(low_pos < high_pos, "CB20 must precede CB21 in pulse sequence");
+        let low_pos  = s.find("RCB2").expect("expected RCB2 in pulse output");
+        let high_pos = s.find("SCB2").expect("expected SCB2 in pulse output");
+        assert!(low_pos < high_pos, "RCB2 must precede SCB2 in pulse sequence");
     }
 
     // --- PA/PB input latching ---
@@ -2262,7 +2405,7 @@ mod tests {
         via.write(0xC, PCR_CA1_INPUT_NEGATIVE_EDGE);
         via.ca1 = true;
         via.input_a = 0xCD;
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
         assert_eq!(via.ira_latch, 0xCD, "ira_latch must capture input_a on CA1 active edge");
     }
 
@@ -2274,7 +2417,7 @@ mod tests {
         via.ca1 = false; // already low — no edge when we send low again
         via.input_a = 0xCD;
         via.ira_latch = 0x11; // sentinel
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x02, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
         assert_eq!(via.ira_latch, 0x11, "ira_latch must not change when CA1 level does not change");
     }
 
@@ -2310,7 +2453,7 @@ mod tests {
         via.write(0xC, PCR_CB1_INPUT_NEGATIVE_EDGE);
         via.cb1 = true;
         via.input_b = 0xCD;
-        via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
         assert_eq!(via.irb_latch, 0xCD, "irb_latch must capture input_b on CB1 active edge");
     }
 
@@ -2351,7 +2494,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PB_LATCH_ENABLE);
         via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
-        send_bytes(&mut remote, "B5A CB11");
+        send_bytes(&mut remote, "B5A SCB1");
         via.tick(1);
         assert_eq!(via.irb_latch, 0x5A, "irb_latch must capture the value from the same-tick port update");
         assert_eq!(via.read(0x0), 0x5A, "ORB read must return latched value");
@@ -2363,7 +2506,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PB_LATCH_ENABLE);
         via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
-        send_bytes(&mut remote, "B5A CB11");
+        send_bytes(&mut remote, "B5A SCB1");
         via.tick(1);
         send_bytes(&mut remote, "BFF");
         via.tick(1);
@@ -2413,7 +2556,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert_eq!(s.trim(), "CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB21 CB11 CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB20 CB11");
+        let actual: Vec<&str> = s.split_ascii_whitespace().collect();
+        let expected: Vec<&str> = "RCB1 SCB2 SCB1 RCB1 RCB2 SCB1 RCB1 SCB2 SCB1 RCB1 SCB2 SCB1 \
+                                   RCB1 RCB2 SCB1 RCB1 SCB2 SCB1 RCB1 RCB2 SCB1 RCB1 RCB2 SCB1"
+            .split_ascii_whitespace().collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -2422,13 +2569,13 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.write(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
         for _ in 0..8 {
-            send_bytes(&mut remote, " CB10");
+            send_bytes(&mut remote, " RCB1");
             via.tick(5);
-            send_bytes(&mut remote, " CB11");
+            send_bytes(&mut remote, " SCB1");
         }
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert_eq!(s.trim(), "CB21 CB20 CB21 CB21 CB20 CB21 CB20 CB20");
+        assert_eq!(s.trim(), "SCB2 RCB2 SCB2 SCB2 RCB2 SCB2 RCB2 RCB2");
     }
 
     #[test]
@@ -2494,11 +2641,13 @@ mod tests {
         }
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert_eq!(s.trim(), "\
-        CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB21 CB11 CB10 CB21 CB11 \
-        CB10 CB20 CB11 CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB20 CB11 \
-        CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB21 CB11 CB10 CB21 CB11 \
-        CB10 CB20 CB11 CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB20 CB11");
+        let actual: Vec<&str> = s.trim().split_ascii_whitespace().collect();
+        let expected: Vec<&str> = "RCB1 SCB2 SCB1 RCB1 RCB2 SCB1 RCB1 SCB2 SCB1 RCB1 SCB2 SCB1 \
+                                   RCB1 RCB2 SCB1 RCB1 SCB2 SCB1 RCB1 RCB2 SCB1 RCB1 RCB2 SCB1 \
+                                   RCB1 SCB2 SCB1 RCB1 RCB2 SCB1 RCB1 SCB2 SCB1 RCB1 SCB2 SCB1 \
+                                   RCB1 RCB2 SCB1 RCB1 SCB2 SCB1 RCB1 RCB2 SCB1 RCB1 RCB2 SCB1"
+            .split_ascii_whitespace().collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -2513,10 +2662,10 @@ mod tests {
         let bits = [1u8, 0, 1, 1, 0, 0, 1, 0];
         for bit in bits {
             // CB1 back low (not a clock).
-            via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: false });
+            via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
             via.cb2 = bit != 0;
             // CB1 rising edge clocks the SR.
-            via.apply_message(ViaProtocolMessage::ControlSignalChange { signals: 0x08, state: true });
+            via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
         }
 
         assert_eq!(via.sr, 0b10110010, "shifted-in byte mismatch: got 0x{:02X}", via.sr);
@@ -2567,7 +2716,12 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert_eq!(s.trim(), "CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB21 CB11 CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB21 CB11 CB10 CB20 CB11 CB10 CB20 CB11");
+        let actual: Vec<&str> = s.trim().split_ascii_whitespace().collect();
+        let expected: Vec<&str> = "RCB1 SCB2 SCB1 RCB1 RCB2 SCB1 RCB1 SCB2 SCB1 \
+                                   RCB1 SCB2 SCB1 RCB1 RCB2 SCB1 RCB1 SCB2 SCB1 \
+                                   RCB1 RCB2 SCB1 RCB1 RCB2 SCB1"
+            .split_ascii_whitespace().collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -2599,10 +2753,10 @@ mod tests {
         let data = 0b10110100u8;
         for i in 0..8 {
             let bit = (data >> (7 - i)) & 1;
-            send_bytes(&mut remote, " CB10");
-            send_bytes(&mut remote, if bit != 0 { " CB21" } else { " CB20" });
-            send_bytes(&mut remote, " CB11");
-            via.tick(1); // poll processes CB10, CB2x, CB11 in order
+            send_bytes(&mut remote, " RCB1");
+            send_bytes(&mut remote, if bit != 0 { " SCB2" } else { " RCB2" });
+            send_bytes(&mut remote, " SCB1");
+            via.tick(1); // poll processes RCB1, CB2x, SCB1 in order
         }
 
         assert_eq!(via.peek(0xA), data, "shifted-in byte mismatch: expected 0x{data:02X} got 0x{:02X}", via.peek(0xA));
@@ -2615,16 +2769,16 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
 
         via.write(0x8, 2u8); // T2 period = 2 cycles
-        via.read(0xA);        // sr_start → CB10 sent, T2 begins counting
-        collect_bytes(&mut remote); // drain CB10
+        via.read(0xA);        // sr_start → RCB1 sent, T2 begins counting
+        collect_bytes(&mut remote); // drain RCB1
 
         let data = 0b10110100u8;
         for i in 0..8 {
             let bit = (data >> (7 - i)) & 1;
             // Pre-send CB2x so poll_transports at the top of tick captures it
             // before T2 underflows and calls sr_update(true).
-            send_bytes(&mut remote, if bit != 0 { " CB21" } else { " CB20" });
-            via.tick(2); // T2 counts 2→0 → captures cb2, sends CB11 + CB10 (if not last)
+            send_bytes(&mut remote, if bit != 0 { " SCB2" } else { " RCB2" });
+            via.tick(2); // T2 counts 2→0 → captures cb2, sends SCB1 + RCB1 (if not last)
             collect_bytes(&mut remote);
         }
 
@@ -2638,24 +2792,24 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
 
         via.write(0x8, 2u8);
-        via.read(0xA); // sr_start → sr_update(false) → CB10 sent
+        via.read(0xA); // sr_start → sr_update(false) → RCB1 sent
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CB10"), "expected CB10 after SR start, got: {s}");
+        assert!(s.contains("RCB1"), "expected RCB1 after SR start, got: {s}");
 
         for _ in 0..7 {
             via.tick(2);
             let received = collect_bytes(&mut remote);
             let s = String::from_utf8_lossy(&received);
-            assert!(s.contains("CB11"), "expected CB11 (rising) in: {s}");
-            assert!(s.contains("CB10"), "expected CB10 (falling for next bit) in: {s}");
+            assert!(s.contains("SCB1"), "expected SCB1 (rising) in: {s}");
+            assert!(s.contains("RCB1"), "expected RCB1 (falling for next bit) in: {s}");
         }
 
         via.tick(2); // 8th bit: rising edge only, no next falling
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
-        assert!(s.contains("CB11"), "expected CB11 for last bit in: {s}");
-        assert!(!s.contains("CB10"), "unexpected CB10 after last bit in: {s}");
+        assert!(s.contains("SCB1"), "expected SCB1 for last bit in: {s}");
+        assert!(!s.contains("RCB1"), "unexpected RCB1 after last bit in: {s}");
     }
 
     #[test]
@@ -2671,8 +2825,8 @@ mod tests {
             let bit = (data >> (7 - i)) & 1;
             // Pre-send CB2x so poll_transports at the top of tick captures it
             // before the PHI2 rising edge calls sr_update(true).
-            send_bytes(&mut remote, if bit != 0 { " CB21" } else { " CB20" });
-            via.tick(1); // falling edge (i=0) → CB10; rising edge (i=1) → captures cb2, CB11
+            send_bytes(&mut remote, if bit != 0 { " SCB2" } else { " RCB2" });
+            via.tick(1); // falling edge (i=0) → RCB1; rising edge (i=1) → captures cb2, SCB1
             collect_bytes(&mut remote);
         }
 
@@ -2689,11 +2843,11 @@ mod tests {
         collect_bytes(&mut remote);
 
         for _ in 0..8 {
-            via.tick(1); // falling edge (i=0) → CB10; rising edge (i=1) → CB11
+            via.tick(1); // falling edge (i=0) → RCB1; rising edge (i=1) → SCB1
             let received = collect_bytes(&mut remote);
             let s = String::from_utf8_lossy(&received);
-            assert!(s.contains("CB10"), "expected CB10 in: {s}");
-            assert!(s.contains("CB11"), "expected CB11 in: {s}");
+            assert!(s.contains("RCB1"), "expected RCB1 in: {s}");
+            assert!(s.contains("SCB1"), "expected SCB1 in: {s}");
         }
     }
 
@@ -2706,7 +2860,7 @@ mod tests {
         collect_bytes(&mut remote);
 
         for _ in 0..8 {
-            send_bytes(&mut remote, " CB10 CB11");
+            send_bytes(&mut remote, " RCB1 SCB1");
             via.tick(1); // poll processes falling then rising edge; sr_count decrements
         }
 
@@ -2789,7 +2943,7 @@ mod tests {
         via.write(0xA, 0x00);
         collect_bytes(&mut remote);
         for _ in 0..8 {
-            send_bytes(&mut remote, " CB10 CB21 CB11");
+            send_bytes(&mut remote, " RCB1 SCB2 SCB1");
             via.tick(1);
         }
         let ifr = via.peek(0xD);
@@ -2804,7 +2958,7 @@ mod tests {
         via.write(0xA, 0xAA);
         collect_bytes(&mut remote);
         for _ in 0..8 {
-            send_bytes(&mut remote, " CB10 CB11");
+            send_bytes(&mut remote, " RCB1 SCB1");
             via.tick(1);
         }
         let ifr = via.peek(0xD);
@@ -2823,8 +2977,8 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
 
         // PB6 high→low: negative transition should decrement counter.
-        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 }); // PB6=1
-        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 }); // PB6=0
+        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });    // PB6=1
+        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });  // PB6=0
 
         assert_eq!(via.t2_counter, 4, "expected T2 counter = 4 after one PB6 neg transition");
     }
@@ -2839,8 +2993,8 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
 
         for _ in 0..3 {
-            via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 });
-            via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 });
+            via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });    // PB6=1
+            via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });  // PB6=0
         }
 
         assert_ne!(via.peek(0xD) & IRQ_T2, 0, "IRQ_T2 must fire after 3 PB6 neg transitions");
@@ -2858,8 +3012,8 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
 
         // PB6 low → high (positive transition) must not decrement.
-        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 }); // PB6=0
-        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 }); // PB6=1
+        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });  // PB6=0
+        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });    // PB6=1
 
         assert_eq!(via.t2_counter, 5, "positive PB6 transition must not decrement T2 counter");
     }
@@ -2873,8 +3027,8 @@ mod tests {
         via.write(0x9, 0x00);
         drain_state_dump(&mut via, &mut remote);
 
-        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x40 });
-        via.apply_message(ViaProtocolMessage::PortStateChange { port: 'B', value: 0x00 });
+        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });    // PB6=1
+        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });  // PB6=0
 
         // Counter should still be near 100 (only a tick or two from handshake).
         assert!(via.t2_counter >= 98, "timed T2 must not be decremented by PB6 transitions");
