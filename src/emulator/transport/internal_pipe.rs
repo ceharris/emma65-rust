@@ -1,10 +1,10 @@
-//! Bidirectional transport over a pair of OS pipes with non-blocking IO.
+//! Transport that connects a device to a pair of pipes.
 //!
 //! Holds two pipes: one for inbound bytes (remote writes, we read) and one for
 //! outbound bytes (we write, remote reads). Both ends are set nonblocking so
 //! `try_recv` and `send` never block the CPU thread.
 //!
-//! This is an internal transport used to connect devices to in-process pipe
+//! This is an internal transport mechanism used to connect devices to in-process pipe
 //! pairs (e.g. the default console attached to the emulator's own stdin/stdout,
 //! or test harnesses that need synchronous byte-level access). For connecting
 //! a device to an external child process, see [`PipeTransport`](super::pipe::PipeTransport).
