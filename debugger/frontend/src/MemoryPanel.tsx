@@ -90,7 +90,7 @@ export default function MemoryPanel({ execState }: Props) {
   /** 256-byte buffer for the current page. */
   const [bytes, setBytes] = useState<Uint8Array>(new Uint8Array(256));
   /** Controlled value of the address input field. */
-  const [inputValue, setInputValue] = useState<string>("$0000");
+  const [inputValue, setInputValue] = useState<string>("0000");
   const [ready, setReady] = useState(false);
   /** Write-memory dialog state; null when closed. */
   const [writeDialog, setWriteDialog] = useState<WriteDialogState | null>(null);
@@ -102,7 +102,7 @@ export default function MemoryPanel({ execState }: Props) {
       setBytes(new Uint8Array(result));
       pageAddrRef.current = addr;
       setPageAddr(addr);
-      setInputValue(`$${fmtAddr(addr)}`);
+      setInputValue(fmtAddr(addr));
     } catch (e) {
       console.error("get_memory failed:", e);
     }
