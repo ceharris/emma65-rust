@@ -2,24 +2,24 @@
 //!
 //! Provides 16 addressable registers (offsets 0x0-0xF):
 //!
-//! | Offset | Name  | Description                            |
-//! |--------|-------|----------------------------------------|
-//! | 0x0    | ORB   | Output Register B / Input Register B  |
-//! | 0x1    | ORA   | Output Register A / Input Register A  |
-//! | 0x2    | DDRB  | Data Direction Register B              |
-//! | 0x3    | DDRA  | Data Direction Register A              |
+//! | Offset | Name  | Description                                    |
+//! |--------|-------|------------------------------------------------|
+//! | 0x0    | ORB   | Output Register B / Input Register B           |
+//! | 0x1    | ORA   | Output Register A / Input Register A           |
+//! | 0x2    | DDRB  | Data Direction Register B                      |
+//! | 0x3    | DDRA  | Data Direction Register A                      |
 //! | 0x4    | T1CL  | Timer 1 Counter Low (read) / Latch Low (write) |
-//! | 0x5    | T1CH  | Timer 1 Counter High                   |
-//! | 0x6    | T1LL  | Timer 1 Latch Low                      |
-//! | 0x7    | T1LH  | Timer 1 Latch High                     |
+//! | 0x5    | T1CH  | Timer 1 Counter High                           |
+//! | 0x6    | T1LL  | Timer 1 Latch Low                              |
+//! | 0x7    | T1LH  | Timer 1 Latch High                             |
 //! | 0x8    | T2CL  | Timer 2 Counter Low (read) / Latch Low (write) |
-//! | 0x9    | T2CH  | Timer 2 Counter High                   |
-//! | 0xA    | SR    | Shift Register                         |
-//! | 0xB    | ACR   | Auxiliary Control Register             |
-//! | 0xC    | PCR   | Peripheral Control Register            |
-//! | 0xD    | IFR   | Interrupt Flag Register                |
-//! | 0xE    | IER   | Interrupt Enable Register              |
-//! | 0xF    | ORA_NH| Output Register A (no handshake)       |
+//! | 0x9    | T2CH  | Timer 2 Counter High                           |
+//! | 0xA    | SR    | Shift Register                                 |
+//! | 0xB    | ACR   | Auxiliary Control Register                     |
+//! | 0xC    | PCR   | Peripheral Control Register                    |
+//! | 0xD    | IFR   | Interrupt Flag Register                        |
+//! | 0xE    | IER   | Interrupt Enable Register                      |
+//! | 0xF    | ORA_NH| Output Register A (no handshake)               |
 //!
 //! **ACR bit layout:**
 //! - Bit 0: PA latch enable (latch IRA on CA1 active edge)
