@@ -688,6 +688,22 @@ fn get_memory(
     Ok(live.memory_page)
 }
 
+/// Writes `data` bytes to memory starting at `addr`, wrapping at 0xFFFF.
+///
+/// Writes are performed via `Bus::write` so device side effects apply.
+/// Only callable while the CPU is halted; returns an error if the CPU is running.
+#[tauri::command]
+fn write_memory(addr: u16, data: Vec<u8>, cpu_state: State<CpuState>) -> Result<(), String> {
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    let bus = cpu.bus_mut();
+    for (i, &byte) in data.iter().enumerate() {
+        let a = addr.wrapping_add(i as u16);
+        bus.write(a, byte).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Returns disassembled instructions starting at `addr`, up to `count` rows.
 #[tauri::command]
 fn get_disassembly(
@@ -1041,6 +1057,7 @@ pub fn run() {
             get_registers,
             get_disassembly,
             get_memory,
+            write_memory,
             get_stack,
             toggle_breakpoint,
             set_breakpoint,

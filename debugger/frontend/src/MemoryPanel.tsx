@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { ExecState } from "./DisassemblyPanel";
 import "./styles/memory.scss";
 
 /** Number of bytes per display row. */
@@ -40,7 +41,39 @@ function toAsciiChar(byte: number): string {
   return byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : ".";
 }
 
-export default function MemoryPanel() {
+/**
+ * Parses a sequence of hex byte tokens separated by whitespace and/or single commas.
+ * Each token must be one or two hex digits. Returns the parsed byte array,
+ * or null if any token is invalid or the input is empty.
+ */
+function parseHexBytes(raw: string): number[] | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const tokens = trimmed.split(/\s*[\s,]\s*/).filter(Boolean);
+  const bytes: number[] = [];
+  for (const token of tokens) {
+    if (!/^[0-9a-fA-F]{1,2}$/.test(token)) return null;
+    bytes.push(parseInt(token, 16));
+  }
+  return bytes.length > 0 ? bytes : null;
+}
+
+/** State for the write-memory dialog; null means closed. */
+interface WriteDialogState {
+  /** Target address for the first byte of the write. */
+  addr: number;
+  /** Controlled value of the data input field. */
+  inputValue: string;
+  /** Validation or backend error message; empty string means no error. */
+  errorMsg: string;
+}
+
+interface Props {
+  /** Current CPU execution state; used to guard double-click when running. */
+  execState: ExecState;
+}
+
+export default function MemoryPanel({ execState }: Props) {
   /** Paragraph-aligned start address of the currently displayed 256-byte page. */
   const [pageAddr, setPageAddr] = useState<number>(0x0000);
   /** Ref mirrors pageAddr so event listeners always see the current value. */
@@ -50,6 +83,8 @@ export default function MemoryPanel() {
   /** Controlled value of the address input field. */
   const [inputValue, setInputValue] = useState<string>("$0000");
   const [ready, setReady] = useState(false);
+  /** Write-memory dialog state; null when closed. */
+  const [writeDialog, setWriteDialog] = useState<WriteDialogState | null>(null);
 
   /** Fetch the 256-byte page starting at `addr` (must be paragraph-aligned). */
   const fetchPage = useCallback(async (addr: number) => {
@@ -133,25 +168,79 @@ export default function MemoryPanel() {
     [fetchPage],
   );
 
+  /** Opens the write dialog for the byte at `addr`. */
+  const handleByteDoubleClick = useCallback((addr: number) => {
+    setWriteDialog({ addr, inputValue: "", errorMsg: "" });
+  }, []);
+
+  /** Validates, invokes write_memory, refreshes on success, shows error on failure. */
+  const commitWriteMemory = useCallback(async () => {
+    if (!writeDialog) return;
+    const data = parseHexBytes(writeDialog.inputValue);
+    if (data === null) {
+      setWriteDialog((d) => d && {
+        ...d,
+        errorMsg: "Enter one or more hex bytes (1–2 digits each), separated by spaces or commas",
+      });
+      return;
+    }
+    try {
+      await invoke("write_memory", { addr: writeDialog.addr, data });
+      setWriteDialog(null);
+      fetchPage(pageAddrRef.current);
+    } catch (e) {
+      setWriteDialog((d) => d && { ...d, errorMsg: String(e) });
+    }
+  }, [writeDialog, fetchPage]);
+
+  /** Dismiss the write dialog on Escape while it is open. */
+  useEffect(() => {
+    if (!writeDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWriteDialog(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [writeDialog]);
+
+  /** Builds per-byte hex spans for one 8-byte half-row. */
+  const makeHexSpans = useCallback(
+    (halfSlice: Uint8Array, baseAddr: number) =>
+      Array.from(halfSlice).map((b, i) => {
+        const byteAddr = (baseAddr + i) & (MEMORY_SIZE - 1);
+        return (
+          <span
+            key={i}
+            className={`mem-hex-byte${execState !== "stopped" ? " locked" : ""}`}
+            onDoubleClick={
+              execState === "stopped"
+                ? () => handleByteDoubleClick(byteAddr)
+                : undefined
+            }
+          >
+            {b.toString(16).toUpperCase().padStart(2, "0")}
+          </span>
+        );
+      }),
+    [execState, handleByteDoubleClick],
+  );
+
   const rows: React.ReactNode[] = [];
   for (let row = 0; row < ROWS_PER_PAGE; row++) {
     const rowAddr = (pageAddr + row * BYTES_PER_ROW) & (MEMORY_SIZE - 1);
     const slice = bytes.slice(row * BYTES_PER_ROW, (row + 1) * BYTES_PER_ROW);
-
-    const hexLow = Array.from(slice.slice(0, 8))
-      .map((b) => b.toString(16).toUpperCase().padStart(2, "0"))
-      .join(" ");
-    const hexHigh = Array.from(slice.slice(8, 16))
-      .map((b) => b.toString(16).toUpperCase().padStart(2, "0"))
-      .join(" ");
     const asciiLow = Array.from(slice.slice(0, 8)).map(toAsciiChar).join("");
     const asciiHigh = Array.from(slice.slice(8, 16)).map(toAsciiChar).join("");
 
     rows.push(
       <div key={rowAddr} className="mem-row">
         <span className="mem-addr">{fmtAddr(rowAddr)}:</span>
-        <span className="mem-hex-group">{hexLow}</span>
-        <span className="mem-hex-group">{hexHigh}</span>
+        <span className="mem-hex-group">
+          {makeHexSpans(slice.slice(0, 8), rowAddr)}
+        </span>
+        <span className="mem-hex-group">
+          {makeHexSpans(slice.slice(8, 16), (rowAddr + 8) & (MEMORY_SIZE - 1))}
+        </span>
         <span className="mem-ascii-group">{asciiLow}</span>
         <span className="mem-ascii-group">{asciiHigh}</span>
       </div>,
@@ -179,6 +268,66 @@ export default function MemoryPanel() {
           rows
         )}
       </div>
+      {writeDialog && (
+        <div
+          className="mem-write-backdrop"
+          onClick={() => setWriteDialog(null)}
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <div className="mem-write-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="mem-write-title">Write Memory</div>
+
+            <div className="mem-write-field">
+              <label className="mem-write-label">Address</label>
+              <input
+                className="mem-write-addr-display"
+                value={fmtAddr(writeDialog.addr)}
+                readOnly
+                disabled
+                tabIndex={-1}
+              />
+            </div>
+
+            <div className="mem-write-field">
+              <label className="mem-write-label">Bytes</label>
+              <input
+                className={`mem-write-data-input${writeDialog.errorMsg ? " invalid" : ""}`}
+                autoFocus
+                spellCheck={false}
+                placeholder="e.g. 4C 00 06"
+                value={writeDialog.inputValue}
+                onChange={(e) =>
+                  setWriteDialog((d) => d && { ...d, inputValue: e.target.value, errorMsg: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitWriteMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setWriteDialog(null); }
+                }}
+              />
+            </div>
+
+            {writeDialog.errorMsg && (
+              <div className="mem-write-error">{writeDialog.errorMsg}</div>
+            )}
+
+            <div className="mem-write-buttons">
+              <button
+                className="mem-write-btn mem-write-btn-cancel"
+                onClick={() => setWriteDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="mem-write-btn mem-write-btn-ok"
+                onClick={commitWriteMemory}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -73,6 +73,27 @@
   color: var(--color-keyword);
   letter-spacing: 0.02em;
   padding-left: 0.5em;
+  display: flex;
+  gap: 1ch;
+}
+
+.mem-hex-byte {
+  cursor: pointer;
+  border-radius: 2px;
+
+  &:hover {
+    background-color: var(--color-bg-hover);
+    color: var(--color-fg-strong);
+  }
+
+  &.locked {
+    cursor: default;
+
+    &:hover {
+      background-color: transparent;
+      color: inherit;
+    }
+  }
 }
 
 .mem-ascii-group {
@@ -80,4 +101,109 @@
   color: var(--color-string);
   letter-spacing: 0.04em;
   padding-left: 0.25em;
+}
+
+.mem-write-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mem-write-dialog {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mem-write-title {
+  font-size: 0.75rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-accent);
+}
+
+.mem-write-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mem-write-label {
+  flex: 0 0 6ch;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.mem-write-addr-display {
+  background: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-family: monospace;
+  font-size: 0.82rem;
+  padding: 3px 6px;
+  border-radius: 3px;
+  width: 6ch;
+  outline: none;
+}
+
+.mem-write-data-input {
+  flex: 1;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: monospace;
+  font-size: 0.82rem;
+  padding: 3px 6px;
+  border-radius: 3px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent);
+  }
+
+  &.invalid {
+    border-color: var(--color-danger-strong);
+  }
+}
+
+.mem-write-error {
+  font-size: 0.78rem;
+  color: var(--color-danger-strong);
+}
+
+.mem-write-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mem-write-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: monospace;
+  font-size: 0.8rem;
+  padding: 3px 12px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &.mem-write-btn-ok {
+    color: var(--color-accent);
+  }
 }
