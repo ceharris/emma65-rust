@@ -164,6 +164,31 @@ impl Bus {
         Ok(())
     }
 
+    /// Writes one byte to `addr`, bypassing ROM write restrictions and triggering device side
+    /// effects if an I/O device is mapped there.
+    pub fn patch(&mut self, addr: u16, value: u8) -> Result<(), BusError> {
+        match self.find_region_mut(addr) {
+            Some(RegionMatch::Ram { data, offset }) => {
+                data[offset] = value;
+                Ok(())
+            }
+            Some(RegionMatch::Rom { data, offset, write_policy: _write_policy }) => {
+                data[offset] = value;
+                Ok(())
+            },
+            Some(RegionMatch::Device { device, addr }) => {
+                device.patch(addr, value);
+                Ok(())
+            }
+            None => match self.unmapped_policy {
+                UnmappedPolicy::DefaultValue => Ok(()),
+                UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
+            },
+        }?;
+        self.emit_trace(addr, value, BusOp::Write);
+        Ok(())
+    }
+
     /// Calls `tick(cycles)` on every IO device mapped on the bus.
     pub fn tick_devices(&mut self, cycles: u32) {
         for (_, device) in &mut self.devices {
@@ -305,7 +330,7 @@ enum PeekMatch<'a> {
 
 enum RegionMatch<'a> {
     Ram { data: &'a mut Vec<u8>, offset: usize },
-    Rom { data: &'a Vec<u8>, offset: usize, write_policy: RomWritePolicy },
+    Rom { data: &'a mut Vec<u8>, offset: usize, write_policy: RomWritePolicy },
     Device { device: &'a mut dyn IoDevice, addr: u16 },
 }
 
@@ -526,6 +551,25 @@ mod tests {
             .build();
         let result = bus.write(0xC010, 0x00);
         assert!(matches!(result, Err(BusError::RomWrite { addr: 0xC010 })));
+    }
+
+    #[test]
+    fn ram_patch_read_round_trip() {
+        let mut bus = ram_bus(0x0000, 0x1FFF);
+        bus.patch(0x0100, 0xAB).unwrap();
+        assert_eq!(bus.read(0x0100).unwrap(), 0xAB);
+    }
+
+    #[test]
+    fn rom_patch_read_round_trip() {
+        let data = vec![0xEAu8; 256];
+        let mut bus = Bus::config()
+            .rom_write_policy(RomWritePolicy::Error)
+            .rom(AddressRange::new(0xC000, 0xC0FF), data)
+            .unwrap()
+            .build();
+        bus.patch(0xC000, 0xAB).unwrap();
+        assert_eq!(bus.read(0xC000).unwrap(), 0xAB);
     }
 
     #[test]
@@ -893,8 +937,8 @@ mod tests {
 
     #[test]
     fn tick_reset_irq_nmi_called_once_per_device() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let tick_count = Arc::new(AtomicUsize::new(0));
         let reset_count = Arc::new(AtomicUsize::new(0));

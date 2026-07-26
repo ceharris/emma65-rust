@@ -238,6 +238,19 @@ impl IoDevice for Vireo {
         }
     }
 
+    fn patch(&mut self, address: u16, value: u8) {
+        if address == self.control_register_address {
+            self.set_control_register(value);
+        } else {
+            let (is_rom, effective_address) = self.effective_address(address);
+            if is_rom {
+                self.rom_data[effective_address] = value;
+            } else {
+                self.ram_data[effective_address] = value;
+            }
+        }
+    }
+
     fn claims(&self, _address: u16) -> bool {
         true
     }
@@ -519,6 +532,45 @@ mod tests {
         assert_eq!(device.rom_data[0x7FFF], 0xFF);
     }
 
+    #[test]
+    fn patch_ram_lower_half_when_lower_mapped() {
+        let mut device = device();
+        device.patch(0, 0xFF);
+        assert_eq!(device.ram_data[0x00000], 0xFF);
+    }
+
+    #[test]
+    fn patch_ram_lower_half_when_upper_mapped() {
+        let mut device = device();
+        device.map_upper = true;
+        device.patch(0, 0xFF);
+        assert_eq!(device.ram_data[0x10000], 0xFF);
+    }
+
+    #[test]
+    fn patch_ram_upper_half_when_ram_only_and_lower_mapped() {
+        let mut device = device();
+        device.ram_only = true;
+        device.patch(0x8000, 0xFF);
+        assert_eq!(device.ram_data[0x08000], 0xFF);
+    }
+
+    #[test]
+    fn patch_ram_upper_half_when_ram_only_and_upper_mapped() {
+        let mut device = device();
+        device.map_upper = true;
+        device.ram_only = true;
+        device.patch(0x8000, 0xFF);
+        assert_eq!(device.ram_data[0x18000], 0xFF);
+    }
+
+    #[test]
+    fn patch_rom() {
+        let mut device = device();
+        device.patch(0xFFFF, 0);
+        assert_eq!(device.rom_data[0x7FFF], 0);
+    }
+
     #[tokio::test]
     async fn write_rom_reports_rejected_write_when_policy_is_error() {
         let device_id = DeviceId(0);
@@ -536,6 +588,7 @@ mod tests {
             Err(e) => panic!("Expected a DeviceEvent, but channel was empty: {:?}", e),
         }
     }
+
 
     #[test]
     fn reset_restores_default_config() {

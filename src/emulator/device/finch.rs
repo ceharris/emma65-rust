@@ -235,6 +235,17 @@ impl IoDevice for Finch {
         }
     }
 
+    fn patch(&mut self, address: u16, value: u8) {
+        if address == self.control_register_address {
+            self.control_register = value
+        } else if self.bank_register_range.contains(address) {
+            self.bank_registers[(address - self.bank_register_range.start) as usize] = value;
+        } else {
+            let effective_address = self.effective_address(address);
+            self.data[effective_address] = value;
+        }
+    }
+
     fn claims(&self, _address: u16) -> bool {
         true
     }
@@ -391,6 +402,21 @@ mod tests {
             }
             Err(e) => panic!("Expected a DeviceEvent, but channel was empty: {:?}", e),
         }
+    }
+
+    #[test]
+    fn patch_ram() {
+        let mut device = device();
+        device.patch(0x01FF, 0xFF);
+        assert_eq!(device.data[0x01FF], 0xFF);
+    }
+
+    #[test]
+    fn patch_rom() {
+        let mut device = device();
+        device.data[0x87FFF] = 0xFF;
+        device.patch(0xFFFF, 0);
+        assert_eq!(device.data[0x87FFF], 0);
     }
 
 }

@@ -98,6 +98,12 @@ pub trait IoDevice: Send {
     /// Reads a byte at the absolute bus address `address`, without side effects.
     fn peek(&self, address: u16) -> u8;
 
+    /// Writes a `value` at the absolute bus address `address`, bypassing read-only restrictions
+    /// at the target device.
+    fn patch(&mut self, address: u16, value: u8) {
+        self.write(address, value);
+    }
+
     /// Returns `true` if this device currently responds to `addr`, the absolute bus
     /// address. Consulted before dispatching `*_absolute`; declining causes the bus to
     /// fall through to the next most-specific region containing `addr`, or to the
