@@ -16,7 +16,7 @@ const PARAGRAPH_MASK = 0xfff0;
 /** Total size of the memory address space */
 const MEMORY_SIZE = 0x10000;
 
-/** Parse a hex (0x/$ prefix) or decimal address string. Returns NaN on failure. */
+/** Parse a hex address string (optional $/ 0x prefix; bare digits treated as hex). Returns NaN on failure. */
 function parseAddress(input: string): number {
   const trimmed = input.trim();
   if (/^\$[0-9a-fA-F]+$/.test(trimmed)) {
@@ -25,8 +25,8 @@ function parseAddress(input: string): number {
   if (/^0x[0-9a-fA-F]+$/i.test(trimmed)) {
     return parseInt(trimmed, 16);
   }
-  if (/^\d+$/.test(trimmed)) {
-    return parseInt(trimmed, 10);
+  if (/^[0-9a-fA-F]+$/.test(trimmed)) {
+    return parseInt(trimmed, 16);
   }
   return NaN;
 }
@@ -215,7 +215,7 @@ export default function MemoryPanel({ execState }: Props) {
     } else {
       const parsed = parseAddress(writeDialog.addrInput);
       if (isNaN(parsed) || parsed < 0 || parsed > 0xffff) {
-        setWriteDialog((d) => d && { ...d, addrError: "Enter a valid address (hex or decimal, 0–65535)" });
+        setWriteDialog((d) => d && { ...d, addrError: "Enter a valid hex address (0–FFFF)" });
         return;
       }
       resolvedAddr = parsed;
@@ -338,8 +338,8 @@ export default function MemoryPanel({ execState }: Props) {
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleInputKeyDown}
           spellCheck={false}
-          placeholder="$0000"
-          title="Enter address and press Enter"
+          placeholder="0000"
+          title="Enter hex address and press Enter"
         />
       </div>
       <div className="memory-body">
@@ -373,7 +373,7 @@ export default function MemoryPanel({ execState }: Props) {
                   className={`mem-write-addr-input${writeDialog.addrError ? " invalid" : ""}`}
                   autoFocus
                   spellCheck={false}
-                  placeholder="$0000 or decimal"
+                  placeholder="0000"
                   value={writeDialog.addrInput}
                   onChange={(e) =>
                     setWriteDialog((d) => d && { ...d, addrInput: e.target.value, addrError: "" })
