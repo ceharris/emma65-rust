@@ -407,7 +407,7 @@ impl Via6522 {
             changed = self.update_ca1(false);
         }
         if reset_c2 {
-            changed = changed | self.update_ca2(false);
+            changed |= self.update_ca2(false);
         }
         if changed {
             self.send_to_all(ViaProtocolMessage::CtrlState {
@@ -422,7 +422,7 @@ impl Via6522 {
             changed = self.update_ca1(true);
         }
         if set_c2 {
-            changed = changed | self.update_ca2(true);
+            changed |= self.update_ca2(true);
         }
         if changed {
             self.send_to_all(ViaProtocolMessage::CtrlState {
@@ -542,7 +542,7 @@ impl Via6522 {
             changed = self.update_cb1(false);
         }
         if reset_c2 {
-            changed = changed | self.update_cb2(false);
+            changed |= self.update_cb2(false);
         }
         if changed {
             self.send_to_all(ViaProtocolMessage::CtrlState {
@@ -557,7 +557,7 @@ impl Via6522 {
             changed = self.update_cb1(true);
         }
         if set_c2 {
-            changed = changed | self.update_cb2(true);
+            changed |= self.update_cb2(true);
         }
         if changed {
             self.send_to_all(ViaProtocolMessage::CtrlState {
