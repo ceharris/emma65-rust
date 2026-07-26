@@ -82,7 +82,7 @@ export default function App() {
       </header>
       <div className="app-layout">
         <div className="col col-left">
-          <MemoryPanel />
+          <MemoryPanel execState={execState} />
           {/* Watchpoints — story 12 */}
         </div>
         <div className="col col-center">
