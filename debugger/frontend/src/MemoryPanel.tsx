@@ -60,18 +60,25 @@ function parseHexBytes(raw: string): number[] | null {
 
 /** State for the write-memory dialog; null means closed. */
 interface WriteDialogState {
-  /** Target address for the first byte of the write. */
-  addr: number;
+  /**
+   * Target address for the first byte of the write.
+   * Non-null when opened by double-click (pre-set); null when opened by keyboard shortcut.
+   */
+  addr: number | null;
+  /** Controlled value of the editable address input (used only when addr is null). */
+  addrInput: string;
+  /** Validation error for the address field; empty string means no error. */
+  addrError: string;
   /** Controlled value of the data input field. */
   inputValue: string;
   /** Validation or backend error message; empty string means no error. */
   errorMsg: string;
-  /** "hex" when opened from the hex column; "utf8" when opened from the ASCII column. */
+  /** "hex" when opened from the hex column or Alt+Shift+H; "utf8" from ASCII column or Alt+Shift+A. */
   mode: "hex" | "utf8";
 }
 
 interface Props {
-  /** Current CPU execution state; used to guard double-click when running. */
+  /** Current CPU execution state; used to guard double-click and key shortcuts when running. */
   execState: ExecState;
 }
 
@@ -159,6 +166,23 @@ export default function MemoryPanel({ execState }: Props) {
     return () => window.removeEventListener("keydown", handler);
   }, [fetchPage]);
 
+  /** Alt+Shift+H / Alt+Shift+A: open write dialog at an arbitrary address. */
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (document.activeElement instanceof HTMLInputElement) return;
+      if (execState !== "stopped" || writeDialog) return;
+      if (e.altKey && e.shiftKey && e.code === "KeyH") {
+        e.preventDefault();
+        setWriteDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex" });
+      } else if (e.altKey && e.shiftKey && e.code === "KeyA") {
+        e.preventDefault();
+        setWriteDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8" });
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [execState, writeDialog]);
+
   /** Wheel scrolling: one row per tick. */
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -172,17 +196,32 @@ export default function MemoryPanel({ execState }: Props) {
 
   /** Opens the hex write dialog for the byte at `addr`. */
   const handleByteDoubleClick = useCallback((addr: number) => {
-    setWriteDialog({ addr, inputValue: "", errorMsg: "", mode: "hex" });
+    setWriteDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex" });
   }, []);
 
   /** Opens the UTF-8 text write dialog for the byte at `addr`. */
   const handleAsciiCharDoubleClick = useCallback((addr: number) => {
-    setWriteDialog({ addr, inputValue: "", errorMsg: "", mode: "utf8" });
+    setWriteDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8" });
   }, []);
 
-  /** Validates, invokes write_memory, refreshes on success, shows error on failure. */
+  /** Validates address and data, invokes write_memory, refreshes on success, shows errors on failure. */
   const commitWriteMemory = useCallback(async () => {
     if (!writeDialog) return;
+
+    // Resolve address: pre-set from double-click, or parse from the editable input.
+    let resolvedAddr: number;
+    if (writeDialog.addr !== null) {
+      resolvedAddr = writeDialog.addr;
+    } else {
+      const parsed = parseAddress(writeDialog.addrInput);
+      if (isNaN(parsed) || parsed < 0 || parsed > 0xffff) {
+        setWriteDialog((d) => d && { ...d, addrError: "Enter a valid address (hex or decimal, 0–65535)" });
+        return;
+      }
+      resolvedAddr = parsed;
+    }
+
+    // Validate data.
     let data: number[];
     if (writeDialog.mode === "hex") {
       const parsed = parseHexBytes(writeDialog.inputValue);
@@ -199,10 +238,12 @@ export default function MemoryPanel({ execState }: Props) {
         setWriteDialog((d) => d && { ...d, errorMsg: "Enter at least one character" });
         return;
       }
+      // No trimming — spaces and all characters are written verbatim.
       data = Array.from(new TextEncoder().encode(writeDialog.inputValue));
     }
+
     try {
-      await invoke("write_memory", { addr: writeDialog.addr, data });
+      await invoke("write_memory", { addr: resolvedAddr, data });
       setWriteDialog(null);
       fetchPage(pageAddrRef.current);
     } catch (e) {
@@ -319,14 +360,36 @@ export default function MemoryPanel({ execState }: Props) {
 
             <div className="mem-write-field">
               <label className="mem-write-label">Address</label>
-              <input
-                className="mem-write-addr-display"
-                value={fmtAddr(writeDialog.addr)}
-                readOnly
-                disabled
-                tabIndex={-1}
-              />
+              {writeDialog.addr !== null ? (
+                <input
+                  className="mem-write-addr-display"
+                  value={fmtAddr(writeDialog.addr)}
+                  readOnly
+                  disabled
+                  tabIndex={-1}
+                />
+              ) : (
+                <input
+                  className={`mem-write-addr-input${writeDialog.addrError ? " invalid" : ""}`}
+                  autoFocus
+                  spellCheck={false}
+                  placeholder="$0000 or decimal"
+                  value={writeDialog.addrInput}
+                  onChange={(e) =>
+                    setWriteDialog((d) => d && { ...d, addrInput: e.target.value, addrError: "" })
+                  }
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") { e.preventDefault(); commitWriteMemory(); }
+                    if (e.key === "Escape") { e.preventDefault(); setWriteDialog(null); }
+                  }}
+                />
+              )}
             </div>
+
+            {writeDialog.addrError && (
+              <div className="mem-write-error">{writeDialog.addrError}</div>
+            )}
 
             <div className="mem-write-field">
               <label className="mem-write-label">
@@ -334,7 +397,7 @@ export default function MemoryPanel({ execState }: Props) {
               </label>
               <input
                 className={`mem-write-data-input${writeDialog.errorMsg ? " invalid" : ""}`}
-                autoFocus
+                autoFocus={writeDialog.addr !== null}
                 spellCheck={writeDialog.mode === "utf8"}
                 placeholder={writeDialog.mode === "hex" ? "e.g. 4C 00 06" : "Enter Unicode text"}
                 value={writeDialog.inputValue}
