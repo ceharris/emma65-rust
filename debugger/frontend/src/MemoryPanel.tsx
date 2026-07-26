@@ -66,6 +66,8 @@ interface WriteDialogState {
   inputValue: string;
   /** Validation or backend error message; empty string means no error. */
   errorMsg: string;
+  /** "hex" when opened from the hex column; "utf8" when opened from the ASCII column. */
+  mode: "hex" | "utf8";
 }
 
 interface Props {
@@ -168,21 +170,36 @@ export default function MemoryPanel({ execState }: Props) {
     [fetchPage],
   );
 
-  /** Opens the write dialog for the byte at `addr`. */
+  /** Opens the hex write dialog for the byte at `addr`. */
   const handleByteDoubleClick = useCallback((addr: number) => {
-    setWriteDialog({ addr, inputValue: "", errorMsg: "" });
+    setWriteDialog({ addr, inputValue: "", errorMsg: "", mode: "hex" });
+  }, []);
+
+  /** Opens the UTF-8 text write dialog for the byte at `addr`. */
+  const handleAsciiCharDoubleClick = useCallback((addr: number) => {
+    setWriteDialog({ addr, inputValue: "", errorMsg: "", mode: "utf8" });
   }, []);
 
   /** Validates, invokes write_memory, refreshes on success, shows error on failure. */
   const commitWriteMemory = useCallback(async () => {
     if (!writeDialog) return;
-    const data = parseHexBytes(writeDialog.inputValue);
-    if (data === null) {
-      setWriteDialog((d) => d && {
-        ...d,
-        errorMsg: "Enter one or more hex bytes (1–2 digits each), separated by spaces or commas",
-      });
-      return;
+    let data: number[];
+    if (writeDialog.mode === "hex") {
+      const parsed = parseHexBytes(writeDialog.inputValue);
+      if (parsed === null) {
+        setWriteDialog((d) => d && {
+          ...d,
+          errorMsg: "Enter one or more hex bytes (1–2 digits each), separated by spaces or commas",
+        });
+        return;
+      }
+      data = parsed;
+    } else {
+      if (!writeDialog.inputValue) {
+        setWriteDialog((d) => d && { ...d, errorMsg: "Enter at least one character" });
+        return;
+      }
+      data = Array.from(new TextEncoder().encode(writeDialog.inputValue));
     }
     try {
       await invoke("write_memory", { addr: writeDialog.addr, data });
@@ -202,6 +219,28 @@ export default function MemoryPanel({ execState }: Props) {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [writeDialog]);
+
+  /** Builds per-character ASCII spans for one 8-byte half-row. */
+  const makeAsciiSpans = useCallback(
+    (halfSlice: Uint8Array, baseAddr: number) =>
+      Array.from(halfSlice).map((b, i) => {
+        const byteAddr = (baseAddr + i) & (MEMORY_SIZE - 1);
+        return (
+          <span
+            key={i}
+            className={`mem-ascii-char${execState !== "stopped" ? " locked" : ""}`}
+            onDoubleClick={
+              execState === "stopped"
+                ? () => handleAsciiCharDoubleClick(byteAddr)
+                : undefined
+            }
+          >
+            {toAsciiChar(b)}
+          </span>
+        );
+      }),
+    [execState, handleAsciiCharDoubleClick],
+  );
 
   /** Builds per-byte hex spans for one 8-byte half-row. */
   const makeHexSpans = useCallback(
@@ -229,9 +268,6 @@ export default function MemoryPanel({ execState }: Props) {
   for (let row = 0; row < ROWS_PER_PAGE; row++) {
     const rowAddr = (pageAddr + row * BYTES_PER_ROW) & (MEMORY_SIZE - 1);
     const slice = bytes.slice(row * BYTES_PER_ROW, (row + 1) * BYTES_PER_ROW);
-    const asciiLow = Array.from(slice.slice(0, 8)).map(toAsciiChar).join("");
-    const asciiHigh = Array.from(slice.slice(8, 16)).map(toAsciiChar).join("");
-
     rows.push(
       <div key={rowAddr} className="mem-row">
         <span className="mem-addr">{fmtAddr(rowAddr)}:</span>
@@ -241,8 +277,12 @@ export default function MemoryPanel({ execState }: Props) {
         <span className="mem-hex-group">
           {makeHexSpans(slice.slice(8, 16), (rowAddr + 8) & (MEMORY_SIZE - 1))}
         </span>
-        <span className="mem-ascii-group">{asciiLow}</span>
-        <span className="mem-ascii-group">{asciiHigh}</span>
+        <span className="mem-ascii-group">
+          {makeAsciiSpans(slice.slice(0, 8), rowAddr)}
+        </span>
+        <span className="mem-ascii-group">
+          {makeAsciiSpans(slice.slice(8, 16), (rowAddr + 8) & (MEMORY_SIZE - 1))}
+        </span>
       </div>,
     );
   }
@@ -289,12 +329,14 @@ export default function MemoryPanel({ execState }: Props) {
             </div>
 
             <div className="mem-write-field">
-              <label className="mem-write-label">Bytes</label>
+              <label className="mem-write-label">
+                {writeDialog.mode === "hex" ? "Bytes" : "Text"}
+              </label>
               <input
                 className={`mem-write-data-input${writeDialog.errorMsg ? " invalid" : ""}`}
                 autoFocus
-                spellCheck={false}
-                placeholder="e.g. 4C 00 06"
+                spellCheck={writeDialog.mode === "utf8"}
+                placeholder={writeDialog.mode === "hex" ? "e.g. 4C 00 06" : "Enter Unicode text"}
                 value={writeDialog.inputValue}
                 onChange={(e) =>
                   setWriteDialog((d) => d && { ...d, inputValue: e.target.value, errorMsg: "" })
