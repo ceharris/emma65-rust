@@ -63,7 +63,7 @@
 //!
 
 use super::protocol::manager::ProtocolManager;
-use super::protocol::via::{VIA_CTRL1_MASK, VIA_CTRL2_MASK, ViaProtocolMessage};
+use super::protocol::via::ViaProtocolMessage;
 use super::protocol::{ProtocolMessageEncoding, via};
 use super::{DeviceId, ErrorSender, IoDevice};
 use crate::emulator::{Transport, TransportError, transport};
@@ -252,16 +252,6 @@ impl Via6522 {
         }
     }
 
-    fn port_a_ctrl_state(&self) -> u8 {
-        (if self.ca1 { VIA_CTRL1_MASK } else { 0 })
-            | (if self.ca2 { VIA_CTRL2_MASK } else { 0 })
-    }
-
-    fn port_b_ctrl_state(&self) -> u8 {
-        (if self.cb1 { VIA_CTRL1_MASK } else { 0 })
-            | (if self.cb2 { VIA_CTRL2_MASK } else { 0 })
-    }
-
     // --- Port read helpers ---
 
     /// Reads the effective state of port B: output pins from ORB, input pins from input_b or
@@ -295,7 +285,8 @@ impl Via6522 {
             },
             ViaProtocolMessage::CtrlState {
                 port: b'A',
-                ctrl_state: self.port_a_ctrl_state(),
+                c1_state: self.ca1,
+                c2_state: self.ca2,
             },
             ViaProtocolMessage::PortState {
                 port: b'B',
@@ -303,7 +294,8 @@ impl Via6522 {
             },
             ViaProtocolMessage::CtrlState {
                 port: b'B',
-                ctrl_state: self.port_b_ctrl_state(),
+                c1_state: self.cb1,
+                c2_state: self.cb2,
             },
         ];
         messages
@@ -375,7 +367,7 @@ impl Via6522 {
             if ca2_mode == 4 && !self.ca2 {
                 self.ca2 = true;
                 self.send_to_all(ViaProtocolMessage::SetCtrl {
-                    port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+                    port: b'A', set_c1: false, set_c2: true });
             }
         }
         self.ca1 = state;
@@ -390,25 +382,25 @@ impl Via6522 {
         }
     }
     
-    fn update_port_a_ctrl(&mut self, ctrl_state: u8) {
-        self.update_ca1(ctrl_state & VIA_CTRL1_MASK != 0);
-        self.update_ca2(ctrl_state & VIA_CTRL2_MASK != 0);
+    fn update_port_a_ctrl(&mut self, c1_state: bool, c2_state: bool) {
+        self.update_ca1(c1_state);
+        self.update_ca2(c2_state);
     }
     
-    fn reset_port_a_ctrl(&mut self, ctrl_mask: u8) {
-        if ctrl_mask & VIA_CTRL1_MASK != 0 {
+    fn reset_port_a_ctrl(&mut self, reset_c1: bool, reset_c2: bool) {
+        if reset_c1 {
             self.update_ca1(false);
         }
-        if ctrl_mask & VIA_CTRL2_MASK != 0 {
+        if reset_c2 {
             self.update_ca2(false);
         }
     }
 
-    fn set_port_a_ctrl(&mut self, ctrl_mask: u8) {
-        if ctrl_mask & VIA_CTRL1_MASK != 0 {
+    fn set_port_a_ctrl(&mut self, set_c1: bool, set_c2: bool) {
+        if set_c1 {
             self.update_ca1(true);
         }
-        if ctrl_mask & VIA_CTRL2_MASK != 0 {
+        if set_c2 {
             self.update_ca2(true);
         }
     }
@@ -469,7 +461,7 @@ impl Via6522 {
                 if cb2_mode == 4 && !self.cb2 {
                     self.cb2 = true;
                     self.send_to_all(ViaProtocolMessage::SetCtrl { 
-                        port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                        port: b'B', set_c1: false, set_c2: true  });
                 }
             }
         }
@@ -493,25 +485,25 @@ impl Via6522 {
         }
     }
 
-    fn update_port_b_ctrl(&mut self, ctrl_state: u8) {
-        self.update_cb1(ctrl_state & VIA_CTRL1_MASK != 0);
-        self.update_cb2(ctrl_state & VIA_CTRL2_MASK != 0);
+    fn update_port_b_ctrl(&mut self, c1_state: bool, c2_state: bool) {
+        self.update_cb1(c1_state);
+        self.update_cb2(c2_state);
     }
 
-    fn reset_port_b_ctrl(&mut self, ctrl_mask: u8) {
-        if ctrl_mask & VIA_CTRL1_MASK != 0 {
+    fn reset_port_b_ctrl(&mut self, reset_c1: bool, reset_c2: bool) {
+        if reset_c1 {
             self.update_cb1(false);
         }
-        if ctrl_mask & VIA_CTRL2_MASK != 0 {
+        if reset_c2 {
             self.update_cb2(false);
         }
     }
 
-    fn set_port_b_ctrl(&mut self, ctrl_mask: u8) {
-        if ctrl_mask & VIA_CTRL1_MASK != 0 {
+    fn set_port_b_ctrl(&mut self, set_c1: bool, set_c2: bool) {
+        if set_c1 {
             self.update_cb1(true);
         }
-        if ctrl_mask & VIA_CTRL2_MASK != 0 {
+        if set_c2 {
             self.update_cb2(true);
         }
     }
@@ -526,43 +518,43 @@ impl Via6522 {
                     self.update_port_b(port_state);
                 }
             }
-            ViaProtocolMessage::ResetPort { port, port_mask, ctrl_mask} => {
+            ViaProtocolMessage::ResetPort { port, port_mask, reset_c1, reset_c2 } => {
                 if port == b'A' {
                     self.reset_port_a(port_mask);
-                    self.reset_port_a_ctrl(ctrl_mask);
+                    self.reset_port_a_ctrl(reset_c1, reset_c2);
                 } else {
                     self.reset_port_b(port_mask);
-                    self.reset_port_b_ctrl(ctrl_mask);
+                    self.reset_port_b_ctrl(reset_c1, reset_c2);
                 }
             }
-            ViaProtocolMessage::SetPort { port, port_mask, ctrl_mask} => {
+            ViaProtocolMessage::SetPort { port, port_mask, set_c1, set_c2 } => {
                 if port == b'A' {
                     self.set_port_a(port_mask);
-                    self.set_port_a_ctrl(ctrl_mask);
+                    self.set_port_a_ctrl(set_c1, set_c2);
                 } else {
                     self.set_port_b(port_mask);
-                    self.set_port_b_ctrl(ctrl_mask);
+                    self.set_port_b_ctrl(set_c1, set_c2);
                 }
             }
-            ViaProtocolMessage::CtrlState { port, ctrl_state } => {
+            ViaProtocolMessage::CtrlState { port, c1_state, c2_state } => {
                 if port == b'A' {
-                    self.update_port_a_ctrl(ctrl_state);
+                    self.update_port_a_ctrl(c1_state, c2_state);
                 } else {
-                    self.update_port_b_ctrl(ctrl_state);
+                    self.update_port_b_ctrl(c1_state, c2_state);
                 }
             }
-            ViaProtocolMessage::ResetCtrl { port, ctrl_mask } => {
+            ViaProtocolMessage::ResetCtrl { port, reset_c1, reset_c2 } => {
                 if port == b'A' {
-                    self.reset_port_a_ctrl(ctrl_mask);
+                    self.reset_port_a_ctrl(reset_c1, reset_c2);
                 } else {
-                    self.reset_port_b_ctrl(ctrl_mask);
+                    self.reset_port_b_ctrl(reset_c1, reset_c2);
                 }
             }
-            ViaProtocolMessage::SetCtrl { port, ctrl_mask } => {
+            ViaProtocolMessage::SetCtrl { port, set_c1, set_c2 } => {
                 if port == b'A' {
-                    self.set_port_a_ctrl(ctrl_mask);
+                    self.set_port_a_ctrl(set_c1, set_c2);
                 } else {
-                    self.set_port_b_ctrl(ctrl_mask);
+                    self.set_port_b_ctrl(set_c1, set_c2);
                 }
             }
         }
@@ -580,13 +572,13 @@ impl Via6522 {
             4 if self.ca2 => { // handshake: assert low; released by CA1 active edge
                 self.ca2 = false;
                 self.send_to_all(ViaProtocolMessage::ResetCtrl { 
-                    port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+                    port: b'A', reset_c1: false, reset_c2: true });
             }
             5 => { // pulse: low then immediately high
                 self.send_to_all(ViaProtocolMessage::ResetCtrl { 
-                    port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+                    port: b'A', reset_c1: false, reset_c2: true });
                 self.send_to_all(ViaProtocolMessage::SetCtrl { 
-                    port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+                    port: b'A', set_c1: false, set_c2: true });
             }
             _ => {}
         }
@@ -600,13 +592,13 @@ impl Via6522 {
             4 if self.cb2 => { // handshake: assert low; released by CB1 active edge
                 self.cb2 = false;
                 self.send_to_all(ViaProtocolMessage::ResetCtrl { 
-                    port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                    port: b'B', reset_c1: false, reset_c2: true });
             }
             5 => { // pulse: low then immediately high
                 self.send_to_all(ViaProtocolMessage::ResetCtrl { 
-                    port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                    port: b'B', reset_c1: false, reset_c2: true });
                 self.send_to_all(ViaProtocolMessage::SetCtrl { 
-                    port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                    port: b'B', set_c1: false, set_c2: true });
             }
             _ => {}
         }
@@ -617,24 +609,24 @@ impl Via6522 {
         if !rising {
             if !self.sr_external {
                 self.send_to_all(ViaProtocolMessage::ResetCtrl { 
-                    port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+                    port: b'B', reset_c1: true, reset_c2: false });
             }
             if self.sr_shifting_out {
                 let bit = (self.sr >> (self.sr_count - 1)) & 1 != 0;
                 self.cb2 = bit;
                 if bit {
                     self.send_to_all(ViaProtocolMessage::SetCtrl { 
-                        port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                        port: b'B', set_c1: false, set_c2: true });
                 } else {
                     self.send_to_all(ViaProtocolMessage::ResetCtrl { 
-                        port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                        port: b'B', reset_c1: false, reset_c2: true });
                 }
             }
         }
         if rising {
             if !self.sr_external {
                 self.send_to_all(ViaProtocolMessage::SetCtrl {
-                    port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+                    port: b'B', set_c1: true, set_c2: false });
             }
             if !self.sr_shifting_out {
                 let bit = self.cb2;
@@ -915,12 +907,12 @@ impl IoDevice for Via6522 {
                     6 if self.ca2 => { // manual low
                         self.ca2 = false;
                         self.send_to_all(ViaProtocolMessage::ResetCtrl { 
-                            port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+                            port: b'A', reset_c1: false, reset_c2: true });
                     }
                     7 if !self.ca2 => { // manual high
                         self.ca2 = true;
                         self.send_to_all(ViaProtocolMessage::SetCtrl { 
-                            port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+                            port: b'A', set_c1: false, set_c2: true });
                     }
                     _ => {}
                 }
@@ -928,11 +920,13 @@ impl IoDevice for Via6522 {
                 match cb2_mode {
                     6 if self.cb2 => { // manual low
                         self.cb2 = false;
-                        self.send_to_all(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                        self.send_to_all(ViaProtocolMessage::ResetCtrl { 
+                            port: b'B', reset_c1: false, reset_c2: true });
                     }
                     7 if !self.cb2 => { // manual high
                         self.cb2 = true;
-                        self.send_to_all(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+                        self.send_to_all(ViaProtocolMessage::SetCtrl { 
+                            port: b'B', set_c1: false, set_c2: true });
                     }
                     _ => {}
                 }
@@ -956,7 +950,8 @@ impl IoDevice for Via6522 {
                 let old_a = (old_ora & self.ddra) | (self.input_a & !self.ddra);
                 let new_a = self.read_port_a();
                 if old_a != new_a {
-                    self.send_to_all(ViaProtocolMessage::PortState { port: b'A', port_state: new_a });
+                    self.send_to_all(ViaProtocolMessage::PortState { 
+                        port: b'A', port_state: new_a });
                 }
             }
             _ => {}
@@ -1769,7 +1764,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = true;
         via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', reset_c1: true, reset_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA1, 0);
@@ -1780,7 +1775,7 @@ mod tests {
         let (mut via, _) = device_with_pipe();
         via.ca1 = false;
         via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', reset_c1: true, reset_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA1, 0);
@@ -1792,7 +1787,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = false;
         via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', set_c1: true, set_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA1, 0);
@@ -1804,7 +1799,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = true;
         via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', set_c1: true, set_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA1, 0);
@@ -1816,7 +1811,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = true;
         via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', reset_c1: true, reset_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB1, 0);
@@ -1828,7 +1823,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = false;
         via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', reset_c1: true, reset_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB1, 0);
@@ -1840,7 +1835,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = false;
         via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', set_c1: true, set_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB1, 0);
@@ -1852,7 +1847,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = true;
         via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', set_c1: true, set_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB1, 0);
@@ -1864,7 +1859,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', reset_c1: false, reset_c2: true });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA2, 0);
@@ -1876,7 +1871,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', reset_c1: false, reset_c2: true });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA2, 0);
@@ -1888,7 +1883,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', set_c1: false, set_c2: true });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CA2, 0);
@@ -1900,7 +1895,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', ctrl_mask: VIA_CTRL2_MASK });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'A', set_c1: false, set_c2: true });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CA2, 0);
@@ -1912,7 +1907,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', reset_c1: false, reset_c2: true });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB2, 0);
@@ -1924,7 +1919,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', reset_c1: true, reset_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB2, 0);
@@ -1936,7 +1931,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL2_MASK });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', set_c1: false, set_c2: true });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_ne!(int_flags & IRQ_CB2, 0);
@@ -1948,7 +1943,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
-        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', set_c1: true, set_c2: false });
         via.tick(2);
         let int_flags = via.read(0xd);
         assert_eq!(int_flags & IRQ_CB2, 0);
@@ -2405,7 +2400,7 @@ mod tests {
         via.write(0xC, PCR_CA1_INPUT_NEGATIVE_EDGE);
         via.ca1 = true;
         via.input_a = 0xCD;
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', reset_c1: true, reset_c2: false });
         assert_eq!(via.ira_latch, 0xCD, "ira_latch must capture input_a on CA1 active edge");
     }
 
@@ -2417,7 +2412,7 @@ mod tests {
         via.ca1 = false; // already low — no edge when we send low again
         via.input_a = 0xCD;
         via.ira_latch = 0x11; // sentinel
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', reset_c1: true, reset_c2: false });
         assert_eq!(via.ira_latch, 0x11, "ira_latch must not change when CA1 level does not change");
     }
 
@@ -2453,7 +2448,7 @@ mod tests {
         via.write(0xC, PCR_CB1_INPUT_NEGATIVE_EDGE);
         via.cb1 = true;
         via.input_b = 0xCD;
-        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+        via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', reset_c1: true, reset_c2: false });
         assert_eq!(via.irb_latch, 0xCD, "irb_latch must capture input_b on CB1 active edge");
     }
 
@@ -2662,10 +2657,10 @@ mod tests {
         let bits = [1u8, 0, 1, 1, 0, 0, 1, 0];
         for bit in bits {
             // CB1 back low (not a clock).
-            via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+            via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'B', reset_c1: true, reset_c2: false });
             via.cb2 = bit != 0;
             // CB1 rising edge clocks the SR.
-            via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', ctrl_mask: VIA_CTRL1_MASK });
+            via.apply_message(ViaProtocolMessage::SetCtrl { port: b'B', set_c1: true, set_c2: false });
         }
 
         assert_eq!(via.sr, 0b10110010, "shifted-in byte mismatch: got 0x{:02X}", via.sr);
@@ -2977,8 +2972,8 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
 
         // PB6 high→low: negative transition should decrement counter.
-        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });    // PB6=1
-        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });  // PB6=0
+        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, set_c1: false, set_c2: false });    // PB6=1
+        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, reset_c1: false, reset_c2: false });  // PB6=0
 
         assert_eq!(via.t2_counter, 4, "expected T2 counter = 4 after one PB6 neg transition");
     }
@@ -2993,8 +2988,8 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
 
         for _ in 0..3 {
-            via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });    // PB6=1
-            via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });  // PB6=0
+            via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, set_c1: false, set_c2: false });    // PB6=1
+            via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, reset_c1: false, reset_c2: false });  // PB6=0
         }
 
         assert_ne!(via.peek(0xD) & IRQ_T2, 0, "IRQ_T2 must fire after 3 PB6 neg transitions");
@@ -3012,8 +3007,8 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
 
         // PB6 low → high (positive transition) must not decrement.
-        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });  // PB6=0
-        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });    // PB6=1
+        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, reset_c1: false, reset_c2: false });  // PB6=0
+        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, set_c1: false, set_c2: false });    // PB6=1
 
         assert_eq!(via.t2_counter, 5, "positive PB6 transition must not decrement T2 counter");
     }
@@ -3027,8 +3022,8 @@ mod tests {
         via.write(0x9, 0x00);
         drain_state_dump(&mut via, &mut remote);
 
-        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });    // PB6=1
-        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, ctrl_mask: 0 });  // PB6=0
+        via.apply_message(ViaProtocolMessage::SetPort { port: b'B', port_mask: 0x40, set_c1: false, set_c2: false });    // PB6=1
+        via.apply_message(ViaProtocolMessage::ResetPort { port: b'B', port_mask: 0x40, reset_c1: false, reset_c2: false });  // PB6=0
 
         // Counter should still be near 100 (only a tick or two from handshake).
         assert!(via.t2_counter >= 98, "timed T2 must not be decremented by PB6 transitions");
