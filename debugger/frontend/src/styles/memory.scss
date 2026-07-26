@@ -107,6 +107,7 @@
 .mem-ascii-char {
   cursor: pointer;
   border-radius: 2px;
+  white-space: pre;
 
   &:hover {
     background-color: var(--color-bg-hover);
