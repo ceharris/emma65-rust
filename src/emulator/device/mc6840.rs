@@ -3,14 +3,14 @@
 //! A reasonably faithful emulation of the MC6840.
 //!
 //! The MC6840 has three 16-bit counters, three corresponding control registers (CR1, CR2, and CR3)
-//! and a status register. Under software control the counters can be used to generate interrupts
-//! and/or generate output signals for peripherals connected via a supported [Transport].
+//! and a status register. Under software control, the counters can be used to generate interrupts
+//! and/or generate output signals for peripherals connected via a supported [transport].
 //! Supported wave generation modes via virtual outputs include square-wave and pulse-width
 //! modulation, in both continuous and single-shot modes. Supported measurement operations include
 //! event counting, frequency measurement, and interval (pulse width measurement).
 //!
 //! The MC6840 occupies eight locations in the assigned address space. Offset 0 in the assigned
-//! region supports writing to either CR1 or CR3 according to the configuration of CR3. All other
+//! region supports writing to either CR1 or CR3 according to the configuration of CR2. All other
 //! offsets address a single register on write or read.
 //!
 //! | Offset |  Write Operation                      |  Read Operation          |
@@ -25,37 +25,34 @@
 //! |   7    | Write Timer 3 Latch                   | Read LSB Buffer Register |
 //!
 //! To facilitate atomic writes of the 16-bit latches and atomic reads of the 16-bit counter for
-//! each timer, the MC6840 uses two additional buffer registers. To write the latch for a timer,
-//! the program first writes the most significant byte of the count to the MSB Buffer Register,
+//! each timer, the MC6840 uses two additional buffer registers. To write a value to the latch
+//! for a timer, the program first writes the most significant byte to the MSB Buffer Register,
 //! it then writes the least significant byte to the latch register offset for the target timer.
-//! Upon writing the LSB, the full 16-bit value is transferred into the timer's latches. To read the
-//! counter for the timer, the program first reads the offset for the subject timer's counter. This
-//! read returns the most significant byte of the counter and simultaneously loads the least
+//! Upon writing the LSB, the full 16-bit value is transferred into the timer's latch. To read the
+//! counter for the timer, the program first reads from the offset for the subject timer's counter.
+//! This read returns the most significant byte of the counter and simultaneously loads the least
 //! significant byte into the LSB Buffer Register, which the program can subsequently read.
 //! To simplify programming using index registers, the MSB Buffer Register and LSB Buffer Register
 //! both respond to I/O requests at multiple offsets.
 //!
-//! Note that both 16-bit counters are organized in the address space in big-endian (MSB first)
-//! order, rather than the little-endian order used by the 6502 microprocessor.
+//! Note that all 16-bit counters are organized in the address space in big endian (MSB first)
+//! order, rather than the little endian order used by the 6502 microprocessor.
 //!
 //! # Virtual peripheral connections
 //!
-//! Virtual peripherals connect to the MC6840 PTM over byte-stream transports using the
-//! PTM message protocol. Any number of transports may be attached using [`Mc6840::attach_transport`]; each
-//! undergoes an independent format negotiation handshake.
+//! Virtual peripherals connect to the PTM over byte-stream transports using the
+//! [`ptm`] message protocol. Any of the available transports may be attached to the device;
+//! socket-based transports have the advantage of allowing multiple peripherals to attach to
+//! the device. As is the case with real hardware, when multiple peripherals share the I/O
+//! pins of the PTM, care must be taken to avoid conflict.
 //!
-//! **Handshake.** The peripheral opens the connection by sending a single format-selector byte.
-//! On the next [`IoDevice::tick`] call that receives it, the PTM completes the handshake and
-//! immediately sends a state dump giving the peripheral the current state of the clock, gate,
-//! and timer output signals before any further exchange.
+//! All messages sent by the PTM are conveyed to all connected peripherals by the underlying
+//! transport implementation. Any change in the PTM's state by a peripheral will be conveyed to
+//! all peripherals. When a peripheral connects, a state dump is triggered such that the newly
+//! connected peripheral will be aware of the current state.
 //!
-//! **PTM → peripheral (outgoing).** After the handshake, the PTM will transmit updates to timer
-//! output signals, as well as updates to clock and gate signals (only if multiple peripherals are
-//! connected) as changes occur in the state of the PTM's timers. Every attached transport that
-//! has completed its handshake receives each update message from the PTM.
-//!
-//! **Peripheral → PTM (incoming).** The peripheral sends messages to signal negative- or
-//! positive-edge transitions for any of the three clock input and three gate input signals.
+//! Inbound messages from peripherals are serviced at each `tick` on the bus, and before the
+//! PTM's timers are updated.
 //!
 
 use super::protocol::manager::ProtocolManager;

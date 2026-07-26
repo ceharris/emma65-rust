@@ -21,12 +21,14 @@
 //!
 //! ## ASCII Protocol
 //!
-//! The ASCII protocol consists of short strings of printable ASCII characters. As an aid to
-//! human readability, distinct messages are separated by a single space character when sent
-//! by the MC6840. When more than 72 characters of messages and spaces have been sent by the
-//! MC6840, it will output a canonical ASCII CR (`0xD`) LF (`0xA`) sequence. The MC6840 ignores
-//! non-printable ASCII control characters (`0x00..0x1F`) and spaces (`0x20`) on input. The
-//! MC6840 does not distinguish between upper case and lower case letters.
+//! The ASCII protocol consists of short strings of printable ASCII characters. A receiver MUST
+//! ignore non-printable ASCII control characters (`0x00..0x1F`, `0x7F`), spaces (`0x20`), and
+//! any byte with the high-order bit set. A receiver MUST NOT distinguish between upper case and 
+//! lower case letters.
+//!
+//! As an aid to human readability, distinct messages are separated by a single space character
+//! when sent by the MC6840. When more than 72 characters of messages and spaces have been sent
+//! by the MC6840, it will output a canonical ASCII CR (`0xD`) LF (`0xA`) sequence.
 //!
 //! | Message Type | Sent By    | Format | Example | Description                                                                                                              |
 //! |--------------|------------|--------|---------|--------------------------------------------------------------------------------------------------------------------------|
