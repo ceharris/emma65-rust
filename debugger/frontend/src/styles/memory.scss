@@ -218,6 +218,46 @@
   }
 }
 
+.mem-write-rom-overwrite {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  cursor: pointer;
+  user-select: none;
+
+  input[type="checkbox"] {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 2px;
+    background: var(--color-bg-alt);
+    cursor: pointer;
+    flex-shrink: 0;
+    position: relative;
+
+    &:checked {
+      background: var(--color-accent);
+      border-color: var(--color-accent);
+
+      &::after {
+        content: "";
+        position: absolute;
+        left: 2px;
+        top: 0px;
+        width: 4px;
+        height: 7px;
+        border: 2px solid var(--color-bg);
+        border-top: none;
+        border-left: none;
+        transform: rotate(45deg);
+      }
+    }
+  }
+}
+
 .mem-write-error {
   font-size: 0.78rem;
   color: var(--color-danger-strong);

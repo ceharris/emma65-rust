@@ -690,16 +690,26 @@ fn get_memory(
 
 /// Writes `data` bytes to memory starting at `addr`, wrapping at 0xFFFF.
 ///
-/// Writes are performed via `Bus::write` so device side effects apply.
+/// Writes are performed via `Bus::write` so device side effects apply, unless `patch` is true
+/// in which case `Bus::patch` is used to bypass ROM write protection.
 /// Only callable while the CPU is halted; returns an error if the CPU is running.
 #[tauri::command]
-fn write_memory(addr: u16, data: Vec<u8>, cpu_state: State<CpuState>) -> Result<(), String> {
+fn write_memory(
+    addr: u16,
+    data: Vec<u8>,
+    patch: bool,
+    cpu_state: State<CpuState>,
+) -> Result<(), String> {
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
     let bus = cpu.bus_mut();
     for (i, &byte) in data.iter().enumerate() {
         let a = addr.wrapping_add(i as u16);
-        bus.write(a, byte).map_err(|e| e.to_string())?;
+        if patch {
+            bus.patch(a, byte).map_err(|e| e.to_string())?;
+        } else {
+            bus.write(a, byte).map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
