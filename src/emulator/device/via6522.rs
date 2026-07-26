@@ -342,7 +342,13 @@ impl Via6522 {
             } else {
                 true
             };
-            if triggered { self.set_ifr(IRQ_CA1); }
+            if triggered {
+                self.set_ifr(IRQ_CA1);
+            }
+            self.send_to_all(ViaProtocolMessage::PortState {
+                port: b'A',
+                port_state: value,
+            });
         }
     }
 
@@ -354,9 +360,10 @@ impl Via6522 {
         self.update_port_a(self.input_a | port_mask);
     }
 
-    fn update_ca1(&mut self, state: bool) {
+    fn update_ca1(&mut self, state: bool) -> bool {
         let pos_edge = self.pcr & PCR_CA1_EDGE != 0;
-        if self.ca1 != state && state == pos_edge {
+        let changed = self.ca1 != state;
+        if changed && state == pos_edge {
             self.set_ifr(IRQ_CA1);
             // Capture IRA latch on CA1 active edge when PA latch enable is set.
             if self.acr & ACR_PA_LATCH_ENABLE != 0 {
@@ -371,37 +378,56 @@ impl Via6522 {
             }
         }
         self.ca1 = state;
+        changed
     }
 
-    fn update_ca2(&mut self, state: bool) {
+    fn update_ca2(&mut self, state: bool) -> bool {
         let ca2_mode = (self.pcr & PCR_CA2_MASK) >> 1;
+        let changed = self.ca2 != state;
         if ca2_mode < 4 { // input modes
             let pos_edge = ca2_mode & 0x02 != 0;
-            if self.ca2 != state && state == pos_edge { self.set_ifr(IRQ_CA2); }
+            if changed && state == pos_edge { self.set_ifr(IRQ_CA2); }
             self.ca2 = state;
         }
+        changed
     }
     
     fn update_port_a_ctrl(&mut self, c1_state: bool, c2_state: bool) {
-        self.update_ca1(c1_state);
-        self.update_ca2(c2_state);
+        let changed = self.update_ca1(c1_state) | self.update_ca2(c2_state);
+        if changed {
+            self.send_to_all(ViaProtocolMessage::CtrlState {
+                port: b'A', c1_state, c2_state
+            });
+        }
     }
     
     fn reset_port_a_ctrl(&mut self, reset_c1: bool, reset_c2: bool) {
+        let mut changed = false;
         if reset_c1 {
-            self.update_ca1(false);
+            changed = self.update_ca1(false);
         }
         if reset_c2 {
-            self.update_ca2(false);
+            changed = changed | self.update_ca2(false);
+        }
+        if changed {
+            self.send_to_all(ViaProtocolMessage::CtrlState {
+                port: b'A', c1_state: self.ca1, c2_state: self.ca2
+            });
         }
     }
 
     fn set_port_a_ctrl(&mut self, set_c1: bool, set_c2: bool) {
+        let mut changed = false;
         if set_c1 {
-            self.update_ca1(true);
+            changed = self.update_ca1(true);
         }
         if set_c2 {
-            self.update_ca2(true);
+            changed = changed | self.update_ca2(true);
+        }
+        if changed {
+            self.send_to_all(ViaProtocolMessage::CtrlState {
+                port: b'A', c1_state: self.ca1, c2_state: self.ca2
+            });
         }
     }
 
@@ -416,6 +442,10 @@ impl Via6522 {
                 (old & !value) != 0
             };
             if triggered { self.set_ifr(IRQ_CB1); }
+            self.send_to_all(ViaProtocolMessage::PortState {
+                port: b'B',
+                port_state: value,
+            });
         }
         // T2 pulse-counting mode: count negative PB6 transitions.
         if self.acr & ACR_T2_PB6_COUNT != 0 && self.t2_running {
@@ -444,9 +474,10 @@ impl Via6522 {
         self.update_port_b(self.input_b | port_mask);
     }
 
-    fn update_cb1(&mut self, state: bool) {
+    fn update_cb1(&mut self, state: bool) -> bool {
         if matches!(self.sr_mode(), SR_MODE_IN_EXT | SR_MODE_OUT_EXT)  {
             self.sr_update(state);
+            false
         } else if self.cb1 != state {
             self.cb1 = state;
             let pos_edge = self.pcr & PCR_CB1_EDGE != 0;
@@ -464,14 +495,22 @@ impl Via6522 {
                         port: b'B', set_c1: false, set_c2: true  });
                 }
             }
+            true
+        } else {
+            false
         }
     }
     
-    fn update_cb2(&mut self, state: bool) {
+    fn update_cb2(&mut self, state: bool) -> bool {
         let mode = self.sr_mode();
         if !matches!(mode, SR_MODE_DISABLED) {
             if matches!(mode, SR_MODE_IN_T2 | SR_MODE_IN_PHI2 | SR_MODE_IN_EXT) {
+                let changed = self.cb2 != state;
                 self.cb2 = state;
+                changed
+            }
+            else {
+                false
             }
         } else {
             let cb2_mode = (self.pcr & PCR_CB2_MASK) >> 5;
@@ -481,30 +520,49 @@ impl Via6522 {
                 if state == pos_edge {
                     self.set_ifr(IRQ_CB2);
                 }
+                true
+            } else {
+                false
             }
         }
     }
 
     fn update_port_b_ctrl(&mut self, c1_state: bool, c2_state: bool) {
-        self.update_cb1(c1_state);
-        self.update_cb2(c2_state);
+        let changed = self.update_cb1(c1_state) | self.update_cb2(c2_state);
+        if changed {
+            self.send_to_all(ViaProtocolMessage::CtrlState {
+                port: b'B', c1_state, c2_state
+            });
+        }
     }
 
     fn reset_port_b_ctrl(&mut self, reset_c1: bool, reset_c2: bool) {
+        let mut changed = false;
         if reset_c1 {
-            self.update_cb1(false);
+            changed = self.update_cb1(false);
         }
         if reset_c2 {
-            self.update_cb2(false);
+            changed = changed | self.update_cb2(false);
+        }
+        if changed {
+            self.send_to_all(ViaProtocolMessage::CtrlState {
+                port: b'B', c1_state: self.cb1, c2_state: self.cb2
+            });
         }
     }
 
     fn set_port_b_ctrl(&mut self, set_c1: bool, set_c2: bool) {
+        let mut changed = false;
         if set_c1 {
-            self.update_cb1(true);
+            changed = self.update_cb1(true);
         }
         if set_c2 {
-            self.update_cb2(true);
+            changed = changed | self.update_cb2(true);
+        }
+        if changed {
+            self.send_to_all(ViaProtocolMessage::CtrlState {
+                port: b'B', c1_state: self.cb1, c2_state: self.cb2
+            });
         }
     }
     
