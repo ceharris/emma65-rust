@@ -218,6 +218,16 @@
   }
 }
 
+.mem-write-rom-overwrite {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
 .mem-write-error {
   font-size: 0.78rem;
   color: var(--color-danger-strong);

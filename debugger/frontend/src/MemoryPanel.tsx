@@ -75,6 +75,8 @@ interface WriteDialogState {
   errorMsg: string;
   /** "hex" when opened from the hex column or Alt+Shift+H; "utf8" from ASCII column or Alt+Shift+A. */
   mode: "hex" | "utf8";
+  /** When true, the write uses Bus::patch to bypass ROM write protection. */
+  allowRomOverwrite: boolean;
 }
 
 interface Props {
@@ -173,10 +175,10 @@ export default function MemoryPanel({ execState }: Props) {
       if (execState !== "stopped" || writeDialog) return;
       if (e.altKey && e.shiftKey && e.code === "KeyH") {
         e.preventDefault();
-        setWriteDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex" });
+        setWriteDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
       } else if (e.altKey && e.shiftKey && e.code === "KeyA") {
         e.preventDefault();
-        setWriteDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8" });
+        setWriteDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
       }
     };
     window.addEventListener("keydown", handler);
@@ -196,12 +198,12 @@ export default function MemoryPanel({ execState }: Props) {
 
   /** Opens the hex write dialog for the byte at `addr`. */
   const handleByteDoubleClick = useCallback((addr: number) => {
-    setWriteDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex" });
+    setWriteDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
   }, []);
 
   /** Opens the UTF-8 text write dialog for the byte at `addr`. */
   const handleAsciiCharDoubleClick = useCallback((addr: number) => {
-    setWriteDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8" });
+    setWriteDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
   }, []);
 
   /** Validates address and data, invokes write_memory, refreshes on success, shows errors on failure. */
@@ -243,7 +245,7 @@ export default function MemoryPanel({ execState }: Props) {
     }
 
     try {
-      await invoke("write_memory", { addr: resolvedAddr, data });
+      await invoke("write_memory", { addr: resolvedAddr, data, patch: writeDialog.allowRomOverwrite });
       setWriteDialog(null);
       fetchPage(pageAddrRef.current);
     } catch (e) {
@@ -390,6 +392,17 @@ export default function MemoryPanel({ execState }: Props) {
             {writeDialog.addrError && (
               <div className="mem-write-error">{writeDialog.addrError}</div>
             )}
+
+            <label className="mem-write-rom-overwrite">
+              <input
+                type="checkbox"
+                checked={writeDialog.allowRomOverwrite}
+                onChange={(e) =>
+                  setWriteDialog((d) => d && { ...d, allowRomOverwrite: e.target.checked })
+                }
+              />
+              Allow ROM Overwrite
+            </label>
 
             <div className="mem-write-field">
               <label className="mem-write-label">
