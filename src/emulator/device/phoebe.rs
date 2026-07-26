@@ -200,6 +200,19 @@ impl IoDevice for Phoebe {
         }
     }
 
+    fn patch(&mut self, address: u16, value: u8) {
+        if address == self.control_register_address {
+            self.set_control_register(value);
+        } else {
+            let (is_rom, effective_address) = self.effective_address(address);
+            if is_rom {
+                self.rom_data[effective_address] = value;
+            } else {
+                self.ram_data[effective_address] = value;
+            }
+        }
+    }
+
     fn claims(&self, _address: u16) -> bool {
         true
     }
@@ -329,6 +342,23 @@ mod tests {
             }
             Err(e) => panic!("Expected a DeviceEvent, but channel was empty: {:?}", e),
         }
+    }
+
+    #[test]
+    fn patch_ram() {
+        let mut device = device();
+        device.selected_bank = SELECTION_MASK;
+        device.patch(0x0000, 0xFF);
+        assert_eq!(device.ram_data[0x0000], 0xFF);
+        device.patch(0xBFFF, 0xFF);
+        assert_eq!(device.ram_data[0xBFFF], 0xFF);
+    }
+
+    #[test]
+    fn patch_rom() {
+        let mut device = device();
+        device.patch(0xFFFF, 0);
+        assert_eq!(device.rom_data[0x7FFF], 0);
     }
 
     #[test]
