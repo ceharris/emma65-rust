@@ -136,7 +136,7 @@
 .disassembly-body {
   flex: 1 1 auto;
   overflow-y: auto;
-  font-size: 0.85rem;
+  font-size: var(--font-size-mono);
   line-height: 1.6;
 }
 
@@ -263,13 +263,13 @@
 .disasm-addr {
   flex: 0 0 4ch;
   color: var(--color-muted);
-  font-size: 0.82rem;
+  font-size: var(--font-size-mono);
 }
 
 .disasm-bytes {
   flex: 0 0 9ch;
   color: var(--color-keyword);
-  font-size: var(--font-size-btn);
+  font-size: var(--font-size-mono);
   letter-spacing: 0.02em;
 }
 

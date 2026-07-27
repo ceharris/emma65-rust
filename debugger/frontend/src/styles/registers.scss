@@ -8,13 +8,13 @@
 .registers-empty {
   padding: 10px;
   color: var(--color-muted-2);
-  font-size: 0.85rem;
+  font-size: var(--font-size-mono);
 }
 
 .reg-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: var(--font-size-mono);
   padding: 4px 0;
 
   td {
@@ -43,7 +43,7 @@
   .reg-ascii {
     margin-left: 8px;
     color: var(--color-string);
-    font-size: 0.82rem;
+    font-size: var(--font-size-mono);
   }
 
   .reg-separator {
@@ -52,7 +52,7 @@
 
   .reg-flags {
     letter-spacing: 0.08em;
-    font-size: 0.82rem;
+    font-size: var(--font-size-mono);
   }
 }
 
@@ -119,7 +119,7 @@
   border-radius: 2px;
   color: var(--color-fg);
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: var(--font-size-mono);
   font-variant-numeric: tabular-nums;
   padding: 0 3px;
 

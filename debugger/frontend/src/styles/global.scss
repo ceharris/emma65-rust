@@ -93,7 +93,9 @@ $light-palette: (
   @include theme-vars($dark-palette);
   --font-mono: monospace;
   --font-ui: system-ui, sans-serif;
-  --font-size-btn: 0.70rem
+  --font-size-btn: 0.70rem;
+  --font-size-ui-panel: 0.80rem;
+  --font-size-mono: 0.85rem;
 }
 
 @media (prefers-color-scheme: light) {
