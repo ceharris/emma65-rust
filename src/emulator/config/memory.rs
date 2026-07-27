@@ -60,7 +60,7 @@ impl DeviceModule for RamModule {
         let offset = config.offset.unwrap_or(0);
         if let Some(filename) = config.image {
             let mut data = make_buffer(config.size as usize, config.fill);
-            loader::load_image(&filename, &mut data, offset as usize).await.map_err(DeviceModuleError::Load)?;
+            loader::load_image(&filename, &mut data, offset).await.map_err(DeviceModuleError::Load)?;
             bus_config.ram_with_data(range, data).map_err(DeviceModuleError::BusConfig)
         } else if let Some(fill) = config.fill {
             bus_config.ram_with_fill(range, fill).map_err(DeviceModuleError::BusConfig)
@@ -83,7 +83,7 @@ impl DeviceModule for RomModule {
         let offset = config.offset.unwrap_or(0);
         if let Some(filename) = config.image {
             let mut data = make_buffer(config.size as usize, config.fill);
-            loader::load_image(&filename, &mut data, offset as usize).await.map_err(DeviceModuleError::Load)?;
+            loader::load_image(&filename, &mut data, offset).await.map_err(DeviceModuleError::Load)?;
             bus_config.rom(range, data).map_err(DeviceModuleError::BusConfig)
         }
         else {

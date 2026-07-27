@@ -7,7 +7,7 @@ pub mod device;
 pub mod error;
 pub mod exec;
 pub mod transport;
-mod config;
+pub mod config;
 mod session;
 
 pub use bus::trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};

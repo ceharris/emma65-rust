@@ -1,3 +1,4 @@
+//! Bus device configuration support.
 mod transport;
 mod device;
 mod path;
@@ -11,7 +12,7 @@ mod via6522;
 mod emulator;
 mod registry;
 mod memory;
-mod loader;
+pub mod loader;
 mod phoebe;
 mod write_policy;
 mod vireo;

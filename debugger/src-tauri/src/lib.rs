@@ -706,7 +706,7 @@ fn write_memory(
     for (i, &byte) in data.iter().enumerate() {
         let a = addr.wrapping_add(i as u16);
         if patch {
-            bus.patch(a, byte).map_err(|e| e.to_string())?;
+            bus.patch(a, byte);
         } else {
             bus.write(a, byte).map_err(|e| e.to_string())?;
         }
