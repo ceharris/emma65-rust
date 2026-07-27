@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { ExecState } from "./DisassemblyPanel";
 import "./styles/memory.scss";
 
@@ -79,6 +80,38 @@ interface WriteDialogState {
   allowRomOverwrite: boolean;
 }
 
+/** State for the load-memory dialog; null means closed. */
+interface LoadDialogState {
+  /** Path to the file to load. */
+  path: string;
+  /** Validation error for the path field; empty string means no error. */
+  pathError: string;
+  /** Selected load format; null when no recognizable extension and no manual selection. */
+  format: "image" | "intel_hex" | "motorola_srec" | null;
+  /** Validation error for the format field; empty string means no error. */
+  formatError: string;
+  /** Controlled value of the load address input (hex, meaningful only for binary image). */
+  loadAddress: string;
+  /** Validation error for the load address field; empty string means no error. */
+  loadAddressError: string;
+}
+
+/** Deduces the load format from a file path's extension. Returns null if unrecognized. */
+function formatFromPath(path: string): LoadDialogState["format"] {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "bin" || ext === "rom") return "image";
+  if (ext === "hex" || ext === "ihx" || ext === "ihex") return "intel_hex";
+  if (ext === "s19" || ext === "srec") return "motorola_srec";
+  return null;
+}
+
+/** Human-readable label for each load format. */
+const FORMAT_LABELS: Record<NonNullable<LoadDialogState["format"]>, string> = {
+  image: "Binary Image",
+  intel_hex: "Intel Hex",
+  motorola_srec: "Motorola S-Record",
+};
+
 interface Props {
   /** Current CPU execution state; used to guard double-click and key shortcuts when running. */
   execState: ExecState;
@@ -96,6 +129,10 @@ export default function MemoryPanel({ execState }: Props) {
   const [ready, setReady] = useState(false);
   /** Write-memory dialog state; null when closed. */
   const [writeDialog, setWriteDialog] = useState<WriteDialogState | null>(null);
+  /** Load-file dialog state; null when closed. */
+  const [loadDialog, setLoadDialog] = useState<LoadDialogState | null>(null);
+  /** Error message from a failed load operation; null when no error dialog is open. */
+  const [loadErrorDialog, setLoadErrorDialog] = useState<string | null>(null);
 
   /** Fetch the 256-byte page starting at `addr` (must be paragraph-aligned). */
   const fetchPage = useCallback(async (addr: number) => {
@@ -185,6 +222,20 @@ export default function MemoryPanel({ execState }: Props) {
     return () => window.removeEventListener("keydown", handler);
   }, [execState, writeDialog]);
 
+  /** Alt+F: open load-file dialog. */
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (document.activeElement instanceof HTMLInputElement) return;
+      if (execState !== "stopped" || loadDialog || writeDialog) return;
+      if (e.altKey && !e.shiftKey && e.code === "KeyF") {
+        e.preventDefault();
+        setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "" });
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [execState, loadDialog, writeDialog]);
+
   /** Wheel scrolling: one row per tick. */
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -263,6 +314,76 @@ export default function MemoryPanel({ execState }: Props) {
     return () => document.removeEventListener("keydown", handler);
   }, [writeDialog]);
 
+  /** Opens the native file chooser and fills the path + auto-selects format. */
+  const handleChooseFile = useCallback(async () => {
+    const selected = await openFileDialog({
+      multiple: false,
+      filters: [{ name: "Memory Files", extensions: ["bin", "rom", "hex", "ihx", "ihex", "s19", "srec"] }],
+    });
+    if (typeof selected === "string") {
+      setLoadDialog((d) => d && {
+        ...d,
+        path: selected,
+        pathError: "",
+        format: formatFromPath(selected),
+        formatError: "",
+      });
+    }
+  }, []);
+
+  /** Validates inputs, invokes load_memory, refreshes the memory view, shows an error dialog on failure. */
+  const commitLoadMemory = useCallback(async () => {
+    if (!loadDialog) return;
+
+    if (!loadDialog.path.trim()) {
+      setLoadDialog((d) => d && { ...d, pathError: "Enter a file path" });
+      return;
+    }
+
+    if (!loadDialog.format) {
+      setLoadDialog((d) => d && { ...d, formatError: "Select a load format" });
+      return;
+    }
+
+    let bias = 0;
+    if (loadDialog.format === "image") {
+      const parsed = parseAddress(loadDialog.loadAddress);
+      if (isNaN(parsed) || parsed < 0 || parsed > 0xffff) {
+        setLoadDialog((d) => d && { ...d, loadAddressError: "Enter a valid hex address (0–FFFF)" });
+        return;
+      }
+      bias = parsed;
+    }
+
+    setLoadDialog(null);
+    try {
+      await invoke("load_memory", { path: loadDialog.path, format: loadDialog.format, bias });
+      fetchPage(pageAddrRef.current);
+    } catch (e) {
+      setLoadErrorDialog(String(e));
+    }
+  }, [loadDialog, fetchPage]);
+
+  /** Dismiss the load dialog on Escape while it is open. */
+  useEffect(() => {
+    if (!loadDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLoadDialog(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [loadDialog]);
+
+  /** Dismiss the load error dialog on Escape while it is open. */
+  useEffect(() => {
+    if (!loadErrorDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLoadErrorDialog(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [loadErrorDialog]);
+
   /** Builds per-character ASCII spans for one 8-byte half-row. */
   const makeAsciiSpans = useCallback(
     (halfSlice: Uint8Array, baseAddr: number) =>
@@ -333,7 +454,17 @@ export default function MemoryPanel({ execState }: Props) {
   return (
     <div className="memory-panel" onWheel={handleWheel}>
       <div className="memory-header">
-        <span className="panel-title">Memory</span>
+        <div className="mem-header-left">
+          <span className="panel-title">Memory</span>
+          <button
+            className="mem-load-btn"
+            onClick={() => setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "" })}
+            disabled={execState !== "stopped"}
+            title="Load file into memory (Alt+F)"
+          >
+            Load
+          </button>
+        </div>
         <input
           className="mem-addr-input"
           value={inputValue}
@@ -351,6 +482,136 @@ export default function MemoryPanel({ execState }: Props) {
           rows
         )}
       </div>
+      {loadDialog && (
+        <div
+          className="mem-load-backdrop"
+          onClick={() => setLoadDialog(null)}
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <div className="mem-load-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="mem-load-title">Load File</div>
+
+            <div className="mem-load-path-row">
+              <input
+                className={`mem-load-path-input${loadDialog.pathError ? " invalid" : ""}`}
+                autoFocus
+                spellCheck={false}
+                placeholder="Path to file"
+                value={loadDialog.path}
+                onChange={(e) =>
+                  setLoadDialog((d) => d && {
+                    ...d,
+                    path: e.target.value,
+                    pathError: "",
+                    format: formatFromPath(e.target.value),
+                    formatError: "",
+                  })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitLoadMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setLoadDialog(null); }
+                }}
+              />
+              <button
+                className="mem-load-folder-btn"
+                onClick={handleChooseFile}
+                title="Browse for file"
+              >
+                📁
+              </button>
+            </div>
+
+            {loadDialog.pathError && (
+              <div className="mem-load-error">{loadDialog.pathError}</div>
+            )}
+
+            <div className="mem-load-format-group">
+              {(["image", "intel_hex", "motorola_srec"] as const).map((fmt) => (
+                <label key={fmt} className="mem-load-format-option">
+                  <input
+                    type="radio"
+                    name="load-format"
+                    checked={loadDialog.format === fmt}
+                    onChange={() =>
+                      setLoadDialog((d) => d && { ...d, format: fmt, formatError: "" })
+                    }
+                  />
+                  {FORMAT_LABELS[fmt]}
+                </label>
+              ))}
+            </div>
+
+            {loadDialog.formatError && (
+              <div className="mem-load-error">{loadDialog.formatError}</div>
+            )}
+
+            <div className="mem-load-field">
+              <label className="mem-load-label">Load Address</label>
+              <input
+                className={`mem-load-addr-input${loadDialog.loadAddressError ? " invalid" : ""}`}
+                spellCheck={false}
+                placeholder="0000"
+                value={loadDialog.format === "image" ? loadDialog.loadAddress : "0000"}
+                disabled={loadDialog.format !== "image"}
+                onChange={(e) =>
+                  setLoadDialog((d) => d && { ...d, loadAddress: e.target.value, loadAddressError: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitLoadMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setLoadDialog(null); }
+                }}
+              />
+            </div>
+
+            {loadDialog.loadAddressError && (
+              <div className="mem-load-error">{loadDialog.loadAddressError}</div>
+            )}
+
+            <div className="mem-load-rom-note">
+              This operation will bypass read-only restrictions for any ROM region targeted by the load.
+            </div>
+
+            <div className="mem-load-buttons">
+              <button
+                className="mem-load-btn-action mem-load-btn-cancel"
+                onClick={() => setLoadDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="mem-load-btn-action mem-load-btn-ok"
+                onClick={commitLoadMemory}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loadErrorDialog !== null && (
+        <div
+          className="mem-load-backdrop"
+          onClick={() => setLoadErrorDialog(null)}
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <div className="mem-load-error-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="mem-load-title">Load Error</div>
+            <div className="mem-load-error-message">{loadErrorDialog}</div>
+            <div className="mem-load-buttons">
+              <button
+                className="mem-load-btn-action mem-load-btn-ok"
+                onClick={() => setLoadErrorDialog(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {writeDialog && (
         <div
           className="mem-write-backdrop"

@@ -295,6 +295,12 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
       onStep(event.payload);
     });
 
+    // Re-fetch disassembly from the current PC when memory contents change (e.g. after a load).
+    const unlistenMemoryModifiedPromise = listen("memory-modified", () => {
+      const pc = pcRef.current;
+      if (pc !== null) fetchFrom(pc);
+    });
+
     // Proactively fetch on mount: the initial `debugger-halted` event can fire
     // before our listener is registered (listen() is async), leaving rows empty.
     invoke<RegisterSnapshot>("get_registers")
@@ -308,8 +314,9 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
     return () => {
       unlistenHaltedPromise.then((f) => f());
       unlistenRunStoppedPromise.then((f) => f());
+      unlistenMemoryModifiedPromise.then((f) => f());
     };
-  }, [handleHalted, onStep, applyBreakpointList]);
+  }, [handleHalted, onStep, applyBreakpointList, fetchFrom]);
 
   // Scroll the current-PC row into view whenever it changes.
   const pcRowRef = useRef<HTMLDivElement | null>(null);

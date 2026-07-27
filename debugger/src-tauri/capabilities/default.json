@@ -5,6 +5,7 @@
   "windows": ["main", "terminal"],
   "permissions": [
     "core:default",
+    "dialog:default",
     "log:default"
   ]
 }
