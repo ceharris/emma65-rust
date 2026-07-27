@@ -754,6 +754,44 @@ async fn load_memory(
     Ok(())
 }
 
+/// Fills every address in the inclusive range [`start`, `end`] with `value`.
+///
+/// Uses `Bus::patch` when `patch` is true (bypasses ROM write protection),
+/// otherwise `Bus::write`. Emits `"debugger-halted"` and `"memory-modified"`
+/// on success to refresh all panels.
+#[tauri::command]
+fn fill_memory(
+    start: u16,
+    end: u16,
+    value: u8,
+    patch: bool,
+    cpu_state: State<CpuState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let pc = {
+        let mut guard = cpu_state.0.lock().unwrap();
+        let cpu = guard.as_mut().ok_or("CPU not ready")?;
+        let pc = cpu.registers().pc;
+        let bus = cpu.bus_mut();
+        let mut addr = start;
+        loop {
+            if patch {
+                bus.patch(addr, value);
+            } else {
+                bus.write(addr, value).map_err(|e| e.to_string())?;
+            }
+            if addr == end {
+                break;
+            }
+            addr = addr.wrapping_add(1);
+        }
+        pc
+    };
+    app.emit("debugger-halted", pc).ok();
+    app.emit("memory-modified", ()).ok();
+    Ok(())
+}
+
 /// Returns disassembled instructions starting at `addr`, up to `count` rows.
 #[tauri::command]
 fn get_disassembly(
@@ -1110,6 +1148,7 @@ pub fn run() {
             get_memory,
             write_memory,
             load_memory,
+            fill_memory,
             get_stack,
             toggle_breakpoint,
             set_breakpoint,

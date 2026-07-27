@@ -112,6 +112,24 @@ const FORMAT_LABELS: Record<NonNullable<LoadDialogState["format"]>, string> = {
   motorola_srec: "Motorola S-Record",
 };
 
+/** State for the fill-memory dialog; null means closed. */
+interface FillDialogState {
+  /** Controlled value of the start address input. */
+  startInput: string;
+  /** Validation error for the start address field; empty string means no error. */
+  startError: string;
+  /** Controlled value of the end address input. */
+  endInput: string;
+  /** Validation error for the end address field; empty string means no error. */
+  endError: string;
+  /** Controlled value of the fill byte input (1–2 hex digits). */
+  fillValue: string;
+  /** Validation error for the fill value field; empty string means no error. */
+  fillError: string;
+  /** When true, uses Bus::patch to bypass ROM write protection. */
+  allowRomOverwrite: boolean;
+}
+
 interface Props {
   /** Current CPU execution state; used to guard double-click and key shortcuts when running. */
   execState: ExecState;
@@ -133,6 +151,8 @@ export default function MemoryPanel({ execState }: Props) {
   const [loadDialog, setLoadDialog] = useState<LoadDialogState | null>(null);
   /** Error message from a failed load operation; null when no error dialog is open. */
   const [loadErrorDialog, setLoadErrorDialog] = useState<string | null>(null);
+  /** Fill-memory dialog state; null when closed. */
+  const [fillDialog, setFillDialog] = useState<FillDialogState | null>(null);
 
   /** Fetch the 256-byte page starting at `addr` (must be paragraph-aligned). */
   const fetchPage = useCallback(async (addr: number) => {
@@ -235,6 +255,21 @@ export default function MemoryPanel({ execState }: Props) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [execState, loadDialog, writeDialog]);
+
+  /** Alt+Shift+F: open fill-memory dialog. */
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (document.activeElement instanceof HTMLInputElement) return;
+      if (execState !== "stopped" || fillDialog || loadDialog || writeDialog) return;
+      if (e.altKey && e.shiftKey && e.code === "KeyF") {
+        e.preventDefault();
+        const endAddr = (pageAddrRef.current + 256) & 0xffff;
+        setFillDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: fmtAddr(endAddr), endError: "", fillValue: "00", fillError: "", allowRomOverwrite: false });
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [execState, fillDialog, loadDialog, writeDialog]);
 
   /** Wheel scrolling: one row per tick. */
   const handleWheel = useCallback(
@@ -384,6 +419,52 @@ export default function MemoryPanel({ execState }: Props) {
     return () => document.removeEventListener("keydown", handler);
   }, [loadErrorDialog]);
 
+  /** Validates inputs and invokes fill_memory; refreshes the view on success. */
+  const commitFillMemory = useCallback(async () => {
+    if (!fillDialog) return;
+
+    const start = parseAddress(fillDialog.startInput);
+    if (isNaN(start) || start < 0 || start > 0xffff) {
+      setFillDialog((d) => d && { ...d, startError: "Enter a valid hex address (0–FFFF)" });
+      return;
+    }
+
+    const end = parseAddress(fillDialog.endInput);
+    if (isNaN(end) || end < 0 || end > 0xffff) {
+      setFillDialog((d) => d && { ...d, endError: "Enter a valid hex address (0–FFFF)" });
+      return;
+    }
+    if (end < start) {
+      setFillDialog((d) => d && { ...d, endError: "End address must be ≥ start address" });
+      return;
+    }
+
+    const fillTrimmed = fillDialog.fillValue.trim();
+    if (!/^[0-9a-fA-F]{1,2}$/.test(fillTrimmed)) {
+      setFillDialog((d) => d && { ...d, fillError: "Enter a hex byte value (00–FF)" });
+      return;
+    }
+    const value = parseInt(fillTrimmed, 16);
+
+    setFillDialog(null);
+    try {
+      await invoke("fill_memory", { start, end, value, patch: fillDialog.allowRomOverwrite });
+      fetchPage(pageAddrRef.current);
+    } catch (e) {
+      setLoadErrorDialog(String(e));
+    }
+  }, [fillDialog, fetchPage]);
+
+  /** Dismiss the fill dialog on Escape while it is open. */
+  useEffect(() => {
+    if (!fillDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFillDialog(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [fillDialog]);
+
   /** Builds per-character ASCII spans for one 8-byte half-row. */
   const makeAsciiSpans = useCallback(
     (halfSlice: Uint8Array, baseAddr: number) =>
@@ -464,6 +545,17 @@ export default function MemoryPanel({ execState }: Props) {
           >
             Load
           </button>
+          <button
+            className="mem-fill-btn"
+            onClick={() => {
+              const endAddr = (pageAddrRef.current + 256) & 0xffff;
+              setFillDialog({ startInput: fmtAddr(pageAddr), startError: "", endInput: fmtAddr(endAddr), endError: "", fillValue: "00", fillError: "", allowRomOverwrite: false });
+            }}
+            disabled={execState !== "stopped"}
+            title="Fill memory range (Alt+Shift+F)"
+          >
+            Fill
+          </button>
         </div>
         <input
           className="mem-addr-input"
@@ -482,6 +574,111 @@ export default function MemoryPanel({ execState }: Props) {
           rows
         )}
       </div>
+      {fillDialog && (
+        <div
+          className="mem-fill-backdrop"
+          onClick={() => setFillDialog(null)}
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <div className="mem-fill-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="mem-fill-title">Fill Memory</div>
+
+            <div className="mem-fill-field">
+              <label className="mem-fill-label">Start Address</label>
+              <input
+                className={`mem-fill-input${fillDialog.startError ? " invalid" : ""}`}
+                autoFocus
+                spellCheck={false}
+                placeholder="0000"
+                value={fillDialog.startInput}
+                onChange={(e) =>
+                  setFillDialog((d) => d && { ...d, startInput: e.target.value, startError: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitFillMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setFillDialog(null); }
+                }}
+              />
+            </div>
+
+            {fillDialog.startError && (
+              <div className="mem-fill-error">{fillDialog.startError}</div>
+            )}
+
+            <div className="mem-fill-field">
+              <label className="mem-fill-label">End Address</label>
+              <input
+                className={`mem-fill-input${fillDialog.endError ? " invalid" : ""}`}
+                spellCheck={false}
+                placeholder="00FF"
+                value={fillDialog.endInput}
+                onChange={(e) =>
+                  setFillDialog((d) => d && { ...d, endInput: e.target.value, endError: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitFillMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setFillDialog(null); }
+                }}
+              />
+            </div>
+
+            {fillDialog.endError && (
+              <div className="mem-fill-error">{fillDialog.endError}</div>
+            )}
+
+            <div className="mem-fill-field">
+              <label className="mem-fill-label">Fill Value</label>
+              <input
+                className={`mem-fill-input${fillDialog.fillError ? " invalid" : ""}`}
+                spellCheck={false}
+                placeholder="00"
+                value={fillDialog.fillValue}
+                onChange={(e) =>
+                  setFillDialog((d) => d && { ...d, fillValue: e.target.value, fillError: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitFillMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setFillDialog(null); }
+                }}
+              />
+            </div>
+
+            {fillDialog.fillError && (
+              <div className="mem-fill-error">{fillDialog.fillError}</div>
+            )}
+
+            <label className="mem-fill-rom-overwrite">
+              <input
+                type="checkbox"
+                checked={fillDialog.allowRomOverwrite}
+                onChange={(e) =>
+                  setFillDialog((d) => d && { ...d, allowRomOverwrite: e.target.checked })
+                }
+              />
+              Allow ROM Overwrite
+            </label>
+
+            <div className="mem-fill-buttons">
+              <button
+                className="mem-fill-btn-action mem-fill-btn-cancel"
+                onClick={() => setFillDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="mem-fill-btn-action mem-fill-btn-ok"
+                onClick={commitFillMemory}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {loadDialog && (
         <div
           className="mem-load-backdrop"
