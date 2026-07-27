@@ -714,6 +714,38 @@ fn write_memory(
     Ok(())
 }
 
+/// Loads a file into emulator memory, bypassing ROM write protection.
+///
+/// Reads the file at `path`, parses it according to `format` (`"image"`, `"intel_hex"`,
+/// or `"motorola_srec"`), and writes the result to the bus via `Bus::patch`.
+/// `bias` is the load address (meaningful only for the binary image format).
+#[tauri::command]
+async fn load_memory(
+    path: String,
+    format: String,
+    bias: u16,
+    cpu_state: State<'_, CpuState>,
+) -> Result<(), String> {
+    use emma65::emulator::bus::BusLoadTarget;
+    use emma65::emulator::config::loader::{load_target, LoadFormat};
+
+    let load_format = match format.as_str() {
+        "image"         => LoadFormat::Image,
+        "intel_hex"     => LoadFormat::IntelHex,
+        "motorola_srec" => LoadFormat::MotorolaSrec,
+        _               => return Err(format!("Unknown format: {format}")),
+    };
+
+    let data = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+
+    let mut guard = cpu_state.0.lock().unwrap();
+    let cpu = guard.as_mut().ok_or("CPU not ready")?;
+    let bus = cpu.bus_mut();
+    let mut target = BusLoadTarget::new(bus, bias as usize);
+    load_target(&data, load_format, &mut target).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Returns disassembled instructions starting at `addr`, up to `count` rows.
 #[tauri::command]
 fn get_disassembly(
@@ -1019,6 +1051,7 @@ pub fn run() {
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
@@ -1068,6 +1101,7 @@ pub fn run() {
             get_disassembly,
             get_memory,
             write_memory,
+            load_memory,
             get_stack,
             toggle_breakpoint,
             set_breakpoint,
