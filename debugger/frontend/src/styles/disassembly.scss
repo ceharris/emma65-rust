@@ -62,7 +62,7 @@
   border-radius: 3px;
   color: var(--color-fg);
   font-family: var(--font-ui);
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   padding: 1px 3px;
   text-align: right;
 
@@ -74,7 +74,7 @@
 
 .speed-unit {
   font-family: var(--font-ui);
-  font-size: 0.75rem;
+  font-size: var(--font-size-btn);
   color: var(--color-muted);
 }
 
@@ -83,7 +83,7 @@
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
   font-family: var(--font-ui);
-  font-size: 0.8rem;
+  font-size: var(--font-size-btn);
   padding: 3px 10px;
   cursor: pointer;
   border-radius: 3px;
@@ -269,7 +269,7 @@
 .disasm-bytes {
   flex: 0 0 9ch;
   color: var(--color-keyword);
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   letter-spacing: 0.02em;
 }
 

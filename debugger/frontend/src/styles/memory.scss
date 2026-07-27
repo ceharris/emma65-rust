@@ -26,7 +26,7 @@
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: var(--font-size-btn);
   padding: 2px 6px;
   width: 8ch;
   border-radius: 3px;
@@ -135,7 +135,7 @@
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
   font-family: var(--font-ui);
-  font-size: 0.75rem;
+  font-size: var(--font-size-btn);
   padding: 2px 8px;
   cursor: pointer;
   border-radius: 3px;
@@ -189,7 +189,7 @@
 }
 
 .mem-load-title {
-  font-size: 0.75rem;
+  font-size: var(--font-size-btn);
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -250,7 +250,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   color: var(--color-fg);
   cursor: pointer;
   user-select: none;
@@ -265,7 +265,7 @@
 .mem-load-label {
   flex: 0 0 10ch;
   color: var(--color-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
 }
 
 .mem-load-addr-input {
@@ -295,13 +295,13 @@
 }
 
 .mem-load-rom-note {
-  font-size: 0.75rem;
+  font-size: var(--font-size-btn);
   font-style: italic;
   color: var(--color-muted);
 }
 
 .mem-load-error {
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   color: var(--color-danger-strong);
 }
 
@@ -322,7 +322,7 @@
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
   font-family: var(--font-ui);
-  font-size: 0.8rem;
+  font-size: var(--font-size-btn);
   padding: 3px 12px;
   cursor: pointer;
   border-radius: 3px;
@@ -361,7 +361,7 @@
 }
 
 .mem-write-title {
-  font-size: 0.75rem;
+  font-size: var(--font-size-btn);
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -377,7 +377,7 @@
 .mem-write-label {
   flex: 0 0 6ch;
   color: var(--color-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
 }
 
 .mem-write-addr-input {
@@ -436,7 +436,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   color: var(--color-muted);
   cursor: pointer;
   user-select: none;
@@ -473,7 +473,7 @@
 }
 
 .mem-write-error {
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   color: var(--color-danger-strong);
 }
 
@@ -488,7 +488,7 @@
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
   font-family: var(--font-ui);
-  font-size: 0.8rem;
+  font-size: var(--font-size-btn);
   padding: 3px 12px;
   cursor: pointer;
   border-radius: 3px;
@@ -508,7 +508,7 @@
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
   font-family: var(--font-ui);
-  font-size: 0.75rem;
+  font-size: var(--font-size-btn);
   padding: 2px 8px;
   cursor: pointer;
   border-radius: 3px;
@@ -548,7 +548,7 @@
 }
 
 .mem-fill-title {
-  font-size: 0.75rem;
+  font-size: var(--font-size-btn);
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -564,7 +564,7 @@
 .mem-fill-label {
   flex: 0 0 11ch;
   color: var(--color-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
 }
 
 .mem-fill-input {
@@ -591,7 +591,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   color: var(--color-muted);
   cursor: pointer;
   user-select: none;
@@ -628,7 +628,7 @@
 }
 
 .mem-fill-error {
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   color: var(--color-danger-strong);
 }
 
@@ -643,7 +643,7 @@
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
   font-family: var(--font-ui);
-  font-size: 0.8rem;
+  font-size: var(--font-size-btn);
   padding: 3px 12px;
   cursor: pointer;
   border-radius: 3px;

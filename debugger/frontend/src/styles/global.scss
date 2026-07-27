@@ -93,6 +93,7 @@ $light-palette: (
   @include theme-vars($dark-palette);
   --font-mono: monospace;
   --font-ui: system-ui, sans-serif;
+  --font-size-btn: 0.70rem
 }
 
 @media (prefers-color-scheme: light) {
@@ -187,7 +188,7 @@ body {
 .panel-title {
   display: block;
   font-family: var(--font-ui);
-  font-size: 0.75rem;
+  font-size: var(--font-size-btn);
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.06em;
