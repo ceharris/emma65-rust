@@ -545,6 +545,8 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
       <div className="disassembly-header">
         <div className="disassembly-toolbar">
           <span className="panel-title">Disassembly</span>
+        </div>
+        <div className="disassembly-toolbar">
           <div className="exec-controls">
             <button
               className="exec-btn run-btn"
@@ -587,8 +589,6 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
               <i className="codicon codicon-debug-stop" />
             </button>
           </div>
-        </div>
-        <div className="disassembly-toolbar">
           <div className="auto-step-control">
             <button
               className={`exec-btn auto-step-btn${isAutoStepping ? " active" : ""}`}
