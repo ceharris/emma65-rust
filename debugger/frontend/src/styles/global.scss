@@ -91,7 +91,7 @@ $light-palette: (
 
 :root {
   @include theme-vars($dark-palette);
-  --font-mono: system-mono, monospace;
+  --font-mono: monospace;
   --font-ui: system-ui, sans-serif;
 }
 
