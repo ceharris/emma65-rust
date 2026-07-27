@@ -144,6 +144,8 @@ pub struct DisassembledRow {
     pub mnemonic: String,
     /// Formatted operand text, e.g. "$0600".
     pub operand: String,
+    /// Comment string
+    pub comment: String,
     /// False for invalid opcodes under the active variant.
     pub is_valid: bool,
 }
@@ -728,7 +730,7 @@ async fn load_memory(
     app: AppHandle,
 ) -> Result<(), String> {
     use emma65::emulator::bus::BusLoadTarget;
-    use emma65::emulator::config::loader::{load_target, LoadFormat};
+    use emma65::emulator::config::loader::{LoadFormat, load_target};
 
     let load_format = match format.as_str() {
         "image"         => LoadFormat::Image,
@@ -811,6 +813,7 @@ fn get_disassembly(
         bytes: line.raw_bytes.iter().map(|b| format!("{b:02X}")).collect(),
         mnemonic: line.mnemonic.to_string(),
         operand: line.operand_text,
+        comment: line.comment_text.unwrap_or("".to_string()),
         is_valid: line.is_valid,
     }).collect();
 

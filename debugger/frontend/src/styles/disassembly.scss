@@ -282,3 +282,8 @@
 .disasm-operand {
   color: var(--color-string);
 }
+
+.disasm-comment {
+  color: var(--color-muted);
+  margin-left: 3rem;
+}

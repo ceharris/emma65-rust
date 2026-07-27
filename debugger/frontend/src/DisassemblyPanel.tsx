@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import {useCallback, useEffect, useRef, useState} from "react";
+import {listen} from "@tauri-apps/api/event";
+import {invoke} from "@tauri-apps/api/core";
 import "./styles/disassembly.scss";
 
 interface DisassembledRow {
@@ -8,6 +8,7 @@ interface DisassembledRow {
   bytes: string[];
   mnemonic: string;
   operand: string;
+  comment: string;
   is_valid: boolean;
 }
 
@@ -661,6 +662,9 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
                 <span className="disasm-mnemonic">{row.mnemonic}</span>
                 {row.operand && (
                   <span className="disasm-operand">{row.operand}</span>
+                )}
+                {row.comment && (
+                  <span className="disasm-comment">{row.comment}</span>
                 )}
               </div>
             );
