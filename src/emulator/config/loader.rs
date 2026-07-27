@@ -188,7 +188,7 @@ pub async fn load_image(path: &Path, mem: &mut [u8], bias: u16)
 }
 
 /// Loads a `target` with `data` that is formatted according to `format`.
-/// Returns an error result if the data cannot be loaded.
+/// Returns an error result only if the data cannot be loaded.
 ///
 /// # Arguments
 /// * `data` - the data to be loaded
