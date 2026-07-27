@@ -91,6 +91,9 @@ $light-palette: (
 
 :root {
   @include theme-vars($dark-palette);
+  --font-mono: monospace;
+  --font-ui: system-ui, sans-serif;
+  --font-size-btn: 0.70rem
 }
 
 @media (prefers-color-scheme: light) {
@@ -117,7 +120,7 @@ body,
 body {
   background-color: var(--color-bg);
   color: var(--color-fg);
-  font-family: monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
 }
 
@@ -184,7 +187,8 @@ body {
 
 .panel-title {
   display: block;
-  font-size: 0.75rem;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.06em;

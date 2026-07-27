@@ -26,7 +26,7 @@
 
 .indicator-label {
   color: var(--color-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
 }
 
 .indicator-spaced {
@@ -57,7 +57,7 @@
 
 .cycles-label {
   color: var(--color-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
 }
 
 .cpu-bus-buttons {

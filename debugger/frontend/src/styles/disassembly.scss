@@ -61,8 +61,8 @@
   border: 1px solid var(--color-border-strong);
   border-radius: 3px;
   color: var(--color-fg);
-  font-family: monospace;
-  font-size: 0.78rem;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
   padding: 1px 3px;
   text-align: right;
 
@@ -73,8 +73,8 @@
 }
 
 .speed-unit {
-  font-family: monospace;
-  font-size: 0.75rem;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
   color: var(--color-muted);
 }
 
@@ -82,8 +82,8 @@
   background: var(--color-btn-bg);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
-  font-family: monospace;
-  font-size: 0.8rem;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
   padding: 3px 10px;
   cursor: pointer;
   border-radius: 3px;
@@ -222,6 +222,7 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   padding: 4px 0;
   min-width: 180px;
+  font-family: var(--font-ui);
 }
 
 .disasm-context-menu-item {
@@ -251,6 +252,7 @@
   border: 1px solid var(--color-border-strong);
   border-radius: 3px;
   color: var(--color-fg);
+  font-family: var(--font-mono);
   padding: 4px 6px;
 
   &.invalid {
@@ -267,7 +269,7 @@
 .disasm-bytes {
   flex: 0 0 9ch;
   color: var(--color-keyword);
-  font-size: 0.78rem;
+  font-size: var(--font-size-btn);
   letter-spacing: 0.02em;
 }
 
