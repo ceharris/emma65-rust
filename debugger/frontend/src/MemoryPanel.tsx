@@ -263,7 +263,7 @@ export default function MemoryPanel({ execState }: Props) {
       if (execState !== "stopped" || fillDialog || loadDialog || writeDialog) return;
       if (e.altKey && e.shiftKey && e.code === "KeyF") {
         e.preventDefault();
-        const endAddr = (pageAddrRef.current + 256) & 0xffff;
+        const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
         setFillDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: fmtAddr(endAddr), endError: "", fillValue: "00", fillError: "", allowRomOverwrite: false });
       }
     };
@@ -548,7 +548,7 @@ export default function MemoryPanel({ execState }: Props) {
           <button
             className="mem-fill-btn"
             onClick={() => {
-              const endAddr = (pageAddrRef.current + 256) & 0xffff;
+              const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
               setFillDialog({ startInput: fmtAddr(pageAddr), startError: "", endInput: fmtAddr(endAddr), endError: "", fillValue: "00", fillError: "", allowRomOverwrite: false });
             }}
             disabled={execState !== "stopped"}
