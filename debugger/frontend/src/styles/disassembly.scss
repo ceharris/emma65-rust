@@ -61,7 +61,7 @@
   border: 1px solid var(--color-border-strong);
   border-radius: 3px;
   color: var(--color-fg);
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 0.78rem;
   padding: 1px 3px;
   text-align: right;
@@ -73,7 +73,7 @@
 }
 
 .speed-unit {
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 0.75rem;
   color: var(--color-muted);
 }
@@ -82,7 +82,7 @@
   background: var(--color-btn-bg);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
-  font-family: monospace;
+  font-family: var(--font-ui);
   font-size: 0.8rem;
   padding: 3px 10px;
   cursor: pointer;
@@ -222,6 +222,7 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   padding: 4px 0;
   min-width: 180px;
+  font-family: var(--font-ui);
 }
 
 .disasm-context-menu-item {
@@ -251,6 +252,7 @@
   border: 1px solid var(--color-border-strong);
   border-radius: 3px;
   color: var(--color-fg);
+  font-family: var(--font-mono);
   padding: 4px 6px;
 
   &.invalid {

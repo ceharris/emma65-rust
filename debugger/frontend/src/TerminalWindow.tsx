@@ -58,11 +58,14 @@ export default function TerminalWindow() {
   }, [resolvedTheme]);
 
   useEffect(() => {
+    const monoFont =
+      getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()
+      || 'monospace';
     const term = new Terminal({
       cols: 80,
       rows: 24,
       theme: resolveTheme(mode, prefersDark) === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME,
-      fontFamily: "monospace",
+      fontFamily: monoFont,
       fontSize: 14,
     });
     termRef.current = term;
