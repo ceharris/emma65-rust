@@ -750,6 +750,7 @@ async fn load_memory(
     };
 
     app.emit("debugger-halted", pc).ok();
+    app.emit("memory-modified", ()).ok();
     Ok(())
 }
 
