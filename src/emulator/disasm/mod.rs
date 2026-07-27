@@ -214,7 +214,7 @@ mod tests {
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert!(matches!(line.mnemonic, Mnemonic::Lda));
         assert_eq!(line.operand_text, "#$42");
-        assert_eq!(line.comment_text, Some("66 'B'".to_string()));
+        assert_eq!(line.comment_text, Some("; 66 'B'".to_string()));
         assert_eq!(line.raw_bytes, vec![0xA9, 0x42]);
     }
 
