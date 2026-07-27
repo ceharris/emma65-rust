@@ -52,7 +52,7 @@ impl DeviceModule for PhoebeModule {
                          -> Result<BusConfig, DeviceModuleError> {
         let config = PhoebeAttributes::from_attributes(attributes)?;
         let device_id = DeviceId(address as u32);
-        let offset = config.offset.unwrap_or(0) as usize;
+        let offset = config.offset.unwrap_or(0);
         let mut rom_data = super::memory::make_buffer(phoebe::ROM_SIZE, config.fill);
         let ram_data = super::memory::make_buffer(phoebe::ROM_SIZE, config.ram_fill);
         loader::load_image(&config.image, &mut rom_data, offset).await.map_err(DeviceModuleError::Load)?;

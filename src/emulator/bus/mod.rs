@@ -3,9 +3,11 @@
 mod interrupt;
 mod region;
 pub mod trace;
+mod loader;
 
 use rand::RngExt;
 pub use interrupt::{InterruptController, IrqSource};
+pub use loader::BusLoadTarget;
 pub use region::{AddressRange, BusOp};
 pub use trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
 
@@ -166,27 +168,21 @@ impl Bus {
 
     /// Writes one byte to `addr`, bypassing ROM write restrictions and triggering device side
     /// effects if an I/O device is mapped there.
-    pub fn patch(&mut self, addr: u16, value: u8) -> Result<(), BusError> {
+    pub fn patch(&mut self, addr: u16, value: u8) {
         match self.find_region_mut(addr) {
             Some(RegionMatch::Ram { data, offset }) => {
                 data[offset] = value;
-                Ok(())
             }
             Some(RegionMatch::Rom { data, offset, write_policy: _write_policy }) => {
                 data[offset] = value;
-                Ok(())
             },
             Some(RegionMatch::Device { device, addr }) => {
                 device.patch(addr, value);
-                Ok(())
             }
-            None => match self.unmapped_policy {
-                UnmappedPolicy::DefaultValue => Ok(()),
-                UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
-            },
-        }?;
+            None => {
+            }
+        };
         self.emit_trace(addr, value, BusOp::Write);
-        Ok(())
     }
 
     /// Calls `tick(cycles)` on every IO device mapped on the bus.
@@ -556,7 +552,7 @@ mod tests {
     #[test]
     fn ram_patch_read_round_trip() {
         let mut bus = ram_bus(0x0000, 0x1FFF);
-        bus.patch(0x0100, 0xAB).unwrap();
+        bus.patch(0x0100, 0xAB);
         assert_eq!(bus.read(0x0100).unwrap(), 0xAB);
     }
 
@@ -568,7 +564,7 @@ mod tests {
             .rom(AddressRange::new(0xC000, 0xC0FF), data)
             .unwrap()
             .build();
-        bus.patch(0xC000, 0xAB).unwrap();
+        bus.patch(0xC000, 0xAB);
         assert_eq!(bus.read(0xC000).unwrap(), 0xAB);
     }
 

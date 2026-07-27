@@ -1,17 +1,13 @@
+//! Utility functions for loading files into a memory segment.
+//!
+//! This module provides two functions ([`load_image`] and [`load_target`]) that can be
+//! used to load a memory segment with the contents of a file. The supported load formats
+//! include simple binary image, Intel Hex, and Motorola S-Record.
+//!
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-const IHEX_DATA: u8 = 0;
-const IHEX_EOF: u8 = 1;
-const IHEX_START: u8 = 5;
-
-const SREC_HEADER: u8 = b'0';
-const SREC_DATA: u8 = b'1';
-const SREC_COUNT: u8 = b'5';
-const SREC_START_ADDR: u8 = b'9';
-
-/// An error that
-/// occurs while loading a file into memory.
+/// An error that occurs while loading data into memory.
 #[derive(Debug)]
 pub enum LoadError {
     /// File format is not recognized.
@@ -19,9 +15,9 @@ pub enum LoadError {
     /// Invalid format within a recognized file type.
     Format(String),
     /// File/record extends beyond the bounds of the target memory space.
-    OutOfBounds { address: u32, size: usize },
+    OutOfBounds { address: usize, size: usize },
     /// Record checksum does not match the expected value
-    ChecksumMismatch { address: u32, actual: u8, expected: u8 },
+    ChecksumMismatch { address: usize, actual: u8, expected: u8 },
     /// Binary file size does not match the size of the target memory space.
     SizeMismatch { actual: usize, expected: usize },
     /// I/O error while loading a file.
@@ -47,43 +43,164 @@ impl Display for LoadError {
     }
 }
 
+/// Supported load formats.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum LoadFormat {
+    /// A simple (binary) memory image.
+    Image,
+    /// A text file containing Intel Hex records.
+    IntelHex,
+    /// A text file containing Motorola S-Records records.
+    MotorolaSrec,
+}
+
+impl LoadFormat {
+    fn from_path_suffix(path: &Path) -> Result<Self, LoadError> {
+        let extension = path.extension();
+        if extension.is_none() {
+            return Err(LoadError::UnknownFormat(
+                "Cannot deduce format; hint: add a known suffix to the filename".to_string()));
+        }
+
+        let extension = extension.unwrap();
+        let suffix = extension.to_str();
+        match suffix {
+            Some("hex") | Some("ihx") | Some("ihex") => Ok(Self::IntelHex),
+            Some("s19") | Some("srec") => Ok(Self::MotorolaSrec),
+            Some("bin") | Some("rom") => Ok(Self::Image),
+            Some(_) => Err(LoadError::UnknownFormat(
+                format!("Filename suffix '{}' not recognized", suffix.unwrap()))),
+            None => Err(LoadError::UnknownFormat("Filename suffix cannot be decoded".to_string())),
+        }
+    }
+}
+
+impl Display for LoadFormat {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Image => write!(f, "Binary Image"),
+            Self::IntelHex => write!(f, "Intel Hex"),
+            Self::MotorolaSrec => write!(f, "Motorola S-Record"),
+        }
+    }
+}
+
+/// An abstraction for addressable memory of byte width.
+pub trait LoadTarget {
+
+    /// Returns an error result if the given data length is not the correct fit for this target.
+    fn check_fit(&self, data_len: usize) -> Result<(), LoadError>;
+
+    /// Writes a single byte `data` into the target at the given `offset`.
+    /// Result is `LoadError::SizeMismatch` if `offset >= len(target)`
+    fn write(&mut self, offset: usize, data: u8) -> Result<(), LoadError>;
+
+    /// Writes a slice `data` into the target at the given `offset`.
+    /// Result is `LoadError::SizeMismatch` if `offset + len(data) >= len(target)`
+    fn write_slice(&mut self, offset: usize, data: &[u8]) -> Result<(), LoadError>;
+
+}
+
+struct SliceLoadTarget<'a> {
+    dest: &'a mut [u8],
+    bias: isize,
+}
+
+impl<'a> SliceLoadTarget<'a> {
+
+    fn new(dest: &'a mut [u8], bias: isize) -> Self {
+        Self { dest, bias }
+    }
+
+}
+
+impl<'a> LoadTarget for SliceLoadTarget<'a> {
+
+    fn check_fit(&self, data_len: usize) -> Result<(), LoadError> {
+        let effective_len = self.dest.len().wrapping_sub_signed(self.bias);
+        if effective_len == data_len {
+            Ok(())
+        } else {
+            Err(LoadError::SizeMismatch { actual: data_len, expected: effective_len })
+        }
+    }
+
+    fn write(&mut self, offset: usize, data: u8) -> Result<(), LoadError> {
+        let effective_offset = offset.wrapping_add_signed(self.bias);
+        if effective_offset < self.dest.len() {
+            self.dest[effective_offset] = data;
+            Ok(())
+        } else {
+            Err(LoadError::OutOfBounds {
+                address: effective_offset,
+                size: 1,
+            })
+        }
+    }
+
+    fn write_slice(&mut self, offset: usize, data: &[u8]) -> Result<(), LoadError> {
+        let effective_offset = offset.wrapping_add_signed(self.bias);
+        if effective_offset + data.len() == self.dest.len() {
+            self.dest[effective_offset..effective_offset + data.len()].copy_from_slice(data);
+            Ok(())
+        } else {
+            Err(LoadError::OutOfBounds {
+                address: effective_offset,
+                size: data.len(),
+            })
+        }
+    }
+
+}
+
 /// Loads a memory segment of length N with the contents of a file.
 ///
 /// # Arguments
 /// * `path` - path to the subject file
 /// * `mem` - target memory segment of length N
-/// * `offset` - address at which the segment will be mapped
+/// * `bias` - bias to be applied to memory offsets when loading; see notes below
 ///
 /// # Supported Formats
+/// * Binary Image: identified by filenames ending in `.bin`, `.rom`; size of the file must
+///   fit the target with the specified bias
 /// * Intel Hex; identified by filenames ending in `.hex`, `.ihx`, `.ihex`; supports records of
 ///   type 0 (Data), type 1 (End of File), and type 5 (Start Linear Address)
 /// * Motorola S-Record; identified by filenames ending in `.s19`, `.srec`; supports records of
 ///   type 0 (Header), type 1 (Data), type 5 (Count), type 9 (Start Address, terminator)
-/// * Binary: identified by filenames ending in `.bin`, `.rom`; size of the file must
-///   exactly match the size of the target memory size
 ///
-/// When loading Intel Hex or Motorola-S records, addresses specified by the records are biased by
-/// the specified `offset`. The biased addressed and length of each record must be within the bounds
-/// of the target memory address. Overlapping records are not detected.
+/// When loading a Binary Image file, the image is loaded into the given memory segment at the
+/// offset specified by `bias`. The image length must be exactly `mem.len() - bias`.
+///
+/// When loading Intel Hex or Motorola-S records, addresses specified by the records are negatively
+/// biased by the specified `bias`. The biased address and length of each record must be within the
+/// bounds of `mem`. Overlapping records are not detected.
 //
-pub async fn load_image(path: &Path, mem: &mut [u8], offset: usize)
-        -> Result<Option<u16>, LoadError> {
+pub async fn load_image(path: &Path, mem: &mut [u8], bias: u16)
+                        -> Result<Option<u16>, LoadError> {
+    let format = LoadFormat::from_path_suffix(path)?;
+    let bias = match format {
+        LoadFormat::Image => bias as isize,
+        LoadFormat::IntelHex | LoadFormat::MotorolaSrec => -(bias as isize),
+    };
+    let mut target = SliceLoadTarget::new(mem, bias);
     let data = tokio::fs::read(path).await.map_err(LoadError::Io)?;
-    let extension = path.extension();
-    if extension.is_none() {
-        return Err(LoadError::UnknownFormat(
-            "Cannot deduce format; hint: add an appropriate suffix to the filename".to_string()));
-    }
+    load_target(&data, format, &mut target)
+}
 
-    let extension = extension.unwrap();
-    let suffix = extension.to_str();
-
-    match suffix {
-        Some("hex") | Some("ihx") | Some("ihex") => load_intel_hex(&data, mem, offset),
-        Some("s19") | Some("srec") => load_motorola_srec(&data, mem, offset),
-        Some("bin") | Some("rom") => load_binary(&data, mem, offset),
-        Some(_) => Err(LoadError::UnknownFormat(format!("Filename suffix '{}' not recognized", suffix.unwrap()))),
-        None => Err(LoadError::UnknownFormat("Filename suffix cannot be decoded".to_string())),
+/// Loads a `target` with `data` that is formatted according to `format`.
+/// Returns an error result only if the data cannot be loaded.
+///
+/// # Arguments
+/// * `data` - the data to be loaded
+/// * `format` - format of the data
+/// * `target` - target into which `data` will be written
+///
+pub fn load_target(data: &[u8], format: LoadFormat, target: &mut dyn LoadTarget)
+        -> Result<Option<u16>, LoadError> {
+    match format {
+        LoadFormat::Image => load_binary(data, target),
+        LoadFormat::IntelHex => load_intel_hex(data, target),
+        LoadFormat::MotorolaSrec => load_motorola_srec(data, target),
     }
 }
 
@@ -91,7 +208,11 @@ struct HexRecord<'a> {
     data: &'a[u8],
 }
 
-fn load_intel_hex(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Option<u16>, LoadError> {
+
+fn load_intel_hex(data: &[u8], target: &mut dyn LoadTarget) -> Result<Option<u16>, LoadError> {
+    const IHEX_DATA: u8 = 0;
+    const IHEX_EOF: u8 = 1;
+    const IHEX_START: u8 = 5;
     let data = consume_preamble(data, b':');
     if data.is_empty() {
         return Ok(None);
@@ -110,11 +231,7 @@ fn load_intel_hex(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Option<u
         checksum.add_u8(rec_type);
         match rec_type {
             IHEX_DATA => {
-                let index = addr as usize;
-                if index < offset || index + (rec_len as usize) - offset > mem.len() {
-                    return Err(LoadError::OutOfBounds { address: index as u32, size: rec_len as usize });
-                }
-                parse_data(&mut record, rec_len, addr, mem, offset, &mut checksum)?;
+                parse_hex_data(&mut record, rec_len, addr, target, &mut checksum)?;
             },
             IHEX_EOF => {
                 eof = true;
@@ -132,14 +249,23 @@ fn load_intel_hex(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Option<u
         let actual_ck = parse_hex_u8(&mut record)?;
         checksum.add_u8(actual_ck);
         if checksum.sum() != 0 {
-            return Err(LoadError::ChecksumMismatch { address: addr as u32, expected: expected_ck, actual: actual_ck })
+            return Err(LoadError::ChecksumMismatch {
+                address: addr as usize,
+                expected: expected_ck,
+                actual: actual_ck
+            })
         }
         consume_to_next_record(&mut record)?;
     }
     Ok(start_addr)
 }
 
-fn load_motorola_srec(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Option<u16>, LoadError> {
+fn load_motorola_srec(data: &[u8], target: &mut dyn LoadTarget) -> Result<Option<u16>, LoadError> {
+    const SREC_HEADER: u8 = b'0';
+    const SREC_DATA: u8 = b'1';
+    const SREC_COUNT: u8 = b'5';
+    const SREC_START_ADDR: u8 = b'9';
+
     let data = consume_preamble(data, b'S');
     if data.is_empty() {
         return Ok(None);
@@ -159,12 +285,7 @@ fn load_motorola_srec(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Opti
                 consume_data(&mut record, rec_len - 3, &mut checksum)?;
             }
             SREC_DATA => {
-                let index = addr as usize;
-                let data_len = rec_len as usize - 2 - 1;
-                if index < offset || index + data_len - offset > mem.len() {
-                    return Err(LoadError::OutOfBounds { address: index as u32, size: data_len });
-                }
-                parse_data(&mut record, rec_len - 3, addr, mem, offset, &mut checksum)?;
+                parse_hex_data(&mut record, rec_len - 3, addr, target, &mut checksum)?;
             }
             SREC_START_ADDR => {
                 start_addr = Some(addr);
@@ -176,27 +297,34 @@ fn load_motorola_srec(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Opti
         let expected_ck = !checksum.sum();
         let actual_ck = parse_hex_u8(&mut record)?;
         if expected_ck != actual_ck {
-            return Err(LoadError::ChecksumMismatch { address: addr as u32, expected: expected_ck, actual: actual_ck })
+            return Err(LoadError::ChecksumMismatch {
+                address: addr as usize,
+                expected: expected_ck,
+                actual: actual_ck
+            })
         }
         consume_to_next_record(&mut record)?;
     }
     Ok(start_addr)
 }
 
-fn load_binary(data: &[u8], mem: &mut [u8], offset: usize) -> Result<Option<u16>, LoadError> {
-    if offset + data.len() == mem.len() {
-        mem[offset..offset + data.len()].copy_from_slice(data);
-        Ok(None)
-    } else {
-        Err(LoadError::SizeMismatch { actual: offset + data.len(), expected: mem.len() })
-    }
+fn load_binary(data: &[u8], target: &mut dyn LoadTarget) -> Result<Option<u16>, LoadError> {
+    target.check_fit(data.len())?;
+    target.write_slice(0, data)?;
+    Ok(None)
 }
 
-fn parse_data(record: &mut HexRecord, data_len: u8, addr: u16, mem: &mut[u8], offset: usize, checksum: &mut Checksum) -> Result<(), LoadError> {
+fn parse_hex_data(
+    record: &mut HexRecord,
+    data_len: u8, addr: u16,
+    target: &mut dyn LoadTarget,
+    checksum: &mut Checksum,
+    ) -> Result<(), LoadError> {
+
     for i in 0..data_len {
         let b = parse_hex_u8(record)?;
-        let index = addr as usize - offset + (i as usize);
-        mem[index] = b;
+        let index = addr as usize + (i as usize);
+        target.write(index, b)?;
         checksum.add_u8(b);
     }
     Ok(())
@@ -368,7 +496,8 @@ S9030000FC
     fn load_intel_hex_success() {
         let hex_data = IHEX_EXAMPLE.as_bytes();
         let mut mem: [u8; 1024] = [0; 1024];
-        let start_addr = load_intel_hex(hex_data, &mut mem[..], 0x100).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, -0x100);
+        let start_addr = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap();
         assert!(start_addr.is_none());
         assert_eq!(mem[0x0..0x4], vec![0x21u8, 0x46u8, 0x01u8, 0x36u8]);
         assert_eq!(mem[0x30..0x34], vec![0x3Fu8, 0x01u8, 0x56u8, 0x70u8]);
@@ -378,7 +507,8 @@ S9030000FC
     fn load_intel_hex_when_empty_data() {
         let hex_data: [u8; 0] = [];
         let mut mem: [u8; 0] = [];
-        let start_addr = load_intel_hex(&hex_data, &mut mem, 0x0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(&hex_data, LoadFormat::IntelHex, &mut target).unwrap();
         assert!(start_addr.is_none());
     }
 
@@ -386,7 +516,8 @@ S9030000FC
     fn load_intel_hex_when_preamble_without_records() {
         let hex_data = "This is a test.\nThis is only a test\n".as_bytes();
         let mut mem: [u8; 0] = [];
-        let start_addr = load_intel_hex(hex_data, &mut mem, 0x0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap();
         assert!(start_addr.is_none());
     }
 
@@ -394,7 +525,8 @@ S9030000FC
     fn load_intel_hex_when_no_data_records() {
         let hex_data = ":00000001FF".as_bytes();
         let mut mem: [u8; 0] = [];
-        let start_addr = load_intel_hex(hex_data, &mut mem, 0x0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap();
         assert!(start_addr.is_none());
     }
 
@@ -402,7 +534,8 @@ S9030000FC
     fn load_intel_hex_when_unsupported_rec_type() {
         let hex_data = ":0000000907".as_bytes();
         let mut mem: [u8; 0] = [];
-        let err = load_intel_hex(hex_data, &mut mem, 0x0).unwrap_err();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let err = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::Format(message) if message.contains("record type")));
     }
 
@@ -410,7 +543,8 @@ S9030000FC
     fn load_intel_hex_when_inconsistent_offset() {
         let hex_data = ":10010000214601360121470136007EFE09D2190140\n".as_bytes();
         let mut mem: [u8; 16] = [0; 16];
-        let err = load_intel_hex(hex_data, &mut mem, 0).unwrap_err();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let err = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::OutOfBounds { address: _, size: _ }));
     }
 
@@ -418,7 +552,8 @@ S9030000FC
     fn load_intel_hex_when_no_eof_record() {
         let hex_data = ":10010000214601360121470136007EFE09D2190140\n".as_bytes();
         let mut mem: [u8; 16] = [0; 16];
-        let err = load_intel_hex(hex_data, &mut mem, 0x100).unwrap_err();
+        let mut target = SliceLoadTarget::new(&mut mem, -0x100);
+        let err = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::Format(message) if message.contains("end-of-file")));
     }
 
@@ -426,7 +561,8 @@ S9030000FC
     fn load_intel_hex_when_invalid_checksum() {
         let hex_data = ":00000001FE".as_bytes();
         let mut mem: [u8; 0] = [];
-        let err = load_intel_hex(hex_data, &mut mem, 0x100).unwrap_err();
+        let mut target = SliceLoadTarget::new(&mut mem, -0x100);
+        let err = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::ChecksumMismatch { actual: a_ck, expected: e_ck, address: addr}
             if a_ck== 0xfeu8 && e_ck == 0xffu8 && addr == 0x0000));
     }
@@ -435,16 +571,18 @@ S9030000FC
     fn load_intel_hex_with_start_record() {
         let hex_data = ":04000005000000CD2A\n:00000001FF\n".as_bytes();
         let mut mem: [u8; 0] = [];
-        let start_addr = load_intel_hex(hex_data, &mut mem, 0x0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap();
         assert!(matches!(start_addr, Some(addr) if addr == 0x00cd))
     }
 
     #[test]
     fn load_index_hex_can_write_to_end_of_segment() {
-        // this record writes 6 bytes at 0xfffa (the 6502 reset vectors)
+        // this record writes 6 bytes at 0xFFFA (the 6502 reset vectors)
         let hex_data = ":06FFFA0000F000F000F031\n:00000001FF\n".as_bytes();
         let mut mem: [u8; 16] = [0; 16];
-        let start_addr = load_intel_hex(hex_data, &mut mem, 0xfff0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, -0xFFF0);
+        let start_addr = load_target(hex_data, LoadFormat::IntelHex, &mut target).unwrap();
         assert!(start_addr.is_none());
     }
 
@@ -452,7 +590,8 @@ S9030000FC
     fn load_motorola_srec_success() {
         let hex_data = SREC_EXAMPLE.as_bytes();
         let mut mem: [u8; 1024] = [0; 1024];
-        let start_addr = load_motorola_srec(hex_data, &mut mem[..], 0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
         assert!(matches!(start_addr, Some(0)));
         assert_eq!(mem[0x0..0x4], vec![0x7Cu8, 0x08u8, 0x02u8, 0xA6u8]);
         assert_eq!(mem[0x38..0x3c], vec![0x48u8, 0x65u8, 0x6Cu8, 0x6Cu8]);
@@ -462,7 +601,8 @@ S9030000FC
     fn load_motorola_srec_when_empty_data() {
         let hex_data: [u8; 0] = [];
         let mut mem: [u8; 0] = [];
-        let start_addr = load_motorola_srec(&hex_data, &mut mem, 0x0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
         assert!(start_addr.is_none());
     }
 
@@ -470,7 +610,8 @@ S9030000FC
     fn load_motorola_srec_when_preamble_without_records() {
         let hex_data = "This is a test.\nThis is only a test\n".as_bytes();
         let mut mem: [u8; 0] = [];
-        let start_addr = load_motorola_srec(hex_data, &mut mem, 0x0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
         assert!(start_addr.is_none());
     }
 
@@ -478,7 +619,8 @@ S9030000FC
     fn load_motorola_srec_when_no_data_records() {
         let hex_data = "S9030000FC".as_bytes();
         let mut mem: [u8; 0] = [];
-        let start_addr = load_motorola_srec(hex_data, &mut mem, 0x0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
         assert!(matches!(start_addr, Some(0)));
     }
 
@@ -486,7 +628,8 @@ S9030000FC
     fn load_motorola_srec_when_unsupported_rec_type() {
         let hex_data = "S70700000000FF".as_bytes();
         let mut mem: [u8; 0] = [];
-        let err = load_motorola_srec(hex_data, &mut mem, 0x0).unwrap_err();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let err = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::Format(message) if message.contains("record type")));
     }
 
@@ -494,16 +637,18 @@ S9030000FC
     fn load_motorola_srec_when_inconsistent_offset() {
         let hex_data = "S11F00007C0802A6900100049421FFF07C6C1B787C8C23783C6000003863000026\n".as_bytes();
         let mut mem: [u8; 16] = [0; 16];
-        let err = load_motorola_srec(hex_data, &mut mem, 0x100).unwrap_err();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let err = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::OutOfBounds { address: _, size: _ }));
     }
 
     #[test]
     fn load_motorola_srec_can_write_to_end_of_segment() {
-        // this record writes 6 bytes at 0xfffa (the 6502 reset vectors)
+        // this record writes 6 bytes at 0xFFFA (the 6502 reset vectors)
         let hex_data = "S109FFFA00F000F000F02D\nS9030000FC\n".as_bytes();
         let mut mem: [u8; 16] = [0; 16];
-        let start_addr = load_motorola_srec(hex_data, &mut mem, 0xfff0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, -0xFFF0);
+        let start_addr = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
         assert!(matches!(start_addr, Some(0)));
     }
 
@@ -511,7 +656,8 @@ S9030000FC
     fn load_motorola_srec_when_no_eof_record() {
         let hex_data = "S00F000068656C6C6F202020202000003C\n".as_bytes();
         let mut mem: [u8; 0] = [0; 0];
-        let err = load_motorola_srec(hex_data, &mut mem, 0x100).unwrap_err();
+        let mut target = SliceLoadTarget::new(&mut mem, -0x100);
+        let err = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::Format(message) if message.contains("end-of-file")));
     }
 
@@ -519,7 +665,8 @@ S9030000FC
     fn load_motorola_srec_when_invalid_checksum() {
         let hex_data = "S9030000FD".as_bytes();
         let mut mem: [u8; 0] = [];
-        let err = load_motorola_srec(hex_data, &mut mem, 0x100).unwrap_err();
+        let mut target = SliceLoadTarget::new(&mut mem, -0x100);
+        let err = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::ChecksumMismatch { actual: a_ck, expected: e_ck, address: addr}
             if a_ck== 0xfdu8 && e_ck == 0xfcu8 && addr == 0x0000));
     }
@@ -527,7 +674,8 @@ S9030000FC
     fn load_binary_success() {
         let bin_data: [u8; 8] = BIN_EXAMPLE;
         let mut mem: [u8; 8] = [0xff; 8];
-        let start_addr = load_binary(&bin_data, &mut mem[..], 0).unwrap();
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let start_addr = load_target(&bin_data, LoadFormat::Image, &mut target).unwrap();
         assert!(start_addr.is_none());
         assert_eq!(mem[0x0..0x8], vec![0x00u8, 0xffu8, 0x55u8, 0xaau8, 0xdeu8, 0xadu8, 0xbeu8, 0xefu8]);
     }
@@ -536,8 +684,10 @@ S9030000FC
     fn load_binary_when_size_mismatch() {
         let bin_data: [u8; 8] = [0x00u8, 0xffu8, 0x55u8, 0xaau8, 0xdeu8, 0xadu8, 0xbeu8, 0xefu8];
         let mut mem: [u8; 0] = [];
-        let err = load_binary(&bin_data, &mut mem[..], 0).unwrap_err();
-        assert!(matches!(err, LoadError::SizeMismatch { actual: a, expected: e} if a == 8 && e == 0));
+        let mut target = SliceLoadTarget::new(&mut mem, 0);
+        let err = load_target(&bin_data, LoadFormat::Image, &mut target).unwrap_err();
+        assert!(matches!(err, LoadError::SizeMismatch { actual, expected }
+            if actual == bin_data.len() && expected == 0 ));
     }
 
     #[test]
@@ -729,11 +879,38 @@ S9030000FC
 
     #[tokio::test]
     async fn load_image_with_non_existent_file() {
-        let path  = tempfile::Builder::new().suffix(".foo").tempfile().unwrap();
+        let path  = tempfile::Builder::new().suffix(".bin").tempfile().unwrap();
         tokio::fs::remove_file(&path).await.unwrap();
         let mut mem: [u8; 0] = [];
         let err = load_image(path.path(), &mut mem, 0).await.unwrap_err();
         assert!(matches!(err, LoadError::Io(_)));
+    }
+
+    #[test]
+    fn load_format_from_path_suffix_image() {
+        assert_eq!(LoadFormat::from_path_suffix(Path::new("file.bin")).unwrap(), LoadFormat::Image);
+        assert_eq!(LoadFormat::from_path_suffix(Path::new("file.rom")).unwrap(), LoadFormat::Image);
+    }
+
+    #[test]
+    fn load_format_from_path_suffix_intel_hex() {
+        assert_eq!(LoadFormat::from_path_suffix(Path::new("file.hex")).unwrap(), LoadFormat::IntelHex);
+        assert_eq!(LoadFormat::from_path_suffix(Path::new("file.ihx")).unwrap(), LoadFormat::IntelHex);
+        assert_eq!(LoadFormat::from_path_suffix(Path::new("file.ihex")).unwrap(), LoadFormat::IntelHex);
+    }
+
+    #[test]
+    fn load_format_from_path_suffix_motorola_srec() {
+        assert_eq!(LoadFormat::from_path_suffix(Path::new("file.s19")).unwrap(), LoadFormat::MotorolaSrec);
+        assert_eq!(LoadFormat::from_path_suffix(Path::new("file.srec")).unwrap(), LoadFormat::MotorolaSrec);
+    }
+
+    #[test]
+    fn load_format_from_path_suffix_unknown() {
+        assert!(matches!(LoadFormat::from_path_suffix(Path::new("no_suffix")).unwrap_err(),
+            LoadError::UnknownFormat(format) if format.contains("deduce")));
+        assert!(matches!(LoadFormat::from_path_suffix(Path::new("bad_suffix.foo")).unwrap_err(),
+            LoadError::UnknownFormat(format) if format.contains("not recognized")));
     }
 
 }
