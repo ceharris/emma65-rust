@@ -547,12 +547,12 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
           <span className="panel-title">Disassembly</span>
           <div className="exec-controls">
             <button
-              className="exec-btn step-into-btn"
-              onClick={stepInto}
-              disabled={stepping || isAutoStepping || isFreeRunning || cpuStopped}
-              title="Step Into (F11)"
+              className="exec-btn run-btn"
+              onClick={runCpu}
+              disabled={isFreeRunning || isAutoStepping || stepping || cpuStopped}
+              title="Run (F5)"
             >
-              <i className="codicon codicon-debug-step-into" />
+              <i className="codicon codicon-debug-continue" />
             </button>
             <button
               className="exec-btn step-over-btn"
@@ -563,24 +563,20 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
               <i className="codicon codicon-debug-step-over" />
             </button>
             <button
+              className="exec-btn step-into-btn"
+              onClick={stepInto}
+              disabled={stepping || isAutoStepping || isFreeRunning || cpuStopped}
+              title="Step Into (F11)"
+            >
+              <i className="codicon codicon-debug-step-into" />
+            </button>
+            <button
               className="exec-btn step-return-btn"
               onClick={stepReturn}
               disabled={stepping || isAutoStepping || isFreeRunning || cpuStopped}
               title="Step Return (Shift+F11)"
             >
               <i className="codicon codicon-debug-step-out" />
-            </button>
-          </div>
-        </div>
-        <div className="disassembly-toolbar">
-          <div className="run-controls">
-            <button
-              className="exec-btn run-btn"
-              onClick={runCpu}
-              disabled={isFreeRunning || isAutoStepping || stepping || cpuStopped}
-              title="Run (F5)"
-            >
-              <i className="codicon codicon-debug-continue" />
             </button>
             <button
               className="exec-btn stop-btn"
@@ -591,6 +587,8 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
               <i className="codicon codicon-debug-stop" />
             </button>
           </div>
+        </div>
+        <div className="disassembly-toolbar">
           <div className="auto-step-control">
             <button
               className={`exec-btn auto-step-btn${isAutoStepping ? " active" : ""}`}
