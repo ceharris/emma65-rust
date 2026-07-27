@@ -725,6 +725,7 @@ async fn load_memory(
     format: String,
     bias: u16,
     cpu_state: State<'_, CpuState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     use emma65::emulator::bus::BusLoadTarget;
     use emma65::emulator::config::loader::{load_target, LoadFormat};
@@ -738,11 +739,17 @@ async fn load_memory(
 
     let data = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
 
-    let mut guard = cpu_state.0.lock().unwrap();
-    let cpu = guard.as_mut().ok_or("CPU not ready")?;
-    let bus = cpu.bus_mut();
-    let mut target = BusLoadTarget::new(bus, bias as usize);
-    load_target(&data, load_format, &mut target).map_err(|e| e.to_string())?;
+    let pc = {
+        let mut guard = cpu_state.0.lock().unwrap();
+        let cpu = guard.as_mut().ok_or("CPU not ready")?;
+        let pc = cpu.registers().pc;
+        let bus = cpu.bus_mut();
+        let mut target = BusLoadTarget::new(bus, bias as usize);
+        load_target(&data, load_format, &mut target).map_err(|e| e.to_string())?;
+        pc
+    };
+
+    app.emit("debugger-halted", pc).ok();
     Ok(())
 }
 
