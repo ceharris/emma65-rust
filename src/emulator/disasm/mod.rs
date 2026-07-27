@@ -14,6 +14,8 @@ pub struct DisassembledLine {
     pub mnemonic: Mnemonic,
     /// Formatted operand text (empty string for implied/accumulator).
     pub operand_text: String,
+    /// An optional comment field (used to provide additional details for immediate operands)
+    pub comment_text: Option<String>,
     /// False when the opcode is invalid for the active variant.
     pub is_valid: bool,
 }
@@ -24,6 +26,27 @@ pub struct Disassembler {
 }
 
 impl Disassembler {
+
+    const ASCII_CTRL_MNEMONICS: &str = "NULSOHSTXETXEOTENQACKBELBS HT LF VT FF CR SO SI \
+                                        DLEDC1DC2DC3DC4NAKSYNETBCANEM SUBESCFS GS RS US ";
+
+    fn ascii_ctrl_mnemonic(ctrl: u8) -> &'static str {
+        let i = (3 * ctrl) as usize;
+        &Self::ASCII_CTRL_MNEMONICS[i..i + 3]
+    }
+
+    fn immediate_mode_comment(operand: u8) -> String {
+        if operand < 0x20 {
+            format!("; {} ^{} {}", operand, (operand + b'@') as char, Self::ascii_ctrl_mnemonic(operand))
+        } else if operand < 0x7F {
+            format!("; {} '{}'", operand, operand as char)
+        } else if operand == 0x7F {
+            "; 127 DEL".to_string()
+        } else {
+            format!("; {} ({})", operand, operand as i8)
+        }
+    }
+
     /// Creates a disassembler for the given CPU variant.
     pub fn new(variant: CpuVariant) -> Self {
         Self { table: decode_table(variant) }
@@ -38,11 +61,17 @@ impl Disassembler {
             raw_bytes.push(bus.peek(addr.wrapping_add(i as u16)).unwrap_or(0xFF));
         }
         let operand_text = format_operand(&decoded, &raw_bytes, addr);
+        let comment_text = if decoded.mode == AddressingMode::Immediate {
+            Some(Self::immediate_mode_comment(raw_bytes[1]))
+        } else {
+            None
+        };
         DisassembledLine {
             addr,
             raw_bytes,
             mnemonic: decoded.mnemonic,
             operand_text,
+            comment_text,
             is_valid: decoded.is_valid,
         }
     }
@@ -112,8 +141,8 @@ fn format_operand(decoded: &DecodedOp, raw: &[u8], addr: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::bus::{Bus, BusConfig};
     use crate::emulator::bus::AddressRange;
+    use crate::emulator::bus::{Bus, BusConfig};
 
     fn make_bus(start: u16, bytes: &[u8]) -> Bus {
         let mut bus = BusConfig::new()
@@ -128,6 +157,42 @@ mod tests {
 
     fn disasm(variant: CpuVariant) -> Disassembler {
         Disassembler::new(variant)
+    }
+
+    #[test]
+    fn ascii_ctrl_mnemonics() {
+        assert_eq!(Disassembler::ascii_ctrl_mnemonic(0), "NUL");
+        assert_eq!(Disassembler::ascii_ctrl_mnemonic(0x7), "BEL");
+        assert_eq!(Disassembler::ascii_ctrl_mnemonic(0xD), "CR ");
+        assert_eq!(Disassembler::ascii_ctrl_mnemonic(0x15), "NAK");
+        assert_eq!(Disassembler::ascii_ctrl_mnemonic(0x18), "CAN");
+        assert_eq!(Disassembler::ascii_ctrl_mnemonic(0x1F), "US ");
+    }
+
+    #[test]
+    fn immediate_mode_comment_ascii_ctrl() {
+        assert_eq!(Disassembler::immediate_mode_comment(0), "; 0 ^@ NUL");
+        assert_eq!(Disassembler::immediate_mode_comment(1), "; 1 ^A SOH");
+        assert_eq!(Disassembler::immediate_mode_comment(0x1A), "; 26 ^Z SUB");
+        assert_eq!(Disassembler::immediate_mode_comment(0x1B), "; 27 ^[ ESC");
+    }
+
+    #[test]
+    fn immediate_mode_comment_ascii_printable() {
+        assert_eq!(Disassembler::immediate_mode_comment(0x40), "; 64 '@'");
+        assert_eq!(Disassembler::immediate_mode_comment(0x41), "; 65 'A'");
+        assert_eq!(Disassembler::immediate_mode_comment(0x7E), "; 126 '~'");
+    }
+
+    #[test]
+    fn immediate_mode_comment_ascii_del() {
+        assert_eq!(Disassembler::immediate_mode_comment(0x7F), "; 127 DEL");
+    }
+
+    #[test]
+    fn immediate_mode_comment_not_ascii() {
+        assert_eq!(Disassembler::immediate_mode_comment(0x80), "; 128 (-128)");
+        assert_eq!(Disassembler::immediate_mode_comment(0xFF), "; 255 (-1)");
     }
 
     // --- single instruction formatting ---
@@ -149,6 +214,7 @@ mod tests {
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert!(matches!(line.mnemonic, Mnemonic::Lda));
         assert_eq!(line.operand_text, "#$42");
+        assert_eq!(line.comment_text, Some("; 66 'B'".to_string()));
         assert_eq!(line.raw_bytes, vec![0xA9, 0x42]);
     }
 
