@@ -153,12 +153,19 @@ export default function MemoryPanel({ execState }: Props) {
   const [loadErrorDialog, setLoadErrorDialog] = useState<string | null>(null);
   /** Fill-memory dialog state; null when closed. */
   const [fillDialog, setFillDialog] = useState<FillDialogState | null>(null);
+  /** Symbol names indexed by page offset (0–255); empty array means no symbols at that address. */
+  const [pageSymbols, setPageSymbols] = useState<string[][]>([]);
 
   /** Fetch the 256-byte page starting at `addr` (must be paragraph-aligned). */
   const fetchPage = useCallback(async (addr: number) => {
     try {
-      const result = await invoke<number[]>("get_memory", { addr });
+      const [result, symbols] = await Promise.all([
+        invoke<number[]>("get_memory", { addr }),
+        invoke<string[][]>("get_symbols_for_range", { start: addr, count: 256 })
+          .catch(() => [] as string[][]),
+      ]);
       setBytes(new Uint8Array(result));
+      setPageSymbols(symbols);
       pageAddrRef.current = addr;
       setPageAddr(addr);
       setInputValue(fmtAddr(addr));
@@ -477,10 +484,14 @@ export default function MemoryPanel({ execState }: Props) {
     (halfSlice: Uint8Array, baseAddr: number) =>
       Array.from(halfSlice).map((b, i) => {
         const byteAddr = (baseAddr + i) & (MEMORY_SIZE - 1);
+        const offset = (byteAddr - pageAddr + MEMORY_SIZE) % MEMORY_SIZE;
+        const names = pageSymbols[offset];
+        const title = names?.length ? names.join("\n") : undefined;
         return (
           <span
             key={i}
             className={`mem-ascii-char${execState !== "stopped" ? " locked" : ""}`}
+            title={title}
             onDoubleClick={
               execState === "stopped"
                 ? () => handleAsciiCharDoubleClick(byteAddr)
@@ -491,7 +502,7 @@ export default function MemoryPanel({ execState }: Props) {
           </span>
         );
       }),
-    [execState, handleAsciiCharDoubleClick],
+    [execState, handleAsciiCharDoubleClick, pageAddr, pageSymbols],
   );
 
   /** Builds per-byte hex spans for one 8-byte half-row. */
@@ -499,10 +510,14 @@ export default function MemoryPanel({ execState }: Props) {
     (halfSlice: Uint8Array, baseAddr: number) =>
       Array.from(halfSlice).map((b, i) => {
         const byteAddr = (baseAddr + i) & (MEMORY_SIZE - 1);
+        const offset = (byteAddr - pageAddr + MEMORY_SIZE) % MEMORY_SIZE;
+        const names = pageSymbols[offset];
+        const title = names?.length ? names.join("\n") : undefined;
         return (
           <span
             key={i}
             className={`mem-hex-byte${execState !== "stopped" ? " locked" : ""}`}
+            title={title}
             onDoubleClick={
               execState === "stopped"
                 ? () => handleByteDoubleClick(byteAddr)
@@ -513,7 +528,7 @@ export default function MemoryPanel({ execState }: Props) {
           </span>
         );
       }),
-    [execState, handleByteDoubleClick],
+    [execState, handleByteDoubleClick, pageAddr, pageSymbols],
   );
 
   const rows: React.ReactNode[] = [];
