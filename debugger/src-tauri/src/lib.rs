@@ -796,6 +796,12 @@ fn fill_memory(
     Ok(())
 }
 
+/// Resolves `name` against the symbol table; returns the associated address, or `null` if not found.
+#[tauri::command]
+fn resolve_symbol(name: String, cpu_state: State<CpuState>) -> Option<u16> {
+    cpu_state.0.lock().unwrap().as_ref()?.bus().symbol_table().address_for(&name)
+}
+
 /// Returns disassembled instructions starting at `addr`, up to `count` rows.
 #[tauri::command]
 fn get_disassembly(
@@ -1163,6 +1169,7 @@ pub fn run() {
             enable_breakpoint,
             get_breakpoints,
             get_cpu_bus_state,
+            resolve_symbol,
             theme::get_theme,
             theme::set_theme,
         ])

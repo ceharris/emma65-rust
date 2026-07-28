@@ -195,12 +195,19 @@ export default function MemoryPanel({ execState }: Props) {
 
   /** Navigate on Enter in the address input. */
   const handleInputKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
+    async (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === "Enter") {
-        const addr = parseAddress(inputValue);
-        if (!isNaN(addr) && addr >= 0 && addr <= (MEMORY_SIZE - 1)) {
-          navigateTo(addr);
+        let addr: number | null = null;
+        try {
+          addr = await invoke<number | null>("resolve_symbol", { name: inputValue.trim() });
+        } catch {
+          // symbol resolution unavailable; fall through to hex parse
         }
+        if (addr === null) {
+          const parsed = parseAddress(inputValue);
+          if (!isNaN(parsed) && parsed >= 0 && parsed <= (MEMORY_SIZE - 1)) addr = parsed;
+        }
+        if (addr !== null) navigateTo(addr);
       }
     },
     [inputValue, navigateTo],
