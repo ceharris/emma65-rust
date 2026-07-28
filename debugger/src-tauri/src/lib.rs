@@ -140,6 +140,8 @@ pub struct DisassembledRow {
     pub addr: u16,
     /// Raw bytes as hex strings, e.g. ["4C", "00", "06"].
     pub bytes: Vec<String>,
+    /// Symbol names from the symbol table associated with `addr`, without trailing colons.
+    pub labels: Vec<String>,
     /// Mnemonic string, e.g. "JMP".
     pub mnemonic: String,
     /// Formatted operand text, e.g. "$0600".
@@ -811,6 +813,7 @@ fn get_disassembly(
     let rows = lines.into_iter().map(|line| DisassembledRow {
         addr: line.addr,
         bytes: line.raw_bytes.iter().map(|b| format!("{b:02X}")).collect(),
+        labels: line.labels,
         mnemonic: line.mnemonic.to_string(),
         operand: line.operand_text,
         comment: line.comment_text.unwrap_or("".to_string()),
