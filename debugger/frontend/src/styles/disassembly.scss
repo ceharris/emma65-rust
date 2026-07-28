@@ -291,3 +291,19 @@
 .disasm-label {
   color: var(--color-fg);
 }
+
+.disasm-addr-input {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  padding: 2px 6px;
+  width: 6ch;
+  border-radius: 3px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent);
+  }
+}
