@@ -6,6 +6,7 @@ import "./styles/disassembly.scss";
 interface DisassembledRow {
   addr: number;
   bytes: string[];
+  labels: string[];
   mnemonic: string;
   operand: string;
   comment: string;
@@ -626,10 +627,46 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
         {rows.length === 0 ? (
           <span className="disassembly-empty">Waiting for session…</span>
         ) : (
-          rows.map((row) => {
+          rows.flatMap((row) => {
             const isCurrent = row.addr === currentPc;
             const bpEnabled = breakpoints.get(row.addr);
-            return (
+            const gutterClasses = [
+              "disasm-gutter",
+              bpEnabled === true ? "breakpoint" : bpEnabled === false ? "breakpoint-disabled" : "",
+              isStopped ? "" : "locked",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            const gutterTitle = isStopped
+              ? (bpEnabled !== undefined ? "Remove breakpoint" : "Set breakpoint")
+              : "Stop the CPU to edit breakpoints";
+            const gutterDot = bpEnabled === false ? "○" : "●";
+
+            const labelGutterClasses = [
+              "disasm-gutter",
+              isStopped ? "" : "locked",
+            ]
+              .filter(Boolean)
+              .join(" ");
+
+            const labelRows = row.labels.map((label) => (
+              <div
+                key={`${row.addr}-label-${label}`}
+                className="disasm-row disasm-label-row"
+                onContextMenu={(e) => handleRowContextMenu(e, row.addr)}
+              >
+                <span
+                  className={labelGutterClasses}
+                  onClick={() => handleToggleBreakpoint(row.addr)}
+                  title={gutterTitle}
+                >
+                  ●
+                </span>
+                <span className="disasm-label">{label}:</span>
+              </div>
+            ));
+
+            const instrRow = (
               <div
                 key={row.addr}
                 ref={isCurrent ? pcRowRef : null}
@@ -643,19 +680,11 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
                 onContextMenu={(e) => handleRowContextMenu(e, row.addr)}
               >
                 <span
-                  className={[
-                    "disasm-gutter",
-                    bpEnabled === true ? "breakpoint" : bpEnabled === false ? "breakpoint-disabled" : "",
-                    isStopped ? "" : "locked",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
+                  className={gutterClasses}
                   onClick={() => handleToggleBreakpoint(row.addr)}
-                  title={isStopped
-                    ? (bpEnabled !== undefined ? "Remove breakpoint" : "Set breakpoint")
-                    : "Stop the CPU to edit breakpoints"}
+                  title={gutterTitle}
                 >
-                  {bpEnabled === false ? "○" : "●"}
+                  {gutterDot}
                 </span>
                 <span className="disasm-addr">{formatAddr(row.addr)}</span>
                 <span className="disasm-bytes">{formatBytes(row.bytes)}</span>
@@ -668,6 +697,8 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
                 )}
               </div>
             );
+
+            return [...labelRows, instrRow];
           })
         )}
       </div>
