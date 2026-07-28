@@ -46,9 +46,7 @@ impl SymbolTable {
 
     /// Gets the address mapped by `name`, if any.
     pub fn address_for(&self, name: &str) -> Option<u16> {
-        self.by_name.get(name)
-            .map_or(None, |&i| self.symbols[i].as_ref())
-            .map_or(None, |s| Some(s.address))
+        self.by_name.get(name).and_then(|&i| self.symbols[i].as_ref()).map(|s| s.address)
     }
 
     /// Gets an iterator for the names mapped to `address`.
@@ -57,8 +55,7 @@ impl SymbolTable {
             .get(&address)
             .into_iter()
             .flatten()
-            .filter(|&i| self.symbols[*i].is_some())
-            .map(|i| self.symbols[*i].as_ref().unwrap())
+            .filter_map(|i| self.symbols[*i].as_ref())
             .map(|s| s.name.as_str())
     }
 
