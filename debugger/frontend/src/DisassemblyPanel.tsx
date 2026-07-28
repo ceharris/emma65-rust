@@ -121,6 +121,7 @@ function intervalToSlider(ms: number): number {
 export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped }: Props) {
   const [rows, setRows] = useState<DisassembledRow[]>([]);
   const [currentPc, setCurrentPc] = useState<number | null>(null);
+  const [addrInputValue, setAddrInputValue] = useState<string>("");
   const [stepping, setStepping] = useState(false);
   const [isAutoStepping, setIsAutoStepping] = useState(false);
   const [isFreeRunning, setIsFreeRunning] = useState(false);
@@ -238,6 +239,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
         count: FETCH_ROWS,
       });
       setRows(result);
+      setAddrInputValue(formatAddr(addr));
     } catch (e) {
       console.error("get_disassembly failed:", e);
     }
@@ -536,6 +538,13 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
     }
   }, [commitIntervalInput]);
 
+  const handleAddrInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      const addr = parseAddressInput(addrInputValue);
+      if (addr !== null) fetchFrom(addr);
+    }
+  }, [addrInputValue, fetchFrom]);
+
   const formatAddr = (addr: number) =>
     addr.toString(16).toUpperCase().padStart(4, "0");
 
@@ -547,6 +556,15 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
       <div className="disassembly-header">
         <div className="disassembly-toolbar">
           <span className="panel-title">Disassembly</span>
+          <input
+            className="disasm-addr-input"
+            value={addrInputValue}
+            onChange={(e) => setAddrInputValue(e.target.value)}
+            onKeyDown={handleAddrInputKeyDown}
+            spellCheck={false}
+            placeholder="0000"
+            title="Enter hex address and press Enter"
+          />
         </div>
         <div className="disassembly-toolbar">
           <div className="exec-controls">
@@ -649,9 +667,10 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
               .filter(Boolean)
               .join(" ");
 
-            const labelRows = row.labels.map((label) => (
+            const labelRows = row.labels.map((label, index) => (
               <div
                 key={`${row.addr}-label-${label}`}
+                ref={isCurrent && index === 0 ? pcRowRef : null}
                 className="disasm-row disasm-label-row"
                 onContextMenu={(e) => handleRowContextMenu(e, row.addr)}
               >
@@ -669,7 +688,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
             const instrRow = (
               <div
                 key={row.addr}
-                ref={isCurrent ? pcRowRef : null}
+                ref={isCurrent && row.labels.length === 0 ? pcRowRef : null}
                 className={[
                   "disasm-row",
                   isCurrent ? "current-pc" : "",
