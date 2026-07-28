@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "emma65 Debugger",
+        "title": "Emma65 Debugger",
         "width": 1600,
         "height": 800,
         "resizable": true,
@@ -19,10 +19,10 @@
       },
       {
         "label": "terminal",
-        "title": "emma65 Terminal",
+        "title": "Emma65 Terminal",
         "url": "terminal.html",
-        "width": 720,
-        "height": 460,
+        "width": 860,
+        "height": 480,
         "resizable": true,
         "fullscreen": false,
         "visible": false
