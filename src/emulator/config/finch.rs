@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
+use crate::emulator::bus::symbol;
 use crate::emulator::config::write_policy::WritePolicySpec;
 use crate::emulator::device::{Finch, finch};
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
@@ -17,21 +18,16 @@ pub struct FinchModule;
 /// Configuration attributes for the Finch bank-switched MMU module.
 #[derive(Deserialize)]
 pub struct FinchAttributes {
-    /// Base address of the bank selection registers.
     #[serde(rename = "bank-registers", alias="banks")]
     bank_register_address: u16,
-    /// Address of the control register.
     #[serde(rename = "control-register", alias="ctrl")]
     control_register_address: u16,
-    /// Write policy
     #[serde(rename = "write-policy", skip_serializing_if = "Option::is_none")]
     write_policy: Option<WritePolicySpec>,
-    /// Value used to fill unused space in ROM
     fill: Option<u8>,
-    /// Offset to apply to load records in the ROM image
     offset: Option<u16>,
-    /// Path to an image to load into the ROM
     image: ExpandedPathBuf,
+    labels: Option<ExpandedPathBuf>,
 }
 
 impl FinchAttributes {
@@ -54,6 +50,16 @@ impl DeviceModule for FinchModule {
         let config = FinchAttributes::from_attributes(attributes)?;
         let device_id = DeviceId(address as u32);
         let offset = finch::ROM_START as u16 + config.offset.unwrap_or(0);
+
+        let bus_config = if let Some(filename) = config.labels {
+            let table = symbol::load_vice_labels(filename)
+                .await
+                .map_err(DeviceModuleError::SymbolTable)?;
+            bus_config.symbol_table(&table)
+        } else {
+            bus_config
+        };
+
         let mut data = super::memory::make_buffer(finch::MEMORY_SIZE, config.fill);
         loader::load_image(&config.image, &mut data, offset).await.map_err(DeviceModuleError::Load)?;
         let device = {

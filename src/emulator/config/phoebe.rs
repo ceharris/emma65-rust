@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
+use crate::emulator::bus::symbol;
 use crate::emulator::config::write_policy::WritePolicySpec;
 use crate::emulator::device::{Phoebe, phoebe};
 use crate::emulator::{AddressRange, BusConfig, DeviceId};
@@ -17,19 +18,14 @@ pub struct PhoebeModule;
 /// Configuration attributes for the Phoebe bank-switched memory module.
 #[derive(Deserialize)]
 pub struct PhoebeAttributes {
-    /// Address of the bank selection register.
     #[serde(rename = "control-register", alias="ctrl")]
     control_register_address: u16,
-    /// Write policy
     #[serde(rename = "write-policy", skip_serializing_if = "Option::is_none")]
     write_policy: Option<WritePolicySpec>,
-    /// Value used to fill unused space in ROM
     fill: Option<u8>,
-    /// Offset to apply to load records in the ROM image
     offset: Option<u16>,
-    /// Path to an image to load into the ROM
     image: ExpandedPathBuf,
-    /// Value used to fill RAM
+    labels: Option<ExpandedPathBuf>,
     ram_fill: Option<u8>,
 }
 
@@ -53,6 +49,16 @@ impl DeviceModule for PhoebeModule {
         let config = PhoebeAttributes::from_attributes(attributes)?;
         let device_id = DeviceId(address as u32);
         let offset = config.offset.unwrap_or(0);
+
+        let bus_config = if let Some(filename) = config.labels {
+            let table = symbol::load_vice_labels(filename)
+                .await
+                .map_err(DeviceModuleError::SymbolTable)?;
+            bus_config.symbol_table(&table)
+        } else {
+            bus_config
+        };
+
         let mut rom_data = super::memory::make_buffer(phoebe::ROM_SIZE, config.fill);
         let ram_data = super::memory::make_buffer(phoebe::ROM_SIZE, config.ram_fill);
         loader::load_image(&config.image, &mut rom_data, offset).await.map_err(DeviceModuleError::Load)?;
