@@ -4,11 +4,13 @@ mod interrupt;
 mod region;
 pub mod trace;
 mod loader;
+mod symbol;
 
 use rand::RngExt;
 pub use interrupt::{InterruptController, IrqSource};
 pub use loader::BusLoadTarget;
 pub use region::{AddressRange, BusOp};
+pub use symbol::SymbolTable;
 pub use trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
 
 use crate::emulator::device::{DeviceId, IoDevice};
@@ -79,6 +81,8 @@ pub struct Bus {
     trace_state: TraceState,
     /// Optional callback invoked on every `read()` and `write()` (not `peek`).
     trace_callback: Option<Box<dyn BusTraceCallback>>,
+    /// A table of names mapped to bus addresses
+    symbol_table: SymbolTable,
 }
 
 impl Bus {
@@ -315,6 +319,17 @@ impl Bus {
             }),
         }
     }
+    
+    /// Returns a reference to the symbol table for this bus.
+    pub fn symbol_table(&self) -> &SymbolTable {
+        &self.symbol_table
+    }
+
+    /// Returns a mutable reference to the symbol table for this bus.
+    pub fn symbol_table_mut(&mut self) -> &mut SymbolTable {
+        &mut self.symbol_table
+    }
+    
 }
 
 // Temporary match result types to avoid holding region borrows.
@@ -458,6 +473,7 @@ impl BusConfig {
             unmapped_policy: self.unmapped_policy,
             trace_state: TraceState::new(),
             trace_callback: None,
+            symbol_table: SymbolTable::new(),
         }
     }
 

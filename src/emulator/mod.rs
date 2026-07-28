@@ -11,7 +11,7 @@ pub mod config;
 mod session;
 
 pub use bus::trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
-pub use bus::{AddressRange, Bus, BusConfig, BusOp, InterruptController, IrqSource, RomWritePolicy, UnmappedPolicy};
+pub use bus::{AddressRange, Bus, BusConfig, BusOp, InterruptController, IrqSource, RomWritePolicy, SymbolTable, UnmappedPolicy};
 pub use config::{BuildError, Config, CpuVariantSpec, DeviceModule, DeviceModuleError, DeviceRegistry, DeviceSpec, InstantiationContext, RamModule, RomModule, TransportSlot, TransportSpec, TransportSpecFormat};
 pub use cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
 pub use cpu::status::StatusRegister;
