@@ -37,11 +37,14 @@ impl Disassembler {
 
     fn immediate_mode_comment(operand: u8) -> String {
         if operand < 0x20 {
-            format!("; {} ^{} {}", operand, (operand + b'@') as char, Self::ascii_ctrl_mnemonic(operand))
+            format!("; {} ^{} ({})", operand, (operand + b'@') as char,
+                    Self::ascii_ctrl_mnemonic(operand))
+        } else if operand == 0x20 {
+            "; 32 ' ' (SPC)".to_string()
         } else if operand < 0x7F {
             format!("; {} '{}'", operand, operand as char)
         } else if operand == 0x7F {
-            "; 127 DEL".to_string()
+            "; 127 (DEL)".to_string()
         } else {
             format!("; {} ({})", operand, operand as i8)
         }
@@ -171,13 +174,17 @@ mod tests {
 
     #[test]
     fn immediate_mode_comment_ascii_ctrl() {
-        assert_eq!(Disassembler::immediate_mode_comment(0), "; 0 ^@ NUL");
-        assert_eq!(Disassembler::immediate_mode_comment(1), "; 1 ^A SOH");
-        assert_eq!(Disassembler::immediate_mode_comment(0x1A), "; 26 ^Z SUB");
-        assert_eq!(Disassembler::immediate_mode_comment(0x1B), "; 27 ^[ ESC");
+        assert_eq!(Disassembler::immediate_mode_comment(0), "; 0 ^@ (NUL)");
+        assert_eq!(Disassembler::immediate_mode_comment(1), "; 1 ^A (SOH)");
+        assert_eq!(Disassembler::immediate_mode_comment(0x1A), "; 26 ^Z (SUB)");
+        assert_eq!(Disassembler::immediate_mode_comment(0x1B), "; 27 ^[ (ESC)");
     }
 
     #[test]
+    fn immediate_mode_comment_ascii_space() {
+        assert_eq!(Disassembler::immediate_mode_comment(0x20), "; 32 ' ' (SPC)");
+    }
+        #[test]
     fn immediate_mode_comment_ascii_printable() {
         assert_eq!(Disassembler::immediate_mode_comment(0x40), "; 64 '@'");
         assert_eq!(Disassembler::immediate_mode_comment(0x41), "; 65 'A'");
@@ -186,7 +193,7 @@ mod tests {
 
     #[test]
     fn immediate_mode_comment_ascii_del() {
-        assert_eq!(Disassembler::immediate_mode_comment(0x7F), "; 127 DEL");
+        assert_eq!(Disassembler::immediate_mode_comment(0x7F), "; 127 (DEL)");
     }
 
     #[test]
