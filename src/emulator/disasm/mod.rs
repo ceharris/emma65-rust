@@ -40,7 +40,7 @@ impl Disassembler {
     fn immediate_mode_comment(operand: u8) -> String {
         if operand < 0x20 {
             format!("; {} ^{} ({})", operand, (operand + b'@') as char,
-                    Self::ascii_ctrl_mnemonic(operand))
+                    Self::ascii_ctrl_mnemonic(operand).trim())
         } else if operand == 0x20 {
             "; 32 ' ' (SPC)".to_string()
         } else if operand < 0x7F {
