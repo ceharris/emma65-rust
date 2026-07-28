@@ -1,6 +1,6 @@
 //! Disassembler: decodes bus memory into human-readable instruction listings.
 
-use crate::emulator::bus::Bus;
+use crate::emulator::bus::{Bus, SymbolTable};
 use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use crate::emulator::cpu::variant::CpuVariant;
 
@@ -10,6 +10,8 @@ pub struct DisassembledLine {
     pub addr: u16,
     /// The raw instruction bytes (1–3).
     pub raw_bytes: Vec<u8>,
+    /// Labels associated with `addr` from the symbol table associated with the [`Bus`].
+    pub labels: Vec<String>,
     /// The instruction mnemonic.
     pub mnemonic: Mnemonic,
     /// Formatted operand text (empty string for implied/accumulator).
@@ -63,7 +65,9 @@ impl Disassembler {
         for i in 1..decoded.byte_len {
             raw_bytes.push(bus.peek(addr.wrapping_add(i as u16)).unwrap_or(0xFF));
         }
-        let operand_text = format_operand(&decoded, &raw_bytes, addr);
+        let names: Vec<&str> = bus.symbol_table().names_for(addr).collect();
+        let labels: Vec<String> = names.iter().map(|&s| s.to_string()).collect();
+        let operand_text = format_operand(&decoded, &raw_bytes, addr, bus.symbol_table());
         let comment_text = if decoded.mode == AddressingMode::Immediate {
             Some(Self::immediate_mode_comment(raw_bytes[1]))
         } else {
@@ -72,6 +76,7 @@ impl Disassembler {
         DisassembledLine {
             addr,
             raw_bytes,
+            labels,
             mnemonic: decoded.mnemonic,
             operand_text,
             comment_text,
@@ -107,39 +112,82 @@ impl Disassembler {
     }
 }
 
-fn format_operand(decoded: &DecodedOp, raw: &[u8], addr: u16) -> String {
+fn format_operand(decoded: &DecodedOp, raw: &[u8], addr: u16, symbol_table: &SymbolTable) -> String {
     let b1 = raw.get(1).copied().unwrap_or(0);
     let b2 = raw.get(2).copied().unwrap_or(0);
-    let abs = u16::from_le_bytes([b1, b2]);
+
     // Branch target is relative to the PC immediately after the instruction,
     // matching the CPU's own branch/bbr/bbs execution (see cpu/mod.rs).
     let pc_after = addr.wrapping_add(decoded.byte_len as u16);
 
+    // Get the absolute address specified by the operand bytes
+    let abs = absolute_address(b1, b2, pc_after, decoded.mode);
+
     match decoded.mode {
-        AddressingMode::Implied => String::new(),
-        AddressingMode::Accumulator => "A".to_string(),
-        AddressingMode::Immediate => format!("#${b1:02X}"),
-        AddressingMode::ZeroPage => format!("${b1:02X}"),
-        AddressingMode::ZeroPageX => format!("${b1:02X},X"),
-        AddressingMode::ZeroPageY => format!("${b1:02X},Y"),
-        AddressingMode::Absolute => format!("${abs:04X}"),
-        AddressingMode::AbsoluteX => format!("${abs:04X},X"),
-        AddressingMode::AbsoluteY => format!("${abs:04X},Y"),
-        AddressingMode::Indirect => format!("(${abs:04X})"),
-        AddressingMode::IndirectX => format!("(${b1:02X},X)"),
-        AddressingMode::IndirectY => format!("(${b1:02X}),Y"),
-        AddressingMode::ZeroPageIndirect => format!("(${b1:02X})"),
-        AddressingMode::AbsoluteIndirectX => format!("(${abs:04X},X)"),
-        AddressingMode::Relative => {
-            let target = pc_after.wrapping_add(b1 as i8 as u16);
-            format!("${target:04X}")
-        }
-        AddressingMode::ZeroPageRelative => {
-            let target = pc_after.wrapping_add(b2 as i8 as u16);
-            format!("${b1:02X},${target:04X}")
+        AddressingMode::Implied =>
+            String::new(),
+        AddressingMode::Accumulator =>
+            "A".to_string(),
+        AddressingMode::Immediate =>
+            format!("#${b1:02X}"),
+        AddressingMode::ZeroPage |
+        AddressingMode::Absolute |
+        AddressingMode::Relative =>
+            format_address(abs, decoded.mode, symbol_table),
+        AddressingMode::ZeroPageX |
+        AddressingMode::AbsoluteX =>
+            format!("{},X", format_address(abs, decoded.mode, symbol_table)),
+        AddressingMode::ZeroPageY |
+        AddressingMode::AbsoluteY =>
+            format!("{},Y", format_address(abs, decoded.mode, symbol_table)),
+        AddressingMode::Indirect |
+        AddressingMode::ZeroPageIndirect =>
+            format!("({})", format_address(abs, decoded.mode, symbol_table)),
+        AddressingMode::IndirectX |
+        AddressingMode::AbsoluteIndirectX =>
+            format!("({},X)", format_address(abs, decoded.mode, symbol_table)),
+        AddressingMode::IndirectY =>
+            format!("({}),Y", format_address(abs, decoded.mode, symbol_table)),
+        AddressingMode::ZeroPageRelative =>
+            format!("{},{}", format_address(b1 as u16, AddressingMode::ZeroPage, symbol_table),
+                    format_address(abs, decoded.mode, symbol_table)),
+    }
+}
+
+fn format_address(address: u16, mode: AddressingMode, symbol_table: &SymbolTable) -> String {
+    let names: Vec<&str> = symbol_table.names_for(address).collect();
+    if !names.is_empty() {
+        names[0].to_string()
+    } else {
+        match mode {
+            AddressingMode::ZeroPage |
+            AddressingMode::ZeroPageX |
+            AddressingMode::ZeroPageY |
+            AddressingMode::IndirectX |
+            AddressingMode::IndirectY |
+            AddressingMode::ZeroPageIndirect => format!("${address:02X}"),
+            AddressingMode::Absolute |
+            AddressingMode::AbsoluteX |
+            AddressingMode::AbsoluteY |
+            AddressingMode::Indirect |
+            AddressingMode::Relative |
+            AddressingMode::ZeroPageRelative |
+            AddressingMode::AbsoluteIndirectX => format!("${address:04X}"),
+            _ => panic!("no address format for mode {:?}", mode),
         }
     }
 }
+
+fn absolute_address(b1: u8, b2: u8, pc_after: u16, mode: AddressingMode) -> u16 {
+    if mode == AddressingMode::Relative {
+        pc_after.wrapping_add(b1 as i8 as u16)
+    } else if mode == AddressingMode::ZeroPageRelative {
+        pc_after.wrapping_add(b2 as i8 as u16)
+    } else {
+        u16::from_le_bytes([b1, b2])
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -233,10 +281,26 @@ mod tests {
     }
 
     #[test]
+    fn lda_zeropage_symbol() {
+        let mut bus = make_bus(0x0200, &[0xA5, 0x50]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x50);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert_eq!(line.operand_text, "foo");
+    }
+
+    #[test]
     fn lda_zeropage_x() {
         let bus = make_bus(0x0200, &[0xB5, 0x50]);
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert_eq!(line.operand_text, "$50,X");
+    }
+
+    #[test]
+    fn lda_zeropage_x_symbol() {
+        let mut bus = make_bus(0x0200, &[0xB5, 0x50]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x50);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert_eq!(line.operand_text, "foo,X");
     }
 
     #[test]
@@ -249,6 +313,16 @@ mod tests {
     }
 
     #[test]
+    fn lda_absolute_symbol() {
+        let mut bus = make_bus(0x0200, &[0xAD, 0x34, 0x12]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x1234);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert!(matches!(line.mnemonic, Mnemonic::Lda));
+        assert_eq!(line.operand_text, "foo");
+        assert_eq!(line.raw_bytes, vec![0xAD, 0x34, 0x12]);
+    }
+
+    #[test]
     fn lda_absolute_x() {
         let bus = make_bus(0x0200, &[0xBD, 0x34, 0x12]);
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
@@ -256,10 +330,27 @@ mod tests {
     }
 
     #[test]
+    fn lda_absolute_x_symbol() {
+        let mut bus = make_bus(0x0200, &[0xBD, 0x34, 0x12]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x1234);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert_eq!(line.operand_text, "foo,X");
+    }
+
+
+    #[test]
     fn lda_absolute_y() {
         let bus = make_bus(0x0200, &[0xB9, 0x34, 0x12]);
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert_eq!(line.operand_text, "$1234,Y");
+    }
+
+    #[test]
+    fn lda_absolute_y_symbol() {
+        let mut bus = make_bus(0x0200, &[0xB9, 0x34, 0x12]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x1234);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert_eq!(line.operand_text, "foo,Y");
     }
 
     #[test]
@@ -270,6 +361,14 @@ mod tests {
     }
 
     #[test]
+    fn lda_indirect_x_symbol() {
+        let mut bus = make_bus(0x0200, &[0xA1, 0x20]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x20);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert_eq!(line.operand_text, "(foo,X)");
+    }
+
+    #[test]
     fn lda_indirect_y() {
         let bus = make_bus(0x0200, &[0xB1, 0x20]);
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
@@ -277,10 +376,26 @@ mod tests {
     }
 
     #[test]
+    fn lda_indirect_symbol() {
+        let mut bus = make_bus(0x0200, &[0xB1, 0x20]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x20);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert_eq!(line.operand_text, "(foo),Y");
+    }
+
+    #[test]
     fn lda_zeropage_indirect() {
         let bus = make_bus(0x0200, &[0xB2, 0x20]);
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert_eq!(line.operand_text, "($20)");
+    }
+
+    #[test]
+    fn lda_zeropage_indirect_symbol() {
+        let mut bus = make_bus(0x0200, &[0xB2, 0x20]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x20);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert_eq!(line.operand_text, "(foo)");
     }
 
     #[test]
@@ -292,10 +407,27 @@ mod tests {
     }
 
     #[test]
+    fn jmp_indirect_symbol() {
+        let mut bus = make_bus(0x0200, &[0x6C, 0x00, 0x03]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x300);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert!(matches!(line.mnemonic, Mnemonic::Jmp));
+        assert_eq!(line.operand_text, "(foo)");
+    }
+
+    #[test]
     fn jmp_absolute_indirect_x() {
         let bus = make_bus(0x0200, &[0x7C, 0x00, 0x03]);
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert_eq!(line.operand_text, "($0300,X)");
+    }
+
+    #[test]
+    fn jmp_absolute_indirect_x_symbol() {
+        let mut bus = make_bus(0x0200, &[0x7C, 0x00, 0x03]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x300);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert_eq!(line.operand_text, "(foo,X)");
     }
 
     #[test]
@@ -308,12 +440,32 @@ mod tests {
     }
 
     #[test]
+    fn bra_relative_backward_symbol() {
+        // Displacement -2, from PC 0x0202 (after the 2-byte instruction) => target 0x0200.
+        let mut bus = make_bus(0x0200, &[0x80, 0xFE]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x200);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert!(matches!(line.mnemonic, Mnemonic::Bra));
+        assert_eq!(line.operand_text, "foo");
+    }
+
+    #[test]
     fn beq_relative_forward() {
         // Displacement +4, from PC 0x0202 (after the 2-byte instruction) => target 0x0206.
         let bus = make_bus(0x0200, &[0xF0, 0x04]);
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
         assert!(matches!(line.mnemonic, Mnemonic::Beq));
         assert_eq!(line.operand_text, "$0206");
+    }
+
+    #[test]
+    fn beq_relative_forward_symbol() {
+        // Displacement +4, from PC 0x0202 (after the 2-byte instruction) => target 0x0206.
+        let mut bus = make_bus(0x0200, &[0xF0, 0x04]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x206);
+        let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
+        assert!(matches!(line.mnemonic, Mnemonic::Beq));
+        assert_eq!(line.operand_text, "foo");
     }
 
     #[test]
@@ -344,6 +496,19 @@ mod tests {
     }
 
     #[test]
+    fn bbr0_zeropage_relative_symbol() {
+        // Displacement +4, from PC 0x0203 (after the 3-byte instruction) => target 0x0207.
+        let mut bus = make_bus(0x0200, &[0x0F, 0x50, 0x04]);
+        let symbol_table = bus.symbol_table_mut();
+        symbol_table.insert("bar".to_string(), 0x50);
+        symbol_table.insert("foo".to_string(), 0x207);
+        let line = disasm(CpuVariant::Wdc65C02).disassemble_one(&bus, 0x0200);
+        assert!(matches!(line.mnemonic, Mnemonic::Bbr0));
+        assert_eq!(line.operand_text, "bar,foo");
+        assert!(line.is_valid);
+    }
+
+    #[test]
     fn invalid_opcode_marked_not_valid() {
         let bus = make_bus(0x0200, &[0xCB]); // WAI — invalid on Cmos65C02
         let line = disasm(CpuVariant::Cmos65C02).disassemble_one(&bus, 0x0200);
@@ -356,6 +521,20 @@ mod tests {
         let line = disasm(CpuVariant::Wdc65C02).disassemble_one(&bus, 0x0200);
         assert!(line.is_valid);
         assert!(matches!(line.mnemonic, Mnemonic::Stp));
+    }
+
+    #[test]
+    fn disassemble_one_with_labels() {
+        // NOP (1 byte), LDA #$42 (2 bytes)
+        let mut bus = make_bus(0x0200, &[0xEA]);
+        bus.symbol_table_mut().insert("foo".to_string(), 0x200);
+        bus.symbol_table_mut().insert("bar".to_string(), 0x200);
+        let line = disasm(CpuVariant::Cmos65C02)
+            .disassemble_one(&bus, 0x0200);
+        assert_eq!(line.addr, 0x0200);
+        assert!(line.labels.contains(&"foo".to_string()));
+        assert!(line.labels.contains(&"bar".to_string()));
+        assert!(matches!(line.mnemonic, Mnemonic::Nop));
     }
 
     // --- range disassembly ---
@@ -400,4 +579,5 @@ mod tests {
         // If peek had side effects we'd see corruption; absence of panic is sufficient here.
         // A mock device test in bus/mod.rs already verifies peek is side-effect-free.
     }
+
 }
