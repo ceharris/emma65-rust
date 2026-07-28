@@ -110,8 +110,8 @@
   white-space: pre;
 
   &:hover {
-    background-color: var(--color-bg-hover);
-    color: var(--color-fg-strong);
+    background-color: var(--color-fg);
+    color: var(--color-bg);
   }
 
   &.locked {
