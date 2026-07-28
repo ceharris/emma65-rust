@@ -667,9 +667,10 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
               .filter(Boolean)
               .join(" ");
 
-            const labelRows = row.labels.map((label) => (
+            const labelRows = row.labels.map((label, index) => (
               <div
                 key={`${row.addr}-label-${label}`}
+                ref={isCurrent && index === 0 ? pcRowRef : null}
                 className="disasm-row disasm-label-row"
                 onContextMenu={(e) => handleRowContextMenu(e, row.addr)}
               >
@@ -687,7 +688,7 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
             const instrRow = (
               <div
                 key={row.addr}
-                ref={isCurrent ? pcRowRef : null}
+                ref={isCurrent && row.labels.length === 0 ? pcRowRef : null}
                 className={[
                   "disasm-row",
                   isCurrent ? "current-pc" : "",
