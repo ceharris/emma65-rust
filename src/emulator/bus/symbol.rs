@@ -31,6 +31,9 @@ impl SymbolTable {
 
     /// Inserts the mapping `name -> address` into the table. 
     pub fn insert(&mut self, name: String, address: u16) {
+        if let Some(addr) = self.address_for(&name) && addr == address {
+            return;
+        }
         let idx = self.symbols.len();
         // Could avoid clone here by changing to `name: Rc<str>` in Symbol; probably not worth it
         self.by_name.insert(name.clone(), idx);
@@ -133,6 +136,14 @@ mod tests {
         let names: Vec<&str> = table.names_for(0xBEEF).collect();
         assert!(names.contains(&"foo"));
         assert!(names.contains(&"bar"));
+    }
+
+    #[test]
+    fn insert_silently_accepts_existing_name_with_same_address() {
+        let mut table = SymbolTable::default();
+        table.insert("foo".to_string(), 0xBEEF);
+        table.insert("foo".to_string(), 0xBEEF);
+        assert_eq!(table.symbols.len(), 1);
     }
 
     #[test]
