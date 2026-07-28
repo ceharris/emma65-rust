@@ -538,9 +538,15 @@ export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped
     }
   }, [commitIntervalInput]);
 
-  const handleAddrInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleAddrInputKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
-      const addr = parseAddressInput(addrInputValue);
+      let addr: number | null = null;
+      try {
+        addr = await invoke<number | null>("resolve_symbol", { name: addrInputValue.trim() });
+      } catch {
+        // symbol resolution unavailable; fall through to hex parse
+      }
+      if (addr === null) addr = parseAddressInput(addrInputValue);
       if (addr !== null) fetchFrom(addr);
     }
   }, [addrInputValue, fetchFrom]);
