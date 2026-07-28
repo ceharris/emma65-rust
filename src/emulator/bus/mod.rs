@@ -352,6 +352,7 @@ pub struct BusConfig {
     devices: Vec<(DeviceId, Box<dyn IoDevice>)>,
     unmapped_policy: UnmappedPolicy,
     rom_write_policy: RomWritePolicy,
+    symbol_table: SymbolTable,
 }
 
 impl BusConfig {
@@ -362,7 +363,13 @@ impl BusConfig {
             devices: Vec::new(),
             unmapped_policy: UnmappedPolicy::DefaultValue,
             rom_write_policy: RomWritePolicy::Ignore,
+            symbol_table: SymbolTable::new(),
         }
+    }
+
+    pub fn symbol_table(mut self, symbol_table: &SymbolTable) -> Self {
+        self.symbol_table.insert_from(symbol_table);
+        self
     }
 
     /// Sets the policy for accesses to unmapped addresses.
@@ -473,7 +480,7 @@ impl BusConfig {
             unmapped_policy: self.unmapped_policy,
             trace_state: TraceState::new(),
             trace_callback: None,
-            symbol_table: SymbolTable::new(),
+            symbol_table: self.symbol_table,
         }
     }
 
@@ -600,6 +607,18 @@ mod tests {
             .build();
         assert!(matches!(bus.read(0x1234), Err(BusError::Unmapped { addr: 0x1234 })));
         assert!(matches!(bus.write(0x1234, 0x00), Err(BusError::Unmapped { addr: 0x1234 })));
+    }
+
+    #[test]
+    fn symbol_table_inserts_from_source() {
+        let mut table = SymbolTable::default();
+        table.insert("foo".to_string(), 0xDEAD);
+        table.insert("bar".to_string(), 0xBEEF);
+        let bus = Bus::config()
+            .symbol_table(&table)
+            .build();
+        assert_eq!(bus.symbol_table.address_for("foo"), Some(0xDEAD));
+        assert_eq!(bus.symbol_table.address_for("bar"), Some(0xBEEF));
     }
 
     #[test]

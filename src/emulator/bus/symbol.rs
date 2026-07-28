@@ -36,6 +36,15 @@ impl SymbolTable {
         self.symbols.push(Some(Symbol { name, address }));
     }
 
+    /// Inserts all mappings from `source` into the table. 
+    pub fn insert_from(&mut self, source: &SymbolTable) {
+        for symbol in source.symbols.iter().as_ref() {
+            if let Some(symbol) = symbol {
+                self.insert(symbol.name.to_string(), symbol.address);
+            }
+        }
+    }
+    
     /// Removes any existing mapping for `name` in the table.
     /// Silently ignores requests to remove a name that has no mapping.
     pub fn remove(&mut self, name: &str) {
