@@ -723,15 +723,18 @@ fn write_memory(
 /// Reads the file at `path`, parses it according to `format` (`"image"`, `"intel_hex"`,
 /// or `"motorola_srec"`), and writes the result to the bus via `Bus::patch`.
 /// `bias` is the load address (meaningful only for the binary image format).
+/// If `symbol_path` is given, loads VICE labels from that file into the bus symbol table.
 #[tauri::command]
 async fn load_memory(
     path: String,
     format: String,
     bias: u16,
+    symbol_path: Option<String>,
     cpu_state: State<'_, CpuState>,
     app: AppHandle,
 ) -> Result<(), String> {
     use emma65::emulator::bus::BusLoadTarget;
+    use emma65::emulator::bus::symbol::load_vice_labels;
     use emma65::emulator::config::loader::{LoadFormat, load_target};
 
     let load_format = match format.as_str() {
@@ -743,6 +746,11 @@ async fn load_memory(
 
     let data = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
 
+    let symbols = match symbol_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        Some(sp) => Some(load_vice_labels(sp).await.map_err(|e| e.to_string())?),
+        None => None,
+    };
+
     let pc = {
         let mut guard = cpu_state.0.lock().unwrap();
         let cpu = guard.as_mut().ok_or("CPU not ready")?;
@@ -750,6 +758,9 @@ async fn load_memory(
         let bus = cpu.bus_mut();
         let mut target = BusLoadTarget::new(bus, bias as usize);
         load_target(&data, load_format, &mut target).map_err(|e| e.to_string())?;
+        if let Some(table) = &symbols {
+            bus.symbol_table_mut().insert_from(table);
+        }
         pc
     };
 

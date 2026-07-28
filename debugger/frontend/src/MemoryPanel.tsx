@@ -94,6 +94,8 @@ interface LoadDialogState {
   loadAddress: string;
   /** Validation error for the load address field; empty string means no error. */
   loadAddressError: string;
+  /** Optional path to a VICE labels symbol file; empty string means none. */
+  symbolPath: string;
 }
 
 /** Deduces the load format from a file path's extension. Returns null if unrecognized. */
@@ -263,7 +265,7 @@ export default function MemoryPanel({ execState }: Props) {
       if (execState !== "stopped" || loadDialog || writeDialog) return;
       if (e.altKey && !e.shiftKey && e.code === "KeyF") {
         e.preventDefault();
-        setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "" });
+        setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "", symbolPath: "" });
       }
     };
     window.addEventListener("keydown", handler);
@@ -380,6 +382,19 @@ export default function MemoryPanel({ execState }: Props) {
     }
   }, []);
 
+  /** Opens the native file chooser for a symbol file; defaults to the directory of the load file. */
+  const handleChooseSymbolFile = useCallback(async () => {
+    const dir = loadDialog?.path.trim().replace(/\/[^/]*$/, "") || undefined;
+    const selected = await openFileDialog({
+      multiple: false,
+      filters: [{ name: "Symbol Files", extensions: ["lbl", "sym", "map", "txt"] }],
+      defaultPath: dir,
+    });
+    if (typeof selected === "string") {
+      setLoadDialog((d) => d && { ...d, symbolPath: selected });
+    }
+  }, [loadDialog]);
+
   /** Validates inputs, invokes load_memory, refreshes the memory view, shows an error dialog on failure. */
   const commitLoadMemory = useCallback(async () => {
     if (!loadDialog) return;
@@ -406,7 +421,12 @@ export default function MemoryPanel({ execState }: Props) {
 
     setLoadDialog(null);
     try {
-      await invoke("load_memory", { path: loadDialog.path, format: loadDialog.format, bias });
+      await invoke("load_memory", {
+        path: loadDialog.path,
+        format: loadDialog.format,
+        bias,
+        symbolPath: loadDialog.symbolPath.trim() || null,
+      });
       fetchPage(pageAddrRef.current);
     } catch (e) {
       setLoadErrorDialog(String(e));
@@ -561,7 +581,7 @@ export default function MemoryPanel({ execState }: Props) {
           <span className="panel-title">Memory</span>
           <button
             className="mem-load-btn"
-            onClick={() => setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "" })}
+            onClick={() => setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "", symbolPath: "" })}
             disabled={execState !== "stopped"}
             title="Load file into memory (Alt+F)"
           >
@@ -788,8 +808,35 @@ export default function MemoryPanel({ execState }: Props) {
               <div className="mem-load-error">{loadDialog.loadAddressError}</div>
             )}
 
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ color: "var(--color-muted)", fontSize: "var(--font-size-btn)" }}>Symbol File</label>
+              <div className="mem-load-path-row">
+                <input
+                  className="mem-load-path-input"
+                  spellCheck={false}
+                  placeholder="Path to symbol file (optional)"
+                  value={loadDialog.symbolPath}
+                  onChange={(e) =>
+                    setLoadDialog((d) => d && { ...d, symbolPath: e.target.value })
+                  }
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") { e.preventDefault(); commitLoadMemory(); }
+                    if (e.key === "Escape") { e.preventDefault(); setLoadDialog(null); }
+                  }}
+                />
+                <button
+                  className="mem-load-folder-btn"
+                  onClick={handleChooseSymbolFile}
+                  title="Browse for symbol file"
+                >
+                  📁
+                </button>
+              </div>
+            </div>
+
             <div className="mem-load-rom-note">
-              This operation will bypass read-only restrictions for any ROM region targeted by the load.
+              The load operation will bypass read-only restrictions for any ROM region targeted by the load.
             </div>
 
             <div className="mem-load-buttons">
