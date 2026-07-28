@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
+use crate::emulator::bus::symbol;
 use crate::emulator::{AddressRange, BusConfig};
 
 // Type name used in registering RAM as a device
@@ -26,6 +27,7 @@ pub struct MemoryAttributes {
     offset: Option<u16>,
     fill: Option<u8>,
     image: Option<ExpandedPathBuf>,
+    labels: Option<ExpandedPathBuf>,
 }
 
 
@@ -58,12 +60,26 @@ impl DeviceModule for RamModule {
         let config = MemoryAttributes::from_attributes(attributes)?;
         let range = AddressRange::new(address, address + (config.size - 1) as u16);
         let offset = config.offset.unwrap_or(0);
+
+        let bus_config = if let Some(filename) = config.labels {
+            let table = symbol::load_vice_labels(filename)
+                .await
+                .map_err(DeviceModuleError::SymbolTable)?;
+            bus_config.symbol_table(&table)
+        } else {
+            bus_config
+        };
+
         if let Some(filename) = config.image {
             let mut data = make_buffer(config.size as usize, config.fill);
-            loader::load_image(&filename, &mut data, offset).await.map_err(DeviceModuleError::Load)?;
-            bus_config.ram_with_data(range, data).map_err(DeviceModuleError::BusConfig)
+            loader::load_image(&filename, &mut data, offset)
+                .await
+                .map_err(DeviceModuleError::Load)?;
+            bus_config.ram_with_data(range, data)
+                .map_err(DeviceModuleError::BusConfig)
         } else if let Some(fill) = config.fill {
-            bus_config.ram_with_fill(range, fill).map_err(DeviceModuleError::BusConfig)
+            bus_config.ram_with_fill(range, fill)
+                .map_err(DeviceModuleError::BusConfig)
         } else {
             bus_config.ram(range).map_err(DeviceModuleError::BusConfig)
         }
@@ -81,6 +97,16 @@ impl DeviceModule for RomModule {
         let config = MemoryAttributes::from_attributes(attributes)?;
         let range = AddressRange::new(address, address + (config.size - 1) as u16);
         let offset = config.offset.unwrap_or(0);
+
+        let bus_config = if let Some(filename) = config.labels {
+            let table = symbol::load_vice_labels(filename)
+                .await
+                .map_err(DeviceModuleError::SymbolTable)?;
+            bus_config.symbol_table(&table)
+        } else {
+            bus_config
+        };
+
         if let Some(filename) = config.image {
             let mut data = make_buffer(config.size as usize, config.fill);
             loader::load_image(&filename, &mut data, offset).await.map_err(DeviceModuleError::Load)?;
@@ -90,5 +116,6 @@ impl DeviceModule for RomModule {
             Err(DeviceModuleError::Config("ROM requires the 'image' attribute".to_string()))
         }
     }
+
 }
 

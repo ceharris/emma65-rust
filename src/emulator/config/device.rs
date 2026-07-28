@@ -1,12 +1,12 @@
+use figment::value::{Tag, Value};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use figment::value::{Tag, Value};
-use serde::{Deserialize, Serialize};
 
-use crate::emulator::{BusConfig, BusConfigError, TransportError};
-use crate::emulator::config::loader::LoadError;
 use super::InstantiationContext;
+use crate::emulator::config::loader::LoadError;
+use crate::emulator::{BusConfig, BusConfigError, TransportError};
 
 /// A configuration spec for a pluggable device module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,7 +55,8 @@ pub enum DeviceModuleError {
     Transport(TransportError),
     Config(String),
     Load(LoadError),
-    Io(std::io::Error)
+    Io(std::io::Error),
+    SymbolTable(&'static str),
 }
 
 impl Display for DeviceModuleError {
@@ -71,6 +72,8 @@ impl Display for DeviceModuleError {
                 write!(f, "load error: {e}"),
             DeviceModuleError::Io(e ) =>
                 write!(f, "I/O error: {e}"),
+            DeviceModuleError::SymbolTable(e ) =>
+                write!(f, "Symbol table error: {e}"),
         }
     }
 }
@@ -192,7 +195,6 @@ fn parse_spec(s: &str) -> Result<DeviceSpec, String> {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]
