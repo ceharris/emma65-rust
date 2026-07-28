@@ -4,7 +4,7 @@ mod interrupt;
 mod region;
 pub mod trace;
 mod loader;
-mod symbol;
+pub mod symbol;
 
 use rand::RngExt;
 pub use interrupt::{InterruptController, IrqSource};
