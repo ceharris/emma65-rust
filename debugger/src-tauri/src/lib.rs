@@ -802,6 +802,25 @@ fn resolve_symbol(name: String, cpu_state: State<CpuState>) -> Option<u16> {
     cpu_state.0.lock().unwrap().as_ref()?.bus().symbol_table().address_for(&name)
 }
 
+/// Returns symbol names for each address in `[start, start + count)`, as a list of name lists.
+///
+/// Index `i` corresponds to `start.wrapping_add(i)`; an empty inner list means no symbols at that address.
+/// Returns all-empty lists when the CPU is not ready.
+#[tauri::command]
+fn get_symbols_for_range(start: u16, count: usize, cpu_state: State<CpuState>) -> Vec<Vec<String>> {
+    let guard = cpu_state.0.lock().unwrap();
+    let Some(cpu) = guard.as_ref() else {
+        return vec![vec![]; count];
+    };
+    let symbol_table = cpu.bus().symbol_table();
+    (0..count)
+        .map(|i| {
+            let addr = start.wrapping_add(i as u16);
+            symbol_table.names_for(addr).map(|s| s.to_string()).collect()
+        })
+        .collect()
+}
+
 /// Returns disassembled instructions starting at `addr`, up to `count` rows.
 #[tauri::command]
 fn get_disassembly(
@@ -1170,6 +1189,7 @@ pub fn run() {
             get_breakpoints,
             get_cpu_bus_state,
             resolve_symbol,
+            get_symbols_for_range,
             theme::get_theme,
             theme::set_theme,
         ])
