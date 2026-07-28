@@ -56,6 +56,13 @@ impl SymbolTable {
         }
     }
 
+    /// Clears all mappings from this table.
+    pub fn clear(&mut self) {
+        self.by_name.clear();
+        self.by_address.clear();
+        self.symbols.clear();
+    }
+    
     /// Gets the address mapped by `name`, if any.
     pub fn address_for(&self, name: &str) -> Option<u16> {
         self.by_name.get(name).and_then(|&i| self.symbols[i].as_ref()).map(|s| s.address)

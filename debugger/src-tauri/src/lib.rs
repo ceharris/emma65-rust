@@ -759,7 +759,9 @@ async fn load_memory(
         let mut target = BusLoadTarget::new(bus, bias as usize);
         load_target(&data, load_format, &mut target).map_err(|e| e.to_string())?;
         if let Some(table) = &symbols {
-            bus.symbol_table_mut().insert_from(table);
+            let bus_table = bus.symbol_table_mut();
+            bus_table.clear();
+            bus_table.insert_from(table);
         }
         pc
     };
