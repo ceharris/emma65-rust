@@ -55,7 +55,8 @@ impl PipeTransport {
 
         let (bridge, in_tx, out_rx, out_notify, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
 
-        tokio::spawn(run_pipe_task(stdin, stdout, child, in_tx, out_rx, out_notify, shutdown_rx, on_exit));
+        let session = PipeSession { in_tx, out_rx, out_notify, shutdown_rx };
+        tokio::spawn(run_pipe_task(stdin, stdout, child, on_exit, session));
 
         Ok(Self { bridge, connected: true })
     }
@@ -101,6 +102,12 @@ impl Transport for PipeTransport {
     }
 }
 
+struct PipeSession {
+    in_tx: Sender<TransportEvent>,
+    out_rx: Receiver<u8>,
+    out_notify: Arc<Notify>,
+    shutdown_rx: oneshot::Receiver<()>,
+}
 /// Tokio task: bridges child process stdin/stdout to the sync `ChannelBridge`.
 ///
 /// Sends `Connected(0)` immediately, then relays bytes between the child and
@@ -110,14 +117,18 @@ async fn run_pipe_task<F>(
     mut stdin: tokio::process::ChildStdin,
     mut stdout: tokio::process::ChildStdout,
     mut child: tokio::process::Child,
-    in_tx: Sender<TransportEvent>,
-    out_rx: Receiver<u8>,
-    out_notify: Arc<Notify>,
-    mut shutdown_rx: oneshot::Receiver<()>,
     on_exit: F,
+    session: PipeSession,
 ) where
     F: FnOnce(io::Error) + Send + 'static,
 {
+    let PipeSession {
+        in_tx,
+        out_rx,
+        out_notify,
+        mut shutdown_rx,
+    } = session;
+
     if in_tx.send(TransportEvent::Connected(0)).is_err() {
         return;
     }
