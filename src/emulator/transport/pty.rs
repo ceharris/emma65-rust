@@ -13,16 +13,16 @@ use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
-use nix::fcntl::{fcntl, FcntlArg, OFlag};
-use nix::pty::{openpty, OpenptyResult};
-use nix::sys::termios::{self, cfmakeraw, SetArg};
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use nix::pty::{OpenptyResult, openpty};
+use nix::sys::termios::{self, SetArg, cfmakeraw};
 use nix::unistd;
 use tokio::io::unix::AsyncFd;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 
 use super::{ChannelBridge, Transport, TransportError, TransportEvent};
 
@@ -77,7 +77,7 @@ impl PtyTransport {
         fcntl(raw, FcntlArg::F_SETFL(new_flags))
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
-        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
+        let (bridge, in_tx, out_rx, shutdown_rx, out_notify) = ChannelBridge::<TransportEvent>::new();
         let client_connected = Arc::new(AtomicBool::new(false));
         let connection_counter = Arc::new(AtomicU64::new(0));
 
@@ -89,6 +89,7 @@ impl PtyTransport {
             async_fd,
             in_tx,
             out_rx,
+            out_notify,
             shutdown_rx,
             Arc::clone(&client_connected),
             Arc::clone(&connection_counter),
@@ -161,6 +162,7 @@ async fn run_pty_task(
     async_fd: AsyncFd<File>,
     in_tx: Sender<TransportEvent>,
     out_rx: Receiver<u8>,
+    out_notify: Arc<Notify>,
     mut shutdown_rx: oneshot::Receiver<()>,
     client_connected: Arc<AtomicBool>,
     connection_counter: Arc<AtomicU64>,
@@ -196,20 +198,20 @@ async fn run_pty_task(
                 }
             }
 
-            _ = drain_outbound(async_fd.get_ref(), &out_rx) => {}
+            _ = drain_outbound(async_fd.get_ref(), &out_rx, &out_notify) => {}
         }
     }
     client_connected.store(false, Ordering::Release);
     let _ = in_tx.send(TransportEvent::Disconnected(0));
 }
 
-async fn drain_outbound(mut file: &File, out_rx: &Receiver<u8>) {
+async fn drain_outbound(mut file: &File, out_rx: &Receiver<u8>, out_notify: &Notify) {
+    out_notify.notified().await;
     while let Ok(byte) = out_rx.try_recv() {
         if file.write_all(&[byte]).is_err() {
             return;
         }
     }
-    tokio::task::yield_now().await;
 }
 
 fn tty_name(fd: BorrowedFd<'_>) -> Option<String> {
