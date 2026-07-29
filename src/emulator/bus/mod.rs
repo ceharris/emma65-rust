@@ -180,8 +180,8 @@ impl Bus {
     }
 
     /// Returns the IRQ state of every device as `(DeviceId, irq_active)` pairs.
-    pub fn device_irq_states(&self) -> Vec<(DeviceId, bool)> {
-        self.devices.iter().map(|(id, device)| (*id, device.irq_active())).collect()
+    pub fn device_irq_states(&self) -> impl Iterator<Item = (DeviceId, bool)> + '_ {
+        self.devices.iter().map(|(id, device)| (*id, device.irq_active()))
     }
 
     /// Drains pending NMI edge events from all devices. Returns `true` if any device had one.
@@ -953,7 +953,7 @@ mod tests {
 
         bus.tick_devices(1);
         bus.reset_devices();
-        let _ = bus.device_irq_states();
+        bus.device_irq_states().for_each(drop);
         bus.take_device_nmi();
 
         assert_eq!(tick_count.load(Ordering::SeqCst), 1);

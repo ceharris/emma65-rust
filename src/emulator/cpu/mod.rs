@@ -875,8 +875,7 @@ impl Cpu {
 
     /// Polls all devices and syncs their IRQ and NMI state into the interrupt controller.
     fn poll_interrupts(&mut self) {
-        let states: Vec<_> = self.bus.device_irq_states();
-        self.interrupts.poll_devices(states.into_iter());
+        self.interrupts.poll_devices(self.bus.device_irq_states());
         if self.bus.take_device_nmi() {
             self.interrupts.signal_nmi();
         }
