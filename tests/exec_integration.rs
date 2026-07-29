@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use emma65::emulator::{
-    AddressRange, Bus, BusOp, BusTraceCallback, ClockSpeed, CpuBuilder,
-    CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, StepResult, TraceRecord,
+    AddressRange, Bus, BusOp, ClockSpeed, CpuBuilder,
+    CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, StepResult, TraceCallback, TraceRecord,
     Transport, run,
 };
 
@@ -13,7 +13,7 @@ struct CapturingCallback {
     records: Arc<Mutex<Vec<TraceRecord>>>,
 }
 
-impl BusTraceCallback for CapturingCallback {
+impl TraceCallback for CapturingCallback {
     fn record(&mut self, rec: TraceRecord) {
         self.records.lock().unwrap().push(rec);
     }

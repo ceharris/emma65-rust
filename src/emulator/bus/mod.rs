@@ -10,7 +10,6 @@ pub use interrupt::{InterruptController, IrqSource};
 pub use loader::BusLoadTarget;
 pub use region::{AddressRange, BusOp};
 pub use symbol::SymbolTable;
-pub use crate::emulator::cpu::trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
 
 use crate::emulator::device::{DeviceId, IoDevice};
 use crate::emulator::error::{BusConfigError, BusError};

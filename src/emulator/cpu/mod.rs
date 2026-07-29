@@ -12,7 +12,7 @@ pub mod trace;
 use crate::emulator::bus::{Bus, BusOp, InterruptController};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::{ClockSpeed, StepResult};
-use crate::emulator::{BusTraceCallback, TraceRecord};
+use crate::emulator::{TraceCallback, TraceRecord};
 use crate::watch::{Operand, WatchContext, WatchEvaluator};
 use log::debug;
 use opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
@@ -87,7 +87,7 @@ pub struct Cpu {
     /// Monotonic clock state; updated by `Cpu::step()` before each instruction.
     trace_state: TraceState,
     /// Optional callback invoked on every `read()` and `write()` (not `peek`).
-    trace_callback: Option<Box<dyn BusTraceCallback>>,
+    trace_callback: Option<Box<dyn TraceCallback>>,
 
 }
 
@@ -185,7 +185,7 @@ impl Cpu {
     /// Installs a trace callback. Pass `None` to remove an existing callback.
     ///
     /// When set, the callback is invoked on every `read()` and `write()`, but never on `peek`.
-    pub fn set_trace_callback(&mut self, callback: Option<Box<dyn BusTraceCallback>>) {
+    pub fn set_trace_callback(&mut self, callback: Option<Box<dyn TraceCallback>>) {
         self.tracing = callback.is_some();
         self.trace_callback = callback;
     }
@@ -2080,7 +2080,7 @@ mod tests {
 
     struct CapturingCallback(Vec<TraceRecord>);
 
-    impl BusTraceCallback for CapturingCallback {
+    impl TraceCallback for CapturingCallback {
         fn record(&mut self, rec: TraceRecord) {
             self.0.push(rec);
         }
