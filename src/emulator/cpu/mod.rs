@@ -252,27 +252,14 @@ impl Cpu {
 
         // NMI takes priority over IRQ.
         if self.interrupts.take_nmi() {
-            return match self.service_interrupt(NMI_VECTOR, false) {
-                Ok(cycles) => {
-                    self.cycles += cycles as u64;
-                    self.bus.tick_devices(cycles as u32);
-                    self.poll_interrupts();
-                    StepResult::Executed(self.table[0x00]) // placeholder decoded for interrupt
-                }
-                Err(e) => StepResult::Error(e),
-            };
+            let interrupt_result =
+                self.service_interrupt(NMI_VECTOR, false);
+            return self.map_interrupt_result(interrupt_result);
         }
-
         if self.interrupts.irq_active() && !self.regs.p.contains(StatusRegister::I) {
-            return match self.service_interrupt(IRQ_VECTOR, false) {
-                Ok(cycles) => {
-                    self.cycles += cycles as u64;
-                    self.bus.tick_devices(cycles as u32);
-                    self.poll_interrupts();
-                    StepResult::Executed(self.table[0x00])
-                }
-                Err(e) => StepResult::Error(e),
-            };
+            let interrupt_result =
+                self.service_interrupt(IRQ_VECTOR, false);
+            return self.map_interrupt_result(interrupt_result);
         }
 
         let opcode = match self.bus_read(pc) {
@@ -286,10 +273,7 @@ impl Cpu {
             match self.invalid_opcode_policy {
                 InvalidOpcodePolicy::Nop => {
                     self.regs.pc = self.regs.pc.wrapping_add(decoded.byte_len as u16);
-                    let cycles = decoded.base_cycles;
-                    self.cycles += cycles as u64;
-                    self.bus.tick_devices(cycles as u32);
-                    self.poll_interrupts();
+                    self.finish_cycle(decoded.base_cycles);
                     return StepResult::Executed(decoded);
                 }
                 InvalidOpcodePolicy::Error => {
@@ -300,9 +284,7 @@ impl Cpu {
 
         match self.execute(decoded) {
             Ok((result, cycles)) => {
-                self.cycles += cycles as u64;
-                self.bus.tick_devices(cycles as u32);
-                self.poll_interrupts();
+                self.finish_cycle(cycles);
                 result
             }
             Err(e) => StepResult::Error(e),
@@ -853,6 +835,17 @@ impl Cpu {
 
     // --- interrupt helpers ---
 
+    /// Map the result from interrupt execution to the appropriate step result
+    fn map_interrupt_result(&mut self, interrupt_result: Result<u8, ExecError>) -> StepResult {
+        match interrupt_result {
+            Ok(cycles) => {
+                self.finish_cycle(cycles);
+                StepResult::Executed(self.table[0x00])
+            }
+            Err(e) => StepResult::Error(e),
+        }
+    }
+
     /// Pushes PC and P, reads the vector at `vector_addr`, and sets the I flag.
     /// Returns the cycle count for the interrupt sequence (7 cycles).
     fn service_interrupt(&mut self, vector_addr: u16, is_brk: bool) -> Result<u8, ExecError> {
@@ -871,6 +864,16 @@ impl Cpu {
         let hi = self.bus_read(vector_addr + 1)?;
         self.regs.pc = u16::from_le_bytes([lo, hi]);
         Ok(7)
+    }
+
+    /// Advances cumulative cycle count, ticks all bus devices, and re-polls
+    /// interrupt state. Called once per step after cycles for that step are known,
+    /// regardless of which path (interrupt service, invalid opcode, normal
+    /// execution) produced them.
+    fn finish_cycle(&mut self, cycles: u8) {
+        self.cycles += cycles as u64;
+        self.bus.tick_devices(cycles as u32);
+        self.poll_interrupts();
     }
 
     /// Polls all devices and syncs their IRQ and NMI state into the interrupt controller.
