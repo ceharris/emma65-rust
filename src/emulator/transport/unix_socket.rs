@@ -7,14 +7,14 @@
 //! they can be demultiplexed downstream.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
 use tokio::net::UnixListener;
-use tokio::sync::{broadcast, oneshot, watch};
+use tokio::sync::{Notify, broadcast, oneshot, watch};
 
-use super::{pump_outbound, run_client_task, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, BROADCAST_CAPACITY};
+use super::{BROADCAST_CAPACITY, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, pump_outbound, run_client_task};
 
 /// Transport that listens for incoming Unix-domain socket connections.
 pub struct UnixSocketTransport {
@@ -28,7 +28,7 @@ impl UnixSocketTransport {
         let path = path.into();
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path)?;
-        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
+        let (bridge, in_tx, out_rx, out_notify, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
         let client_count = Arc::new(AtomicUsize::new(0));
 
         let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
@@ -38,6 +38,7 @@ impl UnixSocketTransport {
             listener,
             in_tx,
             out_rx,
+            out_notify,
             shutdown_watch_rx,
             Arc::clone(&client_count),
         ));
@@ -88,11 +89,12 @@ async fn run_unix_task(
     listener: UnixListener,
     in_tx: Sender<TransportEvent>,
     out_rx: Receiver<u8>,
+    out_notify: Arc<Notify>,
     mut shutdown_rx: watch::Receiver<bool>,
     client_count: Arc<AtomicUsize>,
 ) {
     let (fanout_tx, _) = broadcast::channel::<u8>(BROADCAST_CAPACITY);
-    tokio::spawn(pump_outbound(out_rx, fanout_tx.clone(), shutdown_rx.clone()));
+    tokio::spawn(pump_outbound(out_rx, fanout_tx.clone(), out_notify, shutdown_rx.clone()));
 
     let tag_allocator = Arc::new(TagAllocator::new());
 

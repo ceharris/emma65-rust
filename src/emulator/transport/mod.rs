@@ -11,15 +11,15 @@ pub use self::pty::PtyTransport;
 pub use self::tcp_socket::TcpSocketTransport;
 pub use self::unix_socket::UnixSocketTransport;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::emulator::{DeviceEvent, DeviceId, ErrorSender};
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use std::sync::Mutex;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{broadcast, oneshot, watch};
+use tokio::sync::{Notify, broadcast, oneshot, watch};
 
 pub(crate) const CHANNEL_CAPACITY: usize = 256;
 
@@ -117,6 +117,7 @@ pub(crate) struct ChannelBridge<R = u8> {
     pub(crate) tx: Sender<u8>,
     /// One-shot signal sent to the Tokio task to request shutdown.
     pub(crate) shutdown_tx: Option<oneshot::Sender<()>>,
+    pub(crate) out_notify: Arc<Notify>,
 }
 
 impl<R: Send + 'static> ChannelBridge<R> {
@@ -125,16 +126,18 @@ impl<R: Send + 'static> ChannelBridge<R> {
     /// The caller spawns a Tokio task that reads from `task_rx` (outbound bytes from
     /// the sync side) and writes to `task_tx` (inbound items for the sync side), and
     /// exits when `task_shutdown_rx` fires.
-    pub(crate) fn new() -> (Self, Sender<R>, Receiver<u8>, oneshot::Receiver<()>) {
+    pub(crate) fn new() -> (Self, Sender<R>, Receiver<u8>, Arc<Notify>, oneshot::Receiver<()>) {
         let (in_tx, in_rx) = bounded::<R>(CHANNEL_CAPACITY);
         let (out_tx, out_rx) = bounded::<u8>(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let out_notify = Arc::new(Notify::new());
         let bridge = Self {
             rx: in_rx,
             tx: out_tx,
             shutdown_tx: Some(shutdown_tx),
+            out_notify: Arc::clone(&out_notify),
         };
-        (bridge, in_tx, out_rx, shutdown_rx)
+        (bridge, in_tx, out_rx, out_notify, shutdown_rx)
     }
 
     pub(crate) fn try_recv(&mut self) -> Option<R> {
@@ -146,7 +149,10 @@ impl<R: Send + 'static> ChannelBridge<R> {
 
     pub(crate) fn send(&mut self, byte: u8) -> Result<(), TransportError> {
         match self.tx.try_send(byte) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.out_notify.notify_one();
+                Ok(())
+            },
             Err(crossbeam_channel::TrySendError::Full(_)) => Err(TransportError::Full),
             Err(crossbeam_channel::TrySendError::Disconnected(_)) => Err(TransportError::Disconnected),
         }
@@ -184,16 +190,16 @@ pub trait Transport: Send {
 pub(crate) async fn pump_outbound(
     out_rx: Receiver<u8>,
     fanout_tx: broadcast::Sender<u8>,
+    out_notify: Arc<Notify>,
     mut shutdown_rx: watch::Receiver<bool>) {
     loop {
         tokio::select! {
             _ = shutdown_rx.changed() => break,
-            _ = async {
+            _ = out_notify.notified() => {
                 while let Ok(byte) = out_rx.try_recv() {
                     let _ = fanout_tx.send(byte);
                 }
-                tokio::task::yield_now().await;
-            } => {}
+            }
         }
     }
 }

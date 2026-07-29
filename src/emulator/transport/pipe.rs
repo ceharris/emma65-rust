@@ -6,13 +6,13 @@
 //! reason, the supplied `on_exit` callback is called with a describing
 //! [`io::Error`] so the event can be surfaced as an emulator-level error.
 
+use crossbeam_channel::{Receiver, Sender};
 use std::io;
 use std::process::Stdio;
-
-use crossbeam_channel::{Receiver, Sender};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 
 use super::{ChannelBridge, Transport, TransportError, TransportEvent};
 
@@ -53,9 +53,10 @@ impl PipeTransport {
         let stdout = child.stdout.take()
             .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdout unavailable"))?;
 
-        let (bridge, in_tx, out_rx, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
+        let (bridge, in_tx, out_rx, out_notify, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
 
-        tokio::spawn(run_pipe_task(stdin, stdout, child, in_tx, out_rx, shutdown_rx, on_exit));
+        let session = PipeSession { in_tx, out_rx, out_notify, shutdown_rx };
+        tokio::spawn(run_pipe_task(stdin, stdout, child, on_exit, session));
 
         Ok(Self { bridge, connected: true })
     }
@@ -101,6 +102,12 @@ impl Transport for PipeTransport {
     }
 }
 
+struct PipeSession {
+    in_tx: Sender<TransportEvent>,
+    out_rx: Receiver<u8>,
+    out_notify: Arc<Notify>,
+    shutdown_rx: oneshot::Receiver<()>,
+}
 /// Tokio task: bridges child process stdin/stdout to the sync `ChannelBridge`.
 ///
 /// Sends `Connected(0)` immediately, then relays bytes between the child and
@@ -110,13 +117,18 @@ async fn run_pipe_task<F>(
     mut stdin: tokio::process::ChildStdin,
     mut stdout: tokio::process::ChildStdout,
     mut child: tokio::process::Child,
-    in_tx: Sender<TransportEvent>,
-    out_rx: Receiver<u8>,
-    mut shutdown_rx: oneshot::Receiver<()>,
     on_exit: F,
+    session: PipeSession,
 ) where
     F: FnOnce(io::Error) + Send + 'static,
 {
+    let PipeSession {
+        in_tx,
+        out_rx,
+        out_notify,
+        mut shutdown_rx,
+    } = session;
+
     if in_tx.send(TransportEvent::Connected(0)).is_err() {
         return;
     }
@@ -150,7 +162,7 @@ async fn run_pipe_task<F>(
                 Err(e) => break e,
             },
 
-            _ = drain_outbound(&mut stdin, &out_rx) => {}
+            _ = drain_outbound(&mut stdin, &out_rx, &out_notify) => {}
         }
     };
 
@@ -158,13 +170,13 @@ async fn run_pipe_task<F>(
     let _ = in_tx.send(TransportEvent::Disconnected(0));
 }
 
-async fn drain_outbound(stdin: &mut tokio::process::ChildStdin, out_rx: &Receiver<u8>) {
+async fn drain_outbound(stdin: &mut tokio::process::ChildStdin, out_rx: &Receiver<u8>, out_notify: &Notify) {
+    out_notify.notified().await;
     while let Ok(byte) = out_rx.try_recv() {
         if stdin.write_all(&[byte]).await.is_err() {
             return;
         }
     }
-    tokio::task::yield_now().await;
 }
 
 #[cfg(test)]
