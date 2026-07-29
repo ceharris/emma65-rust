@@ -130,7 +130,7 @@ fn bus_trace_captures_reads_and_writes() {
     cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
     cpu.reset().unwrap();
 
-    cpu.bus_mut().set_trace_callback(Some(Box::new(CapturingCallback {
+    cpu.set_trace_callback(Some(Box::new(CapturingCallback {
         records: records.clone(),
     })));
 

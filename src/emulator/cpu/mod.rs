@@ -7,16 +7,19 @@ pub mod alu;
 pub mod opcodes;
 pub mod status;
 pub mod variant;
+pub mod trace;
 
 use crate::emulator::bus::{Bus, BusOp, InterruptController};
-use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
-use crate::emulator::cpu::status::StatusRegister;
-use crate::emulator::cpu::variant::{CpuVariant, InvalidOpcodePolicy};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::{ClockSpeed, StepResult};
+use crate::emulator::{BusTraceCallback, TraceRecord};
 use crate::watch::{Operand, WatchContext, WatchEvaluator};
 use log::debug;
+use opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
+use status::StatusRegister;
 use std::collections::HashSet;
+use trace::TraceState;
+use variant::{CpuVariant, InvalidOpcodePolicy};
 
 const STACK_BASE: u16 = 0x0100;
 const RESET_VECTOR: u16 = 0xFFFC;
@@ -81,6 +84,11 @@ pub struct Cpu {
     stopped: bool,
     /// True when tracing bus operations.
     tracing: bool,
+    /// Monotonic clock state; updated by `Cpu::step()` before each instruction.
+    trace_state: TraceState,
+    /// Optional callback invoked on every `read()` and `write()` (not `peek`).
+    trace_callback: Option<Box<dyn BusTraceCallback>>,
+
 }
 
 impl Cpu {
@@ -174,14 +182,12 @@ impl Cpu {
         self.cycles
     }
 
-    /// Returns the state of a flag that determines whether bus operations are traced.
-    pub fn tracing(&self) -> bool {
-        self.tracing
-    }
-
-    /// Sets the state of a flag that determines whether bus operations are traced.
-    pub fn set_tracing(&mut self, tracing: bool) {
-        self.tracing = tracing;
+    /// Installs a trace callback. Pass `None` to remove an existing callback.
+    ///
+    /// When set, the callback is invoked on every `read()` and `write()`, but never on `peek`.
+    pub fn set_trace_callback(&mut self, callback: Option<Box<dyn BusTraceCallback>>) {
+        self.tracing = callback.is_some();
+        self.trace_callback = callback;
     }
 
     /// Reads the reset vector and initializes registers. Clears WAI/STP state.
@@ -218,7 +224,7 @@ impl Cpu {
         }
 
         if self.tracing {
-            self.bus.advance_trace_timestamp();
+            self.trace_state.tick();
         }
 
         let pc = self.regs.pc;
@@ -886,21 +892,40 @@ impl Cpu {
     // --- bus helpers ---
 
     fn bus_read(&mut self, addr: u16) -> Result<u8, ExecError> {
-        self.bus.read(addr).map_err(|e| match e {
+        let result = self.bus.read(addr).map_err(|e| match e {
             BusError::Unmapped { addr } => ExecError::UnmappedAddress { addr, op: BusOp::Read },
             BusError::RomWrite { addr } => ExecError::UnmappedAddress { addr, op: BusOp::Read },
-        })
+        });
+        if let Ok(value) = result {
+            self.emit_trace(addr, value, BusOp::Read);
+        }
+        result
     }
 
     fn bus_write(&mut self, addr: u16, value: u8) -> Result<(), ExecError> {
-        self.bus.write(addr, value).map_err(|e| match e {
+        let result = self.bus.write(addr, value).map_err(|e| match e {
             BusError::Unmapped { addr } => ExecError::UnmappedAddress { addr, op: BusOp::Write },
             BusError::RomWrite { addr } => ExecError::RomWrite { addr, value },
-        })
+        });
+        if result.is_ok() {
+            self.emit_trace(addr, value, BusOp::Write);
+        }
+        result
     }
 
     fn bus_reset(&mut self) {
         self.bus.reset_devices();
+    }
+
+    fn emit_trace(&mut self, addr: u16, value: u8, op: BusOp) {
+        if let Some(cb) = &mut self.trace_callback {
+            cb.record(TraceRecord {
+                timestamp_ns: self.trace_state.current_ns(),
+                addr,
+                value,
+                op,
+            });
+        }
     }
 
     // --- stack helpers ---
@@ -1098,6 +1123,8 @@ impl CpuBuilder {
             waiting: false,
             stopped: false,
             tracing: false,
+            trace_state: TraceState::new(),
+            trace_callback: None,
         })
     }
 }
@@ -2047,4 +2074,96 @@ mod tests {
         // Instruction must NOT have executed.
         assert_eq!(cpu.regs.pc, 0x0200);
     }
+
+
+    struct CapturingCallback(Vec<TraceRecord>);
+
+    impl BusTraceCallback for CapturingCallback {
+        fn record(&mut self, rec: TraceRecord) {
+            self.0.push(rec);
+        }
+    }
+
+    fn traced_cpu() -> (Cpu, *mut CapturingCallback) {
+        let bus = Bus::config()
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
+            .unwrap()
+            .build();
+        let mut cpu = Cpu::builder(CpuVariant::Wdc65C02)
+            .bus(bus)
+            .build()
+            .unwrap();
+        cpu.reset().unwrap();
+        let cb = Box::new(CapturingCallback(Vec::new()));
+        let ptr = &*cb as *const CapturingCallback as *mut CapturingCallback;
+        cpu.set_trace_callback(Some(cb));
+        (cpu, ptr)
+    }
+
+    #[test]
+    fn trace_callback_receives_read() {
+        let (mut cpu, cb_ptr) = traced_cpu();
+        cpu.bus_write(0x0100, 0x42).unwrap();
+        // Clear the write record; we only care about the read.
+        unsafe { (*cb_ptr).0.clear(); }
+        cpu.bus_read(0x0100).unwrap();
+        let records = unsafe { &(*cb_ptr).0 };
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].addr, 0x0100);
+        assert_eq!(records[0].value, 0x42);
+        assert_eq!(records[0].op, BusOp::Read);
+    }
+
+    #[test]
+    fn trace_callback_receives_write() {
+        let (mut cpu, cb_ptr) = traced_cpu();
+        cpu.bus_write(0x0200, 0xAB).unwrap();
+        let records = unsafe { &(*cb_ptr).0 };
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].addr, 0x0200);
+        assert_eq!(records[0].value, 0xAB);
+        assert_eq!(records[0].op, BusOp::Write);
+    }
+
+    #[test]
+    fn trace_callback_not_invoked_when_none() {
+        let mut cpu = make_cpu(0);
+        // No callback installed — just verifies no panic.
+        cpu.bus_write(0x0100, 0x42).unwrap();
+        cpu.bus_read(0x0100).unwrap();
+    }
+
+    #[test]
+    fn trace_timestamps_group_by_instruction() {
+        let (mut cpu, cb_ptr) = traced_cpu();
+
+        // Simulate two instructions, each with two bus accesses.
+        cpu.trace_state.tick();
+        cpu.bus_write(0x0100, 0x01).unwrap();
+        cpu.bus_write(0x0101, 0x02).unwrap();
+
+        cpu.trace_state.tick();
+        cpu.bus_write(0x0102, 0x03).unwrap();
+        cpu.bus_write(0x0103, 0x04).unwrap();
+
+        let records = unsafe { &(*cb_ptr).0 };
+        assert_eq!(records.len(), 4);
+        // Both accesses within the first instruction share the same timestamp.
+        assert_eq!(records[0].timestamp_ns, records[1].timestamp_ns);
+        // Both accesses within the second instruction share the same timestamp.
+        assert_eq!(records[2].timestamp_ns, records[3].timestamp_ns);
+        // The second instruction's timestamp is >= the first's.
+        assert!(records[2].timestamp_ns >= records[0].timestamp_ns);
+    }
+
+    #[test]
+    fn set_trace_callback_none_removes_callback() {
+        let (mut cpu, cb_ptr) = traced_cpu();
+        cpu.set_trace_callback(None);
+        assert!(!cpu.tracing);
+        cpu.bus_write(0x0100, 0xFF).unwrap();
+        let records = unsafe { &(*cb_ptr).0 };
+        assert!(records.is_empty());
+    }
+
 }

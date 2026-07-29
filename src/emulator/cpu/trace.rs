@@ -1,7 +1,7 @@
-//! Bus tracing: callback trait, record type, and binary trace writer.
+//! CPU bus access tracing: callback trait, record type, and binary trace writer.
+use crate::emulator::BusOp;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
-use crate::emulator::bus::region::BusOp;
 
 /// A single recorded bus transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,7 @@ impl<W: Write + Send> BusTraceCallback for BinaryTraceWriter<W> {
 }
 
 /// Manages the monotonic clock epoch and current instruction timestamp for bus tracing.
-pub(super) struct TraceState {
+pub(in crate::emulator) struct TraceState {
     /// Monotonic epoch captured at `TraceState::new()`.
     epoch: Instant,
     /// Nanoseconds since epoch, set once per CPU instruction.
@@ -70,16 +70,16 @@ pub(super) struct TraceState {
 }
 
 impl TraceState {
-    pub(super) fn new() -> Self {
+    pub(in crate::emulator) fn new() -> Self {
         Self { epoch: Instant::now(), current_ns: 0 }
     }
 
     /// Updates the timestamp to the current wall-clock time. Called by `Cpu::step()` once per instruction.
-    pub(super) fn tick(&mut self) {
+    pub(in crate::emulator) fn tick(&mut self) {
         self.current_ns = self.epoch.elapsed().as_nanos() as u64;
     }
 
-    pub(super) fn current_ns(&self) -> u64 {
+    pub(in crate::emulator) fn current_ns(&self) -> u64 {
         self.current_ns
     }
 }

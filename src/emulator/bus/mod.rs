@@ -2,7 +2,6 @@
 
 mod interrupt;
 mod region;
-pub mod trace;
 mod loader;
 pub mod symbol;
 
@@ -11,11 +10,10 @@ pub use interrupt::{InterruptController, IrqSource};
 pub use loader::BusLoadTarget;
 pub use region::{AddressRange, BusOp};
 pub use symbol::SymbolTable;
-pub use trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
+pub use crate::emulator::cpu::trace::{BinaryTraceWriter, BusTraceCallback, TraceRecord};
 
 use crate::emulator::device::{DeviceId, IoDevice};
 use crate::emulator::error::{BusConfigError, BusError};
-use trace::TraceState;
 
 /// Value returned on reads from unmapped addresses when `UnmappedPolicy::DefaultValue` is active.
 const UNMAPPED_READ_VALUE: u8 = 0xFF;
@@ -77,10 +75,6 @@ pub struct Bus {
     /// referenced by more than one `Region::Device` entry via `device_index`.
     devices: Vec<(DeviceId, Box<dyn IoDevice>)>,
     unmapped_policy: UnmappedPolicy,
-    /// Monotonic clock state; updated by `Cpu::step()` before each instruction.
-    trace_state: TraceState,
-    /// Optional callback invoked on every `read()` and `write()` (not `peek`).
-    trace_callback: Option<Box<dyn BusTraceCallback>>,
     /// A table of names mapped to bus addresses
     symbol_table: SymbolTable,
 }
@@ -89,21 +83,6 @@ impl Bus {
     /// Returns a `BusConfig` builder for constructing a `Bus`.
     pub fn config() -> BusConfig {
         BusConfig::new()
-    }
-
-    /// Installs a trace callback. Pass `None` to remove an existing callback.
-    ///
-    /// When set, the callback is invoked on every `read()` and `write()`, but never on `peek`.
-    pub fn set_trace_callback(&mut self, callback: Option<Box<dyn BusTraceCallback>>) {
-        self.trace_callback = callback;
-    }
-
-    /// Advances the trace timestamp to the current wall-clock time.
-    ///
-    /// Called by `Cpu::step()` once at the start of each instruction so that all bus
-    /// accesses within a single instruction share the same timestamp.
-    pub fn advance_trace_timestamp(&mut self) {
-        self.trace_state.tick();
     }
 
     /// Reads one byte from `addr`, triggering device side effects if an IO device is mapped there.
@@ -117,7 +96,6 @@ impl Bus {
                 UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
             },
         }?;
-        self.emit_trace(addr, value, BusOp::Read);
         Ok(value)
     }
 
@@ -141,7 +119,6 @@ impl Bus {
                 UnmappedPolicy::Error => Err(BusError::Unmapped { addr }),
             },
         }?;
-        self.emit_trace(addr, value, BusOp::Write);
         Ok(())
     }
 
@@ -186,7 +163,6 @@ impl Bus {
             None => {
             }
         };
-        self.emit_trace(addr, value, BusOp::Write);
     }
 
     /// Calls `tick(cycles)` on every IO device mapped on the bus.
@@ -204,7 +180,7 @@ impl Bus {
     }
 
     /// Returns the IRQ state of every device as `(DeviceId, irq_active)` pairs.
-    pub fn device_irq_states(&self) -> Vec<(crate::emulator::device::DeviceId, bool)> {
+    pub fn device_irq_states(&self) -> Vec<(DeviceId, bool)> {
         self.devices.iter().map(|(id, device)| (*id, device.irq_active())).collect()
     }
 
@@ -237,17 +213,6 @@ impl Bus {
     }
 
     // --- private helpers ---
-
-    fn emit_trace(&mut self, addr: u16, value: u8, op: BusOp) {
-        if let Some(cb) = &mut self.trace_callback {
-            cb.record(TraceRecord {
-                timestamp_ns: self.trace_state.current_ns(),
-                addr,
-                value,
-                op,
-            });
-        }
-    }
 
     /// Returns the index of the most-specific (smallest) region that contains `addr`, if any.
     ///
@@ -478,8 +443,6 @@ impl BusConfig {
             regions: self.regions,
             devices: self.devices,
             unmapped_policy: self.unmapped_policy,
-            trace_state: TraceState::new(),
-            trace_callback: None,
             symbol_table: self.symbol_table,
         }
     }
@@ -999,97 +962,4 @@ mod tests {
         assert_eq!(take_nmi_count.load(Ordering::SeqCst), 1);
     }
 
-    // --- bus trace ---
-
-    struct CapturingCallback(Vec<TraceRecord>);
-
-    impl BusTraceCallback for CapturingCallback {
-        fn record(&mut self, rec: TraceRecord) {
-            self.0.push(rec);
-        }
-    }
-
-    fn traced_ram_bus() -> (Bus, *mut CapturingCallback) {
-        // Returns the bus and a raw pointer to the callback so we can inspect records
-        // after operations. The callback is owned by the bus; the pointer is valid
-        // for the lifetime of the bus.
-        let cb = Box::new(CapturingCallback(Vec::new()));
-        let ptr = &*cb as *const CapturingCallback as *mut CapturingCallback;
-        let mut bus = ram_bus(0x0000, 0xFFFF);
-        bus.set_trace_callback(Some(cb));
-        (bus, ptr)
-    }
-
-    #[test]
-    fn trace_callback_receives_read() {
-        let (mut bus, cb_ptr) = traced_ram_bus();
-        bus.write(0x0100, 0x42).unwrap();
-        // Clear the write record; we only care about the read.
-        unsafe { (*cb_ptr).0.clear(); }
-        bus.read(0x0100).unwrap();
-        let records = unsafe { &(*cb_ptr).0 };
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].addr, 0x0100);
-        assert_eq!(records[0].value, 0x42);
-        assert_eq!(records[0].op, BusOp::Read);
-    }
-
-    #[test]
-    fn trace_callback_receives_write() {
-        let (mut bus, cb_ptr) = traced_ram_bus();
-        bus.write(0x0200, 0xAB).unwrap();
-        let records = unsafe { &(*cb_ptr).0 };
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].addr, 0x0200);
-        assert_eq!(records[0].value, 0xAB);
-        assert_eq!(records[0].op, BusOp::Write);
-    }
-
-    #[test]
-    fn trace_callback_not_invoked_on_peek() {
-        let (bus, cb_ptr) = traced_ram_bus();
-        bus.peek(0x0300).unwrap();
-        let records = unsafe { &(*cb_ptr).0 };
-        assert!(records.is_empty());
-    }
-
-    #[test]
-    fn trace_callback_not_invoked_when_none() {
-        // No callback installed — just verifies no panic.
-        let mut bus = ram_bus(0x0000, 0xFFFF);
-        bus.write(0x0100, 0x42).unwrap();
-        bus.read(0x0100).unwrap();
-    }
-
-    #[test]
-    fn trace_timestamps_group_by_instruction() {
-        let (mut bus, cb_ptr) = traced_ram_bus();
-
-        // Simulate two instructions, each with two bus accesses.
-        bus.advance_trace_timestamp();
-        bus.write(0x0100, 0x01).unwrap();
-        bus.write(0x0101, 0x02).unwrap();
-
-        bus.advance_trace_timestamp();
-        bus.write(0x0102, 0x03).unwrap();
-        bus.write(0x0103, 0x04).unwrap();
-
-        let records = unsafe { &(*cb_ptr).0 };
-        assert_eq!(records.len(), 4);
-        // Both accesses within the first instruction share the same timestamp.
-        assert_eq!(records[0].timestamp_ns, records[1].timestamp_ns);
-        // Both accesses within the second instruction share the same timestamp.
-        assert_eq!(records[2].timestamp_ns, records[3].timestamp_ns);
-        // The second instruction's timestamp is >= the first's.
-        assert!(records[2].timestamp_ns >= records[0].timestamp_ns);
-    }
-
-    #[test]
-    fn set_trace_callback_none_removes_callback() {
-        let (mut bus, cb_ptr) = traced_ram_bus();
-        bus.set_trace_callback(None);
-        bus.write(0x0100, 0xFF).unwrap();
-        let records = unsafe { &(*cb_ptr).0 };
-        assert!(records.is_empty());
-    }
 }
