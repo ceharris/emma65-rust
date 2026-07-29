@@ -77,7 +77,7 @@ impl PtyTransport {
         fcntl(raw, FcntlArg::F_SETFL(new_flags))
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
-        let (bridge, in_tx, out_rx, shutdown_rx, out_notify) = ChannelBridge::<TransportEvent>::new();
+        let (bridge, in_tx, out_rx,  out_notify, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
         let client_connected = Arc::new(AtomicBool::new(false));
         let connection_counter = Arc::new(AtomicU64::new(0));
 

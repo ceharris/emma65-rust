@@ -28,7 +28,7 @@ impl UnixSocketTransport {
         let path = path.into();
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path)?;
-        let (bridge, in_tx, out_rx, shutdown_rx, out_notify) = ChannelBridge::<TransportEvent>::new();
+        let (bridge, in_tx, out_rx, out_notify, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
         let client_count = Arc::new(AtomicUsize::new(0));
 
         let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);

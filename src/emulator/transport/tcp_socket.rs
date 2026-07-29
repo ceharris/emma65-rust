@@ -26,7 +26,7 @@ impl TcpSocketTransport {
     pub async fn listen(addr: SocketAddr) -> std::io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
-        let (bridge, in_tx, out_rx, shutdown_rx, out_notify) = ChannelBridge::<TransportEvent>::new();
+        let (bridge, in_tx, out_rx, out_notify, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
         let client_count = Arc::new(AtomicUsize::new(0));
 
         let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);

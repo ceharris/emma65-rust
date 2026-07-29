@@ -126,7 +126,7 @@ impl<R: Send + 'static> ChannelBridge<R> {
     /// The caller spawns a Tokio task that reads from `task_rx` (outbound bytes from
     /// the sync side) and writes to `task_tx` (inbound items for the sync side), and
     /// exits when `task_shutdown_rx` fires.
-    pub(crate) fn new() -> (Self, Sender<R>, Receiver<u8>, oneshot::Receiver<()>, Arc<Notify>) {
+    pub(crate) fn new() -> (Self, Sender<R>, Receiver<u8>, Arc<Notify>, oneshot::Receiver<()>) {
         let (in_tx, in_rx) = bounded::<R>(CHANNEL_CAPACITY);
         let (out_tx, out_rx) = bounded::<u8>(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -137,7 +137,7 @@ impl<R: Send + 'static> ChannelBridge<R> {
             shutdown_tx: Some(shutdown_tx),
             out_notify: Arc::clone(&out_notify),
         };
-        (bridge, in_tx, out_rx, shutdown_rx, out_notify)
+        (bridge, in_tx, out_rx, out_notify, shutdown_rx)
     }
 
     pub(crate) fn try_recv(&mut self) -> Option<R> {

@@ -53,7 +53,7 @@ impl PipeTransport {
         let stdout = child.stdout.take()
             .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdout unavailable"))?;
 
-        let (bridge, in_tx, out_rx, shutdown_rx, out_notify) = ChannelBridge::<TransportEvent>::new();
+        let (bridge, in_tx, out_rx, out_notify, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
 
         tokio::spawn(run_pipe_task(stdin, stdout, child, in_tx, out_rx, out_notify, shutdown_rx, on_exit));
 
