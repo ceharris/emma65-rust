@@ -1,4 +1,3 @@
-use crate::watch::context::WatchContext;
 use super::compiler;
 use super::compiler::OpCode;
 use super::error::{Error, WatchError};
@@ -6,6 +5,7 @@ use super::evaluator::eval;
 use super::expr::Operand;
 use super::parser::Parser;
 use super::variables::Variables;
+use crate::watch::context::WatchContext;
 
 /// A compiled watch expression, ready for repeated evaluation.
 pub struct Watchpoint {
@@ -102,6 +102,11 @@ impl WatchEvaluator {
             vars: Variables::new(),
             var_storage: Vec::new(),
         }
+    }
+
+    /// Returns true if the watchpoints collection is empty
+    pub fn is_empty(&self) -> bool {
+        self.watchpoints.is_empty()
     }
 
     /// Appends a watchpoint to the end of the collection, returning its index.

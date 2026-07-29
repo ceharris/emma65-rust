@@ -1,5 +1,5 @@
-use emma65::emulator::{AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InvalidOpcodePolicy, Mnemonic, InternalPipeTransport, StepResult, Transport};
-use emma65::emulator::device::{R6551, Console, Mc6850, Via6522};
+use emma65::emulator::device::{Console, Mc6850, R6551, Via6522};
+use emma65::emulator::{AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, Mnemonic, StepResult, Transport};
 
 const MAX_STEPS: u32 = 10_000;
 
@@ -29,7 +29,7 @@ fn build_cpu(prog_addr: u16, prog: &[u8]) -> emma65::emulator::Cpu {
 /// budget is exhausted.
 fn step_to_stop(cpu: &mut emma65::emulator::Cpu) {
     for _ in 0..MAX_STEPS {
-        match cpu.step(None) {
+        match cpu.step(None, true) {
             StepResult::Stopped => return,
             StepResult::Executed(_) | StepResult::Waiting => {}
             StepResult::Error(e) => panic!("CPU error: {e}"),
@@ -49,7 +49,7 @@ fn step_to_stop_deadline(cpu: &mut emma65::emulator::Cpu, deadline: std::time::I
         if std::time::Instant::now() >= deadline {
             panic!("CPU did not reach STP within the time limit");
         }
-        match cpu.step(None) {
+        match cpu.step(None, true) {
             StepResult::Stopped => return,
             StepResult::Executed(_) | StepResult::Waiting => {}
             StepResult::Error(e) => panic!("CPU error: {e}"),
@@ -71,7 +71,7 @@ fn step_result_carries_decoded_op() {
     // NOP at reset address, then STP so the CPU doesn't run off.
     let mut cpu = build_cpu(0x0200, &[0xEA, 0xDB]); // NOP, STP
 
-    match cpu.step(None) {
+    match cpu.step(None, true) {
         StepResult::Executed(op) => {
             assert_eq!(op.mnemonic, Mnemonic::Nop);
             assert_eq!(op.byte_len, 1);
@@ -98,12 +98,12 @@ fn page_crossing_adds_cycle() {
 
     // LDX #$01 — 2 cycles
     let before_ldx = cpu.cycles();
-    assert!(matches!(cpu.step(None), StepResult::Executed(_)));
+    assert!(matches!(cpu.step(None, true), StepResult::Executed(_)));
     assert_eq!(cpu.cycles() - before_ldx, 2);
 
     // LDA $00FF,X — should be 5 cycles (4 base + 1 page crossing)
     let before_lda = cpu.cycles();
-    assert!(matches!(cpu.step(None), StepResult::Executed(_)));
+    assert!(matches!(cpu.step(None, true), StepResult::Executed(_)));
     let lda_cycles = cpu.cycles() - before_lda;
     assert_eq!(lda_cycles, 5, "expected 5 cycles for page-crossing LDA abs,X, got {lda_cycles}");
     assert_eq!(cpu.registers().a, 0x42);

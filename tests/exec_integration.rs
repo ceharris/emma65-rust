@@ -2,11 +2,11 @@ use std::sync::{Arc, Mutex};
 
 use emma65::emulator::{
     AddressRange, Bus, BusOp, BusTraceCallback, ClockSpeed, CpuBuilder,
-    CpuVariant, DeviceId, InvalidOpcodePolicy, InternalPipeTransport, StepResult, TraceRecord,
+    CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, StepResult, TraceRecord,
     Transport, run,
 };
 
-use emma65::emulator::device::{R6551, Console, Mc6850};
+use emma65::emulator::device::{Console, Mc6850, R6551};
 
 /// Collects bus trace records into a shared vec so tests can inspect them after execution.
 struct CapturingCallback {
@@ -135,7 +135,7 @@ fn bus_trace_captures_reads_and_writes() {
     })));
 
     loop {
-        match cpu.step(None) {
+        match cpu.step(None, true) {
             StepResult::Stopped => break,
             StepResult::Error(e) => panic!("CPU error: {e}"),
             StepResult::Executed(_) | StepResult::Waiting => {}

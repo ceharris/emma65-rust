@@ -1,12 +1,12 @@
 //! Execution control; provides the main entry points for execution on the emulated CPU.
 
+use crate::emulator::cpu::opcodes::DecodedOp;
+use crate::emulator::cpu::{Cpu, Registers};
+use crate::emulator::error::ExecError;
+use crate::watch::WatchError;
 use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
 use std::time::Instant;
 use tokio::sync::{oneshot, watch};
-use crate::emulator::cpu::{Cpu, Registers};
-use crate::emulator::cpu::opcodes::DecodedOp;
-use crate::emulator::error::ExecError;
-use crate::watch::WatchError;
 
 /// A lightweight snapshot of CPU state published by the run loop after each
 /// instruction batch so callers can display live state without stopping the CPU.
@@ -213,7 +213,7 @@ impl RunHandle {
 /// Use [`step_over_breakpoint`] to advance past the breakpoint at the current PC without 
 /// disabling it.
 pub fn step_into(cpu: &mut Cpu) -> StepResult {
-    cpu.step(None)
+    cpu.step(None, true)
 }
 
 /// Like [`step_into`], but skips the breakpoint and watch check at `skip_pc`.
@@ -222,7 +222,7 @@ pub fn step_into(cpu: &mut Cpu) -> StepResult {
 /// watch trigger) and needs to advance past it without requiring the breakpoint to be
 /// disabled first. All other addresses are checked normally.
 pub fn step_over_breakpoint(cpu: &mut Cpu, skip_pc: u16) -> StepResult {
-    cpu.step(Some(skip_pc))
+    cpu.step(Some(skip_pc), true)
 }
 
 /// Executes one logical step, treating JSR as atomic.
@@ -419,6 +419,7 @@ fn run_loop(
     let hz = cpu.clock_speed().hz_value();
 
     let mut first = skip_pc.is_some();
+    let check_breakpoints = !cpu.breakpoints().is_empty() || !cpu.evaluator().is_empty();
 
     let final_result = 'outer: loop {
         for _ in 0..BATCH_SIZE {
@@ -427,9 +428,9 @@ fn run_loop(
             }
             let res = if first {
                 first = false;
-                step_over_breakpoint(&mut cpu, skip_pc.unwrap())
+                cpu.step(skip_pc, check_breakpoints)
             } else {
-                step_into(&mut cpu)
+                cpu.step(None, check_breakpoints)
             };
             match res {
                 StepResult::Executed(_) => {}
@@ -504,8 +505,8 @@ mod tests {
     // --- free-run tests ---
 
     use crate::emulator::bus::{AddressRange, Bus};
-    use crate::emulator::cpu::{Cpu, CpuBuilder};
     use crate::emulator::cpu::variant::CpuVariant;
+    use crate::emulator::cpu::{Cpu, CpuBuilder};
 
     const RESET_VECTOR: u16 = 0xFFFC;
     const NOP_ADDR: u16 = 0x0200;
@@ -554,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn watch_trigger_during_free_run_returns_watch_triggered() {
-        use crate::emulator::cpu::{map_register_name, map_flag_name};
+        use crate::emulator::cpu::{map_flag_name, map_register_name};
         use crate::watch::WatchCompiler;
 
         let mut cpu = make_cpu_with_speed(ClockSpeed::unlimited());
