@@ -61,6 +61,61 @@ impl<W: Write + Send> TraceCallback for BinaryTraceWriter<W> {
     }
 }
 
+/// Overflow behavior when the trace writer thread can't keep up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowPolicy {
+    /// Drop the record and count it. Never stalls the CPU thread.
+    DropOnFull,
+    /// Block until the writer thread makes room. Guarantees no lost records,
+    /// at the cost of possibly stalling the CPU thread under sustained write pressure.
+    BlockOnFull,
+}
+
+pub struct ChannelTraceCallback {
+    tx: crossbeam_channel::Sender<TraceRecord>,
+    policy: OverflowPolicy,
+    dropped: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl TraceCallback for ChannelTraceCallback {
+    fn record(&mut self, rec: TraceRecord) {
+        match self.policy {
+            OverflowPolicy::DropOnFull => {
+                if self.tx.try_send(rec).is_err() {
+                    self.dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            OverflowPolicy::BlockOnFull => {
+                // Blocks until the writer drains space, or returns immediately
+                // if the writer thread has exited (receiver disconnected) —
+                // never blocks forever on a dead consumer.
+                let _ = self.tx.send(rec);
+            }
+        }
+    }
+}
+
+pub fn spawn_trace_writer<W: Write + Send + 'static>(
+    writer: BinaryTraceWriter<W>,
+    capacity: usize,
+    policy: OverflowPolicy,
+) -> (ChannelTraceCallback, std::thread::JoinHandle<()>, std::sync::Arc<std::sync::atomic::AtomicU64>) {
+    let (tx, rx) = crossbeam_channel::bounded::<TraceRecord>(capacity);
+    let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+    let mut writer = writer;
+    let handle = std::thread::spawn(move || {
+        // rx.recv() parks the thread until a record arrives, and returns Err
+        // once the sender drops and the channel is drained — no polling loop needed.
+        while let Ok(rec) = rx.recv() {
+            writer.record(rec);
+        }
+        let _ = writer.flush();
+    });
+
+    (ChannelTraceCallback { tx, policy, dropped: dropped.clone() }, handle, dropped)
+}
+
 /// Manages the monotonic clock epoch and current instruction timestamp for bus tracing.
 pub(in crate::emulator) struct TraceState {
     /// Monotonic epoch captured at `TraceState::new()`.
