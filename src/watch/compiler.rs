@@ -1,4 +1,4 @@
-use super::expr::{BinaryOperatorType, Expr, ExprType, Operand, FetchWidth, UnaryOperatorType};
+use super::expr::{BinaryOperatorType, Expr, ExprType, FetchWidth, Operand, UnaryOperatorType};
 
 
 /// An opcode produced by the "byte code" compiler.
@@ -168,10 +168,9 @@ fn traverse(expr: &Expr, signed: bool, code: &mut Vec<OpCode>) {
 
 #[cfg(test)]
 mod tests {
-
-    use super::*;
     use super::super::expr::Operand;
     use super::super::parser::Parser;
+    use super::*;
 
     fn register_mapper(name: &str) -> Option<Operand> {
         match name {

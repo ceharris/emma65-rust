@@ -1,7 +1,7 @@
-use crate::watch::context::WatchContext;
 use super::compiler::OpCode;
 use super::error::WatchError;
 use super::expr::Operand;
+use crate::watch::context::WatchContext;
 
 /// A stack used to evaluate a watch expression.
 struct Stack {
@@ -213,7 +213,6 @@ pub fn eval(code: &[OpCode], context: &dyn WatchContext, vars: &mut [Operand]) -
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     struct MockMachine {

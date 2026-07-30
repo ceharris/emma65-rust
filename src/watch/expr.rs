@@ -1,5 +1,5 @@
-use std::fmt;
 use super::token::Token;
+use std::fmt;
 
 /// The data type used for all watch expressions. 
 /// 

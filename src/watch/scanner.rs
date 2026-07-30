@@ -1,16 +1,14 @@
+use super::error::Error;
 use super::text::Text;
 use super::token::{Token, TokenType};
-use super::error::Error;
 
 const TAB_SIZE: usize = 8;
-
 
 pub struct Scanner<'a> {
     source: Text<'a>,
     line: usize,
     column: usize,
 }
-
 
 impl <'a> Scanner<'a> {
 
@@ -353,7 +351,6 @@ impl <'a> Scanner<'a> {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     fn assert_next_token_valid(token_text: &str, token_type: &TokenType) {

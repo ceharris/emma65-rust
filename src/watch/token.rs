@@ -1,5 +1,5 @@
-use std::mem;
 use super::location::Location;
+use std::mem;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {

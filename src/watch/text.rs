@@ -54,7 +54,6 @@ impl<'a> Text<'a> {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]

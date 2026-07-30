@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use super::expr::Operand;
+use std::collections::HashMap;
 
 /// A collection of name-to-operand mappings for Watchpoint variables.
 pub struct Variables {

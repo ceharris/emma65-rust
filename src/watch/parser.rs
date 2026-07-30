@@ -1,5 +1,5 @@
-use super::error::{Error};
-use super::expr::{BinaryOperatorType, Expr, Operand, FetchWidth, UnaryOperatorType};
+use super::error::Error;
+use super::expr::{BinaryOperatorType, Expr, FetchWidth, Operand, UnaryOperatorType};
 use super::scanner::Scanner;
 use super::token::{Token, TokenType};
 use super::variables::Variables;
@@ -415,8 +415,8 @@ impl<'a, 'p> ParseState<'a, 'p> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::expr::ExprType;
+    use super::*;
 
     const REGISTERS: [(&str, Operand); 2] = [("A", 1), ("PC", 2)];
     const FLAGS: [(&str, Operand) ; 2] = [("C", 1), ("Z", 2)];
