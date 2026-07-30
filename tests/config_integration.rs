@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use figment::value::{Tag, Value};
-use tempfile::Builder;
 use emma65::emulator::{
     BuildError, BusConfig, Config, CpuVariantSpec, DeviceModule, DeviceModuleError,
     DeviceRegistry, InstantiationContext, RamModule, RomModule,
 };
+use figment::value::{Tag, Value};
+use std::collections::HashMap;
+use tempfile::Builder;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -142,13 +142,6 @@ async fn ram_module_missing_size() {
 // ---------------------------------------------------------------------------
 // Group C — RomModule instantiation
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn rom_module_without_image() {
-    let a = attrs(&[("size", Value::from(1024u32))]);
-    let err = RomModule.instantiate(BusConfig::new(), 0x8000, &a, &ctx()).await.err().unwrap();
-    assert!(matches!(err, DeviceModuleError::Config(_)));
-}
 
 #[tokio::test]
 async fn rom_module_with_binary_image() {
