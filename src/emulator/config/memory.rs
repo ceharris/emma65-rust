@@ -107,14 +107,11 @@ impl DeviceModule for RomModule {
             bus_config
         };
 
+        let mut data = make_buffer(config.size as usize, config.fill);
         if let Some(filename) = config.image {
-            let mut data = make_buffer(config.size as usize, config.fill);
             loader::load_image(&filename, &mut data, offset).await.map_err(DeviceModuleError::Load)?;
-            bus_config.rom(range, data).map_err(DeviceModuleError::BusConfig)
         }
-        else {
-            Err(DeviceModuleError::Config("ROM requires the 'image' attribute".to_string()))
-        }
+        bus_config.rom(range, data).map_err(DeviceModuleError::BusConfig)
     }
 
 }
