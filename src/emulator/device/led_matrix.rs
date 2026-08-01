@@ -27,11 +27,11 @@
 //! |--------|-----------|----------------------------|------|
 //! |   0x0  | X         | X coordinate               | 1    |
 //! |   0x1  | Y         | Y coordinate               | 1    |
-//! |   0x3  | WIDTH     | Width                      | 2    |
-//! |   0x4  | HEIGHT    | Height                     | 2    |
-//! |   0x2  | COLOR     | Color palette index        | 3    |
+//! |   0x2  | WIDTH     | Width                      | 2    |
+//! |   0x3  | HEIGHT    | Height                     | 2    |
+//! |   0x4  | COLOR     | Color palette index        | 3    |
 //! |   0x5  | IFR       | Interrupt Flag Register    | 4    |
-//! |   0x6  | IER       | Interrupt Enable Register  | 5    |
+//! |   0x6  | IER       | Interrupt Enable Register  | 5    |s
 //! |   0x7  | CMD/DATA  | Command/Data Register      | 6    |
 //!
 //! ### Notes
