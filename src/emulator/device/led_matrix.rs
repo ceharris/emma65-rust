@@ -27,31 +27,30 @@
 //! |--------|-----------|----------------------------|------|
 //! |   0x0  | X         | X coordinate               | 1    |
 //! |   0x1  | Y         | Y coordinate               | 1    |
-//! |   0x2  | WIDTH     | Width                      | 2    |
-//! |   0x3  | HEIGHT    | Height                     | 2    |
-//! |   0x4  | COLOR     | Color palette index        | 3    |
-//! |   0x5  | IFR       | Interrupt Flag Register    | 4    |
-//! |   0x6  | IER       | Interrupt Enable Register  | 5    |s
-//! |   0x7  | CMD/DATA  | Command/Data Register      | 6    |
+//! |   0x2  | WIDTH     | Width                      | 1    |
+//! |   0x3  | HEIGHT    | Height                     | 1    |
+//! |   0x4  | COLOR     | Color palette index        | 2    |
+//! |   0x5  | IFR       | Interrupt Flag Register    | 3    |
+//! |   0x6  | IER       | Interrupt Enable Register  | 4    |
+//! |   0x7  | CMD/DATA  | Command/Data Register      | 5    |
 //!
 //! ### Notes
-//! 1. Registers used for pixel location support values from 0 to 63. These registers may be
-//!    written at any time; values are latched internally at the start of any command. Bits 6
-//!    and 7 are ignored on write. Reading any of these registers returns the last value written,
-//!    except that bits 6 and 7 always read as zero.
-//! 2. Registers used for pixel dimensions support values from 0 to 64. These registers may be
-//!    written at any time; values are latched internally at the start of any command. A written
-//!    value larger than 64 is clamped to 64.
-//! 3. The COLOR register stores an index into the 256-color RGB565 color palette in the display.
+//! 1. Registers used for pixel location and dimensions are strictly clamped at one less than
+//!    the corresponding horizontal or vertical dimension of the display matrix. These registers
+//!    may be written at any time; values are latched internally at the start of any command.
+//!    Display matrix dimensions are always a small power of two (e.g. 32, 64, 128, 256). Unused bit
+//!    positions are ignored on write. Reading any of these registers returns the last value written
+//!    except that unused bit positions read as zero.
+//! 2. The COLOR register stores an index into the 256-color RGB565 color palette in the display.
 //!    This register may be written at any time; the value is latched internally at the start
 //!    of any command. A read of this register returns the last value written.
-//! 4. The IFR register contains a composite IRQ bit that indicates whether any of the other bits
+//! 3. The IFR register contains a composite IRQ bit that indicates whether any of the other bits
 //!    in the register are set. The other bit positions correspond to status outputs from the
 //!    display. See **Interrupt Flag Register** below.
-//! 5. The IER register is used to set/clear bits used as a mask to determine which status
+//! 4. The IER register is used to set/clear bits used as a mask to determine which status
 //!    conditions in the IFR will assert the 6502 IRQ signal. See **Interrupt Enable Register**
 //!    below.
-//! 6. The CMD/DATA register is used to execute commands on the display. This register may be
+//! 5. The CMD/DATA register is used to execute commands on the display. This register may be
 //!    written only when the READY bit in the IFR is set. See **Commands** below for a description
 //!    of the available commands.
 //!
@@ -110,10 +109,11 @@
 //! |   0x1  | BRIGHTNESS | (none)                     | Set brightness level to COLOR     |
 //! |   0x2  | SET_COLOR  | COLOR, X, Y                | Set palette at COLOR              |
 //! |   0x3  | PIXEL      | X, Y, COLOR                | Write a pixel at X,Y              |
-//! |   0x4  | BLIT       | X, Y, WIDTH, HEIGHT        | Perform a blit of size WxH at X,Y |
-//! |   0x5  | CLEAR      | COLOR                      | Clear the display                 |
+//! |   0x4  | BLIT       | X, Y, WIDTH, HEIGHT        | Blit of size WxH at X,Y           |
+//! |   0x5  | BLIT_ALL   | (none)                     | Blit the entire framebuffer       |
 //! |   0x6  | FILL       | X, Y, WIDTH, HEIGHT, COLOR | Fill a WxH rectangle at X,Y       |
-//! |  0xFF  | SWAP       | (none)                     | Swap display buffers              |
+//! |   0x7  | FILL_ALL   | COLOR                      | Fill the entire framebuffer       |
+//! |  0xFF  | SWAP       | (none)                     | Swap framebuffers                 |
 //!
 //! ### NOP: No Operation
 //! This command has no effect on the display itself. It can be used to clear the READY bit in the
@@ -141,36 +141,27 @@
 //! The PIXEL command is used to set the pixel at `X,Y` in the off-screen buffer to the palette
 //! color specified by `COLOR`.
 //!
-//! ### BLIT: Transfers a Region of Pixels to the Off-Screen Buffer
-//! The BLIT command accepts a sequence of color palette indices to blit the off-screen buffer
-//! within the bounds of the rectangle of size `WIDTH x HEIGHT` whose upper-left corner is at
-//! `X,Y`.
+//! ### BLIT: Modifies a Region of Pixels in the Off-Screen Framebuffer
+//! The BLIT command accepts a sequence of color palette indices to modify every pixel in the
+//! off-screen framebuffer within the bounds of the rectangle of size `WIDTH x HEIGHT` whose
+//! upper-left corner is at `X,Y`. Note that clamping of values written to the WIDTH and
+//! HEIGHT registers precludes using BLIT to modify every pixel in the framebuffer; use
+//! BLIT_ALL instead. See **Blit Operation** below for details on performing a blit.
 //!
-//! After issuing the BLIT command, the next `WIDTH x HEIGHT` bytes written to the CMD/DATA
-//! register are interpreted as color palette indices. The color of every pixel in the
-//! specified region is modified, from left to right and top to bottom. After writing the BLIT
-//! command, and after writing any byte in the sequence of color indices, the program must wait
-//! until the READY bit in the IFR is set before writing the next byte.
+//! ### BLIT_ALL: Modifies all Pixels in the Off-Screen Framebuffer
+//! The BLIT_ALL command accepts a sequence of color palette indices to modify every pixel
+//! the off-screen framebuffer. See **Blit Operation** below for details on performing a blit.
 //!
-//! Upon issuing the BLIT command, the `BLIT` bit in the IFR is cleared. When the last expected
-//! data byte has been accepted by the CMD/DATA register, the `BLIT` bit in the IFR is set. When
-//! this occurs, if `BLIT` is enabled in the IER, IRQ is asserted. The `BLIT` bit is cleared
-//! by writing a byte to the IFR in which the `BLIT` bit is set.
-//!
-//! ### CLEAR: Clear the Off-Screen Buffer
-//! Sets every pixel in the off-screen buffer to the palette color indexed by `COLOR`. In addition
-//! to the usual behavior associated with the READY bit, when this command is issued, the `FILL`
-//! bit in the IFR is cleared. When completed, the `FILL` bit in the IFR is set. If `FILL` is
-//! enabled in the IER, IRQ is asserted. The `FILL` bit is cleared by writing a byte to the IFR
-//! in which the `FILL` bit is set.
-//!
-//! ### FILL: Fill a Rectangular Area of the Off-Screen Buffer
-//! Sets every pixel in the off-screen buffer that lies within the rectangle of size
+//! ### FILL: Fill a Rectangular Area of the Off-Screen Framebuffer
+//! Sets every pixel in the off-screen framebuffer that lies within the rectangle of size
 //! `WIDTH x HEIGHT` whose upper left corner is at pixel `X,Y` to the palette color given by
-//! `COLOR`. In addition to the usual behavior associated with the READY bit, when this command
-//! is issued, the `FILL` bit in the IFR is cleared. When completed, the `FILL` bit in the
-//! IFR is set. If `FILL` is enabled in the IER, IRQ is asserted. The `FILL` bit is cleared
-//! by writing a byte to the IFR in which the `FILL` bit is set.
+//! `COLOR`. Note that clamping of values written to the WIDTH and HEIGHT registers precludes
+//! using FILL to fill the entire framebuffer; use FILL_ALL instead. See **Fill Operation** below
+//! for details on performing a fill.
+//!
+//! ### FILL_ALL: Fill the Full Dimensions of the Off-Screen Framebuffer
+//! Sets every pixel in the off-screen framebuffer to the palette color given by `COLOR`.
+//! See **Fill Operation** below for details on performing a fill.
 //!
 //! ### SWAP: Swap the On-Screen and Off-Screen Buffers
 //! The display is double-buffered. All commands that modify the display content operate on an
@@ -180,7 +171,34 @@
 //! on-screen buffer available for subsequent updates. The swap operation is practically
 //! instantaneous.
 //!
-//! ## Virtual Display Communication Protocol
+//! ## Blit Operation
+//! After issuing the BLIT or BLIT_ALL command the next _N_ bytes written to the CMD/DATA register
+//! are interpreted as color palette indices. For BLIT, _N_ is the product of the dimensions given
+//! by the WIDTH and HEIGHT registers. For BLIT_ALL, _N_ is the product of the dimensions of the
+//! display matrix; i.e. the entire framebuffer is modified.
+//!
+//! A blit writes the color of every pixel in the specified region, using the RGB565 color indexed
+//! by each color index received from the CMD/DATA port, from left to right and top to bottom.
+//! After writing a BLIT or BLIT_ALL command, and after writing any byte in the sequence of color
+//! indices, the program must wait until the READY bit in the IFR is set before writing the next
+//! byte.
+//!
+//! Upon issuing a BLIT or BLIT_ALL command, the `BLIT` bit in the IFR is cleared. When the last
+//! expected data byte has been accepted by the CMD/DATA register, the `BLIT` bit in the IFR is set.
+//! When this occurs, if `BLIT` is enabled in the IER, IRQ is asserted. The `BLIT` bit is cleared
+//! by writing a byte to the IFR in which the `BLIT` bit is set.
+//!
+//! ## Fill Operation
+//! A fill operation is used to efficiently set all pixels in a region of the off-screen
+//! framebuffer to the RGB565 color in the color palette indexed by COLOR. FILL is used to fill a
+//! rectangular region smaller than display dimension. FILL_ALL is used to fill the entire
+//! framebuffer.
+//!
+//! Upon issuing the FILL or FILL_ALL command the `FILL` bit in the IFR is cleared. When completed,
+//! the `FILL` bit in the IFR is set. If `FILL` is enabled in the IER, IRQ is asserted. The `FILL`
+//! bit is cleared by writing a byte to the IFR in which the `FILL` bit is set.
+//!
+//! # Virtual Display Communication Protocol
 //! This display adapter is intended to be used with a virtual display that implements the
 //! functionality of the RGB LED Display Matrix. The virtual display connects to this adapter over
 //! a supported transport connection (typically a UNIX-domain socket for minimal latency).
@@ -205,18 +223,19 @@
 use crate::emulator::{AddressRange, DeviceId, ErrorSender, IoDevice, Transport, TransportError, TransportEvent, transport};
 use log::debug;
 
-const IFR_IRQ:   u8 = 0b10000000;
-const IFR_READY: u8 = 0b01000000;
-const IFR_BLIT:  u8 = 0b00100000;
-const IFR_FILL:  u8 = 0b00010000;
+const IFR_IRQ:   u8 = 0b1000_0000;
+const IFR_READY: u8 = 0b0100_0000;
+const IFR_BLIT:  u8 = 0b0010_0000;
+const IFR_FILL:  u8 = 0b0001_0000;
 const IFR_MASK:  u8 = IFR_READY | IFR_BLIT | IFR_FILL;
 
-const WIDTH_IN_PIXELS: u8 = 64;
-const HEIGHT_IN_PIXELS: u8 = 64;
+const WIDTH_IN_PIXELS: u32 = 64;
+const HEIGHT_IN_PIXELS: u32 = 64;
 
 const COMMAND_BLIT: u8 = 4;
-const COMMAND_CLEAR: u8 = 5;
+const COMMAND_BLIT_ALL: u8 = 5;
 const COMMAND_FILL: u8 = 6;
+const COMMAND_FILL_ALL: u8 = 7;
 
 /// An RGB LED matrix display adapter.
 pub struct LedMatrix {
@@ -234,7 +253,7 @@ pub struct LedMatrix {
     ier: u8,
     cmd_data: u8,
     connection_tag: Option<u8>,
-    blit_bytes_remaining: u16,
+    blit_bytes_remaining: u32,
 }
 
 impl LedMatrix {
@@ -355,19 +374,19 @@ impl IoDevice for LedMatrix {
         let offset = (address - self.address_range.start) as u8;
         match offset {
             0 => {
-                self.x = value & (WIDTH_IN_PIXELS - 1);
+                self.x = value & (WIDTH_IN_PIXELS - 1) as u8;
                 self.send_register(offset, self.x);
             }
             1 => {
-                self.y = value & (HEIGHT_IN_PIXELS - 1);
+                self.y = value & (HEIGHT_IN_PIXELS - 1) as u8;
                 self.send_register(offset, self.y);
             }
             2 => {
-                self.width = if value > WIDTH_IN_PIXELS { WIDTH_IN_PIXELS } else { value };
+                self.width = value & (WIDTH_IN_PIXELS - 1) as u8;
                 self.send_register(offset, self.width);
             }
             3 => {
-                self.height = if value > HEIGHT_IN_PIXELS { HEIGHT_IN_PIXELS } else { value };
+                self.height = value & (HEIGHT_IN_PIXELS - 1) as u8;
                 self.send_register(offset, self.height);
             },
             4 => {
@@ -390,10 +409,14 @@ impl IoDevice for LedMatrix {
                 } else {
                     match value {
                         COMMAND_BLIT => {
-                            self.blit_bytes_remaining = (self.width as u16) * (self.height as u16);
+                            self.blit_bytes_remaining = (self.width as u32) * (self.height as u32);
                             IFR_BLIT
                         }
-                        COMMAND_CLEAR | COMMAND_FILL => IFR_FILL,
+                        COMMAND_BLIT_ALL => {
+                            self.blit_bytes_remaining = WIDTH_IN_PIXELS * HEIGHT_IN_PIXELS;
+                            IFR_BLIT
+                        }
+                        COMMAND_FILL | COMMAND_FILL_ALL => IFR_FILL,
                         _ => 0,
                     }
                 };
@@ -652,43 +675,31 @@ mod tests {
     #[test]
     fn write_registers_parameters() {
         let (mut device, protocol_data) = device_with_transport();
-        // writing X should truncate to width in pixels less one
+        // writing X should clamp to display width in pixels less one
         device.write(DEVICE_ADDRESS + 0, 0xFF);
-        assert_eq!(device.x, WIDTH_IN_PIXELS - 1);
+        assert_eq!(device.x, (WIDTH_IN_PIXELS - 1) as u8);
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.x)));
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 0)));
         assert_eq!(protocol_data.lock().unwrap().pop(), None);
-        // writing Y should truncate to width in pixels less one
+        // writing Y should clamp to display height in pixels less one
         device.write(DEVICE_ADDRESS + 1, 0xFF);
-        assert_eq!(device.y, HEIGHT_IN_PIXELS - 1);
+        assert_eq!(device.y, (HEIGHT_IN_PIXELS - 1) as u8);
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.y)));
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 1)));
         assert_eq!(protocol_data.lock().unwrap().pop(), None);
-        // writing a width less than WIDTH_IN_PIXELS should leave the specified width alone
-        device.write(DEVICE_ADDRESS + 2, WIDTH_IN_PIXELS - 1);
-        assert_eq!(device.width, WIDTH_IN_PIXELS - 1);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.width)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 2)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
-        // writing a width that's too large should truncate to width in pixels
+        // writing WIDTH should clamp to display width in pixels less one
         device.write(DEVICE_ADDRESS + 2, 0xFF);
-        assert_eq!(device.width, WIDTH_IN_PIXELS);
+        assert_eq!(device.width, (WIDTH_IN_PIXELS - 1) as u8);
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.width)));
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 2)));
         assert_eq!(protocol_data.lock().unwrap().pop(), None);
-        // writing a height less than HEIGHT_IN_PIXELS should leave the specified height alone
-        device.write(DEVICE_ADDRESS + 3, HEIGHT_IN_PIXELS - 1);
-        assert_eq!(device.height, HEIGHT_IN_PIXELS - 1);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.height)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 3)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
-        // writing height should truncate to height in pixels
+        // writing HEIGHT should clamp to display height in pixels
         device.write(DEVICE_ADDRESS + 3, 0xFF);
-        assert_eq!(device.height, HEIGHT_IN_PIXELS);
+        assert_eq!(device.height, (HEIGHT_IN_PIXELS - 1) as u8);
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.height)));
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 3)));
         assert_eq!(protocol_data.lock().unwrap().pop(), None);
-        // writing color should transfer value written
+        // writing COLOR should transfer value written
         device.write(DEVICE_ADDRESS + 4, 0xFF);
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.color)));
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 4)));
@@ -733,6 +744,42 @@ mod tests {
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.cmd_data)));
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 7)));
         assert_eq!(protocol_data.lock().unwrap().pop(), None);
+    }
+
+    #[test]
+    fn write_command_blit_clears_ifr_blit_and_sets_expected_bytes() {
+        let mut device = device();
+        device.width = (WIDTH_IN_PIXELS - 1) as u8;
+        device.height = (HEIGHT_IN_PIXELS - 1) as u8;
+        device.ifr = IFR_BLIT;
+        device.write(DEVICE_ADDRESS + 7, COMMAND_BLIT);
+        assert_eq!(device.ifr, 0);
+        assert_eq!(device.blit_bytes_remaining, (WIDTH_IN_PIXELS - 1) * (HEIGHT_IN_PIXELS - 1))
+    }
+
+    #[test]
+    fn write_command_blit_all_clears_ifr_blit_and_sets_expected_bytes() {
+        let mut device = device();
+        device.ifr = IFR_BLIT;
+        device.write(DEVICE_ADDRESS + 7, COMMAND_BLIT_ALL);
+        assert_eq!(device.ifr, 0);
+        assert_eq!(device.blit_bytes_remaining, WIDTH_IN_PIXELS * HEIGHT_IN_PIXELS);
+    }
+
+    #[test]
+    fn write_command_fill_clears_ifr_fill() {
+        let mut device = device();
+        device.ifr = IFR_FILL;
+        device.write(DEVICE_ADDRESS + 7, COMMAND_FILL);
+        assert_eq!(device.ifr, 0);
+    }
+
+    #[test]
+    fn write_command_fill_all_clears_ifr_fill() {
+        let mut device = device();
+        device.ifr = IFR_FILL;
+        device.write(DEVICE_ADDRESS + 7, COMMAND_FILL_ALL);
+        assert_eq!(device.ifr, 0);
     }
 
     #[test]
