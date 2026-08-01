@@ -1,0 +1,774 @@
+//! An RGB LED matrix display adapter.
+//!
+//! This device emulates the parallel bus interface of an RGB LED matrix display unit
+//! that is managed by a microcontroller (MCU). The display unit is fully responsible
+//! for buffering the display image and refreshing the display itself. The 6502 bus
+//! interface provides registers used to convey parameters and commands that write
+//! single pixels, fill rectangles, blit images, etc. The display is double-buffered — all
+//! updates are written to an off-display buffer, and a buffer swap command is executed
+//! to exchange the off-screen buffer with the on-screen buffer.
+//!
+//! ## Color Palette
+//! To reduce blit bandwidth requirements on the 8-bit parallel bus interface, the
+//! display uses a 256-color palette. Each palette entry stores a 16-bit RGB565 color.
+//! All operations that modify the display content de-reference an 8-bit color palette
+//! index to obtain the desired 16-bit RGB565 color. The default color palette has an
+//! organization that is very similar to the 256-color palette in Xterm:
+//!
+//! - `0..7` - black, red, green, blue, yellow, cyan, magenta, and white
+//! - `8..15` - bright variants of colors 0..7
+//! - `16..231` - 6x6x6 color RGB color cube
+//! - `232..255` - 24-level grayscale ramp
+//!
+//! ## Registers
+//! The registers provided by this module are as follows:
+//!
+//! | Offset | Mnemonic  | Description                | Note |
+//! |--------|-----------|----------------------------|------|
+//! |   0x0  | X         | X coordinate               | 1    |
+//! |   0x1  | Y         | Y coordinate               | 1    |
+//! |   0x3  | WIDTH     | Width                      | 2    |
+//! |   0x4  | HEIGHT    | Height                     | 2    |
+//! |   0x2  | COLOR     | Color palette index        | 3    |
+//! |   0x5  | IFR       | Interrupt Flag Register    | 4    |
+//! |   0x6  | IER       | Interrupt Enable Register  | 5    |
+//! |   0x7  | CMD/DATA  | Command/Data Register      | 6    |
+//!
+//! ### Notes
+//! 1. Registers used for pixel location support values from 0 to 63. These registers may be
+//!    written at any time; values are latched internally at the start of any command. Bits 6
+//!    and 7 are ignored on write. Reading any of these registers returns the last value written,
+//!    except that bits 6 and 7 always read as zero.
+//! 2. Registers used for pixel dimensions support values from 0 to 64. These registers may be
+//!    written at any time; values are latched internally at the start of any command. A written
+//!    value larger than 64 is clamped to 64.
+//! 3. The COLOR register stores an index into the 256-color RGB565 color palette in the display.
+//!    This register may be written at any time; the value is latched internally at the start
+//!    of any command. A read of this register returns the last value written.
+//! 4. The IFR register contains a composite IRQ bit that indicates whether any of the other bits
+//!    in the register are set. The other bit positions correspond to status outputs from the
+//!    display. See **Interrupt Flag Register** below.
+//! 5. The IER register is used to set/clear bits used as a mask to determine which status
+//!    conditions in the IFR will assert the 6502 IRQ signal. See **Interrupt Enable Register**
+//!    below.
+//! 6. The CMD/DATA register is used to execute commands on the display. This register may be
+//!    written only when the READY bit in the IFR is set. See **Commands** below for a description
+//!    of the available commands.
+//!
+//! ### Interrupt Flags Register (IFR)
+//! This register provides the status of the display device and can be used in either direct
+//! polling or interrupt-driven I/O with the device. The register contains four relevant status
+//! bits:
+//!
+//! |   7  |   6   |   5  |   4  |   3  |   2  |   1  |   0  |
+//! |------|-------|------|------|------|------|------|------|
+//! | IRQ  | READY | BLIT | FILL |  0   |   0  |   0  |   0  |
+//!
+//! - IRQ - logical OR of READY, BLIT, and FILL
+//! - READY - indicates that the CMD/DATA register is ready for a write operation
+//! - BLIT - indicates that a BLIT operation has been completed
+//! - FILL - indicates that a FILL operation has been completed
+//!
+//! Any bit other than IRQ may be cleared by writing a byte to the IFR with a one in the
+//! corresponding bit position.
+//!
+//! The unused bit positions are ignored on write and always read as zero.
+//!
+//! ### Interrupt Enable Register (IER)
+//! This register determines which status bits in the IFR, when set, will assert the CPU's IRQ
+//! signal. The register contains three relevant enable bits that correspond to bits in the IFR:
+//!
+//! |   7       |   6   |   5  |   4  |   3  |   2  |   1  |   0  |
+//! |-----------|-------|------|------|------|------|------|------|
+//! | Set/Clear | READY | BLIT | FILL |  0   |   0  |   0  |   0  |
+//!
+//! The IRQ signal is asserted whenever the following expression is true:
+//!
+//! ```text
+//! (IFR.READY & IER.READY) | (IFR.BLIT & IER.BLIT) | (IFR.FILL & IER.FILL)
+//! ```
+//!
+//! To set any bit in the IER, write a byte in which bit 7 is 1 and the corresponding IFR bit is
+//! also 1. To clear any bit in the IER, write a byte in which bit 7 is 0 and the corresponding
+//! IFR bit is 1.
+//!
+//! The unused bit positions are ignored on write and always read as zero. Bit 7 always reads as 1.
+//!
+//! ## Commands
+//! The CMD/DATA register may be written only when the READY bit in the IFR is set. When issuing a
+//! command, first write the relevant parameter registers (X, Y, WIDTH, HEIGHT, COLOR) and then
+//! write the command to the CMD/DATA register.
+//!
+//! Upon writing the register, the READY bit in the IFR will be cleared and will remain low
+//! until the display has finished executing the command. The READY bit is cleared by writing to
+//! the CMD/DATA register. The READY bit can also be cleared by writing a byte to the IFR in which
+//! the READY bit is set.
+//!
+//! | Opcode | Mnemonic   | Parameters                 | Description                       |
+//! |--------|------------|----------------------------|-----------------------------------|
+//! |   0x0  | NOP        | (none)                     | No operation                      |
+//! |   0x1  | BRIGHTNESS | (none)                     | Set brightness level to COLOR     |
+//! |   0x2  | SET_COLOR  | COLOR, X, Y                | Set palette at COLOR              |
+//! |   0x3  | PIXEL      | X, Y, COLOR                | Write a pixel at X,Y              |
+//! |   0x4  | BLIT       | X, Y, WIDTH, HEIGHT        | Perform a blit of size WxH at X,Y |
+//! |   0x5  | CLEAR      | COLOR                      | Clear the display                 |
+//! |   0x6  | FILL       | X, Y, WIDTH, HEIGHT, COLOR | Fill a WxH rectangle at X,Y       |
+//! |  0xFF  | SWAP       | (none)                     | Swap display buffers              |
+//!
+//! ### NOP: No Operation
+//! This command has no effect on the display itself. It can be used to clear the READY bit in the
+//! IFR upon handling an interrupt if no subsequent command is needed.
+//!
+//! ### BRIGHTNESS: Set Display Brightness Level
+//! This command immediately changes the display driver's overall brightness (intensity)
+//! to the level specified by COLOR (interpreted as a level between 0 and 100%).
+//!
+//! ### SET_COLOR: Set a Palette Color
+//! The color palette consists of a 256-slot table of 16-bit RGB565 colors. RGB565 color uses
+//! 5 bits for red, 6 bits for green, and 5 bits for blue. The 16-bit representation is
+//! `[ R4 R3 R2 R1 R0 G5 G4 G3 | G2 G1 G0 B4 B3 B2 B1 B0 ]`; the most significant byte holds the
+//! red component and half of the green component, while the least significant byte holds the
+//! other half of the green component and the blue component.
+//!
+//! The SET_COLOR command stores the RGB565 color represented by `Y` (color MSB) and `X` (color LSB)
+//! into the color palette at the index given by `COLOR`. Note that color palette indices are
+//! de-referenced during PIXEL, BLIT, CLEAR, and FILL operations. This implies that a change to
+//! a color palette slot has no effect on colors stored in the current on-screen buffer that is
+//! used to refresh the display. Moreover, it is possible to change a given palette slot between
+//! commands that reference that entry in the palette.
+//!
+//! ### PIXEL: Writes a Pixel
+//! The PIXEL command is used to set the pixel at `X,Y` in the off-screen buffer to the palette
+//! color specified by `COLOR`.
+//!
+//! ### BLIT: Transfers a Region of Pixels to the Off-Screen Buffer
+//! The BLIT command accepts a sequence of color palette indices to blit the off-screen buffer
+//! within the bounds of the rectangle of size `WIDTH x HEIGHT` whose upper-left corner is at
+//! `X,Y`.
+//!
+//! After issuing the BLIT command, the next `WIDTH x HEIGHT` bytes written to the CMD/DATA
+//! register are interpreted as color palette indices. The color of every pixel in the
+//! specified region is modified, from left to right and top to bottom. After writing the BLIT
+//! command, and after writing any byte in the sequence of color indices, the program must wait
+//! until the READY bit in the IFR is set before writing the next byte.
+//!
+//! Upon issuing the BLIT command, the `BLIT` bit in the IFR is cleared. When the last expected
+//! data byte has been accepted by the CMD/DATA register, the `BLIT` bit in the IFR is set. When
+//! this occurs, if `BLIT` is enabled in the IER, IRQ is asserted. The `BLIT` bit is cleared
+//! by writing a byte to the IFR in which the `BLIT` bit is set.
+//!
+//! ### CLEAR: Clear the Off-Screen Buffer
+//! Sets every pixel in the off-screen buffer to the palette color indexed by `COLOR`. In addition
+//! to the usual behavior associated with the READY bit, when this command is issued, the `FILL`
+//! bit in the IFR is cleared. When completed, the `FILL` bit in the IFR is set. If `FILL` is
+//! enabled in the IER, IRQ is asserted. The `FILL` bit is cleared by writing a byte to the IFR
+//! in which the `FILL` bit is set.
+//!
+//! ### FILL: Fill a Rectangular Area of the Off-Screen Buffer
+//! Sets every pixel in the off-screen buffer that lies within the rectangle of size
+//! `WIDTH x HEIGHT` whose upper left corner is at pixel `X,Y` to the palette color given by
+//! `COLOR`. In addition to the usual behavior associated with the READY bit, when this command
+//! is issued, the `FILL` bit in the IFR is cleared. When completed, the `FILL` bit in the
+//! IFR is set. If `FILL` is enabled in the IER, IRQ is asserted. The `FILL` bit is cleared
+//! by writing a byte to the IFR in which the `FILL` bit is set.
+//!
+//! ### SWAP: Swap the On-Screen and Off-Screen Buffers
+//! The display is double-buffered. All commands that modify the display content operate on an
+//! off-screen buffer, while the display continues to refresh from the on-screen buffer. After
+//! a sequence of updates to the display is completed, the SWAP operation exchanges the buffers,
+//! using the previously off-screen buffer to refresh the display, and making the previously
+//! on-screen buffer available for subsequent updates. The swap operation is practically
+//! instantaneous.
+//!
+//! ## Virtual Display Communication Protocol
+//! This display adapter is intended to be used with a virtual display that implements the
+//! functionality of the RGB LED Display Matrix. The virtual display connects to this adapter over
+//! a supported transport connection (typically a UNIX-domain socket for minimal latency).
+//!
+//! A byte-oriented binary communication protocol is used on a transport connection between this
+//! adapter and a virtual display. As device registers are written by the 6502 program, the
+//! values written are immediately conveyed to the virtual display via the SEND_REGISTER message.
+//! On state changes within the virtual display that effect the IFR bits (`READY`, `BLIT`, or
+//! `FILL`), the virtual display immediately sends the IFR state to the adapter via the SEND_IFR
+//! message. Pending messages from the virtual display are received and applied to the adapter's
+//! internal state at each bus tick.
+//!
+//! | Message Type  | Direction                     | Format        | Description                                       |
+//! |---------------|-------------------------------|---------------|---------------------------------------------------|
+//! | SEND_REGISTER | Bus Device -> Virtual Display | `<u8>` `<u8>` | Sends the value of a register as `offset` `value` |
+//! | SEND_IFR      | Virtual Display -> Bus Device | `<u8>`        | Sends the state of the IFR register as `value`    |
+//!
+//! When a virtual display first connects to the bus device over the configured transport, the
+//! adapter immediately sends a dump of all registers via a sequence of SEND_REGISTER messages.
+//! The virtual display should respond by sending the appropriate IFR value.
+//!
+use crate::emulator::{AddressRange, DeviceId, ErrorSender, IoDevice, Transport, TransportError, TransportEvent, transport};
+use log::debug;
+
+const IFR_IRQ:   u8 = 0b10000000;
+const IFR_READY: u8 = 0b01000000;
+const IFR_BLIT:  u8 = 0b00100000;
+const IFR_FILL:  u8 = 0b00010000;
+const IFR_MASK:  u8 = IFR_READY | IFR_BLIT | IFR_FILL;
+
+const WIDTH_IN_PIXELS: u8 = 64;
+const HEIGHT_IN_PIXELS: u8 = 64;
+
+const COMMAND_BLIT: u8 = 4;
+const COMMAND_CLEAR: u8 = 5;
+const COMMAND_FILL: u8 = 6;
+
+/// An RGB LED matrix display adapter.
+pub struct LedMatrix {
+    name: &'static str,
+    address_range: AddressRange,
+    transport: Option<Box<dyn Transport>>,
+    error_reporter: Box<dyn Fn(TransportError) + Send>,
+
+    x: u8,
+    y: u8,
+    width: u8,
+    height: u8,
+    color: u8,
+    ifr: u8,
+    ier: u8,
+    cmd_data: u8,
+    connection_tag: Option<u8>,
+    blit_bytes_remaining: u16,
+}
+
+impl LedMatrix {
+
+    pub fn new(name: &'static str, address_range: AddressRange) -> Self {
+        Self {
+            name,
+            address_range,
+            transport: None,
+            error_reporter: transport::no_op_reporter(),
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            color: 0,
+            ifr: 0,
+            ier: 0,
+            cmd_data: 0,
+            connection_tag: None,
+            blit_bytes_remaining: 0,
+        }
+    }
+
+    /// Attaches a transport for byte-stream IO.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
+        self.transport = Some(transport);
+    }
+
+    /// Sets the error sender for async transport event reporting.
+    pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
+        self.error_reporter = transport::reporter(sender, id);
+    }
+
+    fn write_ifr(&mut self, value: u8) {
+        self.ifr &= !(value & IFR_MASK) & IFR_MASK;
+        if self.ifr != 0 {
+            self.ifr |= IFR_IRQ
+        }
+    }
+
+    fn write_ier(&mut self, value: u8) {
+        let is_set = value & IFR_IRQ != 0;
+        let mask = value & (IFR_READY | IFR_BLIT | IFR_FILL);
+        if is_set {
+            self.ier |= mask;
+        } else {
+            self.ier &= !mask;
+        }
+    }
+
+    fn poll_transport(&mut self) {
+        let mut transport = self.transport.take();
+        if let Some(transport) = transport.as_mut() {
+            while let Some(event) = transport.try_recv_tagged() {
+                match event {
+                    TransportEvent::Connected(tag) => {
+                        self.send_registers(transport);
+                        self.connection_tag = Some(tag);
+                    },
+                    TransportEvent::Disconnected(tag)
+                        if let Some(connection_tag) = self.connection_tag
+                            && tag == connection_tag => {
+                        self.connection_tag = None;
+                    },
+                    TransportEvent::Data(tag, value)
+                        if let Some(connection_tag) = self.connection_tag
+                            && tag == connection_tag => {
+                        self.ifr |= value & IFR_MASK;
+                        if self.ifr != 0 {
+                            self.ifr |= IFR_IRQ
+                        }
+                    }
+                    _ => ()
+                }
+            }
+        }
+        self.transport = transport;
+    }
+
+    fn send_registers(&mut self, transport: &mut Box<dyn Transport>) {
+        self.send_register_via_transport(transport, 0, self.x);
+        self.send_register_via_transport(transport, 1, self.y);
+        self.send_register_via_transport(transport, 2, self.width);
+        self.send_register_via_transport(transport, 3, self.height);
+        self.send_register_via_transport(transport, 4, self.color);
+        self.send_register_via_transport(transport, 5, self.ifr);
+        self.send_register_via_transport(transport, 6, self.ier);
+        self.send_register_via_transport(transport, 7, self.cmd_data);
+    }
+
+    fn send_register(&mut self, offset: u8, value: u8) {
+        let mut transport = self.transport.take();
+        if let Some(transport) = transport.as_mut() {
+            self.send_register_via_transport(transport, offset, value);
+        }
+        self.transport = transport;
+    }
+
+    fn send_register_via_transport(&mut self, transport: &mut Box<dyn Transport>, offset: u8, value: u8) {
+        if let Err(e) = transport.send(offset) {
+            (self.error_reporter)(e);
+        }
+        if let Err(e) = transport.send(value) {
+            (self.error_reporter)(e);
+        }
+    }
+
+
+}
+
+impl IoDevice for LedMatrix {
+
+    fn read(&mut self, address: u16) -> u8 {
+        self.peek(address)
+    }
+
+    fn write(&mut self, address: u16, value: u8) {
+        let offset = (address - self.address_range.start) as u8;
+        match offset {
+            0 => {
+                self.x = value & (WIDTH_IN_PIXELS - 1);
+                self.send_register(offset, self.x);
+            }
+            1 => {
+                self.y = value & (HEIGHT_IN_PIXELS - 1);
+                self.send_register(offset, self.y);
+            }
+            2 => {
+                self.width = if value > WIDTH_IN_PIXELS { WIDTH_IN_PIXELS } else { value };
+                self.send_register(offset, self.width);
+            }
+            3 => {
+                self.height = if value > HEIGHT_IN_PIXELS { HEIGHT_IN_PIXELS } else { value };
+                self.send_register(offset, self.height);
+            },
+            4 => {
+                self.color = value;
+                self.send_register(offset, self.color);
+            }
+            5 => {
+                self.write_ifr(value);
+                self.send_register(offset, self.ifr);
+            },
+            6 => {
+                self.write_ier(value);
+                self.send_register(offset, self.ier);
+            },
+            7 => {
+                self.cmd_data = value;
+                let clear_mask = if self.blit_bytes_remaining > 0 {
+                    self.blit_bytes_remaining -= 1;
+                    0
+                } else {
+                    match value {
+                        COMMAND_BLIT => {
+                            self.blit_bytes_remaining = (self.width as u16) * (self.height as u16);
+                            IFR_BLIT
+                        }
+                        COMMAND_CLEAR | COMMAND_FILL => IFR_FILL,
+                        _ => 0,
+                    }
+                };
+                self.write_ifr(IFR_READY | clear_mask);
+                self.send_register(offset, self.cmd_data);
+            },
+            _ => (),
+        }
+    }
+
+    fn peek(&self, address: u16) -> u8 {
+        match address - self.address_range.start {
+            0 => self.x,
+            1 => self.y,
+            2 => self.width,
+            3 => self.height,
+            4 => self.color,
+            5 => self.ifr,
+            6 => self.ier | IFR_IRQ,
+            7 => self.cmd_data,
+            _ => 0xFF,
+        }
+    }
+
+    fn claims(&self, address: u16) -> bool {
+        self.address_range.contains(address)
+    }
+
+    fn tick(&mut self, _cycles: u32) {
+        self.poll_transport();
+    }
+
+    fn reset(&mut self) {
+        self.blit_bytes_remaining = 0;
+        debug!("{} @0x{:04x} reset", self.name(), self.address_range.start);
+    }
+
+    fn irq_active(&self) -> bool {
+        self.ifr & self.ier != 0
+    }
+
+    fn name(&self) -> &str {
+        self.name
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::emulator::TransportEvent;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    const DEVICE_NAME: &str = "LedMatrixDisplay";
+    const DEVICE_ADDRESS: u16 = 0xD000;
+
+    struct MockTransport {
+        sent: Arc<Mutex<Vec<TransportEvent>>>,
+        received: VecDeque<TransportEvent>,
+    }
+
+    impl MockTransport {
+        /// Returns the transport plus a handle to its captured output, since
+        /// the transport itself gets moved into the `ProtocolManager`.
+        fn new(events: Vec<TransportEvent>) -> (Self, Arc<Mutex<Vec<TransportEvent>>>) {
+            let sent = Arc::new(Mutex::new(Vec::new()));
+            (Self { sent: Arc::clone(&sent), received: events.into() }, sent)
+        }
+    }
+
+    impl Transport for MockTransport {
+
+        fn try_recv(&mut self) -> Option<u8> {
+            loop {
+                if let Some(event) = self.received.pop_front() {
+                    if let TransportEvent::Data(_, value) = event {
+                        return Some(value)
+                    }
+                } else {
+                    return None
+                }
+            }
+        }
+
+        fn send(&mut self, value: u8) -> Result<(), TransportError> {
+            self.sent.lock().unwrap().push(TransportEvent::Data(1, value));
+            Ok(())
+        }
+
+        fn is_connected(&self) -> bool { true }
+
+        fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
+            self.received.pop_front()
+        }
+
+        fn shutdown(&mut self) {}
+
+    }
+
+    fn device() -> LedMatrix {
+        LedMatrix::new(DEVICE_NAME, AddressRange::new(DEVICE_ADDRESS, DEVICE_ADDRESS + 7))
+    }
+
+    fn device_with_transport() -> (LedMatrix, Arc<Mutex<Vec<TransportEvent>>>) {
+        let mut device = LedMatrix::new(DEVICE_NAME, 
+                                        AddressRange::new(DEVICE_ADDRESS, DEVICE_ADDRESS + 7));
+        let (transport, data) = MockTransport::new(Vec::new());
+        device.attach_transport(Box::new(transport));
+        (device, data)
+    }
+
+    fn device_with_transport_events(events: Vec<TransportEvent>)
+        -> (LedMatrix, Arc<Mutex<Vec<TransportEvent>>>) {
+
+        let mut device = LedMatrix::new(DEVICE_NAME,
+                                        AddressRange::new(DEVICE_ADDRESS, DEVICE_ADDRESS + 7));
+        let (transport, data) = MockTransport::new(events);
+        device.attach_transport(Box::new(transport));
+        (device, data)
+    }
+
+    #[test]
+    fn write_ifr_to_clear_bits() {
+        let mut device = device();
+        device.ifr = IFR_IRQ | IFR_READY | IFR_BLIT | IFR_FILL;
+        device.write_ifr(IFR_READY);
+        assert_eq!(device.ifr, IFR_IRQ | IFR_BLIT | IFR_FILL);
+        device.write_ifr(IFR_BLIT);
+        assert_eq!(device.ifr, IFR_IRQ | IFR_FILL);
+        device.write_ifr(IFR_FILL);
+        assert_eq!(device.ifr, 0);
+    }
+
+    #[test]
+    fn write_ier_to_set_bits() {
+        let mut device = device();
+        device.write_ier(IFR_IRQ | IFR_READY);
+        assert_eq!(device.ier, IFR_READY);
+        device.write_ier(IFR_IRQ | IFR_BLIT);
+        assert_eq!(device.ier, IFR_READY | IFR_BLIT);
+        device.write_ier(IFR_IRQ | IFR_FILL);
+        assert_eq!(device.ier, IFR_READY | IFR_BLIT | IFR_FILL);
+        // no other bits can be set
+        device.write_ifr(!IFR_MASK);
+        assert_eq!(device.ier, IFR_READY | IFR_BLIT | IFR_FILL);
+    }
+
+    #[test]
+    fn write_ier_to_clear_bits() {
+        let mut device = device();
+        device.ier = IFR_READY | IFR_BLIT | IFR_FILL;
+        device.write_ier(IFR_READY);
+        assert_eq!(device.ier, IFR_BLIT | IFR_FILL);
+        device.write_ier(IFR_BLIT);
+        assert_eq!(device.ier, IFR_FILL);
+        device.write_ier(IFR_FILL);
+        assert_eq!(device.ier, 0);
+    }
+
+    #[test]
+    fn poll_transport_on_connected() {
+        let (mut device, protocol_data) =
+            device_with_transport_events(vec![TransportEvent::Connected(1)]);
+        device.x = 1;
+        device.y = 2;
+        device.width = 3;
+        device.height = 4;
+        device.color = 5;
+        device.ifr = 6;
+        device.ier = 7;
+        device.cmd_data = 8;
+        device.poll_transport();
+        assert_eq!(device.connection_tag, Some(1));
+        for i in 0..8 {
+            assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 8 - i)));
+            assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 7 - i)));
+        }
+    }
+
+    #[test]
+    fn poll_transport_after_connected_observes_expected_tag() {
+        let (mut device, _) = device_with_transport_events(
+            vec![
+                TransportEvent::Data(1, IFR_READY),
+                TransportEvent::Data(1, IFR_BLIT),
+                TransportEvent::Data(1, 0),
+                TransportEvent::Data(1, !IFR_MASK),
+            ]
+        );
+        device.connection_tag = Some(1);
+        device.poll_transport();
+        assert_eq!(device.ifr, IFR_IRQ | IFR_READY | IFR_BLIT);
+        device.poll_transport();
+        assert_eq!(device.ifr, IFR_IRQ | IFR_READY | IFR_BLIT);
+    }
+
+    #[test]
+    fn poll_transport_after_connected_ignores_other_tag() {
+        let (mut device, protocol_data) = device_with_transport();
+        device.ifr = 0;
+        device.connection_tag = Some(2);
+        protocol_data.lock().unwrap().push(TransportEvent::Data(1, IFR_READY));
+        device.poll_transport();
+        assert_eq!(device.ifr, 0);
+    }
+
+    #[test]
+    fn poll_transport_clears_connection_tag_on_disconnect_for_same_tag() {
+        let (mut device, _) =
+            device_with_transport_events(vec![TransportEvent::Disconnected(1)]);
+        device.connection_tag = Some(1);
+        device.poll_transport();
+        assert_eq!(device.connection_tag, None);
+    }
+
+    #[test]
+    fn poll_transport_ignores_disconnect_for_other_tag() {
+        let (mut device, _) =
+            device_with_transport_events(vec![TransportEvent::Disconnected(1)]);
+        device.connection_tag = Some(2);
+        device.poll_transport();
+        assert_eq!(device.connection_tag, Some(2));
+    }
+
+    #[test]
+    fn send_register() {
+        let (mut device, protocol_data) = device_with_transport();
+        device.send_register(0x55, 0xAA);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 0xAA)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 0x55)));
+    }
+
+    #[test]
+    fn read_registers() {
+        let mut device = device();
+        device.x = 1;
+        device.y = 2;
+        device.width = 3;
+        device.height = 4;
+        device.color = 5;
+        device.ifr = 6;
+        device.ier = 7;
+        device.cmd_data = 8;
+        assert_eq!(device.read(DEVICE_ADDRESS + 0), 1);
+        assert_eq!(device.read(DEVICE_ADDRESS + 1), 2);
+        assert_eq!(device.read(DEVICE_ADDRESS + 2), 3);
+        assert_eq!(device.read(DEVICE_ADDRESS + 3), 4);
+        assert_eq!(device.read(DEVICE_ADDRESS + 4), 5);
+        assert_eq!(device.read(DEVICE_ADDRESS + 5), 6);
+        // IER bit 7 should always read as 1
+        assert_eq!(device.read(DEVICE_ADDRESS + 6), IFR_IRQ | 7);
+        assert_eq!(device.read(DEVICE_ADDRESS + 7), 8);
+    }
+
+    #[test]
+    fn write_registers_parameters() {
+        let (mut device, protocol_data) = device_with_transport();
+        // writing X should truncate to width in pixels less one
+        device.write(DEVICE_ADDRESS + 0, 0xFF);
+        assert_eq!(device.x, WIDTH_IN_PIXELS - 1);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.x)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 0)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        // writing Y should truncate to width in pixels less one
+        device.write(DEVICE_ADDRESS + 1, 0xFF);
+        assert_eq!(device.y, HEIGHT_IN_PIXELS - 1);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.y)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 1)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        // writing a width less than WIDTH_IN_PIXELS should leave the specified width alone
+        device.write(DEVICE_ADDRESS + 2, WIDTH_IN_PIXELS - 1);
+        assert_eq!(device.width, WIDTH_IN_PIXELS - 1);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.width)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 2)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        // writing a width that's too large should truncate to width in pixels
+        device.write(DEVICE_ADDRESS + 2, 0xFF);
+        assert_eq!(device.width, WIDTH_IN_PIXELS);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.width)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 2)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        // writing a height less than HEIGHT_IN_PIXELS should leave the specified height alone
+        device.write(DEVICE_ADDRESS + 3, HEIGHT_IN_PIXELS - 1);
+        assert_eq!(device.height, HEIGHT_IN_PIXELS - 1);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.height)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 3)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        // writing height should truncate to height in pixels
+        device.write(DEVICE_ADDRESS + 3, 0xFF);
+        assert_eq!(device.height, HEIGHT_IN_PIXELS);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.height)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 3)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        // writing color should transfer value written
+        device.write(DEVICE_ADDRESS + 4, 0xFF);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.color)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 4)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+    }
+
+    #[test]
+    fn write_ifr_register() {
+        let (mut device, protocol_data) = device_with_transport();
+        // Here we're just confirming that the address targets the IFR.
+        // See `write_ifr_to_clear_bits` for the more comprehensive test.
+        device.ifr = IFR_IRQ | IFR_READY;
+        device.write(DEVICE_ADDRESS + 5, IFR_READY);
+        assert_eq!(device.ifr, 0);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.ifr)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 5)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+    }
+
+    #[test]
+    fn write_ier_register() {
+        let (mut device, protocol_data) = device_with_transport();
+        // Here we're just confirming that the address targets the IFR.
+        // See `write_ier_to_set_bits` and `write_ier_to_clear_bits` as the more comprehensive tests.
+        device.ier = IFR_READY;
+        device.write(DEVICE_ADDRESS + 6, IFR_READY);
+        assert_eq!(device.ier, 0);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.ier)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 6)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+    }
+
+    #[test]
+    fn write_cmd_data_register() {
+        let (mut device, protocol_data) = device_with_transport();
+        // Here we're just confirming that the address targets the IFR.
+        // See `write_ier_to_set_bits` and `write_ier_to_clear_bits` as the more comprehensive tests.
+        device.ifr = IFR_IRQ | IFR_READY;
+        device.write(DEVICE_ADDRESS + 7, 0x55);
+        assert_eq!(device.cmd_data, 0x55);
+        assert_eq!(device.ifr, 0);
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.cmd_data)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 7)));
+        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+    }
+
+    #[test]
+    fn peek_registers() {
+        let mut device = device();
+        device.x = 1;
+        device.y = 2;
+        device.width = 3;
+        device.height = 4;
+        device.color = 5;
+        device.ifr = 6;
+        device.ier = 7;
+        device.cmd_data = 8;
+        assert_eq!(device.peek(DEVICE_ADDRESS + 0), 1);
+        assert_eq!(device.peek(DEVICE_ADDRESS + 1), 2);
+        assert_eq!(device.peek(DEVICE_ADDRESS + 2), 3);
+        assert_eq!(device.peek(DEVICE_ADDRESS + 3), 4);
+        assert_eq!(device.peek(DEVICE_ADDRESS + 4), 5);
+        assert_eq!(device.peek(DEVICE_ADDRESS + 5), 6);
+        // IER bit 7 should always read as 1
+        assert_eq!(device.peek(DEVICE_ADDRESS + 6), IFR_IRQ | 7);
+        assert_eq!(device.peek(DEVICE_ADDRESS + 7), 8);
+    }
+
+    #[test]
+    fn irq_active() {
+        let mut device = device();
+        device.ier = IFR_MASK;
+        device.ifr = 0;
+        assert!(!device.irq_active());
+        device.ifr = IFR_READY;
+        assert!(device.irq_active());
+        device.ifr = IFR_BLIT;
+        assert!(device.irq_active());
+        device.ifr = IFR_FILL;
+        assert!(device.irq_active());
+    }
+
+}

@@ -1,4 +1,5 @@
 use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrModule, Mc6840Module, Mc6850Module, PhoebeModule, R6551Module, RamModule, RomModule, Via6522Module, VireoModule};
+use crate::emulator::config::led_matrix::LedMatrixModule;
 use crate::emulator::transport::{Transport, TransportError};
 use crate::emulator::{BusConfig, DeviceEvent, DeviceId, ErrorSender};
 use figment::value::Value;
@@ -72,6 +73,7 @@ impl DeviceRegistry {
         r.register(RomModule);
         r.register(ConsoleModule);
         r.register(FinchModule);
+        r.register(LedMatrixModule);
         r.register(LfsrModule);
         r.register(R6551Module);
         r.register(Mc6840Module);

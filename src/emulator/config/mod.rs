@@ -16,6 +16,7 @@ pub mod loader;
 mod phoebe;
 mod write_policy;
 mod vireo;
+mod led_matrix;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
 pub use registry::{DeviceRegistry, InstantiationContext, TransportSlot};

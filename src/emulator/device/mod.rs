@@ -10,6 +10,7 @@ pub mod via6522;
 mod ring;
 pub mod vireo;
 pub mod protocol;
+pub mod led_matrix;
 
 pub use self::console::Console;
 pub use self::finch::Finch;
