@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <radialGradient id="bgGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#21252d"/>
+      <stop offset="100%" stop-color="#0d0e12"/>
+    </radialGradient>
+
+    <!-- Chip Body Gradient -->
+    <linearGradient id="chipBody" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#181a1d"/>
+      <stop offset="8%" stop-color="#282a2e"/>
+      <stop offset="20%" stop-color="#1f2124"/>
+      <stop offset="80%" stop-color="#1f2124"/>
+      <stop offset="92%" stop-color="#282a2e"/>
+      <stop offset="100%" stop-color="#181a1d"/>
+    </linearGradient>
+
+    <!-- Top Bevel Highlight -->
+    <linearGradient id="topBevel" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4a4e57"/>
+      <stop offset="100%" stop-color="#1f2124"/>
+    </linearGradient>
+
+    <!-- Pin Metallic Gradient -->
+    <linearGradient id="pinGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f0f3f7"/>
+      <stop offset="25%" stop-color="#c5cbd3"/>
+      <stop offset="70%" stop-color="#7a828c"/>
+      <stop offset="100%" stop-color="#434850"/>
+    </linearGradient>
+
+    <!-- Text Fill Gradient -->
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e2e6eb"/>
+      <stop offset="100%" stop-color="#a3a8b0"/>
+    </linearGradient>
+
+    <!-- Soft Drop Shadows -->
+    <filter id="iconShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.65"/>
+    </filter>
+
+    <filter id="notchShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000000" flood-opacity="0.8"/>
+    </filter>
+
+    <!-- Pin Template -->
+    <g id="pin-left">
+      <path d="M 126,0 L 166,0 L 166,16 L 138,16 L 126,12 Z" fill="url(#pinGrad)"/>
+    </g>
+    <g id="pin-right">
+      <path d="M 386,0 L 346,0 L 346,16 L 374,16 L 386,12 Z" fill="url(#pinGrad)"/>
+    </g>
+  </defs>
+
+  <!-- App Icon Base / Container -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#bgGrad)"/>
+  <rect x="17" y="17" width="478" height="478" rx="107" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
+
+  <!-- Main Shadowed Assembly -->
+  <g filter="url(#iconShadow)">
+    
+    <!-- Metallic DIP Pins -->
+    <!-- Left Pins -->
+    <use href="#pin-left" x="0" y="104"/>
+    <use href="#pin-left" x="0" y="140"/>
+    <use href="#pin-left" x="0" y="176"/>
+    <use href="#pin-left" x="0" y="212"/>
+    <use href="#pin-left" x="0" y="248"/>
+    <use href="#pin-left" x="0" y="284"/>
+    <use href="#pin-left" x="0" y="320"/>
+    <use href="#pin-left" x="0" y="356"/>
+    <use href="#pin-left" x="0" y="392"/>
+
+    <!-- Right Pins -->
+    <use href="#pin-right" x="0" y="104"/>
+    <use href="#pin-right" x="0" y="140"/>
+    <use href="#pin-right" x="0" y="176"/>
+    <use href="#pin-right" x="0" y="212"/>
+    <use href="#pin-right" x="0" y="248"/>
+    <use href="#pin-right" x="0" y="284"/>
+    <use href="#pin-right" x="0" y="320"/>
+    <use href="#pin-right" x="0" y="356"/>
+    <use href="#pin-right" x="0" y="392"/>
+
+    <!-- DIP Chip Body Base -->
+    <rect x="166" y="76" width="180" height="360" rx="10" fill="url(#chipBody)"/>
+
+    <!-- Outer Edge Highlight / Bevel -->
+    <rect x="167" y="77" width="178" height="358" rx="9" fill="none" stroke="url(#topBevel)" stroke-width="1.5" opacity="0.8"/>
+
+    <!-- Center Notch (Pin 1 Orientation Indicator) -->
+    <path d="M 238,76 A 18,18 0 0,0 274,76 Z" fill="#121315" filter="url(#notchShadow)"/>
+    <path d="M 238,76 A 18,18 0 0,0 274,76" fill="none" stroke="#333740" stroke-width="1.5"/>
+
+    <!-- Pin 1 Dot Identifier -->
+    <circle cx="188" cy="102" r="5" fill="#101113"/>
+    <circle cx="188" cy="102" r="4.5" fill="none" stroke="#2c3038" stroke-width="1"/>
+
+    <!-- Printed Text: 6502 -->
+    <g transform="translate(256, 268)">
+      <!-- Main Text -->
+      <text x="0" y="0" 
+            font-family="'SF Pro Display', -apple-system, 'Helvetica Neue', 'Segoe UI', Arial, sans-serif" 
+            font-size="62" 
+            font-weight="800" 
+            letter-spacing="3" 
+            fill="url(#textGrad)" 
+            text-anchor="middle" 
+            dominant-baseline="central" 
+            opacity="0.9">
+        6502
+      </text>
+
+      <!-- Subtitle / Brand Detail -->
+      <text x="0" y="48" 
+            font-family="'SF Pro Text', -apple-system, 'Helvetica Neue', 'Segoe UI', Arial, sans-serif" 
+            font-size="14" 
+            font-weight="600" 
+            letter-spacing="6" 
+            fill="#808791" 
+            text-anchor="middle" 
+            dominant-baseline="central" 
+            opacity="0.7">
+        MOS
+      </text>
+    </g>
+
+    <!-- Subtle Chip Surface Texture Lines -->
+    <line x1="180" y1="416" x2="332" y2="416" stroke="#ffffff" stroke-opacity="0.04" stroke-width="1"/>
+  </g>
+</svg>
