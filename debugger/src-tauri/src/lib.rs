@@ -110,6 +110,8 @@ pub struct CpuBusSnapshot {
     pub nmi_pending: bool,
     /// Total CPU cycles executed since the last reset.
     pub cycles: u64,
+    /// Effective speed of the CPU
+    pub effective_speed: String,
     /// True when the CPU executed STP and is halted until reset.
     pub cpu_stopped: bool,
     /// True when the CPU executed WAI and is waiting for an interrupt.
@@ -125,6 +127,8 @@ pub struct CpuBusState {
     pub nmi_pending: bool,
     /// Total CPU cycles executed since the last reset.
     pub cycles: u64,
+    /// Effective speed of the CPU
+    pub effective_speed: String,
     /// True while the CPU is free-running (run_cpu, step_over, or step_return in progress).
     pub is_running: bool,
     /// True when the CPU executed STP and is halted until reset.
@@ -478,6 +482,7 @@ fn refresh_cpu_bus_cache(cpu: &Cpu, cpu_bus_cache: &State<CpuBusCache>) -> CpuBu
         irq_active: snap.irq_active,
         nmi_pending: snap.nmi_pending,
         cycles: snap.cycles,
+        effective_speed: snap.effective_speed,
         is_running: false,
         cpu_stopped: snap.cpu_stopped,
         cpu_waiting: snap.cpu_waiting,
@@ -1061,6 +1066,7 @@ fn snapshot_cpu_bus(cpu: &Cpu) -> CpuBusSnapshot {
         irq_active: cpu.interrupts().irq_active(),
         nmi_pending: cpu.interrupts().nmi_pending(),
         cycles: cpu.cycles(),
+        effective_speed: "N/A".to_string(),
         cpu_stopped: cpu.is_stopped(),
         cpu_waiting: cpu.is_waiting(),
     }
@@ -1084,10 +1090,20 @@ fn get_cpu_bus_state(
     } else {
         None
     };
+
+    let effective_speed = if let Some(snap) = &live {
+        let rate = snap.cycles_delta as f64 / snap.elapsed.as_secs_f64() / 1e6;
+        eprintln!("{:.4} MHz effective ({} cycles / {:?}", rate, snap.cycles_delta, snap.elapsed);
+        Some(format!("{:.4} MHz", rate))
+    } else {
+        None
+    };
+
     CpuBusState {
         irq_active: live.as_ref().map_or(snap.irq_active, |s| s.irq_active),
         nmi_pending: live.as_ref().map_or(snap.nmi_pending, |s| s.nmi_pending),
         cycles: live.as_ref().map_or(snap.cycles, |s| s.cycles),
+        effective_speed: effective_speed.unwrap_or(snap.effective_speed),
         is_running,
         cpu_stopped: live.as_ref().map_or(snap.cpu_stopped, |s| s.cpu_stopped),
         cpu_waiting: live.as_ref().map_or(snap.cpu_waiting, |s| s.cpu_waiting),
@@ -1167,6 +1183,7 @@ pub fn run() {
             irq_active: false,
             nmi_pending: false,
             cycles: 0,
+            effective_speed: "N/A".to_string(),
             cpu_stopped: false,
             cpu_waiting: false,
         })))
