@@ -1,13 +1,13 @@
+use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
+use crate::emulator::bus::{DeviceIdAllocator, symbol};
+use crate::emulator::config::write_policy::WritePolicySpec;
+use crate::emulator::device::{Vireo, vireo};
+use crate::emulator::{AddressRange, BusConfig};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
 use serde::Deserialize;
 use std::collections::HashMap;
-
-use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
-use crate::emulator::bus::symbol;
-use crate::emulator::config::write_policy::WritePolicySpec;
-use crate::emulator::device::{Vireo, vireo};
-use crate::emulator::{AddressRange, BusConfig, DeviceId};
+use std::sync::{Arc, Mutex};
 
 const DEVICE_NAME: &str = "mem/vireo";
 
@@ -43,11 +43,12 @@ impl DeviceModule for VireoModule {
 
     fn name(&self) -> &'static str { DEVICE_NAME }
 
-    async fn instantiate(&self, bus_config: BusConfig, address: u16,
-                         attributes: &HashMap<String, Value>, context: &InstantiationContext)
+    async fn instantiate(&self, bus_config: BusConfig, _address: u16,
+                         attributes: &HashMap<String, Value>, context: &InstantiationContext,
+                         id_allocator: Arc<Mutex<DeviceIdAllocator>>)
                          -> Result<BusConfig, DeviceModuleError> {
         let config = VireoAttributes::from_attributes(attributes)?;
-        let device_id = DeviceId(address as u32);
+        let device_id = id_allocator.lock().unwrap().next(false);
         let offset = config.offset.unwrap_or(0);
         let bus_config = if let Some(filename) = config.labels {
             let table = symbol::load_vice_labels(filename)

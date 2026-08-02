@@ -1,13 +1,15 @@
+use figment::providers::Serialized;
+use figment::value::{Dict, Value};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use figment::value::{Dict, Value};
-use figment::providers::Serialized;
-use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 
-use crate::emulator::{AddressRange, BusConfig, DeviceId};
+use super::{DeviceModule, DeviceModuleError, InstantiationContext};
+use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::Lfsr16;
-use super::{DeviceModule, InstantiationContext, DeviceModuleError};
+use crate::emulator::{AddressRange, BusConfig};
 
 /// Number of bytes this device occupies in the bus address space.
 const BUS_SIZE: u16 = 2;
@@ -81,7 +83,8 @@ impl DeviceModule for LfsrModule {
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16,
-                         attributes: &HashMap<String, Value>, _context: &InstantiationContext)
+                         attributes: &HashMap<String, Value>, _context: &InstantiationContext,
+                         id_allocator: Arc<Mutex<DeviceIdAllocator>>)
             -> Result<BusConfig, DeviceModuleError> {
 
         let attrs = Dict::from_iter(attributes.clone());
@@ -93,7 +96,7 @@ impl DeviceModule for LfsrModule {
         let taps = config.taps.unwrap_or(0xB400);
         let continuous = !matches!(config.mode, Some(AdvanceMode::Step));
 
-        let device_id = DeviceId(address as u32);
+        let device_id = id_allocator.lock().unwrap().next(false);
         let device = Lfsr16::new(self.name())
             .with_address(address)
             .with_taps(taps)

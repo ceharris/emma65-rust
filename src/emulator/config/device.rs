@@ -1,12 +1,13 @@
+use super::InstantiationContext;
+use crate::emulator::bus::DeviceIdAllocator;
+use crate::emulator::config::loader::LoadError;
+use crate::emulator::{BusConfig, BusConfigError, TransportError};
 use figment::value::{Tag, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-
-use super::InstantiationContext;
-use crate::emulator::config::loader::LoadError;
-use crate::emulator::{BusConfig, BusConfigError, TransportError};
+use std::sync::{Arc, Mutex};
 
 /// A configuration spec for a pluggable device module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,8 +90,10 @@ pub trait DeviceModule: Clone {
     /// * attributes - device configuration attributes
     /// * context - application-level configuration attributes
     fn instantiate(&self, bus_config: BusConfig, address: u16,
-                   attributes: &HashMap<String, Value>, context: &InstantiationContext)
-        -> impl Future<Output = Result<BusConfig, DeviceModuleError>> + Send;
+                   attributes: &HashMap<String, Value>, 
+                   context: &InstantiationContext,
+                   id_allocator: Arc<Mutex<DeviceIdAllocator>>)
+                   -> impl Future<Output = Result<BusConfig, DeviceModuleError>> + Send;
 }
 
 fn parse_prefixed_u32(s: &str) -> Result<u32, std::num::ParseIntError> {

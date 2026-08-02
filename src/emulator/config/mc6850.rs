@@ -1,11 +1,13 @@
-use std::collections::HashMap;
-use figment::value::{Dict, Value};
 use figment::providers::Serialized;
+use figment::value::{Dict, Value};
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-use crate::emulator::{AddressRange, BusConfig, DeviceId};
+use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
+use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::Mc6850;
-use super::{DeviceModule, InstantiationContext, DeviceModuleError, TransportSpec, TransportSpecFormat};
+use crate::emulator::{AddressRange, BusConfig};
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 2;
@@ -27,7 +29,8 @@ impl DeviceModule for Mc6850Module {
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16, 
-                         attributes: &HashMap<String, Value>, context: &InstantiationContext)
+                         attributes: &HashMap<String, Value>, context: &InstantiationContext,
+                         id_allocator: Arc<Mutex<DeviceIdAllocator>>)
             -> Result<BusConfig, DeviceModuleError> {
         
         let attrs = Dict::from_iter(attributes.clone());
@@ -41,7 +44,7 @@ impl DeviceModule for Mc6850Module {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = DeviceId(address as u32);
+        let device_id = id_allocator.lock().unwrap().next(true);
         let device = {
             let mut dev = Mc6850::new(self.name()).with_address(address);
             if let Some(transport_spec) = transport_spec {

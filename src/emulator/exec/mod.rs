@@ -5,7 +5,7 @@ use crate::emulator::cpu::{Cpu, Registers};
 use crate::emulator::error::ExecError;
 use crate::watch::WatchError;
 use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, watch};
 
 /// A lightweight snapshot of CPU state published by the run loop after each
@@ -18,6 +18,10 @@ pub struct CpuLiveSnapshot {
     pub stack_page: Vec<u8>,
     /// Total cycles executed since the last reset.
     pub cycles: u64,
+    /// Cycles since last snapshot
+    pub cycles_delta: u64,
+    /// Elapsed time since last snapshot
+    pub elapsed: Duration,
     /// True if any device is currently asserting IRQ.
     pub irq_active: bool,
     /// True if an NMI is pending (latched but not yet serviced).
@@ -37,7 +41,7 @@ pub struct CpuLiveSnapshot {
 /// `mem_addr` is the address currently displayed in the memory panel; it is
 /// paragraph-aligned (`& 0xfff0`) before the read so the stored page always
 /// starts on a paragraph boundary.
-fn build_live_snapshot(cpu: &Cpu, mem_addr: u16) -> CpuLiveSnapshot {
+fn build_live_snapshot(cpu: &Cpu, mem_addr: u16, start_cycles: u64, start_timestamp: Instant) -> CpuLiveSnapshot {
     let mut stack_page = vec![0u8; 256];
     let _ = cpu.bus().peek_range(0x0100, &mut stack_page);
     let memory_page_addr = mem_addr & 0xfff0;
@@ -47,6 +51,8 @@ fn build_live_snapshot(cpu: &Cpu, mem_addr: u16) -> CpuLiveSnapshot {
         registers: *cpu.registers(),
         stack_page,
         cycles: cpu.cycles(),
+        cycles_delta: cpu.cycles() - start_cycles,
+        elapsed: start_timestamp.elapsed(),
         irq_active: cpu.interrupts().irq_active(),
         nmi_pending: cpu.interrupts().nmi_pending(),
         cpu_stopped: cpu.is_stopped(),
@@ -267,6 +273,8 @@ pub fn step_over_subroutine(
     // Subsequent iterations use the normal step() path.
     let mut first = true;
     let mut steps = 0u32;
+    let start_cycles = cpu.cycles();
+    let start_timestamp = Instant::now();
     let result = loop {
         if *stop_rx.borrow() {
             if !already_set { cpu.remove_breakpoint(target); }
@@ -280,7 +288,7 @@ pub fn step_over_subroutine(
         };
         steps += 1;
         if let Some(tx) = live_tx.filter(|_| steps.is_multiple_of(BATCH_SIZE)) {
-            let _ = tx.send(Some(build_live_snapshot(cpu, mem_view_addr.load(Ordering::Relaxed))));
+            let _ = tx.send(Some(build_live_snapshot(cpu, mem_view_addr.load(Ordering::Relaxed), start_cycles, start_timestamp)));
         }
         match res {
             StepResult::Executed(op) => {
@@ -342,6 +350,8 @@ pub fn step_return(
     // that a breakpoint there does not immediately re-fire before the instruction executes.
     let mut first = true;
     let mut steps = 0u32;
+    let start_cycles = cpu.cycles();
+    let start_timestamp = Instant::now();
     loop {
         if *stop_rx.borrow() {
             return None;
@@ -355,7 +365,7 @@ pub fn step_return(
         };
         steps += 1;
         if let Some(tx) = live_tx.filter(|_| steps.is_multiple_of(BATCH_SIZE)) {
-            let _ = tx.send(Some(build_live_snapshot(cpu, mem_view_addr.load(Ordering::Relaxed))));
+            let _ = tx.send(Some(build_live_snapshot(cpu, mem_view_addr.load(Ordering::Relaxed), start_cycles, start_timestamp)));
         }
         match res {
             StepResult::Executed(op)
@@ -414,8 +424,8 @@ fn run_loop(
     result_tx: oneshot::Sender<StepResult>,
     cpu_tx: oneshot::Sender<Cpu>,
 ) {
-    let start = Instant::now();
     let start_cycles = cpu.cycles();
+    let start_timestamp = Instant::now();
     let hz = cpu.clock_speed().hz_value();
 
     let mut first = skip_pc.is_some();
@@ -440,10 +450,12 @@ fn run_loop(
 
         // Publish a live snapshot after each batch so the frontend can display
         // current state without stopping the CPU.
-        let _ = live_tx.send(Some(build_live_snapshot(&cpu, mem_view_addr.load(Ordering::Relaxed))));
+        let snapshot = build_live_snapshot(
+            &cpu, mem_view_addr.load(Ordering::Relaxed), start_cycles, start_timestamp);
+        let _ = live_tx.send(Some(snapshot));
 
         if let Some(hz) = hz {
-            let elapsed_ns = start.elapsed().as_nanos() as u64;
+            let elapsed_ns = start_timestamp.elapsed().as_nanos() as u64;
             let expected_cycles =
                 (elapsed_ns as u128 * hz as u128 / 1_000_000_000) as u64;
             let actual_cycles = cpu.cycles() - start_cycles;
