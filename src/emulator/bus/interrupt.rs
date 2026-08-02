@@ -76,17 +76,15 @@ impl InterruptController {
     }
 
     /// Syncs device IRQ states into the source bitmask. Called by the CPU after each instruction.
-    ///
-    /// Each `(id, active)` pair asserts or releases the corresponding `IrqSource`'s bit.
-    ///
-    /// Panics if any `id.0 >= 64`; see [`assert_irq`](Self::assert_irq).
     pub fn poll_devices(&mut self, states: impl Iterator<Item = (DeviceId, bool)>) {
         for (id, active) in states {
-            let bit = 1u64 << Self::bit_index(IrqSource::from(id));
-            if active {
-                self.irq_sources |= bit;
-            } else {
-                self.irq_sources &= !bit;
+            if id.0 < MAX_IRQ_SOURCES {
+                let bit = 1u64 << Self::bit_index(IrqSource::from(id));
+                if active {
+                    self.irq_sources |= bit;
+                } else {
+                    self.irq_sources &= !bit;
+                }
             }
         }
     }
@@ -198,4 +196,12 @@ mod tests {
         let src = IrqSource::from(DeviceId(42));
         assert_eq!(src, IrqSource(42));
     }
+
+    #[test]
+    fn poll_devices_does_not_panic_on_non_irq_source() {
+        let mut ctrl = InterruptController::new();
+        ctrl.poll_devices([(DeviceId(MAX_IRQ_SOURCES), true)].into_iter());
+        assert!(!ctrl.irq_active());
+    }
+
 }
