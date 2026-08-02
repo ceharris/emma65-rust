@@ -63,6 +63,8 @@ pub struct Console {
     ring: Ring<u8>,
     latch: u8,
     interrupt_flag: bool,
+    poll_interval_cycles: u32,
+    cycles_since_poll: u32,
 }
 
 impl Console {
@@ -78,12 +80,20 @@ impl Console {
             ring: Ring::new(0u8),
             latch: 0,
             interrupt_flag: false,
+            poll_interval_cycles: 1,
+            cycles_since_poll: 0,
         }
     }
 
     /// Sets the address at which this device is registered on the bus.
     pub fn with_address(mut self, address: u16) -> Self {
         self.address = address;
+        self
+    }
+
+    /// Sets the number of cycles between each transport poll
+    pub fn with_poll_interval_cycles(mut self, cycles: u32) -> Self {
+        self.poll_interval_cycles = cycles;
         self
     }
 
@@ -164,7 +174,13 @@ impl IoDevice for Console {
         }
     }
 
-    fn tick(&mut self, _cycles: u32) {
+    fn tick(&mut self, cycles: u32) {
+        self.cycles_since_poll += cycles;
+        if self.cycles_since_poll < self.poll_interval_cycles {
+            return;
+        }
+        self.cycles_since_poll = 0;
+
         if let Some(b) = self.transport.as_mut().and_then(|t| t.try_recv()) {
             if let Some(break_key) = self.break_key && b == break_key {
                 self.latch = b;
@@ -472,7 +488,7 @@ mod tests {
                 _ => {}
             }
         }
-
+        cpu.bus_mut().tick_devices(1);
         assert_eq!(cpu.bus_mut().read(0x0300).unwrap(), 0x5A);
     }
 

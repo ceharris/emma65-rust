@@ -1,11 +1,13 @@
-use std::collections::HashMap;
-use figment::value::{Dict, Value};
 use figment::providers::Serialized;
+use figment::value::{Dict, Value};
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-use crate::emulator::{AddressRange, BusConfig, DeviceId};
-use crate::emulator::device::Console;
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
+use crate::emulator::bus::DeviceIdAllocator;
+use crate::emulator::device::Console;
+use crate::emulator::{AddressRange, BusConfig};
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 2;
@@ -26,8 +28,11 @@ impl DeviceModule for ConsoleModule {
 
     fn name(&self) -> &'static str { "console" }
 
-    async fn instantiate(&self, bus_config: BusConfig, address: u16,
-                         attributes: &HashMap<String, Value>, context: &InstantiationContext)
+    async fn instantiate(&self,
+                         bus_config: BusConfig, address: u16,
+                         attributes: &HashMap<String, Value>,
+                         context: &InstantiationContext,
+                         id_allocator: Arc<Mutex<DeviceIdAllocator>>)
             -> Result<BusConfig, DeviceModuleError> {
 
         let attrs = Dict::from_iter(attributes.clone());
@@ -41,7 +46,7 @@ impl DeviceModule for ConsoleModule {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = DeviceId(address as u32);
+        let device_id = id_allocator.lock().unwrap().next(true);
 
         let console = {
             let mut dev = Console::new(self.name()).with_address(address);
@@ -73,9 +78,9 @@ impl DeviceModule for ConsoleModule {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
     use super::*;
     use crate::emulator::transport::{InternalPipeTransport, Transport};
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn instantiate_with_injected_transport() {
@@ -85,9 +90,9 @@ mod tests {
             error_sender: None,
             console_transport: Some(Arc::new(Mutex::new(Some(Box::new(local))))),
         };
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let bus_config = ConsoleModule.instantiate(
-            BusConfig::new(), 0xFFF8, &HashMap::new(), &context,
-        ).await.unwrap();
+            BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
 
         let mut bus = bus_config.build();
         bus.write(0xFFF8, 0x41).unwrap();
@@ -104,9 +109,9 @@ mod tests {
             error_sender: None,
             console_transport: Some(Arc::clone(&slot)),
         };
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let _bus_config = ConsoleModule.instantiate(
-            BusConfig::new(), 0xFFF8, &HashMap::new(), &context,
-        ).await.unwrap();
+            BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
 
         assert!(slot.lock().unwrap().is_none(), "transport should be taken after instantiation");
     }
@@ -128,9 +133,9 @@ mod tests {
             error_sender: None,
             console_transport: Some(Arc::clone(&slot)),
         };
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let _result = ConsoleModule.instantiate(
-            BusConfig::new(), 0xFFF8, &attributes, &context,
-        ).await;
+            BusConfig::new(), 0xFFF8, &attributes, &context, id_allocator).await;
 
         assert!(slot.lock().unwrap().is_some(), "context transport should not be consumed when transport_spec is set");
     }
@@ -142,9 +147,9 @@ mod tests {
             error_sender: None,
             console_transport: None,
         };
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let bus_config = ConsoleModule.instantiate(
-            BusConfig::new(), 0xFFF8, &HashMap::new(), &context,
-        ).await.unwrap();
+            BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
 
         let mut bus = bus_config.build();
         // Console with no transport: write is silent, read returns 0

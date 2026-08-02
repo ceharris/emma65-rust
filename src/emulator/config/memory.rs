@@ -1,11 +1,11 @@
+use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
+use crate::emulator::bus::{DeviceIdAllocator, symbol};
+use crate::emulator::{AddressRange, BusConfig};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
 use serde::Deserialize;
 use std::collections::HashMap;
-
-use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, loader};
-use crate::emulator::bus::symbol;
-use crate::emulator::{AddressRange, BusConfig};
+use std::sync::{Arc, Mutex};
 
 // Type name used in registering RAM as a device
 const RAM_DEVICE_TYPE: &str = "ram";
@@ -54,7 +54,8 @@ impl DeviceModule for RamModule {
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16,
-                         attributes: &HashMap<String, Value>, _context: &InstantiationContext)
+                         attributes: &HashMap<String, Value>, _context: &InstantiationContext,
+                         _id_allocator: Arc<Mutex<DeviceIdAllocator>>)
                          -> Result<BusConfig, DeviceModuleError> {
 
         let config = MemoryAttributes::from_attributes(attributes)?;
@@ -92,7 +93,9 @@ impl DeviceModule for RomModule {
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16,
-                         attributes: &HashMap<String, Value>, _context: &InstantiationContext)
+                         attributes: &HashMap<String, Value>, 
+                         _context: &InstantiationContext, 
+                         _id_allocator: Arc<Mutex<DeviceIdAllocator>>)
                          -> Result<BusConfig, DeviceModuleError> {
         let config = MemoryAttributes::from_attributes(attributes)?;
         let range = AddressRange::new(address, address + (config.size - 1) as u16);

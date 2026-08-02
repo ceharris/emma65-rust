@@ -1,11 +1,12 @@
+use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
+use crate::emulator::bus::DeviceIdAllocator;
+use crate::emulator::device::{ProtocolMessageEncoding, Via6522};
+use crate::emulator::{AddressRange, BusConfig};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
 use serde::Deserialize;
 use std::collections::HashMap;
-
-use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
-use crate::emulator::device::{ProtocolMessageEncoding, Via6522};
-use crate::emulator::{AddressRange, BusConfig, DeviceId};
+use std::sync::{Arc, Mutex};
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 16;
@@ -28,7 +29,8 @@ impl DeviceModule for Via6522Module {
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16, 
-                         attributes: &HashMap<String, Value>, context: &InstantiationContext)
+                         attributes: &HashMap<String, Value>, context: &InstantiationContext,
+                         id_allocator: Arc<Mutex<DeviceIdAllocator>>)
             -> Result<BusConfig, DeviceModuleError> {
         
         let attrs = Dict::from_iter(attributes.clone());
@@ -42,7 +44,7 @@ impl DeviceModule for Via6522Module {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = DeviceId(address as u32);
+        let device_id = id_allocator.lock().unwrap().next(true);
         let device = {
             let mut dev = Via6522::new(self.name()).with_address(address);
             if let Some(protocol) = config.protocol {

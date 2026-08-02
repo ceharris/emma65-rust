@@ -442,6 +442,13 @@ fn run_loop(
         // current state without stopping the CPU.
         let _ = live_tx.send(Some(build_live_snapshot(&cpu, mem_view_addr.load(Ordering::Relaxed))));
 
+        let elapsed = start.elapsed();
+        let cycles_so_far = cpu.cycles() - start_cycles;
+        eprintln!(
+            "{:.3} MHz effective ({cycles_so_far} cycles / {elapsed:?})",
+            cycles_so_far as f64 / elapsed.as_secs_f64() / 1e6
+        );
+
         if let Some(hz) = hz {
             let elapsed_ns = start.elapsed().as_nanos() as u64;
             let expected_cycles =

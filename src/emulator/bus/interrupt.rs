@@ -1,11 +1,10 @@
 //! IRQ and NMI interrupt controller.
-//! 
-use std::collections::HashSet;
 use crate::emulator::device::DeviceId;
 
 /// Identifies a source of IRQ, mapped from the `DeviceId` of the asserting device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IrqSource(pub u32);
+
 
 impl From<DeviceId> for IrqSource {
     fn from(id: DeviceId) -> Self {
@@ -13,36 +12,47 @@ impl From<DeviceId> for IrqSource {
     }
 }
 
+/// Maximum number of IRQ sources
+pub const MAX_IRQ_SOURCES: u32 = 64;
+
 /// Tracks the state of the IRQ line (level-triggered, multi-source) and NMI (edge-triggered).
 pub struct InterruptController {
-    /// Set of IRQ sources currently asserting the line.
-    irq_sources: HashSet<IrqSource>,
-    /// Latched NMI pending flag; set by `signal_nmi`, cleared by `take_nmi`.
+    irq_sources: u64,
     nmi_pending: bool,
+    next_irq_source: u32,
 }
 
 impl InterruptController {
     /// Creates a new controller with no active interrupts.
     pub fn new() -> Self {
         Self {
-            irq_sources: HashSet::new(),
+            irq_sources: 0,
             nmi_pending: false,
+            next_irq_source: 0,
         }
+    }
+
+    /// Allocates the next IRQ source
+    pub fn alloc_irq_source(&mut self) -> IrqSource {
+        assert_ne!(self.next_irq_source, MAX_IRQ_SOURCES, "too many interrupt sources");
+        let source = IrqSource(self.next_irq_source);
+        self.next_irq_source += 1;
+        source
     }
 
     /// Asserts the IRQ line from `source`. The line remains active until all sources release it.
     pub fn assert_irq(&mut self, source: IrqSource) {
-        self.irq_sources.insert(source);
+        self.irq_sources |= 1u64 << source.0;
     }
 
     /// Releases `source` from the IRQ line. If no other sources are asserting, the line goes low.
     pub fn release_irq(&mut self, source: IrqSource) {
-        self.irq_sources.remove(&source);
+        self.irq_sources &= !(1u64 << source.0);
     }
 
     /// Returns `true` if any source is currently asserting the IRQ line.
     pub fn irq_active(&self) -> bool {
-        !self.irq_sources.is_empty()
+        self.irq_sources != 0
     }
 
     /// Latches a pending NMI. Called on the falling edge of the NMI line.
@@ -62,19 +72,32 @@ impl InterruptController {
         self.nmi_pending
     }
 
-    /// Syncs device IRQ states into the source set. Called by the CPU after each instruction.
+    /// Syncs device IRQ states into the source bitmask. Called by the CPU after each instruction.
     ///
-    /// Each `(id, active)` pair asserts or releases the corresponding `IrqSource`.
+    /// Each `(id, active)` pair asserts or releases the corresponding `IrqSource`'s bit.
+    ///
+    /// Panics if any `id.0 >= 64`; see [`assert_irq`](Self::assert_irq).
     pub fn poll_devices(&mut self, states: impl Iterator<Item = (DeviceId, bool)>) {
         for (id, active) in states {
-            let source = IrqSource::from(id);
+            let bit = 1u64 << Self::bit_index(IrqSource::from(id));
             if active {
-                self.irq_sources.insert(source);
+                self.irq_sources |= bit;
             } else {
-                self.irq_sources.remove(&source);
+                self.irq_sources &= !bit;
             }
         }
     }
+
+    /// Validates and extracts the bit index for `source`.
+    fn bit_index(source: IrqSource) -> u32 {
+        assert!(
+            source.0 < 64,
+            "IrqSource({}) is out of range: InterruptController supports IrqSource values 0..64",
+            source.0
+        );
+        source.0
+    }
+
 }
 
 impl Default for InterruptController {
@@ -113,7 +136,7 @@ mod tests {
     #[test]
     fn release_nonexistent_source_is_harmless() {
         let mut ctrl = InterruptController::new();
-        ctrl.release_irq(IrqSource(99));
+        ctrl.release_irq(IrqSource(63));
         assert!(!ctrl.irq_active());
     }
 

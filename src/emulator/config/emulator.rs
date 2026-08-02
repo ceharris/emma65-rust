@@ -1,11 +1,13 @@
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
+use super::CpuVariantSpec::{Cmos6502, Wdc6502};
+use super::{DeviceModuleError, DeviceRegistry, DeviceSpec, InstantiationContext};
+use crate::emulator::bus::DeviceIdAllocator;
+use crate::emulator::device::device_event_channel;
+use crate::emulator::{BusConfig, ClockSpeed, Cpu, CpuBuildError, CpuVariant, EmulatorSession, ErrorReceiver};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use crate::emulator::{BusConfig, ClockSpeed, Cpu, CpuBuildError, CpuVariant, EmulatorSession, ErrorReceiver};
-use crate::emulator::device::device_event_channel;
-use super::CpuVariantSpec::{Cmos6502, Wdc6502};
-use super::{DeviceSpec, DeviceModuleError, DeviceRegistry, InstantiationContext};
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -136,8 +138,9 @@ impl Config {
 
     async fn build_devices(&self, registry: &DeviceRegistry, context: InstantiationContext, error_receiver: ErrorReceiver) -> Result<EmulatorSession, BuildError> {
         let mut bus_config = BusConfig::new();
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         for spec in self.devices.iter().flatten() {
-            bus_config = registry.instantiate(spec.module_name(), bus_config, spec.address(), spec.attributes(), &context)
+            bus_config = registry.instantiate(spec.module_name(), bus_config, spec.address(), spec.attributes(), &context, id_allocator.clone())
                 .await
                 .map_err(|e| BuildError::Device {
                     module_name: spec.module_name().to_string(),

@@ -162,4 +162,5 @@ mod tests {
             assert!(matches!(ev2, DeviceEvent::DeviceInfo { .. }));
         });
     }
+
 }
