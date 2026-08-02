@@ -1,4 +1,17 @@
 //! IRQ and NMI interrupt controller.
+//!
+//! Tne interrupt controller plays a crucial role in identifying interrupt sources
+//! during CPU step execution. As such the [`poll_devices`](InterruptController::poll_devices)
+//! method, which is called for each instruction executed, must be especially
+//! efficient. This implementation uses a bit set (in a `u64`) to track devices that
+//! are currently asserting IRQ.
+//!
+//! To emulate the level-triggered nature of the CPU's IRQ signal, devices assert or
+//! release IRQ (based on their internal state) using [`assert_irq`](InterruptController::assert_irq)
+//! and [`release_irq`](InterruptController::release_irq), respectively. These methods simply
+//! set or clear a bit in the bit set representing active IRQ sources. The CPU's IRQ signal
+//! reads as asserted whenever the bit set is non-empty (i.e. the underlying `u64` is not zero).
+//!
 use crate::emulator::device::DeviceId;
 
 /// Identifies a source of IRQ, mapped from the `DeviceId` of the asserting device.
@@ -19,7 +32,6 @@ pub const MAX_IRQ_SOURCES: u32 = 64;
 pub struct InterruptController {
     irq_sources: u64,
     nmi_pending: bool,
-    next_irq_source: u32,
 }
 
 impl InterruptController {
@@ -28,16 +40,7 @@ impl InterruptController {
         Self {
             irq_sources: 0,
             nmi_pending: false,
-            next_irq_source: 0,
         }
-    }
-
-    /// Allocates the next IRQ source
-    pub fn alloc_irq_source(&mut self) -> IrqSource {
-        assert_ne!(self.next_irq_source, MAX_IRQ_SOURCES, "too many interrupt sources");
-        let source = IrqSource(self.next_irq_source);
-        self.next_irq_source += 1;
-        source
     }
 
     /// Asserts the IRQ line from `source`. The line remains active until all sources release it.
