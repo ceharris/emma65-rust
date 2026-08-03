@@ -60,6 +60,22 @@
   font-size: var(--font-size-btn);
 }
 
+.cpu-bus-speed {
+  margin-top: -2px;
+}
+
+.speed-value {
+  color: var(--color-number);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-size-btn);
+}
+
+.speed-unit {
+  color: var(--color-muted);
+  font-size: var(--font-size-btn);
+  margin-left: 3px;
+}
+
 .cpu-bus-buttons {
   display: flex;
   align-items: center;

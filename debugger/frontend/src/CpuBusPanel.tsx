@@ -12,6 +12,7 @@ interface CpuBusState {
   irq_active: boolean;
   nmi_pending: boolean;
   cycles: number;
+  effective_speed: string;
   is_running: boolean;
   cpu_stopped: boolean;
   cpu_waiting: boolean;
@@ -22,6 +23,12 @@ interface Props {
   execState: ExecState;
   /** Called with the post-reset register snapshot so other panels can update. */
   onReset: (snap: RegisterSnapshot) => void;
+}
+
+/** Splits "1.8432 MHz" into ["1.8432", "MHz"] so the value and unit can be styled separately. */
+function splitSpeed(speed: string): [string, string] {
+  const idx = speed.lastIndexOf(" ");
+  return idx === -1 ? [speed, ""] : [speed.slice(0, idx), speed.slice(idx + 1)];
 }
 
 /** Formats a number with comma thousands separators. */
@@ -168,6 +175,8 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
     runStopClass = "indicator-stop";
   }
 
+  const [speedValue, speedUnit] = splitSpeed(cpuBus?.effective_speed ?? "0 MHz");
+
   return (
     <div className="cpu-bus-panel">
       <span className="panel-title">CPU and Bus</span>
@@ -185,6 +194,10 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
         <div className="cpu-bus-row cpu-bus-cycles">
           <span className="cycles-value">{cpuBus !== null ? formatCycles(cpuBus.cycles) : "—"}</span>
           <span className="cycles-label">cycles</span>
+        </div>
+        <div className="cpu-bus-row cpu-bus-speed">
+          <span className="speed-value">{speedValue}</span>
+          <span className="speed-unit">{speedUnit}</span>
         </div>
         <div className="cpu-bus-row cpu-bus-buttons">
           <button
