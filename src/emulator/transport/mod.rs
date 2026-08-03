@@ -1,4 +1,19 @@
 //! Transport abstraction and implementations for device IO.
+//!
+//! ## `ChannelRelay` shutdown contract
+//!
+//! [`ChannelRelay`] carries no internal stop flag: `Drop for ChannelRelay`
+//! unparks the relay thread (in case it is parked on a full ring) and then
+//! joins it. The owner must ensure every corresponding `Sender<T>` feeding
+//! the relay is dropped *before* the `ChannelRelay` itself is dropped —
+//! otherwise that join blocks indefinitely, since the relay thread can only
+//! exit by observing its channel disconnect.
+//!
+//! Concretely, any task holding a `Sender<T>` (or a clone of one) that feeds
+//! a `ChannelRelay` must drop it as the first action on its shutdown path,
+//! before any other teardown work. This decouples "the relay thread can stop
+//! blocking" from teardown that may take arbitrarily long (e.g. waiting on a
+//! child process to exit).
 pub mod internal_pipe;
 pub mod pipe;
 pub mod tcp_socket;
@@ -393,9 +408,9 @@ pub struct ChannelRelay<T> {
 impl<T: Send + 'static> ChannelRelay<T> {
     /// Spawns a relay thread that blocks on `rx.recv()`, pushing each
     /// received item into a new ring of `capacity` via [`push_and_park`].
-    /// The thread runs until `rx` disconnects — callers must drop every
-    /// corresponding `Sender<T>` before dropping the returned `ChannelRelay`
-    /// (see §1.7 of the redesign plan for the full shutdown contract).
+    /// The thread runs until `rx` disconnects — see the
+    /// [module documentation](crate::emulator::transport) for the full
+    /// shutdown contract this implies for callers.
     pub(crate) fn spawn(rx: Receiver<T>, capacity: usize) -> Self {
         let (mut producer, consumer) = RingBuffer::new(capacity);
         let handle = thread::spawn(move || {
@@ -408,7 +423,7 @@ impl<T: Send + 'static> ChannelRelay<T> {
 
     /// Wraps an already-running relay thread's `Consumer<T>`/`JoinHandle`
     /// directly, without spawning anything or requiring a `Receiver<T>`. For
-    /// callers like `InternalPipeTransport` (§4.4) that read from a raw
+    /// callers like [`InternalPipeTransport`] (§4.4) that read from a raw
     /// source with no `crossbeam_channel` hop and drive their own
     /// [`push_and_park`] loop against their own `Producer<T>`.
     pub(crate) fn from_parts(consumer: Consumer<T>, handle: JoinHandle<()>) -> Self {
@@ -439,7 +454,8 @@ impl<T: Send + 'static> ChannelRelay<T> {
 
 impl<T> Drop for ChannelRelay<T> {
     /// Unparks the relay thread (in case it's parked on a full ring) and
-    /// joins it. Relies on the shutdown contract in §1.7: callers must have
+    /// joins it. Relies on the shutdown contract described in the
+    /// [module documentation](crate::emulator::transport): callers must have
     /// already closed every `Sender<T>` feeding this relay, or this blocks
     /// indefinitely.
     fn drop(&mut self) {

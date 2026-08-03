@@ -1190,10 +1190,10 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
 
 ## 10. Suggested Implementation Order (checklist)
 
-- [ ] `ChannelRelay<T>` in `mod.rs` (`pub`, with `drain_into`,
+- [x] `ChannelRelay<T>` in `mod.rs` (`pub`, with `drain_into`,
       `from_parts`, and the shared `push_and_park` free function), with
       unit tests (§3)
-- [ ] Single `Transport` trait + `TransportReporter` (§2, §2.1)
+- [x] Single `Transport` trait + `TransportReporter` (§2, §2.1)
 - [ ] `PtyTransport` rewrite + tests (§4.1) — reference implementation
 - [ ] `UnixSocketTransport` rewrite + tests (§4.2) — reference multipoint
       implementation, including ingress `try_send` + drop counter
@@ -1201,12 +1201,15 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       Unix socket; look for shared-code opportunities
 - [ ] `PipeTransport` rewrite + tests (§4.3)
 - [ ] `InternalPipeTransport` rewrite + tests (§4.4)
-- [ ] `DeviceEvent::OutboundBytesDropped` / `InboundEventsDropped` (§5)
-- [ ] `DeviceEvent::TransportConnected`/`TransportDisconnected`: add
-      `peer: Option<String>`; wire up `TransportReporter::report_connected`/
-      `report_disconnected`; capture peer name at accept time in
-      `tcp_socket.rs`/`unix_socket.rs` and thread through `ClientSession`;
-      update `main.rs:72,74`'s match arms for the new field (§5.1)
+- [x] `DeviceEvent::OutboundBytesDropped` / `InboundEventsDropped` (§5)
+- [ ] `DeviceEvent::TransportConnected`/`TransportDisconnected` peer-field
+      wiring (§5.1) — `peer: Option<String>` field and `main.rs` match-arm
+      updates landed early (alongside `TransportReporter`, §2.1, since its
+      `report_connected`/`report_disconnected` signatures needed the field to
+      compile); still remaining: capture peer name at accept time in
+      `tcp_socket.rs`/`unix_socket.rs` and thread through `ClientSession`,
+      and actually call `report_connected`/`report_disconnected` from real
+      transports
 - [ ] `IoDevice::shutdown()` (default no-op) + `ProtocolManager::shutdown()`
       + `impl Drop for Bus` calling `shutdown()` on every device before
       normal field-drop runs + integration test (§6)
@@ -1230,3 +1233,10 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       signature (§9.4)
 - [x] All Open Questions (§7) resolved during design review; no
       remaining decisions deferred to implementation time
+- [ ] Documentation cleanup pass, once everything above is implemented: the
+      source code will almost certainly outlive this plan document, so
+      remove every reference to this plan's section numbers (e.g. "§1.7",
+      "§4.1") from doc comments added during this work, replacing each with
+      either a self-contained explanation or a proper intra-doc
+      cross-reference link to the relevant item/module in the source itself
+      (PR #227 review)
