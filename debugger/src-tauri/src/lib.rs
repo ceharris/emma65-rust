@@ -1095,13 +1095,10 @@ fn get_cpu_bus_state(
         None
     };
 
-    let effective_speed = if let Some(snap) = &live {
+    let effective_speed = live.as_ref().map(|snap| {
         let rate = snap.cycles_delta as f64 / snap.elapsed.as_secs_f64() / 1e6;
-        eprintln!("{:.4} MHz effective ({} cycles / {:?}", rate, snap.cycles_delta, snap.elapsed);
-        Some(format!("{:.4} MHz", rate))
-    } else {
-        None
-    };
+        format!("{rate:.4} MHz")
+    });
 
     CpuBusState {
         irq_active: live.as_ref().map_or(snap.irq_active, |s| s.irq_active),

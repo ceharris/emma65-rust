@@ -12,6 +12,7 @@ interface CpuBusState {
   irq_active: boolean;
   nmi_pending: boolean;
   cycles: number;
+  effective_speed: string;
   is_running: boolean;
   cpu_stopped: boolean;
   cpu_waiting: boolean;
@@ -185,6 +186,9 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
         <div className="cpu-bus-row cpu-bus-cycles">
           <span className="cycles-value">{cpuBus !== null ? formatCycles(cpuBus.cycles) : "—"}</span>
           <span className="cycles-label">cycles</span>
+        </div>
+        <div className="cpu-bus-row cpu-bus-speed">
+          <span className="speed-value">{cpuBus?.effective_speed ?? "—"}</span>
         </div>
         <div className="cpu-bus-row cpu-bus-buttons">
           <button
