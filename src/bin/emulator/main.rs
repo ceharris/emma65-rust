@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use crate::config::{AppConfig, apply_default_if_unconfigured};
-use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, StepResult, Transport};
+use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, StepResult, Transport, TransportReporter};
 
 const DEFAULT_ROM: &[u8] = include_bytes!("default.bin");
 
@@ -23,11 +23,16 @@ async fn main() -> ExitCode {
     // Always offer stdin/stdout to the console via the context. If the console has no
     // `transport=` attribute it will take this transport; if it does have one it will ignore it.
     // Checking whether the slot was consumed after build tells us whether to enter raw mode.
-    let transport = InternalPipeTransport::stdio().unwrap_or_else(|e| {
+    //
+    // No `DeviceId` exists yet at this point (the console's isn't allocated until
+    // `ConsoleModule::instantiate` runs deep inside `build_with_context` below), so the
+    // reporter starts unbound; `ConsoleModule::instantiate` binds it once the id is known.
+    let reporter = TransportReporter::pending(None);
+    let (transport, relay) = InternalPipeTransport::stdio(reporter.clone()).unwrap_or_else(|e| {
         eprintln!("error: failed to attach console to stdin/stdout: {e}");
         std::process::exit(1);
     });
-    let console_transport_slot = Arc::new(Mutex::new(Some(Box::new(transport) as Box<dyn Transport>)));
+    let console_transport_slot = Arc::new(Mutex::new(Some((Box::new(transport) as Box<dyn Transport>, relay, reporter))));
     let context = InstantiationContext {
         clock_hz: config.emulator.clock_speed_hz,
         error_sender: None,
@@ -69,14 +74,24 @@ async fn main() -> ExitCode {
             event = error_receiver.recv(), if events_open => match event {
                 Some(DeviceEvent::TransportError { device, error}) =>
                     eprintln!("device {}: transport error: {}", device.0, error),
-                Some(DeviceEvent::TransportDisconnected { device, reason}) =>
-                    eprintln!("device {} disconnected: {}", device.0, reason),
-                Some(DeviceEvent::TransportConnected { device }) =>
-                    println!("device {} connected", device.0),
+                Some(DeviceEvent::TransportDisconnected { device, peer, reason}) =>
+                    match peer {
+                        Some(peer) => eprintln!("device {} disconnected: {} ({})", device.0, reason, peer),
+                        None => eprintln!("device {} disconnected: {}", device.0, reason),
+                    },
+                Some(DeviceEvent::TransportConnected { device, peer }) =>
+                    match peer {
+                        Some(peer) => println!("device {} connected: {}", device.0, peer),
+                        None => println!("device {} connected", device.0),
+                    },
                 Some(DeviceEvent::DeviceInfo { device, message}) =>
                     eprintln!("device {}: {}", device.0, message),
                 Some(DeviceEvent::RejectedWrite { device, address }) =>
                     eprintln!("device rejected write {}: at address {}", device.0, address),
+                Some(DeviceEvent::OutboundBytesDropped { device, count }) =>
+                    eprintln!("device {}: {} outbound bytes dropped", device.0, count),
+                Some(DeviceEvent::InboundEventsDropped { device, count }) =>
+                    eprintln!("device {}: {} inbound events dropped", device.0, count),
                 None => events_open = false,      // all senders dropped
             },
 

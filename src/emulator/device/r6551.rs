@@ -43,9 +43,10 @@
 //! RX is timer-driven: `tick()` polls the transport once per byte period at the configured
 //! baud rate, or on every call when using the external clock (default).
 
-use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::transport;
-use crate::emulator::transport::{Transport, TransportError};
+use std::collections::VecDeque;
+
+use crate::emulator::device::IoDevice;
+use crate::emulator::transport::{Transport, TransportRelay};
 use log::debug;
 
 /// Rockwell R6551 ACIA (Asynchronous Communications Interface Adapter).
@@ -53,7 +54,15 @@ pub struct R6551 {
     name: &'static str,
     address: u16,
     transport: Option<Box<dyn Transport>>,
-    report_error: Box<dyn Fn(TransportError) + Send>,
+    /// Paired with `transport`; drained into `rx_buffer` once per `tick()`.
+    relay: Option<TransportRelay>,
+    /// Bytes drained from `relay` but not yet clocked into `rx_data` by
+    /// `poll_transport`'s baud-rate pacing. Decouples "arrived from the
+    /// transport" from "visible to the CPU at the configured baud rate" —
+    /// before this device's relay migration, the transport itself
+    /// (implicitly, via its own buffering) played this role, since
+    /// `poll_transport` read directly from it at most once per byte period.
+    rx_buffer: VecDeque<u8>,
     rx_data: u8,
     rdrf: bool,
     tdre: bool,
@@ -86,7 +95,8 @@ impl R6551 {
             name,
             address: 0,
             transport: None,
-            report_error: transport::no_op_reporter(),
+            relay: None,
+            rx_buffer: VecDeque::new(),
             rx_data: 0,
             rdrf: false,
             tdre: true,
@@ -144,14 +154,10 @@ impl R6551 {
         self
     }
 
-    /// Attaches a transport for byte-stream IO.
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
+    /// Attaches a transport and its paired relay for byte-stream IO.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: TransportRelay) {
         self.transport = Some(transport);
-    }
-
-    /// Sets the error sender for async transport event reporting.
-    pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.report_error = transport::reporter(sender, id);
+        self.relay = Some(relay);
     }
 
     fn status(&self) -> u8 {
@@ -179,7 +185,7 @@ impl R6551 {
         if !self.rx_is_enabled() || (self.rdrf && !allow_overrun) {
             return;
         }
-        if let Some(byte) = self.transport.as_mut().and_then(|t| t.try_recv()) {
+        if let Some(byte) = self.rx_buffer.pop_front() {
             if self.rdrf {
                 self.overrun = true;
             }
@@ -240,9 +246,8 @@ impl IoDevice for R6551 {
     fn write(&mut self, address: u16, value: u8) {
         match address - self.address {
             0 => {
-                if let Some(transport) = self.transport.as_mut()
-                        && let Err(e) = transport.send(value) {
-                    (self.report_error)(e);
+                if let Some(transport) = self.transport.as_mut() {
+                    transport.send(value);
                 }
                 if !self.tdre_bug_compatible {
                     self.tdre = false;
@@ -281,6 +286,11 @@ impl IoDevice for R6551 {
     }
 
     fn tick(&mut self, cycles: u32) {
+        if let Some(relay) = self.relay.as_mut() {
+            let rx_buffer = &mut self.rx_buffer;
+            relay.drain_bytes_into(|b| rx_buffer.push_back(b));
+        }
+
         if !self.tdre && !self.tdre_bug_compatible {
             if cycles >= self.tx_cycles_remaining {
                 self.tx_cycles_remaining = 0;
@@ -304,14 +314,14 @@ impl IoDevice for R6551 {
     fn reset(&mut self) {
         let address = self.address;
         let transport = std::mem::take(&mut self.transport);
-        let report_error = std::mem::replace(&mut self.report_error, transport::no_op_reporter());
+        let relay = std::mem::take(&mut self.relay);
         let clock_hz = self.clock_hz;
         let tdre_bug_compatible = self.tdre_bug_compatible;
         let overrun_enabled = self.overrun_enabled;
         *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
-        self.report_error = report_error;
+        self.relay = relay;
         self.clock_hz = clock_hz;
         self.tdre_bug_compatible = tdre_bug_compatible;
         self.overrun_enabled = overrun_enabled;
@@ -325,25 +335,46 @@ impl IoDevice for R6551 {
     fn name(&self) -> &str {
         self.name
     }
+
+    fn shutdown(&mut self) {
+        if let Some(transport) = self.transport.as_mut() {
+            transport.shutdown();
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::transport::InternalPipeTransport;
+    use crate::emulator::transport::{ChannelRelay, InternalPipeTransport};
+    use crossbeam_channel::{Sender, unbounded};
     use std::time::Duration;
 
     const DEVICE_NAME: &str = "";
-    
+
     fn device() -> R6551 {
         R6551::new(DEVICE_NAME)
     }
-    
-    fn device_with_pipe() -> (R6551, InternalPipeTransport) {
-        let (local, remote) = InternalPipeTransport::pair().unwrap();
+
+    /// A `ChannelRelay<u8>` fed by a plain, unbounded `crossbeam_channel`,
+    /// for deterministic control over exactly what a device's `tick()`
+    /// observes as "arrived" — independent of `InternalPipeTransport`'s own
+    /// OS-pipe timing. `pair_direct()` gives both ends of the test pipe no
+    /// relay of their own, so this hand-fed one stands in for it.
+    fn spawn_byte_relay(capacity: usize) -> (Sender<u8>, ChannelRelay<u8>) {
+        let (tx, rx) = unbounded();
+        (tx, ChannelRelay::spawn(rx, capacity))
+    }
+
+    /// `remote` is the device's outbound-write sink (verified via
+    /// `remote.try_recv()`); `tx` feeds the device's inbound relay directly,
+    /// simulating bytes arriving from an external peer.
+    fn device_with_pipe() -> (R6551, InternalPipeTransport, Sender<u8>) {
+        let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
+        let (tx, relay) = spawn_byte_relay(256);
         let mut device = device();
-        device.attach_transport(Box::new(local));
-        (device, remote)
+        device.attach_transport(Box::new(local), TransportRelay::Byte(relay));
+        (device, remote, tx)
     }
 
     // --- Initial state ---
@@ -380,7 +411,7 @@ mod tests {
 
     #[test]
     fn tx_sends_byte_to_transport() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, mut remote, _tx) = device_with_pipe();
         device.write(0, 0x41);
         std::thread::sleep(Duration::from_millis(1));
         assert_eq!(remote.try_recv(), Some(0x41));
@@ -396,10 +427,10 @@ mod tests {
 
     #[test]
     fn rx_byte_deferred_when_dtr_not_asserted() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x0);   // deassert DTR
-        remote.send(0xBB).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0xBB).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1); // external clock: poll every tick
         assert_eq!(device.peek(0), 0); // no value read
         assert_eq!(device.peek(1) & 0x08, 0); // RDRF not set
@@ -407,20 +438,20 @@ mod tests {
 
     #[test]
     fn rx_byte_sets_rdrf() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x1);   // assert DTR
-        remote.send(0xBB).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0xBB).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1); // external clock: poll every tick
         assert_ne!(device.peek(1) & 0x08, 0); // RDRF set
     }
 
     #[test]
     fn rx_read_data_returns_byte_and_clears_rdrf() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x1);   // assert DTR
-        remote.send(0x55).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x55).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert_eq!(device.read(0), 0x55);
         assert_eq!(device.peek(1) & 0x08, 0); // RDRF cleared
@@ -428,13 +459,13 @@ mod tests {
 
     #[test]
     fn second_byte_held_in_transport_until_first_read() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x1);   // assert DTR
-        remote.send(0x01).unwrap();
-        remote.send(0x02).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x01).unwrap();
+        tx.send(0x02).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1); // receives 0x01 → RDRF
-        device.tick(1); // 0x02 stays in pipe (RDRF still set)
+        device.tick(1); // 0x02 stays in the internal rx buffer (RDRF still set)
         assert_eq!(device.read(0), 0x01);
         device.tick(1); // now receives 0x02
         assert_eq!(device.read(0), 0x02);
@@ -444,17 +475,18 @@ mod tests {
 
     #[test]
     fn overrun_set_in_internal_clock_mode_with_overrun_enabled() {
-        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
+        let (tx, relay) = spawn_byte_relay(256);
         let mut device = device()
             .with_clock_hz(1_000_000)
             .with_overrun(true);
-        device.attach_transport(Box::new(local));
+        device.attach_transport(Box::new(local), TransportRelay::Byte(relay));
         // 19200 baud internal clock: cycles_per_byte = 1_000_000 * 10 / 19200 = 520
         device.write(2, 0x1);   // assert DTR
         device.write(3, 0x1F);
-        remote.send(0x01).unwrap();
-        remote.send(0x02).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x01).unwrap();
+        tx.send(0x02).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(520); // receives 0x01 → RDRF
         device.tick(520); // receives 0x02 → OVRN (overwrites rx_data)
         assert_ne!(device.peek(1) & 0x04, 0); // OVRN set
@@ -463,17 +495,18 @@ mod tests {
 
     #[test]
     fn no_overrun_in_external_clock_mode_even_with_flag() {
-        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
+        let (tx, relay) = spawn_byte_relay(256);
         let mut device = device()
             .with_overrun(true);
-        device.attach_transport(Box::new(local));
+        device.attach_transport(Box::new(local), TransportRelay::Byte(relay));
         device.write(2, 0x1);   // assert DTR
         // Control defaults to 0x00 → external clock (cycles_per_byte = 0)
-        remote.send(0x01).unwrap();
-        remote.send(0x02).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x01).unwrap();
+        tx.send(0x02).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1); // receives 0x01 → RDRF
-        device.tick(1); // 0x02 stays in pipe (external clock ignores overrun flag)
+        device.tick(1); // 0x02 stays in the internal rx buffer (external clock ignores overrun flag)
         assert_eq!(device.peek(1) & 0x04, 0); // OVRN not set
         assert_eq!(device.read(0), 0x01);
         device.tick(1); // now receives 0x02
@@ -484,11 +517,11 @@ mod tests {
 
     #[test]
     fn baud_rate_setting_controls_poll_timing() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x1);  // assert DTR
         device.write(3, 0x1F); // 19200 baud, internal receiver clock
-        remote.send(0x42).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x42).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
 
         // One byte period at 19200 baud on a 1 MHz clock: 10/19200 * 1_000_000 = 520 cycles
         device.tick(519);
@@ -502,30 +535,30 @@ mod tests {
 
     #[test]
     fn irq_active_on_rdrf_when_rx_irq_enabled_and_dtr_asserted() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x01); // IRD=0, DTR=1: RX IRQ enabled
-        remote.send(0x01).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x01).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert!(device.irq_active());
     }
 
     #[test]
     fn irq_inactive_when_rx_dtr_not_asserted() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x2); // IRD=1, DTR=0: RX IRQ disabled
-        remote.send(0x01).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x01).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert!(!device.irq_active());
     }
 
     #[test]
     fn irq_inactive_when_rx_irq_disabled() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x3); // IRD=1, DTR=1: RX IRQ disabled
-        remote.send(0x01).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x01).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert!(!device.irq_active());
     }
@@ -548,7 +581,7 @@ mod tests {
 
     #[test]
     fn tdre_clears_on_tx_write_in_correct_mode() {
-        let (mut device, _remote) = device_with_pipe();
+        let (mut device, _remote, _tx) = device_with_pipe();
         assert_ne!(device.peek(1) & 0x10, 0); // TDRE set before write
         device.write(0, 0x41);
         assert_eq!(device.peek(1) & 0x10, 0); // TDRE cleared after TX write
@@ -556,7 +589,7 @@ mod tests {
 
     #[test]
     fn tdre_restores_after_tick_in_correct_mode() {
-        let (mut device, _remote) = device_with_pipe();
+        let (mut device, _remote, _tx) = device_with_pipe();
         device.write(0, 0x41); // clears TDRE; external clock sets tx_cycles_remaining = 1
         device.tick(1);
         assert_ne!(device.peek(1) & 0x10, 0); // TDRE restored
@@ -564,9 +597,10 @@ mod tests {
 
     #[test]
     fn tdre_always_set_in_bug_compatible_mode() {
-        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
+        let (_tx, relay) = spawn_byte_relay(256);
         let mut device = device().with_tdre_bug(true);
-        device.attach_transport(Box::new(local));
+        device.attach_transport(Box::new(local), TransportRelay::Byte(relay));
         device.write(0, 0x41); // TX write — should NOT clear TDRE
         assert_ne!(device.peek(1) & 0x10, 0);
         device.tick(1000); // many ticks — TDRE must stay set
@@ -575,7 +609,7 @@ mod tests {
 
     #[test]
     fn tdre_restores_after_baud_rate_period_in_correct_mode() {
-        let (mut device, _remote) = device_with_pipe();
+        let (mut device, _remote, _tx) = device_with_pipe();
         device.write(3, 0x1F); // 19200 baud, internal clock → 520 cycles/byte
         device.write(0, 0x41);
         assert_eq!(device.peek(1) & 0x10, 0); // TDRE cleared
@@ -589,10 +623,10 @@ mod tests {
 
     #[test]
     fn peek_does_not_clear_rdrf() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x1);   // assert DTR
-        remote.send(0xCC).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0xCC).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         let _ = device.peek(0); // peek at data register
         assert_ne!(device.peek(1) & 0x08, 0); // RDRF still set
@@ -600,10 +634,10 @@ mod tests {
 
     #[test]
     fn peek_returns_rx_data_without_consuming() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(2, 0x1);   // assert DTR
-        remote.send(0x77).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x77).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert_eq!(device.peek(0), 0x77);
         assert_eq!(device.read(0), 0x77); // still available

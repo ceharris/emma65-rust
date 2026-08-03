@@ -1,5 +1,5 @@
 use emma65::emulator::device::{Console, Mc6850, R6551, Via6522};
-use emma65::emulator::{AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, Mnemonic, StepResult, Transport};
+use emma65::emulator::{AddressRange, Bus, ChannelRelay, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, Mnemonic, StepResult, Transport, TransportRelay};
 
 const MAX_STEPS: u32 = 10_000;
 
@@ -117,9 +117,14 @@ fn page_crossing_adds_cycle() {
 /// echoes it back, verifying end-to-end transport I/O.
 #[test]
 fn console_full_system_echo() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
+    // `remote` verifies the echoed outbound byte; `tx` feeds the console's
+    // inbound relay directly, simulating a byte arriving from an external
+    // peer (pair_direct() gives both ends of the test pipe no relay of
+    // their own, so this hand-fed one stands in for it).
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut console = Console::new("console").with_address(0xDF00);
-    console.attach_transport(Box::new(local));
+    console.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     // 64 KB RAM; Console at $DF00–$DF01.
     let bus = Bus::config()
@@ -153,9 +158,9 @@ fn console_full_system_echo() {
     cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
     cpu.reset().unwrap();
 
-    // Send the byte *before* starting execution so the pipe buffer is ready.
-    remote.send(0x55).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1));
+    // Send the byte *before* starting execution so the relay has drained it.
+    tx.send(0x55).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
 
     step_to_stop(&mut cpu);
 
@@ -170,9 +175,10 @@ fn console_full_system_echo() {
 /// CPU writes a byte to R6551 TX register; byte appears on the remote transport.
 #[test]
 fn _transmit() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
+    let (_tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("").with_address(0xDF00);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -207,9 +213,10 @@ fn _transmit() {
 /// Remote sends a byte; CPU polls R6551 RDRF status and reads the received byte.
 #[test]
 fn _receive() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("").with_address(0xDF00);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -250,8 +257,8 @@ fn _receive() {
     cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
     cpu.reset().unwrap();
 
-    remote.send(0x55).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1));
+    tx.send(0x55).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
 
     step_to_stop(&mut cpu);
 
@@ -267,9 +274,10 @@ fn _receive() {
 fn mc6850_transmit_and_receive() {
     // --- TX ---
     {
-        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
+        let (_tx, rx) = crossbeam_channel::unbounded::<u8>();
         let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
-        mc.attach_transport(Box::new(local));
+        mc.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
         let bus = Bus::config()
             .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -312,9 +320,10 @@ fn mc6850_transmit_and_receive() {
 
     // --- RX ---
     {
-        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
+        let (tx, rx) = crossbeam_channel::unbounded::<u8>();
         let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
-        mc.attach_transport(Box::new(local));
+        mc.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
         let bus = Bus::config()
             .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -350,8 +359,8 @@ fn mc6850_transmit_and_receive() {
         cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
         cpu.reset().unwrap();
 
-        remote.send(0x77).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        tx.send(0x77).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
 
         step_to_stop(&mut cpu);
 
@@ -374,9 +383,10 @@ fn mc6850_transmit_and_receive() {
 /// ISR: LDA $DF00 (clears RDRF, deasserts IRQ); STA $0300; RTI.
 #[test]
 fn _irq_driven_receive() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("").with_address(0xDF00);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -427,7 +437,7 @@ fn _irq_driven_receive() {
     // WAI before the byte arrives (avoiding the IRQ firing before WAI executes).
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        remote.send(0x55).unwrap();
+        tx.send(0x55).unwrap();
     });
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -447,9 +457,10 @@ fn _irq_driven_receive() {
 /// Main program spins on a zero-page counter until all bytes are sent, then STPs.
 #[test]
 fn _irq_driven_transmit() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
+    let (_tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("").with_address(0xDF00);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -544,9 +555,10 @@ fn _irq_driven_transmit() {
 /// ISR: LDA $DF01 (clears RDRF, deasserts IRQ); STA $0300; RTI.
 #[test]
 fn mc6850_irq_driven_receive() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
-    mc.attach_transport(Box::new(local));
+    mc.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -597,7 +609,7 @@ fn mc6850_irq_driven_receive() {
     // WAI before the byte arrives (avoiding the IRQ firing before WAI executes).
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        remote.send(0x77).unwrap();
+        tx.send(0x77).unwrap();
     });
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -617,9 +629,10 @@ fn mc6850_irq_driven_receive() {
 /// Main program spins on a zero-page counter until all bytes are sent, then STPs.
 #[test]
 fn mc6850_irq_driven_transmit() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
+    let (_tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut mc = Mc6850::new("mc6850").with_address(0xDF00);
-    mc.attach_transport(Box::new(local));
+    mc.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()

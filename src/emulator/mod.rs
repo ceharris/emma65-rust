@@ -24,4 +24,4 @@ pub use disasm::{DisassembledLine, Disassembler};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
 pub use exec::{run, run_from, step_into, step_over_breakpoint, step_over_subroutine, step_return, ClockSpeed, CpuLiveSnapshot, RunHandle, RunStopper, StepResult};
 pub use session::EmulatorSession;
-pub use transport::{InternalPipeTransport, PipeTransport, PtyTransport, TcpSocketTransport, Transport, TransportError, TransportEvent, UnixSocketTransport};
+pub use transport::{ChannelRelay, InternalPipeTransport, PipeTransport, PtyTransport, TcpSocketTransport, Transport, TransportError, TransportEvent, TransportRelay, TransportReporter, UnixSocketTransport};

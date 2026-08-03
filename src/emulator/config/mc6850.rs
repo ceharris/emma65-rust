@@ -48,13 +48,10 @@ impl DeviceModule for Mc6850Module {
         let device = {
             let mut dev = Mc6850::new(self.name()).with_address(address);
             if let Some(transport_spec) = transport_spec {
-                let transport = transport_spec
+                let (transport, relay) = transport_spec
                     .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
-                dev.attach_transport(transport);
-            }
-            if let Some(sender) = &context.error_sender {
-                dev.set_error_sender(sender.clone(), device_id);
+                dev.attach_transport(transport, relay);
             }
             dev
         };

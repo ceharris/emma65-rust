@@ -1,7 +1,7 @@
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::{ProtocolMessageEncoding, Via6522};
-use crate::emulator::{AddressRange, BusConfig};
+use crate::emulator::{AddressRange, BusConfig, TransportRelay};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
 use serde::Deserialize;
@@ -51,13 +51,17 @@ impl DeviceModule for Via6522Module {
                 dev = dev.with_protocol(protocol);
             }
             if let Some(transport_spec) = transport_spec {
-                let transport = transport_spec
+                let (transport, relay) = transport_spec
                     .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
-                dev.attach_transport(transport);
-            }
-            if let Some(sender) = &context.error_sender {
-                dev.set_error_sender(sender.clone(), device_id);
+                let tagged_relay = match relay {
+                    TransportRelay::Tagged(relay) => relay,
+                    TransportRelay::Byte(_) => return Err(DeviceModuleError::Config(
+                        "via/6522 requires a multipoint transport (tcp/unix); \
+                         point-to-point transports (pty/pipe) don't support per-client tagging"
+                            .to_string())),
+                };
+                dev.attach_transport(transport, tagged_relay);
             }
             dev
         };

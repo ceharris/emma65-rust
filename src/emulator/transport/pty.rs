@@ -1,12 +1,19 @@
 //! Transport over a pseudo-terminal (PTY).
 //!
 //! Opens a PTY pair on construction. A Tokio task owns the master side fd via
-//! [`AsyncFd`] for proper non-blocking epoll integration. The sync side
-//! communicates via bounded `crossbeam` channels. The slave device path is
-//! available for external processes to connect to. An optional stable symlink
-//! may be created at a caller-supplied path so that external programs (e.g.
-//! terminal emulators) can find the port by a predictable name; the symlink
-//! is removed automatically when the transport is shut down or dropped.
+//! [`AsyncFd`] for proper non-blocking epoll integration. Inbound bytes flow
+//! through a [`ChannelRelay<u8>`](ChannelRelay): the Tokio task pushes each
+//! byte it reads into a plain `crossbeam_channel`, and the relay's own OS
+//! thread relays those into an `rtrb` ring for the caller to drain. Outbound
+//! bytes go the other way: the transport pushes into an `rtrb::Producer<u8>`
+//! (never blocking; overflow is counted via `TransportReporter`, not
+//! surfaced as an error), and
+//! the same Tokio task drains the matching `Consumer<u8>` and writes to the
+//! master fd. The slave device path is available for external processes to
+//! connect to. An optional stable symlink may be created at a caller-supplied
+//! path so that external programs (e.g. terminal emulators) can find the port
+//! by a predictable name; the symlink is removed automatically when the
+//! transport is shut down or dropped.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -14,21 +21,27 @@ use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Sender, bounded};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{OpenptyResult, openpty};
 use nix::sys::termios::{self, SetArg, cfmakeraw};
 use nix::unistd;
+use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, oneshot};
 
-use super::{ChannelBridge, Transport, TransportError, TransportEvent};
+use super::{CHANNEL_CAPACITY, ChannelRelay, Transport, TransportError, TransportReporter};
 
 /// Transport over a pseudo-terminal (PTY).
 pub struct PtyTransport {
-    bridge: ChannelBridge<TransportEvent>,
+    /// Outbound ring producer; see the module doc for the outbound path.
+    outbound: Producer<u8>,
+    outbound_notify: Arc<Notify>,
+    /// One-shot signal sent to the Tokio task to request shutdown.
+    shutdown_tx: Option<oneshot::Sender<()>>,
     slave_path: Option<String>,
     _slave: OwnedFd,
     // Reflects whether an external process is currently confirmed connected
@@ -36,10 +49,32 @@ pub struct PtyTransport {
     // no longer gates `send()` — see its doc comment.
     client_connected: Arc<AtomicBool>,
     symlink_path: Option<PathBuf>,
+    /// Clone of the reporter supplied to `open`, for `send()`'s own
+    /// `note_outbound_drop` call.
+    reporter: TransportReporter,
 }
 
 impl PtyTransport {
-    pub fn open(symlink_path: Option<&Path>) -> std::io::Result<Self> {
+    /// Opens a PTY pair, using the crate's default channel capacity for both
+    /// the inbound relay's ring and the outbound ring.
+    pub fn open(
+        symlink_path: Option<&Path>,
+        reporter: TransportReporter,
+    ) -> std::io::Result<(Self, ChannelRelay<u8>)> {
+        Self::open_with_capacity(symlink_path, reporter, CHANNEL_CAPACITY)
+    }
+
+    /// Same as [`open`](Self::open), with the inbound/outbound ring capacity
+    /// parameterized. `pub(crate)` and used only by
+    /// `outbound_overflow_increments_drop_counter_and_is_reported` below, to
+    /// force a deterministic ring overflow (capacity 1) rather than racing
+    /// the concurrently running outbound-pump task to overflow the default
+    /// capacity through timing alone.
+    pub(crate) fn open_with_capacity(
+        symlink_path: Option<&Path>,
+        reporter: TransportReporter,
+        capacity: usize,
+    ) -> std::io::Result<(Self, ChannelRelay<u8>)> {
         let OpenptyResult { master, slave } = openpty(None, None)
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
@@ -77,9 +112,13 @@ impl PtyTransport {
         fcntl(raw, FcntlArg::F_SETFL(new_flags))
             .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
-        let (bridge, in_tx, out_rx,  out_notify, shutdown_rx) = ChannelBridge::<TransportEvent>::new();
+        let (in_tx, in_rx) = bounded::<u8>(capacity);
+        let relay = ChannelRelay::spawn(in_rx, capacity);
+
+        let (outbound_producer, outbound_consumer) = RingBuffer::new(capacity);
+        let outbound_notify = Arc::new(Notify::new());
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let client_connected = Arc::new(AtomicBool::new(false));
-        let connection_counter = Arc::new(AtomicU64::new(0));
 
         let master_std = unsafe { File::from_raw_fd(raw) };
         std::mem::forget(master);
@@ -88,14 +127,24 @@ impl PtyTransport {
         tokio::spawn(run_pty_task(
             async_fd,
             in_tx,
-            out_rx,
-            out_notify,
+            outbound_consumer,
+            Arc::clone(&outbound_notify),
             shutdown_rx,
             Arc::clone(&client_connected),
-            Arc::clone(&connection_counter),
+            reporter.clone(),
         ));
 
-        Ok(Self { bridge, slave_path, _slave: slave, client_connected, symlink_path })
+        let transport = Self {
+            outbound: outbound_producer,
+            outbound_notify,
+            shutdown_tx: Some(shutdown_tx),
+            slave_path,
+            _slave: slave,
+            client_connected,
+            symlink_path,
+            reporter,
+        };
+        Ok((transport, relay))
     }
 
     pub fn slave_path(&self) -> Option<&str> {
@@ -104,13 +153,16 @@ impl PtyTransport {
 }
 
 impl Transport for PtyTransport {
+    /// Superseded by the [`ChannelRelay<u8>`](ChannelRelay) returned
+    /// alongside this transport from `open`/`open_with_capacity` — inbound
+    /// bytes flow through that relay now, not through this method. Retained
+    /// only because `Transport::try_recv` is still part of the trait:
+    /// `LedMatrix` (`device/led_matrix.rs`) hasn't yet migrated to draining
+    /// a relay directly and still calls it (via `try_recv_tagged`'s default
+    /// impl). Any device calling this method on a `PtyTransport` will not
+    /// receive PTY input.
     fn try_recv(&mut self) -> Option<u8> {
-        loop {
-            match self.bridge.try_recv()? {
-                TransportEvent::Data(_, byte) => return Some(byte),
-                TransportEvent::Connected(_) | TransportEvent::Disconnected(_) => continue,
-            }
-        }
+        None
     }
 
     /// Sends a byte to the PTY master.
@@ -118,24 +170,25 @@ impl Transport for PtyTransport {
     /// Unlike the previous implementation, this does not gate on whether an
     /// external process has the slave open yet: PTY masters accept writes
     /// regardless of whether anyone has opened the slave side (the kernel
-    /// buffers the output). Dropping writes here would silently discard the
-    /// protocol layer's initial state dump, which is now sent proactively
-    /// as soon as `Connected` fires — before we can know a real reader
-    /// exists. `is_connected()` still reflects true external attachment.
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        self.bridge.send(byte)
+    /// buffers the output). `is_connected()` still reflects true external
+    /// attachment, independently of this. Never blocks and never errors:
+    /// outbound ring overflow is counted via `TransportReporter`, not
+    /// surfaced here.
+    fn send(&mut self, byte: u8) {
+        match self.outbound.push(byte) {
+            Ok(()) => self.outbound_notify.notify_one(),
+            Err(PushError::Full(_)) => self.reporter.note_outbound_drop(),
+        }
     }
 
     fn is_connected(&self) -> bool {
         self.client_connected.load(Ordering::Acquire)
     }
 
-    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
-        self.bridge.try_recv()
-    }
-
     fn shutdown(&mut self) {
-        self.bridge.shutdown();
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
         if let Some(ref link) = self.symlink_path.take() {
             let _ = std::fs::remove_file(link);
         }
@@ -150,26 +203,28 @@ impl Drop for PtyTransport {
     }
 }
 
-/// Tokio task: bridges the async PTY master to sync crossbeam channels.
+/// Tokio task: bridges the async PTY master to the sync side.
 ///
-/// Emits `Connected(0)` once at startup (the transport is ready to accept
-/// writes immediately — see `Transport::send`'s doc comment), `Data(0, _)`
-/// for each byte read, and `Disconnected(0)` once when the task exits.
-/// `client_connected`/`connection_counter` still track real external
-/// attach/detach (via first successful read / EIO) for `is_connected()` and
-/// `connection_id()`, independent of the event stream above.
+/// Reads bytes from the master fd and pushes them into `in_tx` (consumed by
+/// the `ChannelRelay<u8>` returned from `open`); drains `outbound` (the
+/// transport's `send()` target) and writes those bytes to the master fd;
+/// reports outbound/inbound drop counts on a 1-second interval.
+/// `client_connected` tracks real external attach/detach (via first
+/// successful read / EIO) for `is_connected()`, independent of the relay.
+/// Each attach/detach edge is also reported via `reporter.report_connected`/
+/// `report_disconnected`, guarded so a spurious detach isn't reported
+/// on task exit when no client was ever attached.
 async fn run_pty_task(
     async_fd: AsyncFd<File>,
-    in_tx: Sender<TransportEvent>,
-    out_rx: Receiver<u8>,
-    out_notify: Arc<Notify>,
+    in_tx: Sender<u8>,
+    mut outbound: Consumer<u8>,
+    outbound_notify: Arc<Notify>,
     mut shutdown_rx: oneshot::Receiver<()>,
     client_connected: Arc<AtomicBool>,
-    connection_counter: Arc<AtomicU64>,
+    reporter: TransportReporter,
 ) {
-    if in_tx.send(TransportEvent::Connected(0)).is_err() {
-        return;
-    }
+    let mut report_interval = tokio::time::interval(Duration::from_secs(1));
+    report_interval.tick().await; // first tick fires immediately; skip it
 
     let mut buf = [0u8; 1];
     loop {
@@ -180,35 +235,52 @@ async fn run_pty_task(
                 let mut guard = match result { Ok(g) => g, Err(_) => break };
                 match guard.try_io(|inner| inner.get_ref().read(&mut buf)) {
                     Ok(Ok(1)) => {
-                        if !client_connected.load(Ordering::Acquire) {
-                            connection_counter.fetch_add(1, Ordering::Release);
-                            client_connected.store(true, Ordering::Release);
+                        if !client_connected.swap(true, Ordering::Release) {
+                            reporter.report_connected(None);
                         }
-                        if in_tx.send(TransportEvent::Data(0, buf[0])).is_err() {
+                        if in_tx.send(buf[0]).is_err() {
                             break;
                         }
                     }
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) if e.raw_os_error() == Some(nix::libc::EIO) => {
-                        while out_rx.try_recv().is_ok() {}
-                        client_connected.store(false, Ordering::Release);
+                        while outbound.pop().is_ok() {}
+                        if client_connected.swap(false, Ordering::Release) {
+                            reporter.report_disconnected(None, "EIO".to_string());
+                        }
                     }
                     Ok(Err(_)) => break,
                     Err(_) => { guard.clear_ready(); }
                 }
             }
 
-            _ = drain_outbound(async_fd.get_ref(), &out_rx, &out_notify) => {}
+            _ = drain_outbound(async_fd.get_ref(), &mut outbound, &outbound_notify, &reporter) => {}
+
+            _ = report_interval.tick() => {
+                reporter.report_counts();
+            }
         }
     }
-    client_connected.store(false, Ordering::Release);
-    let _ = in_tx.send(TransportEvent::Disconnected(0));
+    // Guarded (`swap`, not `store`): this runs unconditionally on every task
+    // exit, including shutdown before any client ever attached, which must
+    // not be reported as a disconnect — only a genuine false→true→false
+    // transition should.
+    if client_connected.swap(false, Ordering::Release) {
+        reporter.report_disconnected(None, "shutdown".to_string());
+    }
+    drop(in_tx);
 }
 
-async fn drain_outbound(mut file: &File, out_rx: &Receiver<u8>, out_notify: &Notify) {
-    out_notify.notified().await;
-    while let Ok(byte) = out_rx.try_recv() {
-        if file.write_all(&[byte]).is_err() {
+async fn drain_outbound(
+    mut file: &File,
+    outbound: &mut Consumer<u8>,
+    notify: &Notify,
+    reporter: &TransportReporter,
+) {
+    notify.notified().await;
+    while let Ok(byte) = outbound.pop() {
+        if let Err(e) = file.write_all(&[byte]) {
+            reporter.report_error(TransportError::Io(e));
             return;
         }
     }
@@ -224,50 +296,70 @@ fn tty_name(fd: BorrowedFd<'_>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::emulator::{DeviceEvent, DeviceId, device_event_channel};
+
+    /// Shuts `transport` down (stopping the background Tokio task and its
+    /// OS resources, not just the relay) and drops it plus `relay`.
+    /// `ChannelRelay::drop`'s internal stop signal means this is safe and
+    /// prompt even here, inside an `async fn` test on a Tokio worker — it no
+    /// longer depends on that worker being free to poll `run_pty_task` to
+    /// completion first (see the shutdown contract in the module doc).
+    fn close(mut transport: PtyTransport, relay: ChannelRelay<u8>) {
+        transport.shutdown();
+        drop((transport, relay));
+    }
 
     #[tokio::test]
     async fn open_send_recv() {
-        let mut transport = PtyTransport::open(None).unwrap();
+        let (transport, mut relay) = PtyTransport::open(None, TransportReporter::pending(None)).unwrap();
         assert!(transport.slave_path().is_some());
 
         let slave_path = transport.slave_path().unwrap().to_owned();
         let slave_file = std::fs::OpenOptions::new().write(true).open(&slave_path).unwrap();
-        use std::io::Write;
         { let mut f = slave_file; f.write_all(&[0xBB]).unwrap(); }
 
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(transport.try_recv(), Some(0xBB));
+        let mut got = Vec::new();
+        relay.drain_into(|b| got.push(b));
+        assert_eq!(got, vec![0xBB]);
+
+        close(transport, relay);
     }
 
     #[tokio::test]
     async fn shutdown_marks_disconnected() {
-        let mut transport = PtyTransport::open(None).unwrap();
+        let (mut transport, relay) = PtyTransport::open(None, TransportReporter::pending(None)).unwrap();
         transport.shutdown();
         assert!(!transport.is_connected());
+
+        close(transport, relay);
     }
 
     #[tokio::test]
     async fn send_before_any_external_attach_succeeds() {
-        let mut transport = PtyTransport::open(None).unwrap();
+        let (mut transport, relay) = PtyTransport::open(None, TransportReporter::pending(None)).unwrap();
 
-        // No external process connected yet; send must not be silently dropped.
+        // No external process connected yet; send must not panic or block.
         assert!(!transport.is_connected());
-        assert!(transport.send(0xFF).is_ok());
+        transport.send(0xFF);
+
+        close(transport, relay);
     }
 
     #[tokio::test]
     async fn is_connected_reflects_client_state() {
-        let transport = PtyTransport::open(None).unwrap();
+        let (transport, relay) = PtyTransport::open(None, TransportReporter::pending(None)).unwrap();
         let slave_path = transport.slave_path().unwrap().to_owned();
 
         assert!(!transport.is_connected());
 
         let slave = std::fs::OpenOptions::new().write(true).open(&slave_path).unwrap();
-        use std::io::Write;
         { let mut f = slave; f.write_all(&[0x01]).unwrap(); }
 
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(transport.is_connected());
+
+        close(transport, relay);
     }
 
     #[tokio::test]
@@ -275,24 +367,16 @@ mod tests {
         let link_path = PathBuf::from("/tmp/emma65_test_pty_link");
         let _ = std::fs::remove_file(&link_path);
 
-        let transport = PtyTransport::open(Some(&link_path)).unwrap();
+        let (transport, relay) = PtyTransport::open(Some(&link_path), TransportReporter::pending(None)).unwrap();
         assert!(link_path.exists());
 
-        drop(transport);
+        close(transport, relay);
         assert!(!link_path.exists());
     }
 
     #[tokio::test]
-    async fn try_recv_tagged_emits_connected_on_creation() {
-        let mut transport = PtyTransport::open(None).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-
-        assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Connected(0)));
-    }
-
-    #[tokio::test]
     async fn initial_dump_reaches_client_that_attaches_later() {
-        let mut transport = PtyTransport::open(None).unwrap();
+        let (mut transport, relay) = PtyTransport::open(None, TransportReporter::pending(None)).unwrap();
         let slave_path = transport.slave_path().unwrap().to_owned();
 
         // Give the spawned task a chance to run before checking for its
@@ -300,32 +384,58 @@ mod tests {
         // task has been polled even once.
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
-        // Consume the Connected event and write a "dump" before anyone
-        // has opened the slave side.
-        assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Connected(0)));
-        transport.send(0xD0).unwrap();
-        transport.send(0xD1).unwrap();
+        transport.send(0xD0);
+        transport.send(0xD1);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         // Now a reader attaches and should still see the buffered bytes.
         let mut slave = std::fs::OpenOptions::new().read(true).open(&slave_path).unwrap();
-        use std::io::Read;
         let mut buf = [0u8; 2];
         slave.read_exact(&mut buf).unwrap();
         assert_eq!(buf, [0xD0, 0xD1]);
+
+        close(transport, relay);
     }
 
     #[tokio::test]
     async fn send_is_not_echoed_back_as_received_data() {
-        let mut transport = PtyTransport::open(None).unwrap();
+        let (mut transport, mut relay) = PtyTransport::open(None, TransportReporter::pending(None)).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        let _ = transport.try_recv_tagged(); // consume Connected
 
-        transport.send(0xAB).unwrap();
+        transport.send(0xAB);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         // In cooked mode this would incorrectly come back as received data.
-        assert_eq!(transport.try_recv(), None);
+        let mut got = Vec::new();
+        relay.drain_into(|b| got.push(b));
+        assert!(got.is_empty());
+
+        close(transport, relay);
     }
 
+    #[tokio::test]
+    async fn outbound_overflow_increments_drop_counter_and_is_reported() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(99));
+        let (mut transport, relay) = PtyTransport::open_with_capacity(None, reporter.clone(), 1).unwrap();
+
+        // Capacity 1, two sends back-to-back with no `.await` in between —
+        // the spawned Tokio task can't be scheduled to drain in between, so
+        // the second send is guaranteed to see the ring still full.
+        transport.send(0x01);
+        transport.send(0x02);
+
+        reporter.report_counts();
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::OutboundBytesDropped { device, count }) => {
+                assert_eq!(device, DeviceId(99));
+                assert!(count >= 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        close(transport, relay);
+    }
 }

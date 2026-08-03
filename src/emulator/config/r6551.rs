@@ -57,13 +57,10 @@ impl DeviceModule for R6551Module {
                 dev = dev.with_clock_hz(hz);
             }
             if let Some(spec) = transport_spec {
-                let transport = spec
+                let (transport, relay) = spec
                     .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
-                dev.attach_transport(transport);
-            }
-            if let Some(sender) = &context.error_sender {
-                dev.set_error_sender(sender.clone(), device_id);
+                dev.attach_transport(transport, relay);
             }
             dev
         };

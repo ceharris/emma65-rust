@@ -10,7 +10,7 @@ use tauri_plugin_log::{Target, TargetKind};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
-use emma65::emulator::{Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, RunStopper, StatusRegister, StepResult, TransportSlot, run_from as exec_run_from, step_into as exec_step_into, step_over_breakpoint as exec_step_over_breakpoint, step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return};
+use emma65::emulator::{Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, RunStopper, StatusRegister, StepResult, Transport, TransportReporter, TransportSlot, run_from as exec_run_from, step_into as exec_step_into, step_over_breakpoint as exec_step_over_breakpoint, step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return};
 
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
@@ -188,10 +188,14 @@ async fn load_session() -> Result<(EmulatorSession, InternalPipeTransport), Stri
         .extract()
         .map_err(|e| format!("Configuration error: {e}"))?;
 
-    let (local, remote) = InternalPipeTransport::pair()
+    // No `DeviceId` exists yet at this point (the console's isn't allocated until
+    // `ConsoleModule::instantiate` runs deep inside `build_with_context` below), so the
+    // reporter starts unbound; `ConsoleModule::instantiate` binds it once the id is known.
+    let reporter = TransportReporter::pending(None);
+    let ((local, relay), remote) = InternalPipeTransport::pair(reporter.clone())
         .map_err(|e| format!("Failed to create console transport: {e}"))?;
 
-    let transport_slot: TransportSlot = Arc::new(Mutex::new(Some(Box::new(local))));
+    let transport_slot: TransportSlot = Arc::new(Mutex::new(Some((Box::new(local) as Box<dyn Transport>, relay, reporter))));
     let context = InstantiationContext {
         clock_hz: config.clock_speed_hz,
         error_sender: None,

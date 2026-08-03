@@ -353,12 +353,8 @@ impl LedMatrix {
     }
 
     fn send_register_via_transport(&mut self, transport: &mut Box<dyn Transport>, offset: u8, value: u8) {
-        if let Err(e) = transport.send(offset) {
-            (self.error_reporter)(e);
-        }
-        if let Err(e) = transport.send(value) {
-            (self.error_reporter)(e);
-        }
+        transport.send(offset);
+        transport.send(value);
     }
 
 
@@ -462,6 +458,12 @@ impl IoDevice for LedMatrix {
         self.name
     }
 
+    fn shutdown(&mut self) {
+        if let Some(transport) = self.transport.as_mut() {
+            transport.shutdown();
+        }
+    }
+
 }
 
 #[cfg(test)]
@@ -502,9 +504,8 @@ mod tests {
             }
         }
 
-        fn send(&mut self, value: u8) -> Result<(), TransportError> {
+        fn send(&mut self, value: u8) {
             self.sent.lock().unwrap().push(TransportEvent::Data(1, value));
-            Ok(())
         }
 
         fn is_connected(&self) -> bool { true }

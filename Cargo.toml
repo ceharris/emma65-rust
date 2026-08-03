@@ -34,6 +34,7 @@ clap = { version = "4.0", features = ["derive"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 log = "0.4.33"
 env_logger = "0.11.11"
+rtrb = "0.3.4"
 
 [dependencies.tempfile]
 version = "3.27"
