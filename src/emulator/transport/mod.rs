@@ -39,13 +39,13 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::emulator::{DeviceEvent, DeviceId, ErrorSender};
-use crossbeam_channel::{Receiver, Select, Sender, TryRecvError, TrySendError, bounded};
+use crossbeam_channel::{Receiver, Select, Sender, TrySendError, bounded};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{Notify, broadcast, oneshot, watch};
+use tokio::sync::{Notify, broadcast, watch};
 
 pub(crate) const CHANNEL_CAPACITY: usize = 256;
 
@@ -333,67 +333,6 @@ impl TagAllocator {
     /// Releases `tag` so a future connection can reuse it.
     pub(crate) fn release(&self, tag: u8) {
         self.in_use.lock().unwrap()[tag as usize] = false;
-    }
-}
-
-/// Shared sync-side state for channel-based transports.
-///
-/// Each of these transports spawns a Tokio task that owns the async IO handle(s)
-/// and communicates with the CPU-thread sync side via a pair of bounded `crossbeam`
-/// channels. `ChannelBridge` encapsulates those channels and the shutdown signal,
-/// providing the common `Transport` method implementations.
-///
-/// `R` is the inbound item type: plain `u8` for single-connection transports
-/// (pipe, PTY), or `(u64, u8)` — a connection ID paired with a byte — for
-/// multi-client transports (TCP, Unix socket) so inbound bursts from
-/// different clients can be demultiplexed downstream.
-pub(crate) struct ChannelBridge<R = u8> {
-    pub(crate) rx: Receiver<R>,
-    pub(crate) tx: Sender<u8>,
-    /// One-shot signal sent to the Tokio task to request shutdown.
-    pub(crate) shutdown_tx: Option<oneshot::Sender<()>>,
-    pub(crate) out_notify: Arc<Notify>,
-}
-
-impl<R: Send + 'static> ChannelBridge<R> {
-    /// Creates a new bridge and returns `(bridge, task_rx, task_tx, task_shutdown_rx)`.
-    ///
-    /// The caller spawns a Tokio task that reads from `task_rx` (outbound bytes from
-    /// the sync side) and writes to `task_tx` (inbound items for the sync side), and
-    /// exits when `task_shutdown_rx` fires.
-    pub(crate) fn new() -> (Self, Sender<R>, Receiver<u8>, Arc<Notify>, oneshot::Receiver<()>) {
-        let (in_tx, in_rx) = bounded::<R>(CHANNEL_CAPACITY);
-        let (out_tx, out_rx) = bounded::<u8>(CHANNEL_CAPACITY);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let out_notify = Arc::new(Notify::new());
-        let bridge = Self {
-            rx: in_rx,
-            tx: out_tx,
-            shutdown_tx: Some(shutdown_tx),
-            out_notify: Arc::clone(&out_notify),
-        };
-        (bridge, in_tx, out_rx, out_notify, shutdown_rx)
-    }
-
-    pub(crate) fn try_recv(&mut self) -> Option<R> {
-        match self.rx.try_recv() {
-            Ok(v) => Some(v),
-            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
-        }
-    }
-
-    pub(crate) fn send(&mut self, byte: u8) {
-        // Outbound overflow/disconnection is diagnostic-only (§1.5) — never
-        // surfaced as an error to the caller.
-        if self.tx.try_send(byte).is_ok() {
-            self.out_notify.notify_one();
-        }
-    }
-
-    pub(crate) fn shutdown(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
     }
 }
 

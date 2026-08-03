@@ -40,8 +40,15 @@ impl TransportSpec {
     {
         match self {
             TransportSpec::Pipe { command } => {
-                let transport = PipeTransport::spawn(command, on_child_exit).await
+                // See the Pty arm below for why a pending reporter and a
+                // leaked relay are used here: this call site isn't wired to
+                // thread a per-device TransportReporter/ChannelRelay through
+                // yet (checklist items 12/13 of the transport relay redesign
+                // plan).
+                let reporter = TransportReporter::pending(None);
+                let (transport, relay) = PipeTransport::spawn(command, reporter, on_child_exit).await
                     .map_err(TransportError::Io)?;
+                std::mem::forget(relay);
                 Ok(Box::new(transport))
             }
             other => other.to_transport().await,
@@ -99,8 +106,15 @@ impl TransportSpec {
                 Ok(Box::new(transport))
             }
             TransportSpec::Pipe { command } => {
-                let transport = PipeTransport::spawn(command, |_| {}).await
+                // See the Pty arm above for why a pending reporter and a
+                // leaked relay are used here: this call site isn't wired to
+                // thread a per-device TransportReporter/ChannelRelay through
+                // yet (checklist items 12/13 of the transport relay redesign
+                // plan).
+                let reporter = TransportReporter::pending(None);
+                let (transport, relay) = PipeTransport::spawn(command, reporter, |_| {}).await
                     .map_err(TransportError::Io)?;
+                std::mem::forget(relay);
                 Ok(Box::new(transport))
             }
         }
