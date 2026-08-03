@@ -254,10 +254,11 @@ impl InternalPipeTransport {
     /// trait means it can never be reached through a `Box<dyn Transport>` —
     /// which is what let issue #233 slip past `LedMatrix`'s own tests: those
     /// tests built the device's transport via `pair_direct()`, whose
-    /// `try_recv` still worked, while production `LedMatrix` used
-    /// `PtyTransport`/`TcpSocketTransport`, where the identical call (back
-    /// when it was still a trait method) was a hard no-op. See the module
-    /// documentation for the `local`/`remote` asymmetry.
+    /// `try_recv` still worked, while production `LedMatrix` requires a
+    /// multipoint transport (`TcpSocketTransport`/`UnixSocketTransport`),
+    /// where the identical call (back when it was still a trait method) was
+    /// a hard no-op. See the module documentation for the `local`/`remote`
+    /// asymmetry.
     pub fn try_recv(&mut self) -> Option<u8> {
         let mut newly_disconnected = false;
         let result = match &mut self.rx_mode {
