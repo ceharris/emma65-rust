@@ -419,6 +419,15 @@ impl<T: Send + 'static> ChannelRelay<T> {
         self.consumer.pop().ok()
     }
 
+    /// Returns `true` if the ring currently has nothing to drain.
+    ///
+    /// Lets a caller skip work that's only needed when there's actually
+    /// something to process — see `ProtocolManager::has_pending`'s doc
+    /// comment for why this matters for `Via6522`/`Mc6840`.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.consumer.is_empty()
+    }
+
     /// Unparks the relay thread. Harmless if it isn't currently parked.
     fn unpark(&self) {
         if let Some(handle) = &self.handle {
@@ -426,13 +435,29 @@ impl<T: Send + 'static> ChannelRelay<T> {
         }
     }
 
-    /// Drains all currently available items, then unparks the relay thread.
-    /// Call once per `tick()`.
+    /// Drains all currently available items, then unparks the relay thread
+    /// if anything was actually drained. Call once per `tick()`.
+    ///
+    /// The unpark is conditional on having popped at least one item: `park`/
+    /// `unpark` share a single per-thread token regardless of *why* a thread
+    /// parked, and this same relay thread also blocks in a
+    /// `crossbeam_channel::Select` wait (for the next inbound item) whenever
+    /// it isn't retrying a full-ring push in `push_and_park`. An
+    /// unconditional `unpark()` here would spuriously kick the relay thread
+    /// out of that otherwise-idle `Select` wait on every call — at the
+    /// unthrottled-clock tick rate, that's a busy-loop with no actual data
+    /// flowing. Only popping something means the ring may have just gained
+    /// free space, which is the only condition `push_and_park` needs to be
+    /// woken for.
     pub fn drain_into(&mut self, mut f: impl FnMut(T)) {
+        let mut drained_any = false;
         while let Some(item) = self.pop() {
+            drained_any = true;
             f(item);
         }
-        self.unpark();
+        if drained_any {
+            self.unpark();
+        }
     }
 }
 
