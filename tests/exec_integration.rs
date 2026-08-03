@@ -26,7 +26,7 @@ impl TraceCallback for CapturingCallback {
 /// forever. The test polls the remote pipe until both bytes arrive, then stops the CPU.
 #[tokio::test]
 async fn free_run_console_output() {
-    use emma65::emulator::{Bus, Transport};
+    use emma65::emulator::Bus;
 
     let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
     // This test only observes outbound bytes (via `remote`); the relay

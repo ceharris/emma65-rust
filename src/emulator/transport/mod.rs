@@ -281,8 +281,8 @@ mod transport_reporter_tests {
     }
 }
 
-/// An event yielded by [`Transport::try_recv_tagged`] for transports that
-/// support multiple concurrent connections.
+/// An event drained from a [`ChannelRelay<TransportEvent>`](ChannelRelay) for
+/// transports that support multiple concurrent connections.
 ///
 /// `Connected`/`Disconnected` bound the lifetime of a given `tag` explicitly,
 /// so callers that demultiplex by tag (e.g. `ProtocolManager`) don't have to
@@ -524,8 +524,6 @@ pub(crate) fn push_and_park<T>(producer: &mut Producer<T>, mut item: T, stop: &R
 }
 
 pub trait Transport: Send {
-    fn try_recv(&mut self) -> Option<u8>;
-
     /// Never blocks and never returns an error. Outbound ring overflow is
     /// diagnostic-only (counted, not reported as an error); hard I/O errors
     /// are reported asynchronously via the `TransportReporter` supplied at
@@ -533,16 +531,6 @@ pub trait Transport: Send {
     fn send(&mut self, byte: u8);
 
     fn is_connected(&self) -> bool;
-
-    /// Returns the next event from the channel.
-    /// For a transport type that accepts multiple client connections, the sequence of events for
-    /// any given client tag starts with a [`Connected`](TransportEvent::Connected) event,
-    /// followed by zero or more [`Data`](TransportEvent::Data) events, followed by a
-    /// [`Disconnected`](TransportEvent::Disconnected) event.
-    ///
-    fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
-        self.try_recv().map(|b| TransportEvent::Data(0, b))
-    }
 
     fn shutdown(&mut self);
 }
