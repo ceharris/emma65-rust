@@ -12,21 +12,23 @@
 //! is counted via [`TransportReporter`], not surfaced as an error) and
 //! fanned out to every connected client via a `broadcast::channel`.
 //!
-//! `pump_outbound`, `run_client_task`, and `ClientSession` are shared with
-//! [`TcpSocketTransport`](super::TcpSocketTransport) in `super` — both
-//! transports were converted to this shape (transport relay redesign plan
-//! §4.2), so the machinery lives in one place rather than being duplicated.
+//! The accept loop itself (`pump_outbound`, `run_client_task`,
+//! `ClientSession`, and the loop body driving them) is shared with
+//! [`TcpSocketTransport`](super::TcpSocketTransport) via
+//! `super::run_listener_task`, generic over the [`ClientListener`] trait —
+//! this module supplies only the `UnixListener`-specific `accept`/
+//! peer-naming logic (PR #227 review).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crossbeam_channel::{Sender, bounded};
-use rtrb::{Consumer, Producer, PushError, RingBuffer};
+use crossbeam_channel::bounded;
+use rtrb::{Producer, PushError, RingBuffer};
 use tokio::net::UnixListener;
-use tokio::sync::{Notify, broadcast, oneshot, watch};
+use tokio::sync::{Notify, oneshot, watch};
 
-use super::{BROADCAST_CAPACITY, CHANNEL_CAPACITY, ChannelRelay, ClientSession, TagAllocator, Transport, TransportEvent, TransportReporter, pump_outbound, run_client_task};
+use super::{CHANNEL_CAPACITY, ChannelRelay, ClientListener, Transport, TransportEvent, TransportReporter, run_listener_task};
 
 /// Transport that listens for incoming Unix-domain socket connections.
 pub struct UnixSocketTransport {
@@ -77,7 +79,7 @@ impl UnixSocketTransport {
         let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
         tokio::spawn(propagate_shutdown(shutdown_rx, shutdown_watch_tx));
 
-        tokio::spawn(run_unix_task(
+        tokio::spawn(run_listener_task(
             listener,
             in_tx,
             outbound_consumer,
@@ -151,66 +153,29 @@ async fn propagate_shutdown(shutdown_rx: oneshot::Receiver<()>, shutdown_tx: wat
     let _ = shutdown_tx.send(true);
 }
 
-/// Tokio task: owns the `UnixListener`'s accept loop, spawning a
-/// [`run_client_task`] per connection, and the outbound
-/// [`pump_outbound`] task that fans sent bytes out to every connected
-/// client.
-async fn run_unix_task(
-    listener: UnixListener,
-    in_tx: Sender<TransportEvent>,
-    outbound: Consumer<u8>,
-    outbound_notify: Arc<Notify>,
-    mut shutdown_rx: watch::Receiver<bool>,
-    client_count: Arc<AtomicUsize>,
-    reporter: TransportReporter,
-) {
-    let (fanout_tx, _) = broadcast::channel::<u8>(BROADCAST_CAPACITY);
-    tokio::spawn(pump_outbound(outbound, fanout_tx.clone(), outbound_notify, shutdown_rx.clone(), reporter.clone()));
+impl ClientListener for UnixListener {
+    type Reader = tokio::net::unix::OwnedReadHalf;
+    type Writer = tokio::net::unix::OwnedWriteHalf;
+    /// `peer_addr()` is typically unnamed for Unix client sockets, so
+    /// [`format_peer`](Self::format_peer) uses `peer_cred()` (PID/UID)
+    /// instead, falling back to `conn_tag` if even that errors.
+    type PeerInfo = std::io::Result<tokio::net::unix::UCred>;
 
-    let tag_allocator = Arc::new(TagAllocator::new());
+    async fn accept(&self) -> std::io::Result<(Self::Reader, Self::Writer, Self::PeerInfo)> {
+        let (stream, _) = UnixListener::accept(self).await?;
+        let peer_info = stream.peer_cred();
+        let (reader, writer) = stream.into_split();
+        Ok((reader, writer, peer_info))
+    }
 
-    loop {
-        let stream = tokio::select! {
-            _ = shutdown_rx.changed() => break,
-            result = listener.accept() => match result {
-                Ok((stream, _)) => stream,
-                Err(_) => continue,
-            },
-        };
-
-        let conn_tag = match tag_allocator.allocate() {
-            Some(tag) => tag,
-            None => continue,
-        };
-
-        // Unix client sockets are typically unbound, so `peer_addr()` rarely
-        // gives anything useful; `peer_cred()` (PID/UID) is the meaningful
-        // identifier, falling back to the connection tag if it errors.
-        let peer = match stream.peer_cred() {
+    fn format_peer(info: Self::PeerInfo, conn_tag: u8) -> String {
+        match info {
             Ok(cred) => match cred.pid() {
                 Some(pid) => format!("pid={pid} uid={}", cred.uid()),
                 None => format!("uid={}", cred.uid()),
             },
             Err(_) => format!("conn#{conn_tag}"),
-        };
-
-        client_count.fetch_add(1, Ordering::Release);
-
-        let (reader, writer) = stream.into_split();
-        tokio::spawn(run_client_task(
-            reader,
-            writer,
-            ClientSession {
-                conn_tag,
-                peer,
-                in_tx: in_tx.clone(),
-                fanout_rx: fanout_tx.subscribe(),
-                shutdown_rx: shutdown_rx.clone(),
-                client_count: Arc::clone(&client_count),
-                tag_allocator: Arc::clone(&tag_allocator),
-                reporter: reporter.clone(),
-            },
-        ));
+        }
     }
 }
 

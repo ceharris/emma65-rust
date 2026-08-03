@@ -664,7 +664,16 @@ principles:
   already centralizes.
 - Once both Tcp and Unix variants are done, look for opportunities to
   further deduplicate — they were already near-identical before this
-  redesign and will remain so after.
+  redesign and will remain so after. **Done** (PR #227 review): the two
+  listeners' accept loops were identical except for the listener/stream
+  types and how a client's peer identity is captured. Extracted a
+  `ClientListener` trait (`mod.rs`) with an `accept` method returning
+  `(Reader, Writer, PeerInfo)` plus a `format_peer(PeerInfo, conn_tag)`
+  associated function, and a single generic `run_listener_task<L:
+  ClientListener>` that now owns the whole accept loop (tag allocation,
+  `pump_outbound` spawn, `ClientSession` construction, `run_client_task`
+  spawn). `tcp_socket.rs`/`unix_socket.rs` each shrink to just a
+  `ClientListener` impl for their respective listener type.
 - Test suite: rewrite `concurrent_clients_are_tagged_and_counted` and
   friends against `ChannelRelay<TransportEvent>::drain_into` instead of
   `try_recv_tagged()`-in-a-loop. Add a test that forces `try_send` to fail

@@ -669,6 +669,79 @@ where
     tag_allocator.release(conn_tag);
 }
 
+/// Abstracts a multipoint listener's `accept()` over `TcpListener`/
+/// `UnixListener` so [`run_listener_task`] can own their otherwise-identical
+/// accept loops in one place (transport relay redesign plan, PR #227 review).
+/// `PeerInfo` carries whatever raw, listener-specific data is needed to name
+/// the client (a `SocketAddr` for TCP, a `UCred` for Unix), captured at
+/// accept time — before the stream is split into halves for
+/// [`run_client_task`] — and turned into the final peer string by
+/// [`format_peer`](Self::format_peer) once the connection's `conn_tag` is
+/// known, since Unix's fallback identifier needs it.
+pub(crate) trait ClientListener {
+    type Reader: AsyncRead + Unpin + Send + 'static;
+    type Writer: AsyncWrite + Unpin + Send + 'static;
+    type PeerInfo;
+
+    async fn accept(&self) -> std::io::Result<(Self::Reader, Self::Writer, Self::PeerInfo)>;
+
+    fn format_peer(info: Self::PeerInfo, conn_tag: u8) -> String;
+}
+
+/// Tokio task: owns a multipoint listener's accept loop, spawning a
+/// [`run_client_task`] per connection, and the outbound [`pump_outbound`]
+/// task that fans sent bytes out to every connected client. Shared by
+/// `TcpSocketTransport` and `UnixSocketTransport` via [`ClientListener`] —
+/// their accept loops were otherwise byte-for-byte identical except for the
+/// listener/stream types and how a client's peer identity is captured.
+pub(crate) async fn run_listener_task<L: ClientListener>(
+    listener: L,
+    in_tx: Sender<TransportEvent>,
+    outbound: Consumer<u8>,
+    outbound_notify: Arc<Notify>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    client_count: Arc<AtomicUsize>,
+    reporter: TransportReporter,
+) {
+    let (fanout_tx, _) = broadcast::channel::<u8>(BROADCAST_CAPACITY);
+    tokio::spawn(pump_outbound(outbound, fanout_tx.clone(), outbound_notify, shutdown_rx.clone(), reporter.clone()));
+
+    let tag_allocator = Arc::new(TagAllocator::new());
+
+    loop {
+        let (reader, writer, peer_info) = tokio::select! {
+            _ = shutdown_rx.changed() => break,
+            result = listener.accept() => match result {
+                Ok(parts) => parts,
+                Err(_) => continue,
+            },
+        };
+
+        let conn_tag = match tag_allocator.allocate() {
+            Some(tag) => tag,
+            None => continue,
+        };
+        let peer = L::format_peer(peer_info, conn_tag);
+
+        client_count.fetch_add(1, Ordering::Release);
+
+        tokio::spawn(run_client_task(
+            reader,
+            writer,
+            ClientSession {
+                conn_tag,
+                peer,
+                in_tx: in_tx.clone(),
+                fanout_rx: fanout_tx.subscribe(),
+                shutdown_rx: shutdown_rx.clone(),
+                client_count: Arc::clone(&client_count),
+                tag_allocator: Arc::clone(&tag_allocator),
+                reporter: reporter.clone(),
+            },
+        ));
+    }
+}
+
 #[cfg(test)]
 mod channel_relay_tests {
     use super::*;

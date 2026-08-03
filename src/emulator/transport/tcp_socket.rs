@@ -12,20 +12,23 @@
 //! is counted via [`TransportReporter`], not surfaced as an error) and
 //! fanned out to every connected client via a `broadcast::channel`.
 //!
-//! `pump_outbound`, `run_client_task`, and `ClientSession` are shared with
-//! [`UnixSocketTransport`](super::UnixSocketTransport) in `super` — both
-//! transports use this same shape.
+//! The accept loop itself (`pump_outbound`, `run_client_task`,
+//! `ClientSession`, and the loop body driving them) is shared with
+//! [`UnixSocketTransport`](super::UnixSocketTransport) via
+//! `super::run_listener_task`, generic over the [`ClientListener`] trait —
+//! this module supplies only the `TcpListener`-specific `accept`/peer-naming
+//! logic (PR #227 review).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crossbeam_channel::{Sender, bounded};
-use rtrb::{Consumer, Producer, PushError, RingBuffer};
+use crossbeam_channel::bounded;
+use rtrb::{Producer, PushError, RingBuffer};
 use tokio::net::TcpListener;
-use tokio::sync::{Notify, broadcast, oneshot, watch};
+use tokio::sync::{Notify, oneshot, watch};
 
-use super::{BROADCAST_CAPACITY, CHANNEL_CAPACITY, ChannelRelay, ClientSession, TagAllocator, Transport, TransportEvent, TransportReporter, pump_outbound, run_client_task};
+use super::{CHANNEL_CAPACITY, ChannelRelay, ClientListener, Transport, TransportEvent, TransportReporter, run_listener_task};
 
 /// Transport that listens for incoming TCP socket connections.
 pub struct TcpSocketTransport {
@@ -75,7 +78,7 @@ impl TcpSocketTransport {
         let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
         tokio::spawn(propagate_shutdown(shutdown_rx, shutdown_watch_tx));
 
-        tokio::spawn(run_tcp_task(
+        tokio::spawn(run_listener_task(
             listener,
             in_tx,
             outbound_consumer,
@@ -149,59 +152,22 @@ async fn propagate_shutdown(shutdown_rx: oneshot::Receiver<()>, shutdown_tx: wat
     let _ = shutdown_tx.send(true);
 }
 
-/// Tokio task: owns the `TcpListener`'s accept loop, spawning a
-/// [`run_client_task`] per connection, and the outbound [`pump_outbound`]
-/// task that fans sent bytes out to every connected client.
-async fn run_tcp_task(
-    listener: TcpListener,
-    in_tx: Sender<TransportEvent>,
-    outbound: Consumer<u8>,
-    outbound_notify: Arc<Notify>,
-    mut shutdown_rx: watch::Receiver<bool>,
-    client_count: Arc<AtomicUsize>,
-    reporter: TransportReporter,
-) {
-    let (fanout_tx, _) = broadcast::channel::<u8>(BROADCAST_CAPACITY);
-    tokio::spawn(pump_outbound(outbound, fanout_tx.clone(), outbound_notify, shutdown_rx.clone(), reporter.clone()));
+impl ClientListener for TcpListener {
+    type Reader = tokio::net::tcp::OwnedReadHalf;
+    type Writer = tokio::net::tcp::OwnedWriteHalf;
+    /// `Ok`/`Err` from `peer_addr()` itself, so [`format_peer`](Self::format_peer)
+    /// can fall back to `conn_tag` on error, same as Unix sockets.
+    type PeerInfo = std::io::Result<SocketAddr>;
 
-    let tag_allocator = Arc::new(TagAllocator::new());
-
-    loop {
-        let stream = tokio::select! {
-            _ = shutdown_rx.changed() => break,
-            result = listener.accept() => match result {
-                Ok((stream, _)) => stream,
-                Err(_) => continue,
-            },
-        };
-
-        let conn_tag = match tag_allocator.allocate() {
-            Some(tag) => tag,
-            None => continue,
-        };
-
-        let peer = stream
-            .peer_addr()
-            .map(|addr| addr.to_string())
-            .unwrap_or_else(|_| format!("conn#{conn_tag}"));
-
-        client_count.fetch_add(1, Ordering::Release);
-
+    async fn accept(&self) -> std::io::Result<(Self::Reader, Self::Writer, Self::PeerInfo)> {
+        let (stream, _) = TcpListener::accept(self).await?;
+        let peer_info = stream.peer_addr();
         let (reader, writer) = stream.into_split();
-        tokio::spawn(run_client_task(
-            reader,
-            writer,
-            ClientSession {
-                conn_tag,
-                peer,
-                in_tx: in_tx.clone(),
-                fanout_rx: fanout_tx.subscribe(),
-                shutdown_rx: shutdown_rx.clone(),
-                client_count: Arc::clone(&client_count),
-                tag_allocator: Arc::clone(&tag_allocator),
-                reporter: reporter.clone(),
-            },
-        ));
+        Ok((reader, writer, peer_info))
+    }
+
+    fn format_peer(info: Self::PeerInfo, conn_tag: u8) -> String {
+        info.map(|addr| addr.to_string()).unwrap_or_else(|_| format!("conn#{conn_tag}"))
     }
 }
 
