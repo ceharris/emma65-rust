@@ -65,8 +65,8 @@
 use super::protocol::manager::ProtocolManager;
 use super::protocol::via::ViaProtocolMessage;
 use super::protocol::{ProtocolMessageEncoding, via};
-use super::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::{Transport, TransportError, transport};
+use super::IoDevice;
+use crate::emulator::{ChannelRelay, Transport, TransportEvent};
 use log::debug;
 use std::time::Duration;
 
@@ -113,7 +113,6 @@ pub struct Via6522 {
     address: u16,
     protocol: ProtocolMessageEncoding,
     protocol_manager: Option<ProtocolManager<ViaProtocolMessage>>,
-    report_error: Box<dyn Fn(TransportError) + Send>,
 
     // --- Port registers ---
     /// Output register B — written bits drive output pins on port B.
@@ -198,7 +197,6 @@ impl Via6522 {
             address: 0,
             protocol: ProtocolMessageEncoding::Ascii,
             protocol_manager: None,
-            report_error: transport::no_op_reporter(),
             orb: 0, ora: 0, ddrb: 0, ddra: 0,
             input_b: 0, input_a: 0, ira_latch: 0, irb_latch: 0,
             t1_counter: 0, t1_latch: 0, t1_running: false, t1_pb7: false,
@@ -221,17 +219,13 @@ impl Via6522 {
         self
     }
 
-    /// Attaches a transport. All attached transports receive every port and control-signal
-    /// state change; any number of peripherals may be connected simultaneously.
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport,
+    /// Attaches a transport and its paired tagged relay. All attached
+    /// transports receive every port and control-signal state change; any
+    /// number of peripherals may be connected simultaneously.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: ChannelRelay<TransportEvent>) {
+        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport, relay,
                                                           via::new_encoder,
                                                           via::new_decoder))
-    }
-
-    /// Sets the error sender for async transport event reporting.
-    pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.report_error = transport::reporter(sender, id);
     }
 
     // --- IFR helpers ---
@@ -302,31 +296,23 @@ impl Via6522 {
     }
 
     fn send_to_all(&mut self, message: ViaProtocolMessage) {
-        if self.protocol_manager.is_some()
-                && let Err(e) = self.protocol_manager.as_mut().unwrap().send_to_all(&message) {
-            (self.report_error)(e);
+        if let Some(pm) = self.protocol_manager.as_mut() {
+            pm.send_to_all(&message);
         }
     }
 
     fn send_state_to_all(&mut self, messages: Vec<ViaProtocolMessage>) {
-        if self.protocol_manager.is_some()
-                && let Err(e) = self.protocol_manager.as_mut().unwrap().send_all_to_all(&messages) {
-            (self.report_error)(e);
+        if let Some(pm) = self.protocol_manager.as_mut() {
+            pm.send_all_to_all(&messages);
         }
     }
 
     fn poll_transports(&mut self) {
         if self.protocol_manager.is_some() {
             let state = self.current_state();
-            loop {
-                match self.protocol_manager.as_mut().unwrap().poll_transport(&state) {
-                    Ok(Some(m)) => self.apply_message(m),
-                    Ok(None) => break,
-                    Err(e) => {
-                        (self.report_error)(e);
-                        break;
-                    }
-                }
+            let messages = self.protocol_manager.as_mut().unwrap().poll_transport(&state);
+            for message in messages {
+                self.apply_message(message);
             }
         }
     }
@@ -1055,7 +1041,6 @@ impl IoDevice for Via6522 {
     fn reset(&mut self) {
         let address = self.address;
         let protocol_manager = std::mem::take(&mut self.protocol_manager);
-        let report_error = std::mem::replace(&mut self.report_error, transport::no_op_reporter());
         // state that must be preserved because it is under peripheral control
         let input_b = self.input_b;
         let input_a = self.input_a;
@@ -1073,7 +1058,6 @@ impl IoDevice for Via6522 {
         *self = Self::new(self.name);
         self.address = address;
         self.protocol_manager = protocol_manager;
-        self.report_error = report_error;
         // restore state under peripheral control
         self.input_b = input_b;
         self.input_a = input_a;
@@ -1107,26 +1091,44 @@ impl IoDevice for Via6522 {
 mod tests {
     use super::*;
     use crate::emulator::transport::InternalPipeTransport;
+    use crossbeam_channel::{Sender, unbounded};
     use std::time::Duration;
 
     const DEVICE_NAME: &str = "via6522";
-    
+    /// Client tag used for every simulated peripheral connection in these
+    /// tests — a single peripheral, so any fixed value works.
+    const TAG: u8 = 1;
+
     fn device() -> Via6522 {
         Via6522::new(DEVICE_NAME)
     }
 
-    fn device_with_pipe() -> (Via6522, InternalPipeTransport) {
+    /// `remote` is the device's outbound-write sink (verified via
+    /// `collect_bytes`); `tx` feeds the device's inbound tagged relay
+    /// directly, simulating a single already-connected peripheral (`Sender::send`
+    /// a `Connected(TAG)` event up front, matching what a real multipoint
+    /// transport does on accept — `InternalPipeTransport` doesn't produce
+    /// its own relay yet, see the transport relay redesign plan's §10
+    /// checklist item 7).
+    fn device_with_pipe() -> (Via6522, InternalPipeTransport, Sender<TransportEvent>) {
         let (local, remote) = InternalPipeTransport::pair().unwrap();
+        let (tx, rx) = unbounded();
+        tx.send(TransportEvent::Connected(TAG)).unwrap();
+        let relay = ChannelRelay::spawn(rx, 256);
+        std::thread::sleep(Duration::from_millis(5));
         let mut via = Via6522::new(DEVICE_NAME);
-        via.attach_transport(Box::new(local));
-        (via, remote)
+        via.attach_transport(Box::new(local), relay);
+        (via, remote, tx)
     }
 
-    fn send_bytes(remote: &mut InternalPipeTransport, s: &str) {
-        for c in s.as_bytes() {
-            let b = *c;
-            remote.send(b);
+    /// Feeds `s`'s bytes into the device's inbound relay as `Data(TAG, _)`
+    /// events, simulating a peripheral protocol message arriving from the
+    /// already-connected peer established by `device_with_pipe`.
+    fn send_bytes(tx: &Sender<TransportEvent>, s: &str) {
+        for &b in s.as_bytes() {
+            tx.send(TransportEvent::Data(TAG, b)).unwrap();
         }
+        std::thread::sleep(Duration::from_millis(5));
     }
 
     fn collect_bytes(remote: &mut InternalPipeTransport) -> Vec<u8> {
@@ -1375,8 +1377,8 @@ mod tests {
 
     #[test]
     fn t1_one_shot_with_pb7_output_sends_pb7_low_at_start_when_needed() {
-        let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20);
+        let (mut via, mut remote, tx) = device_with_pipe();
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
 
@@ -1412,8 +1414,8 @@ mod tests {
 
     #[test]
     fn t1_pb7_output_mode_sends_pb7_low_if_needed_when_pb7_output_mode_disabled() {
-        let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20);
+        let (mut via, mut remote, tx) = device_with_pipe();
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
 
@@ -1577,7 +1579,7 @@ mod tests {
 
     #[test]
     fn t1_pb7_overrides_orb7() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
 
@@ -1608,8 +1610,8 @@ mod tests {
 
     #[test]
     fn write_orb_sends_port_b_state_change() {
-        let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20);
+        let (mut via, mut remote, tx) = device_with_pipe();
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
 
@@ -1628,12 +1630,12 @@ mod tests {
 
     #[test]
     fn incoming_port_b_message_updates_input_b() {
-        let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20); // ASCII
+        let (mut via, _remote, tx) = device_with_pipe();
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap(); // ASCII
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        for b in b"BAB".iter() { remote.send(*b); }
+        for &b in b"BAB".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1643,12 +1645,12 @@ mod tests {
 
     #[test]
     fn incoming_port_a_message_updates_input_a() {
-        let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20); // ASCII
+        let (mut via, _remote, tx) = device_with_pipe();
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap(); // ASCII
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        for b in b"A55".iter() { remote.send(*b); }
+        for &b in b"A55".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1660,16 +1662,16 @@ mod tests {
 
     #[test]
     fn incoming_ca1_low_triggers_irq_when_neg_edge_configured() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, _remote, tx) = device_with_pipe();
         via.write(0xE, 0x82); // enable CA1 IRQ
         via.write(0xC, 0x00); // PCR: CA1 negative edge (bit 0 = 0)
         via.ca1 = true; // start high
 
-        remote.send(0x20);
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        for b in b"RCA1".iter() { remote.send(*b); }
+        for &b in b"RCA1".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1679,16 +1681,16 @@ mod tests {
 
     #[test]
     fn incoming_ca1_high_does_not_trigger_when_neg_edge_configured() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, _remote, tx) = device_with_pipe();
         via.write(0xE, 0x82); // enable CA1 IRQ
         via.write(0xC, 0x00); // PCR: CA1 negative edge
         via.ca1 = false;
 
-        remote.send(0x20);
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"CA11".iter() { remote.send(*b); }
+        for &b in b"CA11".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1697,16 +1699,16 @@ mod tests {
 
     #[test]
     fn incoming_ca2_triggers_irq_when_input_mode() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, _remote, tx) = device_with_pipe();
         via.write(0xE, 0x81); // enable CA2 IRQ
         via.write(0xC, 0x00); // PCR bits 3:1 = 000 → CA2 input, negative edge
         via.ca2 = true;
 
-        remote.send(0x20);
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"RCA2".iter() { remote.send(*b); }
+        for &b in b"RCA2".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1715,16 +1717,16 @@ mod tests {
 
     #[test]
     fn incoming_cb1_triggers_irq_when_neg_edge_configured() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, _remote, tx) = device_with_pipe();
         via.write(0xE, 0x90); // enable CB1 IRQ
         via.write(0xC, 0x00); // PCR: CB1 negative edge (bit 4 = 0)
         via.cb1 = true;
 
-        remote.send(0x20);
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"RCB1".iter() { remote.send(*b); }
+        for &b in b"RCB1".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1734,16 +1736,16 @@ mod tests {
 
     #[test]
     fn incoming_cb2_triggers_irq_when_input_mode() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, _remote, tx) = device_with_pipe();
         via.write(0xE, 0x88); // enable CB2 IRQ
         via.write(0xC, 0x00); // PCR bits 7:5 = 000 → CB2 input, negative edge
         via.cb2 = true;
 
-        remote.send(0x20);
+        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"RCB2".iter() { remote.send(*b); }
+        for &b in b"RCB2".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1779,7 +1781,7 @@ mod tests {
 
     #[test]
     fn state_dump_sends_expected_messages() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         via.ca1 = true;
         via.cb2 = true;
 
@@ -1818,7 +1820,7 @@ mod tests {
 
     #[test]
     fn ca1_negative_edge_triggers_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = true;
         via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
@@ -1830,7 +1832,7 @@ mod tests {
 
     #[test]
     fn ca1_negative_edge_does_not_trigger_irq_when_level_low() {
-        let (mut via, _) = device_with_pipe();
+        let (mut via, _, _tx) = device_with_pipe();
         via.ca1 = false;
         via.write(0xc, PCR_CA1_INPUT_NEGATIVE_EDGE);
         via.apply_message(ViaProtocolMessage::ResetCtrl { port: b'A', reset_c1: true, reset_c2: false });
@@ -1841,7 +1843,7 @@ mod tests {
 
     #[test]
     fn ca1_positive_edge_triggers_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = false;
         via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
@@ -1853,7 +1855,7 @@ mod tests {
 
     #[test]
     fn ca1_positive_edge_does_not_trigger_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca1 = true;
         via.write(0xc, PCR_CA1_INPUT_POSITIVE_EDGE);
@@ -1865,7 +1867,7 @@ mod tests {
 
     #[test]
     fn cb1_negative_edge_triggers_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = true;
         via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
@@ -1877,7 +1879,7 @@ mod tests {
 
     #[test]
     fn cb1_negative_edge_does_not_trigger_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = false;
         via.write(0xc, PCR_CB1_INPUT_NEGATIVE_EDGE);
@@ -1889,7 +1891,7 @@ mod tests {
 
     #[test]
     fn cb1_positive_edge_triggers_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = false;
         via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
@@ -1901,7 +1903,7 @@ mod tests {
 
     #[test]
     fn cb1_positive_edge_does_not_trigger_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb1 = true;
         via.write(0xc, PCR_CB1_INPUT_POSITIVE_EDGE);
@@ -1913,7 +1915,7 @@ mod tests {
 
     #[test]
     fn ca2_negative_edge_triggers_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
@@ -1925,7 +1927,7 @@ mod tests {
 
     #[test]
     fn ca2_negative_edge_does_not_trigger_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
@@ -1937,7 +1939,7 @@ mod tests {
 
     #[test]
     fn ca2_positive_edge_triggers_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
@@ -1949,7 +1951,7 @@ mod tests {
 
     #[test]
     fn ca2_positive_edge_does_not_trigger_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xc, PCR_CA2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
@@ -1961,7 +1963,7 @@ mod tests {
 
     #[test]
     fn cb2_negative_edge_triggers_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
@@ -1973,7 +1975,7 @@ mod tests {
 
     #[test]
     fn cb2_negative_edge_does_not_trigger_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_NEGATIVE_EDGE);
@@ -1985,7 +1987,7 @@ mod tests {
 
     #[test]
     fn cb2_positive_edge_triggers_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
@@ -1997,7 +1999,7 @@ mod tests {
 
     #[test]
     fn cb2_positive_edge_does_not_trigger_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xc, PCR_CB2_INDEPENDENT_INTERRUPT_INPUT_POSITIVE_EDGE);
@@ -2009,90 +2011,90 @@ mod tests {
 
     #[test]
     fn ca2_non_independent_negative_edge_triggers_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
-        send_bytes(&mut remote, "RCA2");
+        send_bytes(&tx, "RCA2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
 
     #[test]
     fn ca2_non_independent_positive_edge_triggers_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xC, PCR_CA2_INPUT_POSITIVE_EDGE);
-        send_bytes(&mut remote, "SCA2");
+        send_bytes(&tx, "SCA2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
 
     #[test]
     fn ca2_output_mode_does_not_trigger_irq() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
-        send_bytes(&mut remote, "RCA2");
+        send_bytes(&tx, "RCA2");
         via.tick(1);
         assert_eq!(via.peek(0xD) & IRQ_CA2, 0);
     }
 
     #[test]
     fn ca2_output_mode_does_not_update_ca2_state() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         // Write PCR first (ca2 is false by default, so no immediate transition).
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
         // A peripheral message asserting CA2 high must not overwrite the driven-low state.
-        send_bytes(&mut remote, "SCA2");
+        send_bytes(&tx, "SCA2");
         via.tick(1);
         assert!(!via.ca2, "ca2 must not be overwritten by peripheral message in output mode");
     }
 
     #[test]
     fn cb2_non_independent_negative_edge_triggers_irq_when_level_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
-        send_bytes(&mut remote, "RCB2");
+        send_bytes(&tx, "RCB2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
 
     #[test]
     fn cb2_non_independent_positive_edge_triggers_irq_when_level_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xC, PCR_CB2_INPUT_POSITIVE_EDGE);
-        send_bytes(&mut remote, "SCB2");
+        send_bytes(&tx, "SCB2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
 
     #[test]
     fn cb2_output_mode_does_not_trigger_irq() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
-        send_bytes(&mut remote, "RCB2");
+        send_bytes(&tx, "RCB2");
         via.tick(1);
         assert_eq!(via.peek(0xD) & IRQ_CB2, 0);
     }
 
     #[test]
     fn cb2_output_mode_does_not_update_cb2_state() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         // Write PCR first (cb2 is false by default, so no immediate transition).
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
         // A peripheral message asserting CB2 high must not overwrite the driven-low state.
-        send_bytes(&mut remote, "SCB2");
+        send_bytes(&tx, "SCB2");
         via.tick(1);
         assert!(!via.cb2, "cb2 must not be overwritten by peripheral message in output mode");
     }
@@ -2184,7 +2186,7 @@ mod tests {
 
     #[test]
     fn ca2_manual_low_sends_ca2_low_message_on_pcr_write() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
@@ -2196,7 +2198,7 @@ mod tests {
 
     #[test]
     fn ca2_manual_high_sends_ca2_high_message_on_pcr_write() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         // ca2 starts false by default
         via.write(0xC, PCR_CA2_MANUAL_HIGH_OUTPUT);
@@ -2208,7 +2210,7 @@ mod tests {
 
     #[test]
     fn cb2_manual_low_sends_cb2_low_message_on_pcr_write() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
@@ -2220,7 +2222,7 @@ mod tests {
 
     #[test]
     fn cb2_manual_high_sends_cb2_high_message_on_pcr_write() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         // cb2 starts false by default
         via.write(0xC, PCR_CB2_MANUAL_HIGH_OUTPUT);
@@ -2234,7 +2236,7 @@ mod tests {
 
     #[test]
     fn ca2_handshake_output_asserts_on_ora_read() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
@@ -2248,7 +2250,7 @@ mod tests {
 
     #[test]
     fn ca2_handshake_output_releases_on_ca1_active_edge() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.ca1 = true; // start high so falling edge triggers
@@ -2256,7 +2258,7 @@ mod tests {
         collect_bytes(&mut remote);
         via.read(0x1); // assert CA2 low
         collect_bytes(&mut remote); // drain RCA2
-        send_bytes(&mut remote, "RCA1"); // CA1 falling edge — active edge in neg-edge mode
+        send_bytes(&tx, "RCA1"); // CA1 falling edge — active edge in neg-edge mode
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
@@ -2266,7 +2268,7 @@ mod tests {
 
     #[test]
     fn ca2_handshake_not_triggered_by_ora_nh_read() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
@@ -2280,7 +2282,7 @@ mod tests {
 
     #[test]
     fn ca2_handshake_output_not_asserted_when_already_low() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false; // already asserted
         via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
@@ -2295,7 +2297,7 @@ mod tests {
 
     #[test]
     fn ca2_handshake_output_asserts_on_ora_write() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_HANDSHAKE_OUTPUT);
@@ -2309,7 +2311,7 @@ mod tests {
 
     #[test]
     fn ca2_write_handshake_releases_on_ca1_active_edge() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.ca1 = true;
@@ -2317,7 +2319,7 @@ mod tests {
         collect_bytes(&mut remote);
         via.write(0x1, 0x00); // assert CA2 low
         collect_bytes(&mut remote);
-        send_bytes(&mut remote, "RCA1");
+        send_bytes(&tx, "RCA1");
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
@@ -2329,7 +2331,7 @@ mod tests {
 
     #[test]
     fn ca2_pulse_output_on_ora_read_sends_low_then_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xC, PCR_CA2_PULSE_OUTPUT);
         collect_bytes(&mut remote);
@@ -2343,7 +2345,7 @@ mod tests {
 
     #[test]
     fn ca2_pulse_output_on_ora_write_sends_low_then_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xC, PCR_CA2_PULSE_OUTPUT);
         collect_bytes(&mut remote);
@@ -2357,7 +2359,7 @@ mod tests {
 
     #[test]
     fn ca2_pulse_output_not_triggered_by_ora_nh() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xC, PCR_CA2_PULSE_OUTPUT);
         collect_bytes(&mut remote);
@@ -2372,7 +2374,7 @@ mod tests {
 
     #[test]
     fn cb2_handshake_output_asserts_on_orb_write() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_HANDSHAKE_OUTPUT);
@@ -2386,7 +2388,7 @@ mod tests {
 
     #[test]
     fn cb2_handshake_output_releases_on_cb1_active_edge() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.cb1 = true;
@@ -2394,7 +2396,7 @@ mod tests {
         collect_bytes(&mut remote);
         via.write(0x0, 0x00); // assert CB2 low
         collect_bytes(&mut remote);
-        send_bytes(&mut remote, "RCB1"); // CB1 falling edge — active in neg-edge mode
+        send_bytes(&tx, "RCB1"); // CB1 falling edge — active in neg-edge mode
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
@@ -2404,7 +2406,7 @@ mod tests {
 
     #[test]
     fn cb2_handshake_output_not_triggered_by_orb_read() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_HANDSHAKE_OUTPUT);
@@ -2420,7 +2422,7 @@ mod tests {
 
     #[test]
     fn cb2_pulse_output_on_orb_write_sends_low_then_high() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xC, PCR_CB2_PULSE_OUTPUT);
         collect_bytes(&mut remote);
@@ -2514,12 +2516,12 @@ mod tests {
     fn pa_latch_captures_via_transport_in_same_tick() {
         // Validates the full protocol path: port state and CA1 edge arriving via transport
         // in the same tick — port update must precede the capture.
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PA_LATCH_ENABLE);
         via.write(0xC, PCR_CA1_INPUT_POSITIVE_EDGE); // positive edge
         // Send port A update then CA1 rising edge in a single burst.
-        send_bytes(&mut remote, "A3F CA11");
+        send_bytes(&tx, "A3F CA11");
         via.tick(1); // poll_transports processes both messages in order
         assert_eq!(via.ira_latch, 0x3F, "ira_latch must capture the value from the same-tick port update");
         assert_eq!(via.read(0x1), 0x3F, "ORA read must return latched value");
@@ -2528,26 +2530,26 @@ mod tests {
     #[test]
     fn pa_latch_holds_value_after_subsequent_port_update() {
         // Validates that the latch retains its captured value when input_a subsequently changes.
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PA_LATCH_ENABLE);
         via.write(0xC, PCR_CA1_INPUT_POSITIVE_EDGE);
         // Capture 0x3F via CA1 rising edge.
-        send_bytes(&mut remote, "A3F CA11");
+        send_bytes(&tx, "A3F CA11");
         via.tick(1);
         // Port A changes after the latch was captured.
-        send_bytes(&mut remote, "AFF");
+        send_bytes(&tx, "AFF");
         via.tick(1);
         assert_eq!(via.read(0x1), 0x3F, "latched value must be held despite subsequent port update");
     }
 
     #[test]
     fn pb_latch_captures_via_transport_in_same_tick() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PB_LATCH_ENABLE);
         via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
-        send_bytes(&mut remote, "B5A SCB1");
+        send_bytes(&tx, "B5A SCB1");
         via.tick(1);
         assert_eq!(via.irb_latch, 0x5A, "irb_latch must capture the value from the same-tick port update");
         assert_eq!(via.read(0x0), 0x5A, "ORB read must return latched value");
@@ -2555,23 +2557,23 @@ mod tests {
 
     #[test]
     fn pb_latch_holds_value_after_subsequent_port_update() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, tx) = device_with_pipe();
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PB_LATCH_ENABLE);
         via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
-        send_bytes(&mut remote, "B5A SCB1");
+        send_bytes(&tx, "B5A SCB1");
         via.tick(1);
-        send_bytes(&mut remote, "BFF");
+        send_bytes(&tx, "BFF");
         via.tick(1);
         assert_eq!(via.read(0x0), 0x5A, "latched value must be held despite subsequent port update");
     }
 
     // --- Shift register ---
 
-    fn sr_device_with_pipe_and_mode(acr: u8) -> (Via6522, InternalPipeTransport) {
-        let (mut via, remote) = device_with_pipe();
+    fn sr_device_with_pipe_and_mode(acr: u8) -> (Via6522, InternalPipeTransport, Sender<TransportEvent>) {
+        let (mut via, remote, tx) = device_with_pipe();
         via.write(0xB, acr);
-        (via, remote)
+        (via, remote, tx)
     }
 
     fn drain_state_dump(via: &mut Via6522, remote: &mut InternalPipeTransport) {
@@ -2593,7 +2595,7 @@ mod tests {
 
     #[test]
     fn sr_shift_out_t2_sends_cb1_cb2_messages() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_T2);
+        let (mut via, mut remote, _tx) = sr_device_with_pipe_and_mode(SR_MODE_OUT_T2);
         drain_state_dump(&mut via, &mut remote);
 
         // Load T2 = 2, write SR to start (ACR already set).
@@ -2618,13 +2620,13 @@ mod tests {
 
     #[test]
     fn sr_shift_out_ext_sends_cb2_messages() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
+        let (mut via, mut remote, tx) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
         drain_state_dump(&mut via, &mut remote);
         via.write(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
         for _ in 0..8 {
-            send_bytes(&mut remote, " RCB1");
+            send_bytes(&tx, " RCB1");
             via.tick(5);
-            send_bytes(&mut remote, " SCB1");
+            send_bytes(&tx, " SCB1");
         }
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
@@ -2680,7 +2682,7 @@ mod tests {
 
     #[test]
     fn sr_shift_out_free_t2_sends_cb1_cb2_messages() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_FREE_T2);
+        let (mut via, mut remote, _tx) = sr_device_with_pipe_and_mode(SR_MODE_OUT_FREE_T2);
         drain_state_dump(&mut via, &mut remote);
         via.write(0x8, 5u8);
         via.write(0x9, 0);
@@ -2705,7 +2707,7 @@ mod tests {
 
     #[test]
     fn sr_shift_in_ext_clk_captures_cb2() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
+        let (mut via, mut remote, _tx) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
         drain_state_dump(&mut via, &mut remote);
 
         via.write(0xA, 0x00); // start SR shift-in
@@ -2759,7 +2761,7 @@ mod tests {
 
     #[test]
     fn sr_shift_out_phi2_sends_cb1_cb2_messages() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_PHI2);
+        let (mut via, mut remote, _tx) = sr_device_with_pipe_and_mode(SR_MODE_OUT_PHI2);
         drain_state_dump(&mut via, &mut remote);
 
         via.write(0xA, 0b10110100); // write SR to start shifting out
@@ -2797,7 +2799,7 @@ mod tests {
 
     #[test]
     fn sr_in_ext_data_captured_via_transport() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
+        let (mut via, mut remote, tx) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
         drain_state_dump(&mut via, &mut remote);
 
         via.write(0xA, 0x00); // start shift-in
@@ -2806,9 +2808,9 @@ mod tests {
         let data = 0b10110100u8;
         for i in 0..8 {
             let bit = (data >> (7 - i)) & 1;
-            send_bytes(&mut remote, " RCB1");
-            send_bytes(&mut remote, if bit != 0 { " SCB2" } else { " RCB2" });
-            send_bytes(&mut remote, " SCB1");
+            send_bytes(&tx, " RCB1");
+            send_bytes(&tx, if bit != 0 { " SCB2" } else { " RCB2" });
+            send_bytes(&tx, " SCB1");
             via.tick(1); // poll processes RCB1, CB2x, SCB1 in order
         }
 
@@ -2818,7 +2820,7 @@ mod tests {
 
     #[test]
     fn sr_in_t2_data_captured_via_transport() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_T2);
+        let (mut via, mut remote, tx) = sr_device_with_pipe_and_mode(SR_MODE_IN_T2);
         drain_state_dump(&mut via, &mut remote);
 
         via.write(0x8, 2u8); // T2 period = 2 cycles
@@ -2830,7 +2832,7 @@ mod tests {
             let bit = (data >> (7 - i)) & 1;
             // Pre-send CB2x so poll_transports at the top of tick captures it
             // before T2 underflows and calls sr_update(true).
-            send_bytes(&mut remote, if bit != 0 { " SCB2" } else { " RCB2" });
+            send_bytes(&tx, if bit != 0 { " SCB2" } else { " RCB2" });
             via.tick(2); // T2 counts 2→0 → captures cb2, sends SCB1 + RCB1 (if not last)
             collect_bytes(&mut remote);
         }
@@ -2841,7 +2843,7 @@ mod tests {
 
     #[test]
     fn sr_in_t2_sends_cb1_clock_to_peripheral() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_T2);
+        let (mut via, mut remote, _tx) = sr_device_with_pipe_and_mode(SR_MODE_IN_T2);
         drain_state_dump(&mut via, &mut remote);
 
         via.write(0x8, 2u8);
@@ -2867,7 +2869,7 @@ mod tests {
 
     #[test]
     fn sr_in_phi2_data_captured_via_transport() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_PHI2);
+        let (mut via, mut remote, tx) = sr_device_with_pipe_and_mode(SR_MODE_IN_PHI2);
         drain_state_dump(&mut via, &mut remote);
 
         via.read(0xA); // start shift-in
@@ -2878,7 +2880,7 @@ mod tests {
             let bit = (data >> (7 - i)) & 1;
             // Pre-send CB2x so poll_transports at the top of tick captures it
             // before the PHI2 rising edge calls sr_update(true).
-            send_bytes(&mut remote, if bit != 0 { " SCB2" } else { " RCB2" });
+            send_bytes(&tx, if bit != 0 { " SCB2" } else { " RCB2" });
             via.tick(1); // falling edge (i=0) → RCB1; rising edge (i=1) → captures cb2, SCB1
             collect_bytes(&mut remote);
         }
@@ -2889,7 +2891,7 @@ mod tests {
 
     #[test]
     fn sr_in_phi2_sends_cb1_clock_to_peripheral() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_PHI2);
+        let (mut via, mut remote, _tx) = sr_device_with_pipe_and_mode(SR_MODE_IN_PHI2);
         drain_state_dump(&mut via, &mut remote);
 
         via.read(0xA); // start shift-in
@@ -2906,14 +2908,14 @@ mod tests {
 
     #[test]
     fn sr_out_ext_sets_ifr_after_8_clocks() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
+        let (mut via, mut remote, tx) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
         drain_state_dump(&mut via, &mut remote);
 
         via.write(0xA, 0xAA); // start shift-out
         collect_bytes(&mut remote);
 
         for _ in 0..8 {
-            send_bytes(&mut remote, " RCB1 SCB1");
+            send_bytes(&tx, " RCB1 SCB1");
             via.tick(1); // poll processes falling then rising edge; sr_count decrements
         }
 
@@ -2991,12 +2993,12 @@ mod tests {
 
     #[test]
     fn sr_in_ext_does_not_set_cb1_cb2_ifr_bits() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
+        let (mut via, mut remote, tx) = sr_device_with_pipe_and_mode(SR_MODE_IN_EXT);
         drain_state_dump(&mut via, &mut remote);
         via.write(0xA, 0x00);
         collect_bytes(&mut remote);
         for _ in 0..8 {
-            send_bytes(&mut remote, " RCB1 SCB2 SCB1");
+            send_bytes(&tx, " RCB1 SCB2 SCB1");
             via.tick(1);
         }
         let ifr = via.peek(0xD);
@@ -3006,12 +3008,12 @@ mod tests {
 
     #[test]
     fn sr_out_ext_does_not_set_cb1_cb2_ifr_bits() {
-        let (mut via, mut remote) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
+        let (mut via, mut remote, tx) = sr_device_with_pipe_and_mode(SR_MODE_OUT_EXT);
         drain_state_dump(&mut via, &mut remote);
         via.write(0xA, 0xAA);
         collect_bytes(&mut remote);
         for _ in 0..8 {
-            send_bytes(&mut remote, " RCB1 SCB1");
+            send_bytes(&tx, " RCB1 SCB1");
             via.tick(1);
         }
         let ifr = via.peek(0xD);
@@ -3023,7 +3025,7 @@ mod tests {
 
     #[test]
     fn t2_pulse_count_pb6_neg_transition_decrements_counter() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 5u8);
         via.write(0x9, 0x00); // T2 = 5, starts
@@ -3038,7 +3040,7 @@ mod tests {
 
     #[test]
     fn t2_pulse_count_fires_irq_on_underflow() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         via.write(0xE, 0xA0); // enable T2 IRQ
         via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 3u8);
@@ -3058,7 +3060,7 @@ mod tests {
 
     #[test]
     fn t2_pulse_count_ignores_positive_transitions() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         via.write(0xB, ACR_T2_PB6_COUNT);
         via.write(0x8, 5u8);
         via.write(0x9, 0x00);
@@ -3073,7 +3075,7 @@ mod tests {
 
     #[test]
     fn t2_timed_mode_not_affected_by_pb6() {
-        let (mut via, mut remote) = device_with_pipe();
+        let (mut via, mut remote, _tx) = device_with_pipe();
         // ACR bit 5 clear → timed mode.
         via.write(0xB, 0x00);
         via.write(0x8, 100u8);

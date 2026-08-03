@@ -58,7 +58,7 @@
 use super::protocol::manager::ProtocolManager;
 use super::protocol::ptm::PtmProtocolMessage;
 use super::protocol::{ProtocolMessageEncoding, ptm};
-use crate::emulator::{DeviceId, ErrorSender, IoDevice, Transport, TransportError, transport};
+use crate::emulator::{ChannelRelay, IoDevice, Transport, TransportEvent};
 use log::debug;
 
 const T1: usize = 0;
@@ -473,7 +473,6 @@ pub struct Mc6840 {
     address: u16,
     protocol: ProtocolMessageEncoding,
     protocol_manager: Option<ProtocolManager<PtmProtocolMessage>>,
-    report_error: Box<dyn Fn(TransportError) + Send>,
 
     latched_status: u8,
     lsb_buffer: u8,
@@ -491,7 +490,6 @@ impl Mc6840 {
             address: 0,
             protocol: ProtocolMessageEncoding::Ascii,
             protocol_manager: None,
-            report_error: Box::new(transport::no_op_reporter()),
             latched_status: 0,
             lsb_buffer: 0,
             msb_buffer: 0,
@@ -517,16 +515,12 @@ impl Mc6840 {
         self
     }
 
-    /// Attaches a transport. All attached transports receive every port and control-signal
-    /// state change; any number of peripherals may be connected simultaneously.
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
-        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport,
+    /// Attaches a transport and its paired tagged relay. All attached
+    /// transports receive every port and control-signal state change; any
+    /// number of peripherals may be connected simultaneously.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: ChannelRelay<TransportEvent>) {
+        self.protocol_manager = Some(ProtocolManager::new(self.protocol, transport, relay,
                                                           ptm::new_encoder, ptm::new_decoder));
-    }
-
-    /// Sets the error sender for async transport event reporting.
-    pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.report_error = transport::reporter(sender, id);
     }
 
     fn current_state(&self) -> Vec<PtmProtocolMessage> {
@@ -556,23 +550,16 @@ impl Mc6840 {
     fn poll_transports(&mut self) {
         if self.protocol_manager.is_some() {
             let state = self.current_state();
-            loop {
-                match self.protocol_manager.as_mut().unwrap().poll_transport(&state) {
-                    Ok(Some(m)) => self.apply_message(m),
-                    Ok(None) => break,
-                    Err(e) => {
-                        (self.report_error)(e);
-                        break;
-                    }
-                }
+            let messages = self.protocol_manager.as_mut().unwrap().poll_transport(&state);
+            for message in messages {
+                self.apply_message(message);
             }
         }
     }
 
     fn send_state_to_all(&mut self, messages: Vec<PtmProtocolMessage>) {
-        if self.protocol_manager.is_some()
-                && let Err(e) = self.protocol_manager.as_mut().unwrap().send_all_to_all(&messages) {
-            (self.report_error)(e);
+        if let Some(pm) = self.protocol_manager.as_mut() {
+            pm.send_all_to_all(&messages);
         }
     }
 
@@ -716,11 +703,9 @@ impl IoDevice for Mc6840 {
     fn reset(&mut self) {
         let address = self.address;
         let protocol_manager = std::mem::take(&mut self.protocol_manager);
-        let report_error = std::mem::replace(&mut self.report_error, transport::no_op_reporter());
         *self = Self::new(self.name);
         self.address = address;
         self.protocol_manager = protocol_manager;
-        self.report_error = report_error;
         debug!("{} @0x{:04x} reset", self.name(), self.address);
         self.internal_reset();
         self.send_state_to_all(self.current_state());
