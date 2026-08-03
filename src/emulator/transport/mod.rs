@@ -45,7 +45,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{Notify, broadcast, watch};
+use tokio::sync::{Notify, broadcast, oneshot, watch};
 
 pub(crate) const CHANNEL_CAPACITY: usize = 256;
 
@@ -683,7 +683,11 @@ pub(crate) trait ClientListener {
     type Writer: AsyncWrite + Unpin + Send + 'static;
     type PeerInfo;
 
-    async fn accept(&self) -> std::io::Result<(Self::Reader, Self::Writer, Self::PeerInfo)>;
+    /// Explicit `+ Send` on the returned future (rather than plain `async
+    /// fn`) is required so `tokio::spawn(run_listener_task(...))` type-checks
+    /// from inside the generic [`ListenerCore::spawn`], not just from a
+    /// concrete, non-generic call site.
+    fn accept(&self) -> impl std::future::Future<Output = std::io::Result<(Self::Reader, Self::Writer, Self::PeerInfo)>> + Send;
 
     fn format_peer(info: Self::PeerInfo, conn_tag: u8) -> String;
 }
@@ -739,6 +743,109 @@ pub(crate) async fn run_listener_task<L: ClientListener>(
                 reporter: reporter.clone(),
             },
         ));
+    }
+}
+
+/// Sends `true` on `shutdown_tx` once `shutdown_rx` fires, translating a
+/// transport's one-shot `shutdown()` signal into the `watch` channel that
+/// [`run_listener_task`] and [`pump_outbound`] select on. A `watch` channel
+/// (rather than the oneshot directly) is needed because both tasks, plus
+/// every per-client [`run_client_task`], must observe the same shutdown
+/// signal.
+async fn propagate_shutdown(shutdown_rx: oneshot::Receiver<()>, shutdown_tx: watch::Sender<bool>) {
+    let _ = shutdown_rx.await;
+    let _ = shutdown_tx.send(true);
+}
+
+/// Owns the state and background Tokio tasks shared by every multipoint,
+/// ring-based listener transport (`TcpSocketTransport`, `UnixSocketTransport`)
+/// — construction (relay, outbound ring, shutdown plumbing, `run_listener_task`),
+/// and the `send`/`is_connected`/`shutdown` logic that used to be duplicated
+/// verbatim across both `Transport` impls (transport relay redesign plan
+/// §4.2 / PR #227 review). Each transport wraps this plus whatever
+/// listener-specific identity it needs to expose (a `PathBuf` for Unix, a
+/// `SocketAddr` for TCP).
+pub(crate) struct ListenerCore {
+    /// Outbound ring producer; see the module doc for the outbound path.
+    outbound: Producer<u8>,
+    outbound_notify: Arc<Notify>,
+    /// One-shot signal sent to the Tokio task to request shutdown.
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Number of currently connected clients. `send()` is a no-op while this
+    /// is zero; `is_connected()` reports whether it's nonzero.
+    client_count: Arc<AtomicUsize>,
+    /// Clone of the reporter supplied to `spawn`, for `send()`'s own
+    /// `note_outbound_drop` call.
+    reporter: TransportReporter,
+}
+
+impl ListenerCore {
+    /// Wires up the inbound relay, outbound ring, and shutdown plumbing for
+    /// `listener`, and spawns the [`run_listener_task`] Tokio task that
+    /// drives its accept loop. Returns the resulting core plus the inbound
+    /// relay the caller hands back alongside its transport.
+    pub(crate) fn spawn<L: ClientListener + Send + 'static>(
+        listener: L,
+        reporter: TransportReporter,
+        capacity: usize,
+    ) -> (Self, ChannelRelay<TransportEvent>) {
+        let (in_tx, in_rx) = bounded::<TransportEvent>(capacity);
+        let relay = ChannelRelay::spawn(in_rx, capacity);
+
+        let (outbound_producer, outbound_consumer) = RingBuffer::new(capacity);
+        let outbound_notify = Arc::new(Notify::new());
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let client_count = Arc::new(AtomicUsize::new(0));
+
+        let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
+        tokio::spawn(propagate_shutdown(shutdown_rx, shutdown_watch_tx));
+
+        tokio::spawn(run_listener_task(
+            listener,
+            in_tx,
+            outbound_consumer,
+            Arc::clone(&outbound_notify),
+            shutdown_watch_rx,
+            Arc::clone(&client_count),
+            reporter.clone(),
+        ));
+
+        let core = Self {
+            outbound: outbound_producer,
+            outbound_notify,
+            shutdown_tx: Some(shutdown_tx),
+            client_count,
+            reporter,
+        };
+        (core, relay)
+    }
+
+    /// Pushes a byte into the outbound ring for fan-out to every connected
+    /// client. A no-op while no client is connected — matching the previous
+    /// early-out behavior — and this idle-no-client case is deliberately
+    /// *not* counted as a drop (unlike a genuine ring overflow while clients
+    /// are connected), since it's ordinary steady state for an unwatched
+    /// multipoint device, not a diagnostic signal. Never blocks and never
+    /// errors: ring overflow while connected is counted via
+    /// `TransportReporter`, not surfaced here.
+    pub(crate) fn send(&mut self, byte: u8) {
+        if self.client_count.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        match self.outbound.push(byte) {
+            Ok(()) => self.outbound_notify.notify_one(),
+            Err(PushError::Full(_)) => self.reporter.note_outbound_drop(),
+        }
+    }
+
+    pub(crate) fn is_connected(&self) -> bool {
+        self.client_count.load(Ordering::Acquire) > 0
+    }
+
+    pub(crate) fn shutdown(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
     }
 }
 

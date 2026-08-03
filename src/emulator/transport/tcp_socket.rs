@@ -17,34 +17,22 @@
 //! [`UnixSocketTransport`](super::UnixSocketTransport) via
 //! `super::run_listener_task`, generic over the [`ClientListener`] trait —
 //! this module supplies only the `TcpListener`-specific `accept`/peer-naming
-//! logic (PR #227 review).
+//! logic (PR #227 review). Construction and the `Transport` plumbing
+//! (`send`/`is_connected`/`shutdown`) are likewise shared via
+//! `super::ListenerCore`.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crossbeam_channel::bounded;
-use rtrb::{Producer, PushError, RingBuffer};
 use tokio::net::TcpListener;
-use tokio::sync::{Notify, oneshot, watch};
 
-use super::{CHANNEL_CAPACITY, ChannelRelay, ClientListener, Transport, TransportEvent, TransportReporter, run_listener_task};
+use super::{CHANNEL_CAPACITY, ChannelRelay, ClientListener, ListenerCore, Transport, TransportEvent, TransportReporter};
 
 /// Transport that listens for incoming TCP socket connections.
 pub struct TcpSocketTransport {
-    /// Outbound ring producer; see the module doc for the outbound path.
-    outbound: Producer<u8>,
-    outbound_notify: Arc<Notify>,
-    /// One-shot signal sent to the Tokio task to request shutdown.
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Number of currently connected clients. `send()` is a no-op while this
-    /// is zero; `is_connected()` reports whether it's nonzero.
-    client_count: Arc<AtomicUsize>,
+    /// Shared listener state; see [`ListenerCore`].
+    core: ListenerCore,
     /// Address the listener is bound to.
     local_addr: SocketAddr,
-    /// Clone of the reporter supplied to `listen`, for `send()`'s own
-    /// `note_outbound_drop` call.
-    reporter: TransportReporter,
 }
 
 impl TcpSocketTransport {
@@ -67,36 +55,8 @@ impl TcpSocketTransport {
         let listener = TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
 
-        let (in_tx, in_rx) = bounded::<TransportEvent>(capacity);
-        let relay = ChannelRelay::spawn(in_rx, capacity);
-
-        let (outbound_producer, outbound_consumer) = RingBuffer::new(capacity);
-        let outbound_notify = Arc::new(Notify::new());
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let client_count = Arc::new(AtomicUsize::new(0));
-
-        let (shutdown_watch_tx, shutdown_watch_rx) = watch::channel(false);
-        tokio::spawn(propagate_shutdown(shutdown_rx, shutdown_watch_tx));
-
-        tokio::spawn(run_listener_task(
-            listener,
-            in_tx,
-            outbound_consumer,
-            Arc::clone(&outbound_notify),
-            shutdown_watch_rx,
-            Arc::clone(&client_count),
-            reporter.clone(),
-        ));
-
-        let transport = Self {
-            outbound: outbound_producer,
-            outbound_notify,
-            shutdown_tx: Some(shutdown_tx),
-            client_count,
-            local_addr,
-            reporter,
-        };
-        Ok((transport, relay))
+        let (core, relay) = ListenerCore::spawn(listener, reporter, capacity);
+        Ok((Self { core, local_addr }, relay))
     }
 
     /// Returns the address the listener is bound to.
@@ -118,38 +78,17 @@ impl Transport for TcpSocketTransport {
         None
     }
 
-    /// Pushes a byte into the outbound ring for fan-out to every connected
-    /// client. A no-op while no client is connected — matching the previous
-    /// early-out behavior — and this idle-no-client case is deliberately
-    /// *not* counted as a drop (unlike a genuine ring overflow while clients
-    /// are connected), since it's ordinary steady state for an unwatched
-    /// multipoint device, not a diagnostic signal. Never blocks and never
-    /// errors: ring overflow while connected is counted via
-    /// `TransportReporter`, not surfaced here.
     fn send(&mut self, byte: u8) {
-        if self.client_count.load(Ordering::Acquire) == 0 {
-            return;
-        }
-        match self.outbound.push(byte) {
-            Ok(()) => self.outbound_notify.notify_one(),
-            Err(PushError::Full(_)) => self.reporter.note_outbound_drop(),
-        }
+        self.core.send(byte);
     }
 
     fn is_connected(&self) -> bool {
-        self.client_count.load(Ordering::Acquire) > 0
+        self.core.is_connected()
     }
 
     fn shutdown(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
+        self.core.shutdown();
     }
-}
-
-async fn propagate_shutdown(shutdown_rx: oneshot::Receiver<()>, shutdown_tx: watch::Sender<bool>) {
-    let _ = shutdown_rx.await;
-    let _ = shutdown_tx.send(true);
 }
 
 impl ClientListener for TcpListener {
