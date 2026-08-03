@@ -1270,8 +1270,16 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       own item lands. Dedupe once both transports are converted, per this
       section's existing note to look for shared-code opportunities once
       both exist.
-- [ ] `TcpSocketTransport` rewrite + tests (§4.2) — should mostly mirror
-      Unix socket; look for shared-code opportunities
+- [x] `TcpSocketTransport` rewrite + tests (§4.2) — mirrors
+      `UnixSocketTransport` closely (same `listen`/`listen_with_capacity`
+      shape, same `Transport` impl, same test set). Since both multipoint
+      transports are now converted, `pump_outbound`/`ClientSession`/
+      `run_client_task` moved back into `mod.rs` as shared machinery (their
+      new ring/reporter shapes), replacing both the old `ChannelBridge`-based
+      versions and item 4's local duplicates in `unix_socket.rs` — the
+      deduplication opportunity this section called out. `ChannelBridge`
+      itself stays in `mod.rs`, still used by `PipeTransport` (item 6, not
+      yet converted).
 - [ ] `PipeTransport` rewrite + tests (§4.3)
 - [ ] `InternalPipeTransport` rewrite + tests (§4.4)
 - [x] `DeviceEvent::OutboundBytesDropped` / `InboundEventsDropped` (§5)
