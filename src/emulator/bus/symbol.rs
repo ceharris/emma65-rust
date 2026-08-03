@@ -169,7 +169,7 @@ mod tests {
         let mut table = SymbolTable::default();
         table.insert("foo".to_string(), 0xBEEF);
         table.insert("bar".to_string(), 0xBEEF);
-        table.remove(&"foo");
+        table.remove("foo");
         assert_eq!(table.address_for("foo"), None);
         let names: Vec<&str> = table.names_for(0xBEEF).collect();
         assert!(!names.contains(&"foo"));

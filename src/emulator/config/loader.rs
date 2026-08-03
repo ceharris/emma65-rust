@@ -611,7 +611,7 @@ S9030000FC
         let hex_data = "This is a test.\nThis is only a test\n".as_bytes();
         let mut mem: [u8; 0] = [];
         let mut target = SliceLoadTarget::new(&mut mem, 0);
-        let start_addr = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
+        let start_addr = load_target(hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
         assert!(start_addr.is_none());
     }
 
@@ -620,7 +620,7 @@ S9030000FC
         let hex_data = "S9030000FC".as_bytes();
         let mut mem: [u8; 0] = [];
         let mut target = SliceLoadTarget::new(&mut mem, 0);
-        let start_addr = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
+        let start_addr = load_target(hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
         assert!(matches!(start_addr, Some(0)));
     }
 
@@ -629,7 +629,7 @@ S9030000FC
         let hex_data = "S70700000000FF".as_bytes();
         let mut mem: [u8; 0] = [];
         let mut target = SliceLoadTarget::new(&mut mem, 0);
-        let err = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
+        let err = load_target(hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::Format(message) if message.contains("record type")));
     }
 
@@ -638,7 +638,7 @@ S9030000FC
         let hex_data = "S11F00007C0802A6900100049421FFF07C6C1B787C8C23783C6000003863000026\n".as_bytes();
         let mut mem: [u8; 16] = [0; 16];
         let mut target = SliceLoadTarget::new(&mut mem, 0);
-        let err = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
+        let err = load_target(hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::OutOfBounds { address: _, size: _ }));
     }
 
@@ -648,7 +648,7 @@ S9030000FC
         let hex_data = "S109FFFA00F000F000F02D\nS9030000FC\n".as_bytes();
         let mut mem: [u8; 16] = [0; 16];
         let mut target = SliceLoadTarget::new(&mut mem, -0xFFF0);
-        let start_addr = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
+        let start_addr = load_target(hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap();
         assert!(matches!(start_addr, Some(0)));
     }
 
@@ -657,7 +657,7 @@ S9030000FC
         let hex_data = "S00F000068656C6C6F202020202000003C\n".as_bytes();
         let mut mem: [u8; 0] = [0; 0];
         let mut target = SliceLoadTarget::new(&mut mem, -0x100);
-        let err = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
+        let err = load_target(hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::Format(message) if message.contains("end-of-file")));
     }
 
@@ -666,7 +666,7 @@ S9030000FC
         let hex_data = "S9030000FD".as_bytes();
         let mut mem: [u8; 0] = [];
         let mut target = SliceLoadTarget::new(&mut mem, -0x100);
-        let err = load_target(&hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
+        let err = load_target(hex_data, LoadFormat::MotorolaSrec, &mut target).unwrap_err();
         assert!(matches!(err, LoadError::ChecksumMismatch { actual: a_ck, expected: e_ck, address: addr}
             if a_ck== 0xfdu8 && e_ck == 0xfcu8 && addr == 0x0000));
     }

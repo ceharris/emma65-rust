@@ -494,12 +494,11 @@ mod tests {
 
         fn try_recv(&mut self) -> Option<u8> {
             loop {
-                if let Some(event) = self.received.pop_front() {
+                {
+                    let event = self.received.pop_front()?;
                     if let TransportEvent::Data(_, value) = event {
                         return Some(value)
                     }
-                } else {
-                    return None
                 }
             }
         }
@@ -662,7 +661,7 @@ mod tests {
         device.ifr = 6;
         device.ier = 7;
         device.cmd_data = 8;
-        assert_eq!(device.read(DEVICE_ADDRESS + 0), 1);
+        assert_eq!(device.read(DEVICE_ADDRESS), 1);
         assert_eq!(device.read(DEVICE_ADDRESS + 1), 2);
         assert_eq!(device.read(DEVICE_ADDRESS + 2), 3);
         assert_eq!(device.read(DEVICE_ADDRESS + 3), 4);
@@ -677,7 +676,7 @@ mod tests {
     fn write_registers_parameters() {
         let (mut device, protocol_data) = device_with_transport();
         // writing X should clamp to display width in pixels less one
-        device.write(DEVICE_ADDRESS + 0, 0xFF);
+        device.write(DEVICE_ADDRESS, 0xFF);
         assert_eq!(device.x, (WIDTH_IN_PIXELS - 1) as u8);
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.x)));
         assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 0)));
@@ -794,7 +793,7 @@ mod tests {
         device.ifr = 6;
         device.ier = 7;
         device.cmd_data = 8;
-        assert_eq!(device.peek(DEVICE_ADDRESS + 0), 1);
+        assert_eq!(device.peek(DEVICE_ADDRESS), 1);
         assert_eq!(device.peek(DEVICE_ADDRESS + 1), 2);
         assert_eq!(device.peek(DEVICE_ADDRESS + 2), 3);
         assert_eq!(device.peek(DEVICE_ADDRESS + 3), 4);

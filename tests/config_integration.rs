@@ -90,14 +90,14 @@ async fn build_with_unknown_device_type() {
 async fn ram_module_plain() {
     let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
     let a = attrs(&[("size", Value::from(1024u32))]);
-    RamModule.instantiate(BusConfig::new(), 0x2000, &a, &mut ctx(), id_allocator).await.unwrap();
+    RamModule.instantiate(BusConfig::new(), 0x2000, &a, &ctx(), id_allocator).await.unwrap();
 }
 
 #[tokio::test]
 async fn ram_module_with_fill() {
     let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
     let a = attrs(&[("size", Value::from(1024u32)), ("fill", Value::from(0xABu32))]);
-    let bus_config = RamModule.instantiate(BusConfig::new(), 0x2000, &a, &mut ctx(), id_allocator).await.unwrap();
+    let bus_config = RamModule.instantiate(BusConfig::new(), 0x2000, &a, &ctx(), id_allocator).await.unwrap();
     let mut bus = bus_config.build();
     assert_eq!(bus.read(0x2000).unwrap(), 0xAB);
     assert_eq!(bus.read(0x23FF).unwrap(), 0xAB);
@@ -111,7 +111,7 @@ async fn ram_module_with_binary_image() {
     tokio::fs::write(f.path(), &data).await.unwrap();
     let path_str = Value::String(Tag::Default, f.path().to_str().unwrap().to_string());
     let a = attrs(&[("size", Value::from(8u32)), ("image", path_str)]);
-    let bus_config = RamModule.instantiate(BusConfig::new(), 0x3000, &a, &mut ctx(), id_allocator).await.unwrap();
+    let bus_config = RamModule.instantiate(BusConfig::new(), 0x3000, &a, &ctx(), id_allocator).await.unwrap();
     let mut bus = bus_config.build();
     for (i, &expected) in data.iter().enumerate() {
         assert_eq!(bus.read(0x3000 + i as u16).unwrap(), expected);
@@ -131,7 +131,7 @@ async fn ram_module_with_intel_hex_image() {
         ("fill", Value::from(0u32)),
         ("image", path_str),
     ]);
-    let bus_config = RamModule.instantiate(BusConfig::new(), 0x0000, &a, &mut ctx(), id_allocator).await.unwrap();
+    let bus_config = RamModule.instantiate(BusConfig::new(), 0x0000, &a, &ctx(), id_allocator).await.unwrap();
     let mut bus = bus_config.build();
     assert_eq!(bus.read(0x0000).unwrap(), 0x01);
     assert_eq!(bus.read(0x0001).unwrap(), 0x02);
@@ -141,7 +141,7 @@ async fn ram_module_with_intel_hex_image() {
 async fn ram_module_missing_size() {
     let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
     let a = attrs(&[]);
-    let err = RamModule.instantiate(BusConfig::new(), 0x2000, &a, &mut ctx(), id_allocator).await.err().unwrap();
+    let err = RamModule.instantiate(BusConfig::new(), 0x2000, &a, &ctx(), id_allocator).await.err().unwrap();
     assert!(matches!(err, DeviceModuleError::Config(_)));
 }
 
@@ -157,7 +157,7 @@ async fn rom_module_with_binary_image() {
     tokio::fs::write(f.path(), &data).await.unwrap();
     let path_str = Value::String(Tag::Default, f.path().to_str().unwrap().to_string());
     let a = attrs(&[("size", Value::from(8u32)), ("image", path_str)]);
-    let bus_config = RomModule.instantiate(BusConfig::new(), 0x8000, &a, &mut ctx(), id_allocator).await.unwrap();
+    let bus_config = RomModule.instantiate(BusConfig::new(), 0x8000, &a, &ctx(), id_allocator).await.unwrap();
     let mut bus = bus_config.build();
     for (i, &expected) in data.iter().enumerate() {
         assert_eq!(bus.read(0x8000 + i as u16).unwrap(), expected);
@@ -173,7 +173,7 @@ async fn registry_instantiates_ram() {
     let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
     let registry = DeviceRegistry::with_builtins();
     let a = attrs(&[("size", Value::from(64u32)), ("fill", Value::from(0u32))]);
-    registry.instantiate("ram", BusConfig::new(), 0x1000, &a, &mut ctx(), id_allocator).await.unwrap();
+    registry.instantiate("ram", BusConfig::new(), 0x1000, &a, &ctx(), id_allocator).await.unwrap();
 }
 
 #[tokio::test]
@@ -185,7 +185,7 @@ async fn registry_instantiates_rom() {
     let path_str = Value::String(Tag::Default, f.path().to_str().unwrap().to_string());
     let registry = DeviceRegistry::with_builtins();
     let a = attrs(&[("size", Value::from(64u32)), ("image", path_str)]);
-    registry.instantiate("rom", BusConfig::new(), 0x8000, &a, &mut ctx(), id_allocator).await.unwrap();
+    registry.instantiate("rom", BusConfig::new(), 0x8000, &a, &ctx(), id_allocator).await.unwrap();
 }
 
 #[tokio::test]
@@ -193,6 +193,6 @@ async fn registry_unknown_module_name() {
     let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
     let registry = DeviceRegistry::with_builtins();
     let a = attrs(&[]);
-    let err = registry.instantiate("bogus", BusConfig::new(), 0x1000, &a, &mut ctx(), id_allocator).await.err().unwrap();
+    let err = registry.instantiate("bogus", BusConfig::new(), 0x1000, &a, &ctx(), id_allocator).await.err().unwrap();
     assert!(matches!(err, DeviceModuleError::Config(s) if s.contains("bogus")));
 }

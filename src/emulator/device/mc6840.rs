@@ -808,10 +808,10 @@ mod tests {
         let mut device = device();
         device.write(1, 0x01);
         assert!(device.cr1_enabled, "expected CR1 enabled");
-        device.write(0, 0xff & !CTRL_INTERNAL_RESET);
+        device.write(0, !CTRL_INTERNAL_RESET);
         assert!(!device.reset_active, "expected reset not active");
         assert!(device.timers[T1].external_clock, "expected external clock");
-        assert_eq!(device.timers[T1].mode, 0xff & CTRL_MODE_MASK);
+        assert_eq!(device.timers[T1].mode, CTRL_MODE_MASK);
         assert!(device.timers[T1].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T1].output_enabled, "expected output enabled");
     }
@@ -839,7 +839,7 @@ mod tests {
         device.write(1, 0xff);
         assert!(device.cr1_enabled, "expected CR1 enabled");
         assert!(device.timers[T2].external_clock, "expected external clock");
-        assert_eq!(device.timers[T2].mode, 0xff & CTRL_MODE_MASK);
+        assert_eq!(device.timers[T2].mode, CTRL_MODE_MASK);
         assert!(device.timers[T2].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T2].output_enabled, "expected output enabled");
     }
@@ -848,10 +848,10 @@ mod tests {
     fn write_t3_control_register() {
         let mut device = device();
         assert!(!device.cr1_enabled, "expected CR3 enabled");
-        device.write(0, 0xff & !CTRL_T3_PRESCALE);
-        assert!(matches!(device.timers[T3].prescaler, None), "expected no prescaler");
+        device.write(0, !CTRL_T3_PRESCALE);
+        assert!(device.timers[T3].prescaler.is_none(), "expected no prescaler");
         assert!(device.timers[T3].external_clock, "expected external clock");
-        assert_eq!(device.timers[T3].mode, 0xff & CTRL_MODE_MASK);
+        assert_eq!(device.timers[T3].mode, CTRL_MODE_MASK);
         assert!(device.timers[T3].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T3].output_enabled, "expected output enabled");
     }
@@ -860,7 +860,7 @@ mod tests {
     fn write_t3_control_register_with_prescaler() {
         let mut device = device();
         device.write(0, CTRL_T3_PRESCALE);
-        assert!(matches!(device.timers[T3].prescaler, Some(_)), "expected prescaler");
+        assert!(device.timers[T3].prescaler.is_some(), "expected prescaler");
     }
 
     #[test]
