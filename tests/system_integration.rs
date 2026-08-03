@@ -154,7 +154,7 @@ fn console_full_system_echo() {
     cpu.reset().unwrap();
 
     // Send the byte *before* starting execution so the pipe buffer is ready.
-    remote.send(0x55).unwrap();
+    remote.send(0x55);
     std::thread::sleep(std::time::Duration::from_millis(1));
 
     step_to_stop(&mut cpu);
@@ -250,7 +250,7 @@ fn _receive() {
     cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
     cpu.reset().unwrap();
 
-    remote.send(0x55).unwrap();
+    remote.send(0x55);
     std::thread::sleep(std::time::Duration::from_millis(1));
 
     step_to_stop(&mut cpu);
@@ -350,7 +350,7 @@ fn mc6850_transmit_and_receive() {
         cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
         cpu.reset().unwrap();
 
-        remote.send(0x77).unwrap();
+        remote.send(0x77);
         std::thread::sleep(std::time::Duration::from_millis(1));
 
         step_to_stop(&mut cpu);
@@ -427,7 +427,7 @@ fn _irq_driven_receive() {
     // WAI before the byte arrives (avoiding the IRQ firing before WAI executes).
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        remote.send(0x55).unwrap();
+        remote.send(0x55);
     });
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -597,7 +597,7 @@ fn mc6850_irq_driven_receive() {
     // WAI before the byte arrives (avoiding the IRQ firing before WAI executes).
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        remote.send(0x77).unwrap();
+        remote.send(0x77);
     });
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);

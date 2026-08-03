@@ -251,7 +251,7 @@ async fn _external_clock_throughput_at_1_8432_mhz() {
 
     // Pre-fill the pipe with N bytes before starting the CPU.
     for i in 0..N {
-        remote.send(i as u8).unwrap();
+        remote.send(i as u8);
     }
 
     let handle = run(cpu);
@@ -327,7 +327,7 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
     let cpu = build_acia_cpu(acia, prog);
 
     for i in 0..N {
-        remote.send(i as u8).unwrap();
+        remote.send(i as u8);
     }
 
     let wall_start = std::time::Instant::now();
@@ -424,7 +424,7 @@ async fn mc6850_throughput_at_1_8432_mhz() {
     cpu.reset().unwrap();
 
     for i in 0..N {
-        remote.send(i as u8).unwrap();
+        remote.send(i as u8);
     }
 
     let handle = run(cpu);
