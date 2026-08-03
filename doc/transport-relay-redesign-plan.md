@@ -1280,7 +1280,22 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       deduplication opportunity this section called out. `ChannelBridge`
       itself stays in `mod.rs`, still used by `PipeTransport` (item 6, not
       yet converted).
-- [ ] `PipeTransport` rewrite + tests (§4.3)
+- [x] `PipeTransport` rewrite + tests (§4.3) — mirrors `PtyTransport` (§4.1)
+      closely: `spawn`/`spawn_with_capacity` return `(Self, ChannelRelay<u8>)`,
+      same `try_recv` no-op-stub deferral to item 12. Unlike PTY,
+      `is_connected`/`send`'s gate are driven by a background-task-owned
+      `Arc<AtomicBool>` that `run_pipe_task` flips directly on child exit
+      (edge-triggered via the same `swap`-style pattern PTY uses for
+      `client_connected`), since nothing left in the trait observes the old
+      `Disconnected` event once `try_recv`/`try_recv_tagged` stop being real
+      data paths. `run_pipe_task`'s shutdown branch drops `in_tx` before
+      calling `on_exit`, per §4.3. `TransportSpec`'s `Pipe` arms (both
+      `to_transport` and `to_transport_with_reporter`) got the same
+      `TransportReporter::pending(None)` + `std::mem::forget(relay)`
+      treatment as the other three arms. Now that all four P2P/multipoint
+      transports using it are converted, `ChannelBridge` had no remaining
+      callers and was removed from `mod.rs` (not itself a checklist item,
+      but trivial once dead).
 - [ ] `InternalPipeTransport` rewrite + tests (§4.4)
 - [x] `DeviceEvent::OutboundBytesDropped` / `InboundEventsDropped` (§5)
 - [ ] `DeviceEvent::TransportConnected`/`TransportDisconnected` peer-field
