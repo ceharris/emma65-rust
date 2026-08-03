@@ -2,18 +2,26 @@
 //!
 //! ## `ChannelRelay` shutdown contract
 //!
-//! [`ChannelRelay`] carries no internal stop flag: `Drop for ChannelRelay`
-//! unparks the relay thread (in case it is parked on a full ring) and then
-//! joins it. The owner must ensure every corresponding `Sender<T>` feeding
-//! the relay is dropped *before* the `ChannelRelay` itself is dropped —
-//! otherwise that join blocks indefinitely, since the relay thread can only
-//! exit by observing its channel disconnect.
+//! `Drop for ChannelRelay` sends an internal stop signal, unparks the relay
+//! thread (in case it's parked retrying a push into a full ring), and joins
+//! it. For a `ChannelRelay::spawn`-constructed relay, this makes dropping
+//! always prompt: the relay thread doesn't need its producer side to make
+//! any progress (e.g. an owning Tokio task actually getting polled) in order
+//! to exit, so it's safe to drop a `ChannelRelay` from anywhere — including
+//! from within an async task on a Tokio worker, which would otherwise
+//! deadlock that worker against the very task it needs to drive to
+//! completion. An earlier version of this design had no independent stop
+//! signal and instead required every corresponding `Sender<T>` to be dropped
+//! first; that contract turned out to be an easy-to-violate footgun in
+//! practice (see the transport relay redesign plan's implementation log)
+//! and has been replaced by this one.
 //!
-//! Concretely, any task holding a `Sender<T>` (or a clone of one) that feeds
-//! a `ChannelRelay` must drop it as the first action on its shutdown path,
-//! before any other teardown work. This decouples "the relay thread can stop
-//! blocking" from teardown that may take arbitrarily long (e.g. waiting on a
-//! child process to exit).
+//! `ChannelRelay::from_parts`-constructed relays don't yet have this
+//! independent signal wired to their caller-owned thread (that thread's loop
+//! is defined entirely by the caller, e.g. `InternalPipeTransport`, which
+//! reads off a raw fd rather than a `crossbeam_channel`). Until a caller
+//! wires up an equivalent stop condition of its own, dropping one of these
+//! still depends on the caller's thread exiting on its own.
 pub mod internal_pipe;
 pub mod pipe;
 pub mod tcp_socket;
@@ -30,7 +38,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::emulator::{DeviceEvent, DeviceId, ErrorSender};
-use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
+use crossbeam_channel::{Receiver, Select, Sender, TryRecvError, bounded};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -403,22 +411,48 @@ pub struct ChannelRelay<T> {
     /// The relay thread's handle. Taken on drop so it can be unparked and
     /// joined exactly once.
     handle: Option<JoinHandle<()>>,
+    /// Independent shutdown signal for `Drop`, so a [`spawn`](Self::spawn)ed
+    /// relay thread can be told to stop without depending on its producer
+    /// side making any progress — see the module documentation. `None` for
+    /// [`from_parts`](Self::from_parts)-constructed relays, whose thread
+    /// doesn't know about this signal (yet).
+    stop: Option<Sender<()>>,
 }
 
 impl<T: Send + 'static> ChannelRelay<T> {
-    /// Spawns a relay thread that blocks on `rx.recv()`, pushing each
-    /// received item into a new ring of `capacity` via [`push_and_park`].
-    /// The thread runs until `rx` disconnects — see the
-    /// [module documentation](crate::emulator::transport) for the full
-    /// shutdown contract this implies for callers.
+    /// Spawns a relay thread that waits on either `rx` or its own internal
+    /// stop signal, pushing each item received from `rx` into a new ring of
+    /// `capacity` via [`push_and_park`]. Exits when `rx` disconnects *or*
+    /// when `Drop` signals it to stop — see the
+    /// [module documentation](crate::emulator::transport) for why both
+    /// exist.
     pub(crate) fn spawn(rx: Receiver<T>, capacity: usize) -> Self {
         let (mut producer, consumer) = RingBuffer::new(capacity);
+        let (stop_tx, stop_rx) = bounded::<()>(1);
         let handle = thread::spawn(move || {
-            while let Ok(item) = rx.recv() {
-                push_and_park(&mut producer, item);
+            let mut sel = Select::new();
+            let data_idx = sel.recv(&rx);
+            let stop_idx = sel.recv(&stop_rx);
+            loop {
+                let oper = sel.select();
+                match oper.index() {
+                    i if i == data_idx => match oper.recv(&rx) {
+                        Ok(item) => {
+                            if !push_and_park(&mut producer, item, &stop_rx) {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    },
+                    i if i == stop_idx => {
+                        let _ = oper.recv(&stop_rx);
+                        break;
+                    }
+                    _ => unreachable!(),
+                }
             }
         });
-        Self { consumer, handle: Some(handle) }
+        Self { consumer, handle: Some(handle), stop: Some(stop_tx) }
     }
 
     /// Wraps an already-running relay thread's `Consumer<T>`/`JoinHandle`
@@ -427,7 +461,7 @@ impl<T: Send + 'static> ChannelRelay<T> {
     /// source with no `crossbeam_channel` hop and drive their own
     /// [`push_and_park`] loop against their own `Producer<T>`.
     pub(crate) fn from_parts(consumer: Consumer<T>, handle: JoinHandle<()>) -> Self {
-        Self { consumer, handle: Some(handle) }
+        Self { consumer, handle: Some(handle), stop: None }
     }
 
     /// Pops one item from the ring, if available.
@@ -453,12 +487,15 @@ impl<T: Send + 'static> ChannelRelay<T> {
 }
 
 impl<T> Drop for ChannelRelay<T> {
-    /// Unparks the relay thread (in case it's parked on a full ring) and
-    /// joins it. Relies on the shutdown contract described in the
-    /// [module documentation](crate::emulator::transport): callers must have
-    /// already closed every `Sender<T>` feeding this relay, or this blocks
-    /// indefinitely.
+    /// Signals stop (if this relay has that signal wired up, i.e. it was
+    /// `spawn`ed rather than built via `from_parts`), unparks the relay
+    /// thread (in case it's parked retrying a push into a full ring), and
+    /// joins it. See the [module documentation](crate::emulator::transport)
+    /// for why both are needed and what this means for `from_parts`.
     fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
         if let Some(handle) = self.handle.take() {
             handle.thread().unpark();
             let _ = handle.join();
@@ -467,16 +504,21 @@ impl<T> Drop for ChannelRelay<T> {
 }
 
 /// Pushes `item` into `producer`, parking the current thread on
-/// `PushError::Full` and retrying once unparked. Shared by
+/// `PushError::Full` and retrying once unparked, until either the push
+/// succeeds (`true`) or `stop` signals shutdown while parked, in which case
+/// `item` is dropped and this returns `false`. Shared by
 /// [`ChannelRelay::spawn`]'s thread body and `InternalPipeTransport`'s custom
 /// relay thread (§4.4), so the retry loop exists in exactly one place.
-pub(crate) fn push_and_park<T>(producer: &mut Producer<T>, mut item: T) {
+pub(crate) fn push_and_park<T>(producer: &mut Producer<T>, mut item: T, stop: &Receiver<()>) -> bool {
     loop {
         match producer.push(item) {
-            Ok(()) => return,
+            Ok(()) => return true,
             Err(PushError::Full(returned)) => {
                 item = returned;
                 thread::park();
+                if stop.try_recv().is_ok() {
+                    return false;
+                }
             }
         }
     }
@@ -617,10 +659,6 @@ mod channel_relay_tests {
         let mut got = Vec::new();
         relay.drain_into(|item| got.push(item));
         assert_eq!(got, (0..10u8).collect::<Vec<_>>());
-
-        // Drop the sender before `relay` so its `Drop` doesn't block on
-        // `join()` waiting for a relay thread that can't exit yet (§1.7).
-        drop(tx);
     }
 
     #[test]
@@ -647,10 +685,6 @@ mod channel_relay_tests {
         let mut got = Vec::new();
         relay.drain_into(|item| got.push(item));
         assert_eq!(got, vec![2]);
-
-        // Drop the sender before `relay` so its `Drop` doesn't block on
-        // `join()` waiting for a relay thread that can't exit yet (§1.7).
-        drop(tx);
     }
 
     #[test]
@@ -668,5 +702,28 @@ mod channel_relay_tests {
         done_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("ChannelRelay::drop hung after Sender was dropped");
+    }
+
+    #[test]
+    fn drop_returns_promptly_even_with_sender_still_alive() {
+        let (tx, rx) = bounded::<u8>(4);
+        let relay = ChannelRelay::spawn(rx, 4);
+        // Deliberately keep `tx` alive past the relay's drop — this is
+        // exactly the scenario that used to require callers to carefully
+        // order drops (or, worse, deadlock a Tokio worker joining a thread
+        // that could only exit once an async task got scheduled to drop its
+        // sender). The internal stop signal means the relay thread no
+        // longer needs the sender to close at all.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(relay);
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("ChannelRelay::drop hung with a live Sender");
+
+        drop(tx);
     }
 }

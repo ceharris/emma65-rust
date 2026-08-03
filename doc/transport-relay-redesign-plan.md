@@ -165,7 +165,31 @@ blocking `send()`.
 
 ### 1.7 Shutdown contract
 
-- `ChannelRelay<T>` carries **no internal stop flag**. Given the fixed,
+**Revised during implementation of checklist item 3** (`PtyTransport`
+rewrite): the original "no internal stop flag" design below caused real,
+repeated friction — `ChannelRelay`'s own unit tests needed careful `Sender`
+drop-ordering to avoid hanging, and `PtyTransport`'s async tests deadlocked
+outright, since dropping a `ChannelRelay` inside a `#[tokio::test]` async fn
+blocks the very Tokio worker needed to drive the producer task to drop its
+sender in the first place. `ChannelRelay` now carries an internal stop
+signal instead (a small `crossbeam_channel`, used only by `Drop`, selected
+against alongside the data channel) — see the shutdown-contract section of
+`src/emulator/transport/mod.rs`'s module doc for the final design. For a
+`spawn`-constructed relay, `Drop` is now prompt unconditionally: it no
+longer depends on any `Sender<T>` being dropped, from anywhere, including
+from within an async task on a Tokio worker. `from_parts`-constructed relays
+(§3; first real consumer is `InternalPipeTransport`, §4.4, not yet
+implemented) don't have this signal wired to their caller-owned thread yet
+— that thread reads off a raw fd rather than a `crossbeam_channel`, so an
+interruption mechanism for it needs its own design when item 7 lands, and
+the "drop the sender/close the fd before joining" caveat below still applies
+there until it does.
+
+The original design is preserved below for traceability, but its "senders
+must be dropped first" premise no longer applies to `spawn`-constructed
+relays as described above.
+
+- ~~`ChannelRelay<T>` carries **no internal stop flag**. Given the fixed,
   small, enumerable set of transport implementations that construct one,
   the simpler contract is acceptable: **the owner must ensure every
   corresponding `Sender<T>` is dropped before dropping the
@@ -174,21 +198,24 @@ blocking `send()`.
   instead blocked in `rx.recv()` with a live sender still outstanding
   anywhere, that join blocks indefinitely — this is a known, accepted
   footgun scoped to the small set of call sites this plan enumerates, not
-  a general-purpose public API.
+  a general-purpose public API.~~
 
-- Every tokio task holding an `in_tx: Sender<_>` (or a clone of one) must
+- ~~Every tokio task holding an `in_tx: Sender<_>` (or a clone of one) must
   **drop it as the first action on its shutdown branch**, before any other
   cleanup (child process reaping, final event sends, `on_exit` callbacks).
   This decouples "the relay thread can stop blocking" from "the rest of
   this task's teardown work," which may take arbitrarily long (e.g.
-  waiting on a child process).
-    - Example: in `run_pipe_task`'s `select!`, the shutdown branch should
-      `drop(in_tx)` before or independent of calling `on_exit(...)`.
-    - Example: in `run_client_task`, the shutdown branch should
+  waiting on a child process).~~
+    - ~~Example: in `run_pipe_task`'s `select!`, the shutdown branch should
+      `drop(in_tx)` before or independent of calling `on_exit(...)`.~~
+    - ~~Example: in `run_client_task`, the shutdown branch should
       `drop(in_tx)` and skip the final `Disconnected` send entirely, since
       nothing reads events past a whole-bus shutdown — confirmed against
       `ProtocolManager`'s actual usage (§4.2, §7 "Resolved during design
-      review").
+      review").~~ (This specific sub-point — skipping the final
+      `Disconnected` send on whole-bus shutdown — is independently still
+      correct and unaffected by the stop-signal change; it's about event
+      semantics, not relay shutdown.)
 
 - For multipoint, the listener-accept loop (`run_tcp_task`/`run_unix_task`)
   already has a `_ = shutdown_rx.changed() => break` branch preventing new
@@ -197,14 +224,18 @@ blocking `send()`.
   wins a last-instant race against the shutdown branch and gets spawned
   anyway will still observe shutdown via its own `select!` and drop its
   sender promptly. This is a bounded, harmless delay, not a stall risk. No
-  fix needed.
+  fix needed. (Unaffected by the stop-signal change — this is about client
+  task spawning, not relay shutdown.)
 
-- **Precondition supplied by the project**: `Bus::drop` runs on a plain
+- ~~**Precondition supplied by the project**: `Bus::drop` runs on a plain
   owning thread, never inside a tokio worker. This is what makes it safe
   for `ChannelRelay::drop`'s `join()` to block synchronously — the block
   is bounded by ordinary tokio scheduling latency (sub-millisecond in
   practice) once senders are dropped first as required above, not by IO or
-  process-exit latency.
+  process-exit latency.~~ No longer a precondition for `spawn`-constructed
+  relays — `Drop` is now safe and prompt from any thread, including a Tokio
+  worker. Still worth keeping true regardless (§6's `Bus::drop` design is
+  unaffected either way).
 
 - **Today, `Transport::shutdown()` is not called in production** — buses
   and CPUs live for the process lifetime. This redesign is also the
@@ -446,18 +477,24 @@ that crosses crate boundaries directly (e.g. into `src/bin/emulator/`
 and `debugger/src-tauri/`, §9.4). `T` is `u8` for P2P transports,
 `TransportEvent` for multipoint.
 
+**Updated during implementation of checklist item 3** — see §1.7's "Revised
+during implementation" note. `ChannelRelay` gained an internal stop signal,
+changing the shape below from what was originally sketched here:
+
 ```rust
 pub struct ChannelRelay<T> {
     consumer: Consumer<T>,          // rtrb
     handle: Option<JoinHandle<()>>,
+    stop: Option<Sender<()>>,       // None for from_parts; Some for spawn
 }
 
 impl<T: Send + 'static> ChannelRelay<T> {
-    /// Spawns a thread that blocks on `rx.recv()`, pushing each item into a
-    /// new `rtrb` ring of the given `capacity` and parking on
-    /// `PushError::Full`. The shape needed by every transport except
-    /// `InternalPipeTransport` (§4.4), which has no `crossbeam_channel`
-    /// hop to receive from.
+    /// Spawns a thread that selects between `rx` and its own internal stop
+    /// channel, pushing each item received from `rx` into a new `rtrb` ring
+    /// of the given `capacity` via `push_and_park`. Exits when `rx`
+    /// disconnects *or* when `Drop` signals it to stop. The shape needed by
+    /// every transport except `InternalPipeTransport` (§4.4), which has no
+    /// `crossbeam_channel` hop to receive from.
     pub(crate) fn spawn(rx: Receiver<T>, capacity: usize) -> Self;
 
     /// Wraps an already-running relay thread's `Consumer<T>`/`JoinHandle`
@@ -470,7 +507,9 @@ impl<T: Send + 'static> ChannelRelay<T> {
     /// The caller owns constructing the thread and the ring; this just
     /// takes ownership of the resulting handle and consumer so the
     /// caller's return type matches every other transport's
-    /// `(Self, ChannelRelay<T>)` shape.
+    /// `(Self, ChannelRelay<T>)` shape. Has no stop signal wired up yet —
+    /// item 7 will need to design an equivalent interruption mechanism for
+    /// a thread that blocks on a raw fd read rather than a channel recv.
     pub(crate) fn from_parts(consumer: Consumer<T>, handle: JoinHandle<()>) -> Self;
 
     fn pop(&mut self) -> Option<T>;
@@ -482,13 +521,17 @@ impl<T: Send + 'static> ChannelRelay<T> {
 }
 
 /// Push `item` into `producer`, parking the current thread on
-/// `PushError::Full` and retrying once unparked. Shared by `spawn`'s
-/// internal thread body and `InternalPipeTransport`'s custom thread
-/// (§4.4), so the retry logic exists in exactly one place.
-pub(crate) fn push_and_park<T>(producer: &mut Producer<T>, item: T);
+/// `PushError::Full` and retrying once unparked, until either the push
+/// succeeds or `stop` signals shutdown while parked (in which case `item`
+/// is dropped). Shared by `spawn`'s internal thread body and
+/// `InternalPipeTransport`'s custom thread (§4.4), so the retry logic
+/// exists in exactly one place.
+pub(crate) fn push_and_park<T>(producer: &mut Producer<T>, item: T, stop: &Receiver<()>) -> bool;
 
-// Drop: unpark (harmless if not parked) + join(). Relies on the shutdown
-// contract in §1.7 — callers must close all Senders before drop.
+// Drop: send the stop signal (if any), unpark (harmless if not parked),
+// then join(). For a `spawn`-constructed relay this is always prompt,
+// regardless of whether any Sender<T> feeding it is still alive — see the
+// shutdown contract in §1.7 and in transport/mod.rs's module doc.
 ```
 
 Only `spawn`/`from_parts` (construction) and `drain_into` (the
@@ -496,8 +539,10 @@ device-facing drain) are part of the public surface; `pop`/`unpark` are
 private implementation details of `drain_into` now that there's no wrapper
 type needing them.
 
-Relay thread body (used by `spawn`): `while let Ok(item) = rx.recv() {
-push_and_park(&mut producer, item); }`. No internal stop flag (§1.7).
+Relay thread body (used by `spawn`): a `crossbeam_channel::Select` over `rx`
+and the internal stop channel; on data, `push_and_park`s it (aborting the
+loop if `push_and_park` reports a stop request); on the stop branch or `rx`
+disconnecting, exits.
 
 **Unit tests to include:**
 - Round-trip: send N items via `Sender`, confirm `drain_into` yields them
@@ -508,6 +553,9 @@ push_and_park(&mut producer, item); }`. No internal stop flag (§1.7).
   subsequent items do arrive on the next `drain_into`).
 - Shutdown: drop all `Sender`s, confirm `ChannelRelay::drop` returns
   promptly (bounded test timeout) rather than hanging.
+- Shutdown with a live `Sender`: confirm `ChannelRelay::drop` is *still*
+  prompt even when a `Sender<T>` is deliberately kept alive past the
+  relay's drop — the scenario the internal stop signal exists for.
 
 ---
 
@@ -1192,7 +1240,10 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
 
 - [x] `ChannelRelay<T>` in `mod.rs` (`pub`, with `drain_into`,
       `from_parts`, and the shared `push_and_park` free function), with
-      unit tests (§3)
+      unit tests (§3). Revised while implementing item 3: gained an
+      internal stop signal, replacing the original "senders must be
+      dropped first" contract — see §1.7 and §3's "Updated during
+      implementation" notes.
 - [x] Single `Transport` trait + `TransportReporter` (§2, §2.1)
 - [x] `PtyTransport` rewrite + tests (§4.1) — reference implementation.
       Deviates from the literal spec in one deliberate way: `try_recv()` is

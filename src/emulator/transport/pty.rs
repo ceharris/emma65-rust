@@ -285,22 +285,15 @@ mod tests {
     use super::*;
     use crate::emulator::{DeviceEvent, DeviceId, device_event_channel};
 
-    /// Shuts `transport` down and drops it plus `relay` on a dedicated
-    /// blocking-pool thread, then waits for that to finish.
-    ///
-    /// `ChannelRelay::drop` joins its relay thread, which only exits once
-    /// `run_pty_task`'s shutdown branch drops its channel sender — and that
-    /// branch can only run if the Tokio worker driving this test is free to
-    /// poll it. Dropping `relay` directly at the end of an `async fn` test
-    /// would join *on that same worker thread*, deadlocking it against the
-    /// very task it needs to drive to completion (module doc's shutdown
-    /// contract: `ChannelRelay::drop`'s blocking join is only sound off a
-    /// Tokio worker — production's equivalent is `Bus::drop` running on a
-    /// plain thread). Moving the drop to `spawn_blocking` keeps the join off
-    /// the worker so the shutdown it's waiting for can actually happen.
-    async fn close(mut transport: PtyTransport, relay: ChannelRelay<u8>) {
+    /// Shuts `transport` down (stopping the background Tokio task and its
+    /// OS resources, not just the relay) and drops it plus `relay`.
+    /// `ChannelRelay::drop`'s internal stop signal means this is safe and
+    /// prompt even here, inside an `async fn` test on a Tokio worker — it no
+    /// longer depends on that worker being free to poll `run_pty_task` to
+    /// completion first (see the shutdown contract in the module doc).
+    fn close(mut transport: PtyTransport, relay: ChannelRelay<u8>) {
         transport.shutdown();
-        tokio::task::spawn_blocking(move || drop((transport, relay))).await.unwrap();
+        drop((transport, relay));
     }
 
     #[tokio::test]
@@ -317,7 +310,7 @@ mod tests {
         relay.drain_into(|b| got.push(b));
         assert_eq!(got, vec![0xBB]);
 
-        close(transport, relay).await;
+        close(transport, relay);
     }
 
     #[tokio::test]
@@ -326,7 +319,7 @@ mod tests {
         transport.shutdown();
         assert!(!transport.is_connected());
 
-        close(transport, relay).await;
+        close(transport, relay);
     }
 
     #[tokio::test]
@@ -337,7 +330,7 @@ mod tests {
         assert!(!transport.is_connected());
         transport.send(0xFF);
 
-        close(transport, relay).await;
+        close(transport, relay);
     }
 
     #[tokio::test]
@@ -353,7 +346,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(transport.is_connected());
 
-        close(transport, relay).await;
+        close(transport, relay);
     }
 
     #[tokio::test]
@@ -364,7 +357,7 @@ mod tests {
         let (transport, relay) = PtyTransport::open(Some(&link_path), TransportReporter::pending(None)).unwrap();
         assert!(link_path.exists());
 
-        close(transport, relay).await;
+        close(transport, relay);
         assert!(!link_path.exists());
     }
 
@@ -388,7 +381,7 @@ mod tests {
         slave.read_exact(&mut buf).unwrap();
         assert_eq!(buf, [0xD0, 0xD1]);
 
-        close(transport, relay).await;
+        close(transport, relay);
     }
 
     #[tokio::test]
@@ -404,7 +397,7 @@ mod tests {
         relay.drain_into(|b| got.push(b));
         assert!(got.is_empty());
 
-        close(transport, relay).await;
+        close(transport, relay);
     }
 
     #[tokio::test]
@@ -429,6 +422,6 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
 
-        close(transport, relay).await;
+        close(transport, relay);
     }
 }
