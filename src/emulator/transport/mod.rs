@@ -68,16 +68,6 @@ pub enum TransportError {
     Full,
 }
 
-pub(crate) fn no_op_reporter() -> Box<impl Fn(TransportError) + Send> {
-    Box::new(|_error| {})
-}
-
-pub(crate) fn reporter(sender: ErrorSender, id: DeviceId) -> Box<impl Fn(TransportError) + Send> {
-    Box::new(move |error| {
-        let _ = sender.send(DeviceEvent::TransportError { device: id, error });
-    })
-}
-
 /// Bundles the callbacks a transport needs at construction time: error
 /// reporting, diagnostic drop counters, and connect/disconnect edge
 /// reporting. Built once per transport and cloned into every

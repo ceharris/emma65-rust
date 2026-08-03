@@ -1366,12 +1366,9 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       normal field-drop runs + integration test (§6). `ProtocolManager::shutdown`
       was already present (forwarding to its transport) from earlier work;
       this item added `IoDevice::shutdown` (default no-op) and overrides on
-      every transport-owning device (`Console`, `R6551`, `Mc6850` call
-      `self.transport.shutdown()`; `Via6522`, `Mc6840` call
-      `self.protocol_manager.shutdown()`), plus `LedMatrix` — not explicitly
-      named in §6's device list but also holds a `Box<dyn Transport>`
-      directly, so given the same override for consistency even though it
-      isn't yet migrated onto the relay design (§9.1, still deferred).
+      every transport-owning device (`Console`, `R6551`, `Mc6850`, `LedMatrix`
+      call `self.transport.shutdown()`; `Via6522`, `Mc6840` call
+      `self.protocol_manager.shutdown()`).
       `impl Drop for Bus` iterates `self.devices` calling `shutdown()` before
       normal field-drop. New integration test
       `tests/bus_shutdown.rs::bus_drop_shuts_down_all_transports_without_hanging`
@@ -1396,13 +1393,20 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       literal §4.4 spec — making `try_recv()` a permanent no-op stub —
       would break every device's unit tests, which all depend on
       `InternalPipeTransport::pair()` as a synchronous test double.
+      `LedMatrix` was inadvertently left out of the initial pass (it holds
+      a tagged `ChannelRelay<TransportEvent>` directly, like
+      `ProtocolManager` does, rather than going through `ProtocolManager`
+      itself — its register/IFR wire format isn't one of the
+      `ProtocolMessageEncoding` variants); migrated in a followup pass, same
+      shape as the rest of §9.1 plus the tagged-relay rejection from §9.3/
+      `via/6522`'s `DeviceModule`.
 - [x] `DeviceModule::instantiate` implementations: build `TransportReporter`
       before constructing the transport, thread the returned relay into the
-      device constructor, drop the `set_error_sender` call (§9.2). `via/6522`
-      and `ptm/6840` additionally reject a resolved `TransportRelay::Byte`
-      (P2P transport) with a `DeviceModuleError::Config`, since
-      `ProtocolManager` requires per-client tagging that pty/pipe
-      transports can't provide.
+      device constructor, drop the `set_error_sender` call (§9.2). `via/6522`,
+      `ptm/6840`, and `display/matrix` additionally reject a resolved
+      `TransportRelay::Byte` (P2P transport) with a `DeviceModuleError::Config`,
+      since they require per-client tagging that pty/pipe transports can't
+      provide.
 - [x] `TransportReporter::pending`/`bind` (§2.2), for the two call sites
       that must construct a transport before any `DeviceId` exists —
       landed together with the `TransportSlot` widening below, since
