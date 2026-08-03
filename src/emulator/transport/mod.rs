@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::emulator::{DeviceEvent, DeviceId, ErrorSender};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
+use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::Mutex;
+use std::thread::{self, JoinHandle};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Notify, broadcast, oneshot, watch};
@@ -165,6 +167,99 @@ impl<R: Send + 'static> ChannelBridge<R> {
     }
 }
 
+/// A dedicated relay thread paired with the consumer side of an `rtrb` ring
+/// buffer. The relay thread blocks on an inbound source and pushes each item
+/// into the ring, parking on a full ring until [`ChannelRelay::drain_into`]
+/// frees space and unparks it. Using a plain OS thread (rather than an async
+/// task) for the parkable producer side avoids stalling a Tokio worker and
+/// everything else scheduled on it; see `doc/transport-relay-redesign-plan.md`
+/// §1.2 for the full rationale. Shared by every `Transport` implementation
+/// needing an inbound relay (`T` is `u8` for point-to-point transports,
+/// `TransportEvent` for multipoint ones).
+pub struct ChannelRelay<T> {
+    /// Consumer side of the ring the relay thread pushes into.
+    consumer: Consumer<T>,
+    /// The relay thread's handle. Taken on drop so it can be unparked and
+    /// joined exactly once.
+    handle: Option<JoinHandle<()>>,
+}
+
+impl<T: Send + 'static> ChannelRelay<T> {
+    /// Spawns a relay thread that blocks on `rx.recv()`, pushing each
+    /// received item into a new ring of `capacity` via [`push_and_park`].
+    /// The thread runs until `rx` disconnects — callers must drop every
+    /// corresponding `Sender<T>` before dropping the returned `ChannelRelay`
+    /// (see §1.7 of the redesign plan for the full shutdown contract).
+    pub(crate) fn spawn(rx: Receiver<T>, capacity: usize) -> Self {
+        let (mut producer, consumer) = RingBuffer::new(capacity);
+        let handle = thread::spawn(move || {
+            while let Ok(item) = rx.recv() {
+                push_and_park(&mut producer, item);
+            }
+        });
+        Self { consumer, handle: Some(handle) }
+    }
+
+    /// Wraps an already-running relay thread's `Consumer<T>`/`JoinHandle`
+    /// directly, without spawning anything or requiring a `Receiver<T>`. For
+    /// callers like `InternalPipeTransport` (§4.4) that read from a raw
+    /// source with no `crossbeam_channel` hop and drive their own
+    /// [`push_and_park`] loop against their own `Producer<T>`.
+    pub(crate) fn from_parts(consumer: Consumer<T>, handle: JoinHandle<()>) -> Self {
+        Self { consumer, handle: Some(handle) }
+    }
+
+    /// Pops one item from the ring, if available.
+    fn pop(&mut self) -> Option<T> {
+        self.consumer.pop().ok()
+    }
+
+    /// Unparks the relay thread. Harmless if it isn't currently parked.
+    fn unpark(&self) {
+        if let Some(handle) = &self.handle {
+            handle.thread().unpark();
+        }
+    }
+
+    /// Drains all currently available items, then unparks the relay thread.
+    /// Call once per `tick()`.
+    pub fn drain_into(&mut self, mut f: impl FnMut(T)) {
+        while let Some(item) = self.pop() {
+            f(item);
+        }
+        self.unpark();
+    }
+}
+
+impl<T> Drop for ChannelRelay<T> {
+    /// Unparks the relay thread (in case it's parked on a full ring) and
+    /// joins it. Relies on the shutdown contract in §1.7: callers must have
+    /// already closed every `Sender<T>` feeding this relay, or this blocks
+    /// indefinitely.
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.thread().unpark();
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Pushes `item` into `producer`, parking the current thread on
+/// `PushError::Full` and retrying once unparked. Shared by
+/// [`ChannelRelay::spawn`]'s thread body and `InternalPipeTransport`'s custom
+/// relay thread (§4.4), so the retry loop exists in exactly one place.
+pub(crate) fn push_and_park<T>(producer: &mut Producer<T>, mut item: T) {
+    loop {
+        match producer.push(item) {
+            Ok(()) => return,
+            Err(PushError::Full(returned)) => {
+                item = returned;
+                thread::park();
+            }
+        }
+    }
+}
+
 pub trait Transport: Send {
     fn try_recv(&mut self) -> Option<u8>;
 
@@ -276,4 +371,76 @@ where
     let _ = in_tx.send(TransportEvent::Disconnected(conn_tag));
     client_count.fetch_sub(1, Ordering::Release);
     tag_allocator.release(conn_tag);
+}
+
+#[cfg(test)]
+mod channel_relay_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn round_trip_preserves_order() {
+        let (tx, rx) = bounded::<u8>(16);
+        let mut relay = ChannelRelay::spawn(rx, 16);
+
+        for i in 0..10u8 {
+            tx.send(i).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+
+        let mut got = Vec::new();
+        relay.drain_into(|item| got.push(item));
+        assert_eq!(got, (0..10u8).collect::<Vec<_>>());
+
+        // Drop the sender before `relay` so its `Drop` doesn't block on
+        // `join()` waiting for a relay thread that can't exit yet (§1.7).
+        drop(tx);
+    }
+
+    #[test]
+    fn backpressure_parks_relay_thread_until_drained() {
+        let (tx, rx) = bounded::<u8>(16);
+        let mut relay = ChannelRelay::spawn(rx, 2);
+
+        // Fill the ring (capacity 2) and give the relay thread time to push both.
+        tx.send(0).unwrap();
+        tx.send(1).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        // The relay thread should now be parked trying to push a 3rd item —
+        // sending it must not panic or lose the item.
+        tx.send(2).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let mut got = Vec::new();
+        relay.drain_into(|item| got.push(item));
+        assert_eq!(got, vec![0, 1]);
+
+        // drain_into's unpark should let the relay thread push the 3rd item now.
+        std::thread::sleep(Duration::from_millis(50));
+        let mut got = Vec::new();
+        relay.drain_into(|item| got.push(item));
+        assert_eq!(got, vec![2]);
+
+        // Drop the sender before `relay` so its `Drop` doesn't block on
+        // `join()` waiting for a relay thread that can't exit yet (§1.7).
+        drop(tx);
+    }
+
+    #[test]
+    fn drop_returns_promptly_after_senders_close() {
+        let (tx, rx) = bounded::<u8>(4);
+        let relay = ChannelRelay::spawn(rx, 4);
+        drop(tx);
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(relay);
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("ChannelRelay::drop hung after Sender was dropped");
+    }
 }
