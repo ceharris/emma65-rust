@@ -27,9 +27,10 @@
 //! next `tick()` call, reflecting the real hardware's transmit-busy signaling.
 //! RX is polled on every `tick()` call.
 
-use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::transport;
-use crate::emulator::transport::{Transport, TransportError};
+use std::collections::VecDeque;
+
+use crate::emulator::device::IoDevice;
+use crate::emulator::transport::{Transport, TransportRelay};
 use log::debug;
 
 /// Motorola MC6850 Asynchronous Communications Interface Adapter (ACIA).
@@ -37,7 +38,15 @@ pub struct Mc6850 {
     name: &'static str,
     address: u16,
     transport: Option<Box<dyn Transport>>,
-    error_reporter: Box<dyn Fn(TransportError) + Send>,
+    /// Paired with `transport`; drained into `rx_buffer` once per `tick()`
+    /// (§9.1 of the transport relay redesign plan).
+    relay: Option<TransportRelay>,
+    /// Bytes drained from `relay` but not yet clocked into `rx_data`.
+    /// Decouples "arrived from the transport" from "visible to the CPU,
+    /// one byte at a time, gated by RDRF" — before this device's relay
+    /// migration, the transport itself played this role implicitly, since
+    /// `tick()` read directly from it at most once per call.
+    rx_buffer: VecDeque<u8>,
     control: u8,
     rx_data: u8,
     rdrf: bool,
@@ -60,7 +69,8 @@ impl Mc6850 {
             name,
             address: 0,
             transport: None,
-            error_reporter: transport::no_op_reporter(),
+            relay: None,
+            rx_buffer: VecDeque::new(),
             control: 0,
             rx_data: 0,
             rdrf: false,
@@ -76,14 +86,10 @@ impl Mc6850 {
         self
     }
 
-    /// Attaches a transport for byte-stream IO.
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
+    /// Attaches a transport and its paired relay for byte-stream IO.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: TransportRelay) {
         self.transport = Some(transport);
-    }
-
-    /// Sets the error sender for async transport event reporting.
-    pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_reporter = transport::reporter(sender, id);
+        self.relay = Some(relay);
     }
 
     fn status(&self) -> u8 {
@@ -155,12 +161,17 @@ impl IoDevice for Mc6850 {
     }
 
     fn tick(&mut self, _cycles: u32) {
+        if let Some(relay) = self.relay.as_mut() {
+            let rx_buffer = &mut self.rx_buffer;
+            relay.drain_bytes_into(|b| rx_buffer.push_back(b));
+        }
+
         if self.tx_pending {
             self.tx_pending = false;
             self.tdre = true;
         }
         if !self.rdrf
-            && let Some(byte) = self.transport.as_mut().and_then(|t| t.try_recv())
+            && let Some(byte) = self.rx_buffer.pop_front()
         {
             self.rx_data = byte;
             self.rdrf = true;
@@ -170,11 +181,11 @@ impl IoDevice for Mc6850 {
     fn reset(&mut self) {
         let address = self.address;
         let transport = std::mem::take(&mut self.transport);
-        let report_error = std::mem::replace(&mut self.error_reporter, transport::no_op_reporter());
+        let relay = std::mem::take(&mut self.relay);
         *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
-        self.error_reporter = report_error;
+        self.relay = relay;
         debug!("{} @0x{:04x} reset", self.name(), self.address);
     }
 
@@ -191,20 +202,36 @@ impl IoDevice for Mc6850 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::transport::InternalPipeTransport;
+    use crate::emulator::transport::{ChannelRelay, InternalPipeTransport};
+    use crossbeam_channel::{Sender, unbounded};
     use std::time::Duration;
 
     const DEVICE_NAME: &str = "mc6850";
-    
+
     fn device() -> Mc6850 {
-        Mc6850::new(DEVICE_NAME)    
+        Mc6850::new(DEVICE_NAME)
     }
-    
-    fn device_with_pipe() -> (Mc6850, InternalPipeTransport) {
+
+    /// A `ChannelRelay<u8>` fed by a plain, unbounded `crossbeam_channel`,
+    /// for deterministic control over exactly what a device's `tick()`
+    /// observes as "arrived" — independent of `InternalPipeTransport`'s own
+    /// OS-pipe timing (it doesn't produce its own relay yet; that lands
+    /// with checklist item 7, deliberately ordered after this device
+    /// migration).
+    fn spawn_byte_relay(capacity: usize) -> (Sender<u8>, ChannelRelay<u8>) {
+        let (tx, rx) = unbounded();
+        (tx, ChannelRelay::spawn(rx, capacity))
+    }
+
+    /// `remote` is the device's outbound-write sink (verified via
+    /// `remote.try_recv()`); `tx` feeds the device's inbound relay directly,
+    /// simulating bytes arriving from an external peer.
+    fn device_with_pipe() -> (Mc6850, InternalPipeTransport, Sender<u8>) {
         let (local, remote) = InternalPipeTransport::pair().unwrap();
+        let (tx, relay) = spawn_byte_relay(256);
         let mut device = device();
-        device.attach_transport(Box::new(local));
-        (device, remote)
+        device.attach_transport(Box::new(local), TransportRelay::Byte(relay));
+        (device, remote, tx)
     }
 
     // --- Initial state ---
@@ -232,9 +259,9 @@ mod tests {
 
     #[test]
     fn master_reset_clears_rdrf() {
-        let (mut device, mut remote) = device_with_pipe();
-        remote.send(0xAA);
-        std::thread::sleep(Duration::from_millis(1));
+        let (mut device, _remote, tx) = device_with_pipe();
+        tx.send(0xAA).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1); // RDRF
         assert_ne!(device.peek(0) & 0x01, 0); // RDRF set
         device.write(0, 0x03); // master reset
@@ -252,7 +279,7 @@ mod tests {
 
     #[test]
     fn tx_sends_byte_to_transport() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, mut remote, _tx) = device_with_pipe();
         device.write(1, 0x58);
         std::thread::sleep(Duration::from_millis(1));
         assert_eq!(remote.try_recv(), Some(0x58));
@@ -266,7 +293,7 @@ mod tests {
 
     #[test]
     fn tdre_clears_on_tx_write() {
-        let (mut device, _remote) = device_with_pipe();
+        let (mut device, _remote, _tx) = device_with_pipe();
         assert_ne!(device.peek(0) & 0x02, 0); // TDRE set before write
         device.write(1, 0x41);
         assert_eq!(device.peek(0) & 0x02, 0); // TDRE cleared after TX write
@@ -274,7 +301,7 @@ mod tests {
 
     #[test]
     fn tdre_restores_after_tick() {
-        let (mut device, _remote) = device_with_pipe();
+        let (mut device, _remote, _tx) = device_with_pipe();
         device.write(1, 0x41);
         assert_eq!(device.peek(0) & 0x02, 0); // TDRE cleared
         device.tick(1);
@@ -285,18 +312,18 @@ mod tests {
 
     #[test]
     fn rx_byte_sets_rdrf() {
-        let (mut device, mut remote) = device_with_pipe();
-        remote.send(0xBB);
-        std::thread::sleep(Duration::from_millis(1));
+        let (mut device, _remote, tx) = device_with_pipe();
+        tx.send(0xBB).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert_ne!(device.peek(0) & 0x01, 0); // RDRF set
     }
 
     #[test]
     fn rx_read_returns_byte_and_clears_rdrf() {
-        let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x44);
-        std::thread::sleep(Duration::from_millis(1));
+        let (mut device, _remote, tx) = device_with_pipe();
+        tx.send(0x44).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert_eq!(device.read(1), 0x44);
         assert_eq!(device.peek(0) & 0x01, 0); // RDRF cleared
@@ -304,12 +331,12 @@ mod tests {
 
     #[test]
     fn second_byte_held_in_transport_until_first_read() {
-        let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x01);
-        remote.send(0x02);
-        std::thread::sleep(Duration::from_millis(1));
+        let (mut device, _remote, tx) = device_with_pipe();
+        tx.send(0x01).unwrap();
+        tx.send(0x02).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1); // receives 0x01 → RDRF
-        device.tick(1); // 0x02 stays in pipe (RDRF still set)
+        device.tick(1); // 0x02 stays in the internal rx buffer (RDRF still set)
         assert_eq!(device.read(1), 0x01);
         device.tick(1); // now receives 0x02
         assert_eq!(device.read(1), 0x02);
@@ -319,20 +346,20 @@ mod tests {
 
     #[test]
     fn irq_on_rdrf_when_rx_irq_enabled() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(0, 0x81); // RIE=1, CD=01
-        remote.send(0x01);
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x01).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert!(device.irq_active());
     }
 
     #[test]
     fn no_irq_on_rdrf_when_rx_irq_disabled() {
-        let (mut device, mut remote) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.write(0, 0x01); // RIE=0, CD=01
-        remote.send(0x01);
-        std::thread::sleep(Duration::from_millis(1));
+        tx.send(0x01).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert!(!device.irq_active());
     }
@@ -355,9 +382,9 @@ mod tests {
 
     #[test]
     fn peek_does_not_clear_rdrf() {
-        let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x99);
-        std::thread::sleep(Duration::from_millis(1));
+        let (mut device, _remote, tx) = device_with_pipe();
+        tx.send(0x99).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         let _ = device.peek(1);
         assert_ne!(device.peek(0) & 0x01, 0); // RDRF still set
@@ -365,9 +392,9 @@ mod tests {
 
     #[test]
     fn peek_returns_rx_data_without_consuming() {
-        let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x33);
-        std::thread::sleep(Duration::from_millis(1));
+        let (mut device, _remote, tx) = device_with_pipe();
+        tx.send(0x33).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert_eq!(device.peek(1), 0x33);
         assert_eq!(device.read(1), 0x33); // still available

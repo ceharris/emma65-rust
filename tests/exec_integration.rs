@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use emma65::emulator::{
     AddressRange, Bus, BusOp, ChannelRelay, ClockSpeed, CpuBuilder,
     CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, StepResult, TraceCallback, TraceRecord,
-    Transport, TransportRelay, run,
+    TransportRelay, run,
 };
 
 use emma65::emulator::device::{Console, Mc6850, R6551};
@@ -379,9 +379,10 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
 async fn mc6850_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair().unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut mc = Mc6850::new("mc6580").with_address(0xDF00);
-    mc.attach_transport(Box::new(local));
+    mc.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -431,8 +432,9 @@ async fn mc6850_throughput_at_1_8432_mhz() {
     cpu.reset().unwrap();
 
     for i in 0..N {
-        remote.send(i as u8);
+        tx.send(i as u8).unwrap();
     }
+    std::thread::sleep(std::time::Duration::from_millis(5));
 
     let handle = run(cpu);
 
