@@ -1107,11 +1107,11 @@ mod tests {
     /// `collect_bytes`); `tx` feeds the device's inbound tagged relay
     /// directly, simulating a single already-connected peripheral (`Sender::send`
     /// a `Connected(TAG)` event up front, matching what a real multipoint
-    /// transport does on accept — `InternalPipeTransport` doesn't produce
-    /// its own relay yet, see the transport relay redesign plan's §10
-    /// checklist item 7).
+    /// transport does on accept). `pair_direct()` gives both ends of the
+    /// test pipe no relay of their own, so this hand-fed tagged relay
+    /// stands in for it.
     fn device_with_pipe() -> (Via6522, InternalPipeTransport, Sender<TransportEvent>) {
-        let (local, remote) = InternalPipeTransport::pair().unwrap();
+        let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, rx) = unbounded();
         tx.send(TransportEvent::Connected(TAG)).unwrap();
         let relay = ChannelRelay::spawn(rx, 256);

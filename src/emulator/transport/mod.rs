@@ -109,7 +109,12 @@ impl TransportReporter {
     /// the `TransportSlot` injection path (§9.4), where the transport must
     /// be built before the device (and its `DeviceId`) exists. Every
     /// reporting call before `bind` is a silent no-op.
-    pub(crate) fn pending(error_sender: Option<ErrorSender>) -> Self {
+    ///
+    /// `pub` (rather than `pub(crate)`) so the two call sites that build an
+    /// `InternalPipeTransport` directly for that injection path —
+    /// `src/bin/emulator/main.rs` and `debugger/src-tauri/src/lib.rs`, both
+    /// outside this crate — can construct one too.
+    pub fn pending(error_sender: Option<ErrorSender>) -> Self {
         Self {
             device_id: Arc::new(OnceLock::new()),
             error_sender,

@@ -28,7 +28,7 @@ impl TraceCallback for CapturingCallback {
 async fn free_run_console_output() {
     use emma65::emulator::{Bus, Transport};
 
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
     // This test only observes outbound bytes (via `remote`); the relay
     // (inbound path) is unused, so a hand-fed one with no data is enough.
     let (_tx, rx) = crossbeam_channel::unbounded::<u8>();
@@ -217,7 +217,7 @@ fn build_acia_cpu(acia: R6551, prog: &[u8]) -> emma65::emulator::Cpu {
 async fn _external_clock_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
-    let (local, _remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
     let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new(""); // control defaults to 0x00 → external clock
     acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
@@ -290,7 +290,7 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
     const CLOCK_HZ: u64 = 1_843_200;
     const CYCLES_PER_BYTE: u64 = CLOCK_HZ * 10 / BAUD; // 960
 
-    let (local, _remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
     let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("")
         .with_clock_hz(CLOCK_HZ);
@@ -379,7 +379,7 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
 async fn mc6850_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
-    let (local, _remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
     let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut mc = Mc6850::new("mc6580").with_address(0xDF00);
     mc.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));

@@ -215,9 +215,8 @@ mod tests {
     /// A `ChannelRelay<u8>` fed by a plain, unbounded `crossbeam_channel`,
     /// for deterministic control over exactly what a device's `tick()`
     /// observes as "arrived" — independent of `InternalPipeTransport`'s own
-    /// OS-pipe timing (it doesn't produce its own relay yet; that lands
-    /// with checklist item 7, deliberately ordered after this device
-    /// migration).
+    /// OS-pipe timing. `pair_direct()` gives both ends of the test pipe no
+    /// relay of their own, so this hand-fed one stands in for it.
     fn spawn_byte_relay(capacity: usize) -> (Sender<u8>, ChannelRelay<u8>) {
         let (tx, rx) = unbounded();
         (tx, ChannelRelay::spawn(rx, capacity))
@@ -227,7 +226,7 @@ mod tests {
     /// `remote.try_recv()`); `tx` feeds the device's inbound relay directly,
     /// simulating bytes arriving from an external peer.
     fn device_with_pipe() -> (Mc6850, InternalPipeTransport, Sender<u8>) {
-        let (local, remote) = InternalPipeTransport::pair().unwrap();
+        let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, relay) = spawn_byte_relay(256);
         let mut device = device();
         device.attach_transport(Box::new(local), TransportRelay::Byte(relay));

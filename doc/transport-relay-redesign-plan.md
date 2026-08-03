@@ -1296,7 +1296,30 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       transports using it are converted, `ChannelBridge` had no remaining
       callers and was removed from `mod.rs` (not itself a checklist item,
       but trivial once dead).
-- [ ] `InternalPipeTransport` rewrite + tests (§4.4)
+- [x] `InternalPipeTransport` rewrite + tests (§4.4). Deviates from the
+      literal spec in one respect, confirmed with the user: `try_recv()`
+      only becomes a permanent no-op for a relay-backed (`local`) instance.
+      A bare instance built with no relay (`remote` from `pair()`, and both
+      ends of the new `pair_direct()` — see below) keeps the old direct
+      non-blocking-read implementation, since dozens of existing device
+      tests depend on `remote.try_recv()` for outbound verification and
+      giving `remote` a relay it never drains would race `into_split()`'s
+      raw reads in production anyway. `pair()` itself stays asymmetric as
+      spec'd (`local` relay-backed, `remote` bare). A new `pair_direct()`
+      constructor (both ends bare, no relay/thread for either) was added for
+      the ~24 existing test call sites that already simulate inbound data
+      via a separately hand-fed relay and never touch `pair()`'s own
+      `local` relay at all — giving those call sites a real relay-backed
+      `local` would risk a permanent hang at drop time (a discarded,
+      undrained `ChannelRelay` needs its background thread signaled to
+      stop, but `local` is typically moved into a device long before the
+      relay — bound to its own local variable — is dropped, and Rust drops
+      same-`let`-statement bindings in reverse pattern order, so the relay
+      drops *before* `local` with no signal ever sent). The relay-backed
+      thread itself blocks in `libc::poll()` on both the real rx fd and the
+      read end of a private self-pipe used solely to interrupt that wait on
+      `shutdown()`/`Drop`, since a plain blocking read has no other portable
+      way to be interrupted.
 - [x] `DeviceEvent::OutboundBytesDropped` / `InboundEventsDropped` (§5)
 - [ ] `DeviceEvent::TransportConnected`/`TransportDisconnected` peer-field
       wiring (§5.1) — `peer: Option<String>` field and `main.rs` match-arm

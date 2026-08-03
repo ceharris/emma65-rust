@@ -354,9 +354,8 @@ mod tests {
     /// A `ChannelRelay<u8>` fed by a plain, unbounded `crossbeam_channel`,
     /// for deterministic control over exactly what a device's `tick()`
     /// observes as "arrived" — independent of `InternalPipeTransport`'s own
-    /// OS-pipe timing (it doesn't produce its own relay yet; that lands
-    /// with checklist item 7, deliberately ordered after this device
-    /// migration).
+    /// OS-pipe timing. `pair_direct()` gives both ends of the test pipe no
+    /// relay of their own, so this hand-fed one stands in for it.
     fn spawn_byte_relay(capacity: usize) -> (Sender<u8>, ChannelRelay<u8>) {
         let (tx, rx) = unbounded();
         (tx, ChannelRelay::spawn(rx, capacity))
@@ -366,7 +365,7 @@ mod tests {
     /// `remote.try_recv()`); `tx` feeds the device's inbound relay directly,
     /// simulating bytes arriving from an external peer.
     fn device_with_pipe() -> (R6551, InternalPipeTransport, Sender<u8>) {
-        let (local, remote) = InternalPipeTransport::pair().unwrap();
+        let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, relay) = spawn_byte_relay(256);
         let mut device = device();
         device.attach_transport(Box::new(local), TransportRelay::Byte(relay));
@@ -471,7 +470,7 @@ mod tests {
 
     #[test]
     fn overrun_set_in_internal_clock_mode_with_overrun_enabled() {
-        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, relay) = spawn_byte_relay(256);
         let mut device = device()
             .with_clock_hz(1_000_000)
@@ -491,7 +490,7 @@ mod tests {
 
     #[test]
     fn no_overrun_in_external_clock_mode_even_with_flag() {
-        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, relay) = spawn_byte_relay(256);
         let mut device = device()
             .with_overrun(true);
@@ -593,7 +592,7 @@ mod tests {
 
     #[test]
     fn tdre_always_set_in_bug_compatible_mode() {
-        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
         let (_tx, relay) = spawn_byte_relay(256);
         let mut device = device().with_tdre_bug(true);
         device.attach_transport(Box::new(local), TransportRelay::Byte(relay));

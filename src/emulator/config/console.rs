@@ -85,7 +85,7 @@ mod tests {
 
     #[tokio::test]
     async fn instantiate_with_injected_transport() {
-        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
@@ -103,7 +103,7 @@ mod tests {
 
     #[tokio::test]
     async fn injected_transport_is_consumed() {
-        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
         let slot = Arc::new(Mutex::new(Some(Box::new(local) as Box<dyn crate::emulator::transport::Transport>)));
         let context = InstantiationContext {
             clock_hz: None,
@@ -121,7 +121,7 @@ mod tests {
     async fn injected_transport_ignored_when_transport_spec_is_set() {
         // When a transport= attribute is configured, the context transport must not be consumed,
         // so that the caller can detect whether stdio will be used (e.g. to enter raw mode).
-        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
         let slot = Arc::new(Mutex::new(Some(Box::new(local) as Box<dyn crate::emulator::transport::Transport>)));
         let mut attributes = HashMap::new();
         // pipe transport is the only variant we can create without an OS resource in a unit test

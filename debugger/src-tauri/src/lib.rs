@@ -10,7 +10,7 @@ use tauri_plugin_log::{Target, TargetKind};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::oneshot;
 
-use emma65::emulator::{Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, RunStopper, StatusRegister, StepResult, TransportSlot, run_from as exec_run_from, step_into as exec_step_into, step_over_breakpoint as exec_step_over_breakpoint, step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return};
+use emma65::emulator::{Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassembler, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, RunStopper, StatusRegister, StepResult, TransportReporter, TransportSlot, run_from as exec_run_from, step_into as exec_step_into, step_over_breakpoint as exec_step_over_breakpoint, step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return};
 
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
@@ -188,8 +188,16 @@ async fn load_session() -> Result<(EmulatorSession, InternalPipeTransport), Stri
         .extract()
         .map_err(|e| format!("Configuration error: {e}"))?;
 
-    let (local, remote) = InternalPipeTransport::pair()
+    let ((local, relay), remote) = InternalPipeTransport::pair(TransportReporter::pending(None))
         .map_err(|e| format!("Failed to create console transport: {e}"))?;
+    // TransportSlot only carries a Box<dyn Transport> today, not its paired
+    // relay — widening it to also carry one is transport relay redesign
+    // plan checklist item 9.4, not yet done. Until then this relay has
+    // nothing to drain it, so console input is a known, temporary gap;
+    // forget it rather than let it sit undrained (dropping it here would
+    // hang, since `local`'s background thread isn't signaled to stop until
+    // the transport itself is shut down, long after this function returns).
+    std::mem::forget(relay);
 
     let transport_slot: TransportSlot = Arc::new(Mutex::new(Some(Box::new(local))));
     let context = InstantiationContext {

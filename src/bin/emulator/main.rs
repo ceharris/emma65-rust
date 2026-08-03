@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use crate::config::{AppConfig, apply_default_if_unconfigured};
-use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, StepResult, Transport};
+use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, StepResult, Transport, TransportReporter};
 
 const DEFAULT_ROM: &[u8] = include_bytes!("default.bin");
 
@@ -23,10 +23,17 @@ async fn main() -> ExitCode {
     // Always offer stdin/stdout to the console via the context. If the console has no
     // `transport=` attribute it will take this transport; if it does have one it will ignore it.
     // Checking whether the slot was consumed after build tells us whether to enter raw mode.
-    let transport = InternalPipeTransport::stdio().unwrap_or_else(|e| {
+    let (transport, relay) = InternalPipeTransport::stdio(TransportReporter::pending(None)).unwrap_or_else(|e| {
         eprintln!("error: failed to attach console to stdin/stdout: {e}");
         std::process::exit(1);
     });
+    // TransportSlot only carries a Box<dyn Transport> today, not its paired
+    // relay — widening it to also carry one is transport relay redesign
+    // plan checklist item 9.4, not yet done. Until then this relay has
+    // nothing to drain it (Console::attach_transport's relay param is None
+    // for the injected-transport path), so stdin input is a known,
+    // temporary gap; forget it rather than let it sit undrained.
+    std::mem::forget(relay);
     let console_transport_slot = Arc::new(Mutex::new(Some(Box::new(transport) as Box<dyn Transport>)));
     let context = InstantiationContext {
         clock_hz: config.emulator.clock_speed_hz,

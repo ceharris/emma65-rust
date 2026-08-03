@@ -217,10 +217,8 @@ mod tests {
     /// the relay thread drains into its `capacity`-sized ring), for
     /// deterministic control over exactly what a device's `tick()` observes
     /// as "arrived" — independent of `InternalPipeTransport`'s own OS-pipe
-    /// timing. `InternalPipeTransport` doesn't produce a relay of its own
-    /// yet (its rewrite is the transport relay redesign plan's checklist
-    /// item 7, deliberately ordered *after* this device migration — see
-    /// `doc/transport-relay-redesign-plan.md`'s §10 checklist).
+    /// timing. `pair_direct()` gives both ends of the test pipe no relay of
+    /// their own, so this hand-fed one stands in for it.
     fn spawn_byte_relay(capacity: usize) -> (Sender<u8>, ChannelRelay<u8>) {
         let (tx, rx) = unbounded();
         (tx, ChannelRelay::spawn(rx, capacity))
@@ -233,7 +231,7 @@ mod tests {
     /// first `tick()`, so the relay thread has fully drained (not parked)
     /// by the time `tick()` runs.
     fn device_with_pipe(relay_capacity: usize) -> (Console, InternalPipeTransport, Sender<u8>) {
-        let (local, remote) = InternalPipeTransport::pair().unwrap();
+        let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, relay) = spawn_byte_relay(relay_capacity);
         let mut device = device();
         device.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
@@ -408,7 +406,7 @@ mod tests {
             AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };
 
-        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+        let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
         let (_tx, relay) = spawn_byte_relay(256);
         let mut console = device().with_address(0xF000);
         console.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
@@ -467,7 +465,7 @@ mod tests {
             AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };
 
-        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, relay) = spawn_byte_relay(256);
         let mut console = device().with_address(0xF000);
         console.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
