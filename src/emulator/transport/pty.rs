@@ -153,18 +153,6 @@ impl PtyTransport {
 }
 
 impl Transport for PtyTransport {
-    /// Superseded by the [`ChannelRelay<u8>`](ChannelRelay) returned
-    /// alongside this transport from `open`/`open_with_capacity` — inbound
-    /// bytes flow through that relay now, not through this method. Retained
-    /// only because `Transport::try_recv` is still part of the trait:
-    /// `LedMatrix` (`device/led_matrix.rs`) hasn't yet migrated to draining
-    /// a relay directly and still calls it (via `try_recv_tagged`'s default
-    /// impl). Any device calling this method on a `PtyTransport` will not
-    /// receive PTY input.
-    fn try_recv(&mut self) -> Option<u8> {
-        None
-    }
-
     /// Sends a byte to the PTY master.
     ///
     /// Unlike the previous implementation, this does not gate on whether an

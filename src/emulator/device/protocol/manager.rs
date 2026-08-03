@@ -192,8 +192,6 @@ mod tests {
     }
 
     impl Transport for MockTransport {
-        fn try_recv(&mut self) -> Option<u8> { None }
-
         fn send(&mut self, byte: u8) {
             self.sent.lock().unwrap().push(byte);
         }

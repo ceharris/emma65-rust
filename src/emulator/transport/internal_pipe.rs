@@ -242,16 +242,23 @@ impl InternalPipeTransport {
             RxMode::Relayed { connected, .. } => connected,
         }
     }
-}
 
-impl Transport for InternalPipeTransport {
-    /// Superseded by the [`ChannelRelay<u8>`](ChannelRelay) returned
-    /// alongside a relay-backed (`local`) instance from `from_raw_fds`/
-    /// `stdio`/`pair` — a permanent no-op for those. For a bare (`remote`)
-    /// instance, with no relay of its own, this still does a direct
-    /// non-blocking read of `rx`, exactly as before this transport's
-    /// rewrite — see the module documentation for why.
-    fn try_recv(&mut self) -> Option<u8> {
+    /// Direct, synchronous, non-blocking read of `rx` — only meaningful for
+    /// a bare (`RxMode::Direct`) instance (`remote`, or any `pair_direct()`
+    /// end); always `None` for a relay-backed (`local`) instance, whose `rx`
+    /// has been moved into the background relay thread. Deliberately an
+    /// **inherent** method, not part of `Transport`: existing device tests
+    /// call this on a concrete `InternalPipeTransport` (`remote`) purely to
+    /// verify outbound sends, a use that has nothing to do with the inbound
+    /// relay path every real transport now uses instead. Keeping it off the
+    /// trait means it can never be reached through a `Box<dyn Transport>` —
+    /// which is what let issue #233 slip past `LedMatrix`'s own tests: those
+    /// tests built the device's transport via `pair_direct()`, whose
+    /// `try_recv` still worked, while production `LedMatrix` used
+    /// `PtyTransport`/`TcpSocketTransport`, where the identical call (back
+    /// when it was still a trait method) was a hard no-op. See the module
+    /// documentation for the `local`/`remote` asymmetry.
+    pub fn try_recv(&mut self) -> Option<u8> {
         let mut newly_disconnected = false;
         let result = match &mut self.rx_mode {
             RxMode::Direct { rx, connected } => {
@@ -276,7 +283,9 @@ impl Transport for InternalPipeTransport {
         }
         result
     }
+}
 
+impl Transport for InternalPipeTransport {
     /// Writes directly and synchronously — this transport has no separate
     /// background task on the outbound side (unlike Pty/Pipe), so there's
     /// nothing to hand a byte off to. Never blocks: `WouldBlock` (pipe full)
