@@ -183,6 +183,17 @@ async fn run_unix_task(
             None => continue,
         };
 
+        // Unix client sockets are typically unbound, so `peer_addr()` rarely
+        // gives anything useful; `peer_cred()` (PID/UID) is the meaningful
+        // identifier, falling back to the connection tag if it errors.
+        let peer = match stream.peer_cred() {
+            Ok(cred) => match cred.pid() {
+                Some(pid) => format!("pid={pid} uid={}", cred.uid()),
+                None => format!("uid={}", cred.uid()),
+            },
+            Err(_) => format!("conn#{conn_tag}"),
+        };
+
         client_count.fetch_add(1, Ordering::Release);
 
         let (reader, writer) = stream.into_split();
@@ -191,6 +202,7 @@ async fn run_unix_task(
             writer,
             ClientSession {
                 conn_tag,
+                peer,
                 in_tx: in_tx.clone(),
                 fanout_rx: fanout_tx.subscribe(),
                 shutdown_rx: shutdown_rx.clone(),
@@ -423,6 +435,7 @@ mod tests {
         let _client = UnixStream::connect(&path).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert!(transport.is_connected());
+        assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
 
         // Capacity 1, two sends back-to-back with no `.await` in between —
         // the spawned Tokio task can't be scheduled to drain in between, so
@@ -453,6 +466,7 @@ mod tests {
 
         let mut client = UnixStream::connect(&path).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
 
         // Never drain the relay: with channel/ring capacity 1, a burst large
         // enough is guaranteed to overflow before it's exhausted.
@@ -466,6 +480,40 @@ mod tests {
             Ok(DeviceEvent::InboundEventsDropped { device, count }) => {
                 assert_eq!(device, DeviceId(100));
                 assert!(count >= 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        close(transport, relay);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn client_connect_disconnect_reports_peer_events() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::new(DeviceId(102), Some(sender));
+        let (transport, relay) = UnixSocketTransport::listen(tmp_socket_path("unix_peer_events"), reporter).await.unwrap();
+        let path = transport.path().to_path_buf();
+
+        let client = UnixStream::connect(&path).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let peer = match receiver.try_recv() {
+            Ok(DeviceEvent::TransportConnected { device, peer: Some(peer) }) => {
+                assert_eq!(device, DeviceId(102));
+                assert!(!peer.is_empty());
+                peer
+            }
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        drop(client);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::TransportDisconnected { device, peer: Some(disconnected_peer), .. }) => {
+                assert_eq!(device, DeviceId(102));
+                assert_eq!(disconnected_peer, peer);
             }
             other => panic!("unexpected event: {other:?}"),
         }

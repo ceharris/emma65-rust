@@ -574,6 +574,11 @@ pub(crate) async fn pump_outbound(
 /// drop-counting.
 pub(crate) struct ClientSession {
     pub(crate) conn_tag: u8,
+    /// Human-readable client identity for `DeviceEvent::TransportConnected`/
+    /// `TransportDisconnected` (§5.1) — `peer_addr()` for TCP, `peer_cred()`
+    /// (falling back to `conn_tag`) for Unix sockets. Captured by the caller
+    /// at accept time, before the stream is split.
+    pub(crate) peer: String,
     pub(crate) in_tx: Sender<TransportEvent>,
     pub(crate) fanout_rx: broadcast::Receiver<u8>,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
@@ -596,6 +601,7 @@ where
 {
     let ClientSession {
         conn_tag,
+        peer,
         in_tx,
         mut fanout_rx,
         mut shutdown_rx,
@@ -604,7 +610,10 @@ where
         reporter,
     } = session;
 
+    reporter.report_connected(Some(peer.clone()));
+
     if in_tx.try_send(TransportEvent::Connected(conn_tag)).is_err() {
+        reporter.report_disconnected(Some(peer), "inbound channel unavailable".to_string());
         client_count.fetch_sub(1, Ordering::Release);
         tag_allocator.release(conn_tag);
         return;
@@ -618,7 +627,9 @@ where
                 // ProtocolManager::poll_transport only reacts to Disconnected
                 // by releasing a slot, and neither slots nor the tag
                 // allocator outlive the bus, so a skipped event here has no
-                // observable effect.
+                // observable effect. DeviceEvent::TransportDisconnected is a
+                // separate, UI-facing signal (§5.1) and still fires below.
+                reporter.report_disconnected(Some(peer), "shutdown".to_string());
                 drop(in_tx);
                 client_count.fetch_sub(1, Ordering::Release);
                 tag_allocator.release(conn_tag);
@@ -653,6 +664,7 @@ where
     }
 
     let _ = in_tx.try_send(TransportEvent::Disconnected(conn_tag));
+    reporter.report_disconnected(Some(peer), "connection closed".to_string());
     client_count.fetch_sub(1, Ordering::Release);
     tag_allocator.release(conn_tag);
 }

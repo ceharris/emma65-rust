@@ -211,6 +211,9 @@ impl Drop for PtyTransport {
 /// reports outbound/inbound drop counts on a 1-second interval (§1.5).
 /// `client_connected` tracks real external attach/detach (via first
 /// successful read / EIO) for `is_connected()`, independent of the relay.
+/// Each attach/detach edge is also reported via `reporter.report_connected`/
+/// `report_disconnected` (§5.1), guarded so a spurious detach isn't reported
+/// on task exit when no client was ever attached.
 async fn run_pty_task(
     async_fd: AsyncFd<File>,
     in_tx: Sender<u8>,
@@ -232,7 +235,9 @@ async fn run_pty_task(
                 let mut guard = match result { Ok(g) => g, Err(_) => break };
                 match guard.try_io(|inner| inner.get_ref().read(&mut buf)) {
                     Ok(Ok(1)) => {
-                        client_connected.store(true, Ordering::Release);
+                        if !client_connected.swap(true, Ordering::Release) {
+                            reporter.report_connected(None);
+                        }
                         if in_tx.send(buf[0]).is_err() {
                             break;
                         }
@@ -240,7 +245,9 @@ async fn run_pty_task(
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) if e.raw_os_error() == Some(nix::libc::EIO) => {
                         while outbound.pop().is_ok() {}
-                        client_connected.store(false, Ordering::Release);
+                        if client_connected.swap(false, Ordering::Release) {
+                            reporter.report_disconnected(None, "EIO".to_string());
+                        }
                     }
                     Ok(Err(_)) => break,
                     Err(_) => { guard.clear_ready(); }
@@ -254,7 +261,13 @@ async fn run_pty_task(
             }
         }
     }
-    client_connected.store(false, Ordering::Release);
+    // Guarded (`swap`, not `store`): this runs unconditionally on every task
+    // exit, including shutdown before any client ever attached, which must
+    // not be reported as a disconnect (§5.1) — only a genuine false→true→false
+    // transition should.
+    if client_connected.swap(false, Ordering::Release) {
+        reporter.report_disconnected(None, "shutdown".to_string());
+    }
     drop(in_tx);
 }
 

@@ -217,8 +217,9 @@ impl InternalPipeTransport {
         let (producer, consumer) = RingBuffer::new(capacity);
 
         let thread_connected = Arc::clone(&connected);
+        let thread_reporter = reporter.clone();
         let handle = thread::spawn(move || {
-            run_relay_thread(rx, producer, stop_rx, interrupt_r, thread_connected);
+            run_relay_thread(rx, producer, stop_rx, interrupt_r, thread_connected, thread_reporter);
         });
         let relay = ChannelRelay::from_parts(consumer, handle);
 
@@ -231,6 +232,7 @@ impl InternalPipeTransport {
                 interrupt_w: Some(interrupt_w),
             },
         };
+        transport.reporter.report_connected(None);
         Ok((transport, relay))
     }
 
@@ -250,24 +252,29 @@ impl Transport for InternalPipeTransport {
     /// non-blocking read of `rx`, exactly as before this transport's
     /// rewrite — see the module documentation for why.
     fn try_recv(&mut self) -> Option<u8> {
-        match &mut self.rx_mode {
+        let mut newly_disconnected = false;
+        let result = match &mut self.rx_mode {
             RxMode::Direct { rx, connected } => {
                 let mut buf = [0u8; 1];
                 match rx.read(&mut buf) {
                     Ok(1) => Some(buf[0]),
                     Ok(_) => {
-                        connected.store(false, Ordering::Release);
+                        newly_disconnected = connected.swap(false, Ordering::Release);
                         None
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => None,
                     Err(_) => {
-                        connected.store(false, Ordering::Release);
+                        newly_disconnected = connected.swap(false, Ordering::Release);
                         None
                     }
                 }
             }
             RxMode::Relayed { .. } => None,
+        };
+        if newly_disconnected {
+            self.reporter.report_disconnected(None, "connection closed".to_string());
         }
+        result
     }
 
     /// Writes directly and synchronously — this transport has no separate
@@ -291,7 +298,10 @@ impl Transport for InternalPipeTransport {
                 self.reporter.report_counts();
             }
             Err(e) => {
-                self.connected_flag().store(false, Ordering::Release);
+                let reason = format!("write error: {e}");
+                if self.connected_flag().swap(false, Ordering::Release) {
+                    self.reporter.report_disconnected(None, reason);
+                }
                 self.reporter.report_error(TransportError::Io(e));
             }
         }
@@ -302,7 +312,9 @@ impl Transport for InternalPipeTransport {
     }
 
     fn shutdown(&mut self) {
-        self.connected_flag().store(false, Ordering::Release);
+        if self.connected_flag().swap(false, Ordering::Release) {
+            self.reporter.report_disconnected(None, "shutdown".to_string());
+        }
         if let RxMode::Relayed { stop_tx, interrupt_w, .. } = &mut self.rx_mode {
             if let Some(tx) = stop_tx.take() {
                 let _ = tx.send(());
@@ -336,19 +348,22 @@ impl Drop for InternalPipeTransport {
 /// helper (itself interruptible via `stop_rx`, for the case where the ring is
 /// full when the self-pipe signal arrives). Exits on the self-pipe signal, on
 /// EOF/error reading `rx`, or once `push_and_park` reports the ring's
-/// consumer is gone.
+/// consumer is gone. Reports a disconnect edge via `reporter` on exit,
+/// guarded by `connected` so a `shutdown()` that already reported it
+/// synchronously isn't double-counted.
 fn run_relay_thread(
     mut rx: File,
     mut producer: Producer<u8>,
     stop_rx: Receiver<()>,
     interrupt_r: File,
     connected: Arc<AtomicBool>,
+    reporter: TransportReporter,
 ) {
     let rx_fd = rx.as_raw_fd();
     let interrupt_fd = interrupt_r.as_raw_fd();
     let mut buf = [0u8; 1];
 
-    'relay: loop {
+    let reason = 'relay: loop {
         let mut fds = [
             libc::pollfd { fd: rx_fd, events: libc::POLLIN, revents: 0 },
             libc::pollfd { fd: interrupt_fd, events: libc::POLLIN, revents: 0 },
@@ -358,27 +373,32 @@ fn run_relay_thread(
             if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            break;
+            break 'relay "poll error".to_string();
         }
         if fds[1].revents & libc::POLLIN != 0 {
-            break; // shutdown requested
+            break 'relay "shutdown".to_string(); // shutdown requested
         }
         if fds[0].revents & libc::POLLIN != 0 {
             match rx.read(&mut buf) {
                 Ok(1) => {
                     if !push_and_park(&mut producer, buf[0], &stop_rx) {
-                        break 'relay;
+                        break 'relay "shutdown".to_string();
                     }
                 }
-                Ok(_) => break,
+                Ok(_) => break 'relay "connection closed".to_string(),
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
+                Err(_) => break 'relay "connection closed".to_string(),
             }
         } else if fds[0].revents & (libc::POLLHUP | libc::POLLERR) != 0 {
-            break;
+            break 'relay "connection closed".to_string();
         }
+    };
+    // Guarded (`swap`, not `store`): `shutdown()` may have already reported
+    // this disconnect synchronously (§5.1) before signaling this thread to
+    // exit, in which case this is a no-op.
+    if connected.swap(false, Ordering::Release) {
+        reporter.report_disconnected(None, reason);
     }
-    connected.store(false, Ordering::Release);
 }
 
 fn os_pipe() -> io::Result<(File, File)> {
@@ -537,6 +557,7 @@ mod tests {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::new(DeviceId(99), Some(sender));
         let ((mut local, relay), _remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
+        assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
 
         // Force the OS pipe buffer (default 64KiB on Linux) full without
         // ever draining it from the remote side, so send() observes

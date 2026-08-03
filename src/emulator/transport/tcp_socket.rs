@@ -180,6 +180,11 @@ async fn run_tcp_task(
             None => continue,
         };
 
+        let peer = stream
+            .peer_addr()
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|_| format!("conn#{conn_tag}"));
+
         client_count.fetch_add(1, Ordering::Release);
 
         let (reader, writer) = stream.into_split();
@@ -188,6 +193,7 @@ async fn run_tcp_task(
             writer,
             ClientSession {
                 conn_tag,
+                peer,
                 in_tx: in_tx.clone(),
                 fanout_rx: fanout_tx.subscribe(),
                 shutdown_rx: shutdown_rx.clone(),
@@ -402,6 +408,7 @@ mod tests {
         let _client = TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert!(transport.is_connected());
+        assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
 
         // Capacity 1, two sends back-to-back with no `.await` in between —
         // the spawned Tokio task can't be scheduled to drain in between, so
@@ -431,6 +438,7 @@ mod tests {
 
         let mut client = TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
 
         // Never drain the relay: with channel/ring capacity 1, a burst large
         // enough is guaranteed to overflow before it's exhausted.
@@ -444,6 +452,39 @@ mod tests {
             Ok(DeviceEvent::InboundEventsDropped { device, count }) => {
                 assert_eq!(device, DeviceId(100));
                 assert!(count >= 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        close(transport, relay);
+    }
+
+    #[tokio::test]
+    async fn client_connect_disconnect_reports_peer_events() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::new(DeviceId(102), Some(sender));
+        let (transport, relay) = TcpSocketTransport::listen("127.0.0.1:0".parse().unwrap(), reporter).await.unwrap();
+        let addr = transport.local_addr();
+
+        let client = TcpStream::connect(addr).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let peer = match receiver.try_recv() {
+            Ok(DeviceEvent::TransportConnected { device, peer: Some(peer) }) => {
+                assert_eq!(device, DeviceId(102));
+                assert!(!peer.is_empty());
+                peer
+            }
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        drop(client);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::TransportDisconnected { device, peer: Some(disconnected_peer), .. }) => {
+                assert_eq!(device, DeviceId(102));
+                assert_eq!(disconnected_peer, peer);
             }
             other => panic!("unexpected event: {other:?}"),
         }

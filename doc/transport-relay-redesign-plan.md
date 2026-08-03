@@ -1321,14 +1321,37 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       `shutdown()`/`Drop`, since a plain blocking read has no other portable
       way to be interrupted.
 - [x] `DeviceEvent::OutboundBytesDropped` / `InboundEventsDropped` (§5)
-- [ ] `DeviceEvent::TransportConnected`/`TransportDisconnected` peer-field
+- [x] `DeviceEvent::TransportConnected`/`TransportDisconnected` peer-field
       wiring (§5.1) — `peer: Option<String>` field and `main.rs` match-arm
       updates landed early (alongside `TransportReporter`, §2.1, since its
       `report_connected`/`report_disconnected` signatures needed the field to
-      compile); still remaining: capture peer name at accept time in
-      `tcp_socket.rs`/`unix_socket.rs` and thread through `ClientSession`,
-      and actually call `report_connected`/`report_disconnected` from real
-      transports
+      compile). Completed for multipoint: `ClientSession` gained a `peer:
+      String` field, captured at accept time before the stream is split —
+      `peer_addr()` for TCP, `peer_cred()` (formatted `"pid={pid} uid={uid}"`,
+      falling back to `conn#{conn_tag}` on error) for Unix sockets, per §5.1's
+      resolution. `run_client_task` calls
+      `reporter.report_connected(Some(peer.clone()))` once at entry and
+      `reporter.report_disconnected(Some(peer), reason)` on every exit path
+      (early bail on a full inbound channel, whole-bus shutdown, and ordinary
+      connection close) — distinct from and unaffected by the existing skip
+      of the tagged `TransportEvent::Disconnected` send on shutdown, which
+      remains ProtocolManager-only plumbing. Completed for P2P (found not yet
+      wired at all, despite an earlier draft of this checklist entry assuming
+      otherwise): `PtyTransport`'s two disconnect sites (`EIO`, unconditional
+      task-exit) switched from `store` to `swap`-and-guard exactly as this
+      section prescribes, fixing the exact spurious-disconnect-on-shutdown bug
+      called out above; its connect site guarded the same way.
+      `PipeTransport` reports connected once at `spawn` (single disconnect
+      site already, no guard needed). `InternalPipeTransport`'s `local`/
+      relay-backed instances report connected at construction and
+      disconnected (guarded) from every site that flips its `connected` flag
+      (`send`'s hard-error path, `shutdown`, and the relay thread's exit);
+      `remote`/`pair_direct` instances keep an unbound `TransportReporter`, so
+      these calls are permanent no-ops there, matching today's design. Note:
+      for the `TransportSlot`-injected console path (items 14/15, not yet
+      done), `report_connected` fires before `TransportReporter::bind` runs
+      and is therefore silently dropped — an accepted gap in the same
+      "unbound window" category as §2.2, not something this item resolves.
 - [ ] `IoDevice::shutdown()` (default no-op) + `ProtocolManager::shutdown()`
       + `impl Drop for Bus` calling `shutdown()` on every device before
       normal field-drop runs + integration test (§6)

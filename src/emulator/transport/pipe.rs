@@ -122,6 +122,7 @@ impl PipeTransport {
             connected,
             reporter,
         };
+        transport.reporter.report_connected(None);
         Ok((transport, relay))
     }
 }
@@ -176,7 +177,9 @@ impl Transport for PipeTransport {
 /// child's alive/exited state for `is_connected()` and `send()`'s gate,
 /// independent of the relay. On any exit — IO error, child process
 /// termination, or shutdown signal — calls `on_exit` with a describing
-/// error.
+/// error and reports the disconnect edge via `reporter` (§5.1); the matching
+/// connect edge is reported once at `spawn`, since a spawned child is
+/// considered connected from the start.
 #[allow(clippy::too_many_arguments)]
 async fn run_pipe_task<F>(
     mut stdin: tokio::process::ChildStdin,
@@ -233,6 +236,7 @@ async fn run_pipe_task<F>(
     };
 
     connected.store(false, Ordering::Release);
+    reporter.report_disconnected(None, exit_error.to_string());
     drop(in_tx);
     on_exit(exit_error);
 }
@@ -361,6 +365,7 @@ mod tests {
             |_| {},
             1,
         ).await.unwrap();
+        assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
 
         // Capacity 1, two sends back-to-back with no `.await` in between —
         // the spawned Tokio task can't be scheduled to drain in between, so
