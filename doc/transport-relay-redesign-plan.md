@@ -561,7 +561,11 @@ to Unix socket — factor shared code once both exist) → `PipeTransport` →
   apply. New tests should assert against `ChannelRelay<u8>::drain_into`. See
   drafted test module in design conversation for a starting point,
   **except** the `dropped_outbound_bytes_are_reported` test, which was
-  identified as weak/racy — see Open Questions before finalizing it.
+  identified as weak/racy — resolved in §7's "Resolved during design
+  review" log: split into a plain `TransportReporter` unit test (no ring,
+  fully deterministic) plus a `pub(crate) open_with_capacity(...)`
+  constructor used only by this one test to force overflow with a
+  capacity of 1–2 rather than relying on timing.
 
 ### 4.2 `UnixSocketTransport` / `TcpSocketTransport` (multipoint)
 
@@ -816,18 +820,18 @@ original motivation in §1.8):
   that client's disconnect — naturally aligned with the existing per-client
   `TransportEvent::Connected(tag)`/`Disconnected(tag)` lifecycle
   `run_client_task` already observes (§1.1), just also surfaced via
-  `DeviceEvent` now. **The peer-naming mechanism differs by socket type,
-  and needs resolving per transport during implementation**:
+  `DeviceEvent` now. **The peer-naming mechanism differs by socket type**
+  (resolved during design review, §7):
   - TCP: `TcpStream::peer_addr()` gives a real, meaningful `SocketAddr`
     (`IP:port`) — straightforward.
   - Unix domain sockets: `UnixStream::peer_addr()` is typically *unnamed*
     for client-side sockets (most UDS clients connect from an unbound
-    socket) — it won't usually produce anything useful. `SO_PEERCRED`
-    (`peer_cred()`, giving PID/UID/GID) is the realistic alternative for a
-    meaningful per-client identifier on Unix sockets; falling back to the
-    connection's `conn_tag` (already unique per session, just not very
-    human-readable) is the fallback if `peer_cred()` isn't worth the
-    complexity.
+    socket) — it won't usually produce anything useful. Resolved: use
+    `peer_cred()` (giving PID/UID/GID, stable on `tokio::net::UnixStream`)
+    as the meaningful per-client identifier, formatted as e.g.
+    `"pid=1234 uid=1000"`; fall back to the connection's `conn_tag`
+    (already unique per session, just not very human-readable, e.g.
+    `"conn#7"`) if `peer_cred()` errors.
   - Since `run_client_task` (`transport/mod.rs:225-238`) is generic over
     already-split `R`/`W` streams and has no access to the original
     `TcpStream`/`UnixStream` (needed for `peer_addr()`/`peer_cred()`), the
@@ -898,27 +902,53 @@ mode this whole shutdown-ordering exercise exists to prevent.
 
 ## 7. Open Questions (resolve before or during implementation, not after)
 
-1. **Outbound ring capacity for multipoint under MC6840-style fanout
-   amplification** (§1.4) — the default `CHANNEL_CAPACITY` (256) may need
-   to be larger, or configurable per-transport, given N-way fanout
-   multiplies a single inbound event into N outbound pushes. Revisit once
-   real fanout device counts are known.
-2. **Deterministic testing of outbound drop-counting** — identified during
-   `PtyTransport` drafting as inherently racy against the concurrently
-   running outbound pump task (no park/unpark synchronization point exists
-   on the outbound side by design). Consider adding a test-only
-   constructor that accepts a smaller ring capacity to make overflow
-   trivial to force deterministically, rather than relying on timing.
-3. **Report interval (1s default)** — confirmed purely diagnostic (§1.5),
-   so this is a UX tuning question, not a correctness one. Fine to leave
-   at 1s unless real usage suggests otherwise.
-4. **Unix domain socket peer naming** (§5.1) — `UnixStream::peer_addr()` is
-   typically unnamed for client sockets; decide during implementation
-   whether `peer_cred()` (PID/UID/GID) is worth the complexity versus
-   falling back to `conn_tag` as the multipoint `peer` identifier for Unix
-   sockets specifically. TCP's `peer_addr()` needs no such decision.
+None remaining — all resolved during design review (see log below).
 
 ### Resolved during design review (kept here for traceability)
+
+- ~~Unix domain socket peer naming~~ (§5.1) — resolved: use
+  `tokio::net::UnixStream::peer_cred()` (stable, Linux-only target),
+  called at accept time in `unix_socket.rs` before the stream is split,
+  formatted as e.g. `"pid=1234 uid=1000"` for the `peer` field. Falls back
+  to `conn_tag` (e.g. `"conn#7"`) if `peer_cred()` errors, so a naming
+  failure never blocks the connection. TCP keeps `peer_addr()`'s
+  `SocketAddr` as before, unaffected by this decision.
+
+- ~~Report interval (1s default)~~ — confirmed purely diagnostic (§1.5)
+  with no correctness implication either way; keep the 1s default,
+  hardcoded, no per-transport configurability. Revisit only if real usage
+  shows a need, at which point it's a small follow-up, not a redesign.
+
+- ~~Outbound ring capacity for multipoint under MC6840-style fanout
+  amplification~~ (§1.4) — the premise didn't hold up: `pump_outbound`
+  sources from **one** shared `rtrb::Consumer<u8>` per transport; the
+  N-way client fanout happens downstream in the existing
+  `broadcast::channel` (`BROADCAST_CAPACITY`, `unix_socket.rs`/
+  `tcp_socket.rs`), which this redesign doesn't touch. A tick never pushes
+  more than once per byte into the new ring regardless of client count —
+  confirmed against `Mc6840::send_state_to_all`/`ProtocolManager::send_to_all`
+  (`mc6840.rs:569-572`, `manager.rs:67-74`), which encode at most 3 small
+  state-change messages once per tick and push each byte exactly once, not
+  once per connected peripheral. No per-transport configurable capacity or
+  size increase needed; keep the existing default.
+- ~~Deterministic testing of outbound drop-counting~~ — splits into two
+  independent pieces once `TransportReporter`'s actual shape (§2.1) is
+  accounted for. (a) Counter-increment (`note_outbound_drop`) plus
+  `report_counts()`'s `DeviceEvent::OutboundBytesDropped` emission is pure
+  logic with no ring or background thread involved at all — unit-test it
+  directly against a bare `TransportReporter` (construct, call
+  `note_outbound_drop()` N times, call `report_counts()`, assert the
+  event and its count on the `ErrorSender`'s receiver), fully
+  deterministic with no new machinery needed. (b) Only the per-transport
+  "does a real ring overflow actually reach `note_outbound_drop()`" wiring
+  test is racy, since public constructors (`PtyTransport::open()` etc., §4.1)
+  don't expose ring capacity. Resolved: add a `pub(crate)`-only
+  capacity-override constructor per transport (e.g.
+  `PtyTransport::open_with_capacity(symlink_path, reporter, capacity)`,
+  with `open()` calling it with the real default), used only by that one
+  wiring test per transport to force overflow with a capacity of 1 or 2
+  instead of relying on timing against the concurrently running outbound
+  pump task.
 
 - ~~Trait split (`TransportControl`/`PointToPointTransport`/
   `MultiClientTransport`) and the `Transport`→`TransportControl` rename~~ —
@@ -1198,5 +1228,5 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       `pair()`'s asymmetric return needs `debugger/src-tauri`'s
       `load_session`/`into_split()` usage re-verified against the final
       signature (§9.4)
-- [ ] Resolve remaining Open Questions (§7) and update this document if
-      any resolution changes the plan materially
+- [x] All Open Questions (§7) resolved during design review; no
+      remaining decisions deferred to implementation time
