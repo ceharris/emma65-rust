@@ -1194,7 +1194,20 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       `from_parts`, and the shared `push_and_park` free function), with
       unit tests (§3)
 - [x] Single `Transport` trait + `TransportReporter` (§2, §2.1)
-- [ ] `PtyTransport` rewrite + tests (§4.1) — reference implementation
+- [x] `PtyTransport` rewrite + tests (§4.1) — reference implementation.
+      Deviates from the literal spec in one deliberate way: `try_recv()` is
+      kept on the trait as a documented no-op stub rather than migrating any
+      device to drain the returned `ChannelRelay<u8>` directly — R6551 and
+      Mc6850 (not Console) turn out to be the ones that default to a PTY
+      transport (`src/bin/emulator/config.rs`), so that migration is
+      deliberately deferred to item 12 (IoDevice migration) rather than
+      expanding this unit's scope. `TransportSpec::to_transport`'s Pty branch
+      leaks the relay it gets back (`std::mem::forget`) rather than
+      threading it anywhere, since nothing consumes it yet and dropping it
+      would deadlock (join waits on a sender the generic call site has no
+      way to close). Accepted per-user direction: prioritize compileable,
+      narrowly-scoped, reviewable units over preserving PTY input at every
+      commit on this branch.
 - [ ] `UnixSocketTransport` rewrite + tests (§4.2) — reference multipoint
       implementation, including ingress `try_send` + drop counter
 - [ ] `TcpSocketTransport` rewrite + tests (§4.2) — should mostly mirror

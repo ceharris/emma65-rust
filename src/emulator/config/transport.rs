@@ -4,7 +4,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use super::ExpandedPathBuf;
-use crate::emulator::{PipeTransport, PtyTransport, TcpSocketTransport, Transport, TransportError, UnixSocketTransport};
+use crate::emulator::{PipeTransport, PtyTransport, TcpSocketTransport, Transport, TransportError, TransportReporter, UnixSocketTransport};
 
 /// A transport configuration spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,11 +69,25 @@ impl TransportSpec {
                 }
             }
             TransportSpec::Pty { path} => {
-                let transport = if let Some(path) = path {
-                    PtyTransport::open(Some(path))
+                // TransportSpec::to_transport is shared, device-agnostic
+                // construction machinery (used by every DeviceModule, not
+                // just Console) that isn't wired to thread a per-device
+                // TransportReporter/ChannelRelay through yet — that lands at
+                // checklist items 12/13 of the transport relay redesign
+                // plan, alongside the IoDevice migration that will actually
+                // consume the relay. Until then: a reporter that will never
+                // be bound to a DeviceId (so it silently reports nothing),
+                // and the relay is deliberately leaked rather than dropped —
+                // ChannelRelay::drop joins its relay thread, which only
+                // exits once every Sender feeding it is gone, a condition
+                // this generic call site has no way to satisfy on its own.
+                let reporter = TransportReporter::pending(None);
+                let (transport, relay) = if let Some(path) = path {
+                    PtyTransport::open(Some(path), reporter)
                 } else {
-                    PtyTransport::open(None)
+                    PtyTransport::open(None, reporter)
                 }?;
+                std::mem::forget(relay);
                 Ok(Box::new(transport))
             }
             TransportSpec::Pipe { command } => {
