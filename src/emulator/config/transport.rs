@@ -62,11 +62,15 @@ impl TransportSpec {
                 }
             }
             TransportSpec::Unix { path } => {
-                let transport = UnixSocketTransport::listen(path).await;
-                match transport {
-                    Ok(transport) => Ok(Box::new(transport)),
-                    Err(e) => Err(TransportError::Io(e))
-                }
+                // See the Pty arm below for why a pending reporter and a
+                // leaked relay are used here: this call site isn't wired to
+                // thread a per-device TransportReporter/ChannelRelay through
+                // yet (checklist items 12/13 of the transport relay redesign
+                // plan).
+                let reporter = TransportReporter::pending(None);
+                let (transport, relay) = UnixSocketTransport::listen(path, reporter).await?;
+                std::mem::forget(relay);
+                Ok(Box::new(transport))
             }
             TransportSpec::Pty { path} => {
                 // TransportSpec::to_transport is shared, device-agnostic
