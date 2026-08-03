@@ -394,7 +394,7 @@ fn run_relay_thread(
         }
     };
     // Guarded (`swap`, not `store`): `shutdown()` may have already reported
-    // this disconnect synchronously (§5.1) before signaling this thread to
+    // this disconnect synchronously before signaling this thread to
     // exit, in which case this is a no-op.
     if connected.swap(false, Ordering::Release) {
         reporter.report_disconnected(None, reason);

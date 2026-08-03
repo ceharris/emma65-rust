@@ -2,12 +2,12 @@
 //!
 //! Opens a PTY pair on construction. A Tokio task owns the master side fd via
 //! [`AsyncFd`] for proper non-blocking epoll integration. Inbound bytes flow
-//! through a [`ChannelRelay<u8>`](ChannelRelay) (transport relay redesign
-//! plan, §3/§4.1): the Tokio task pushes each byte it reads into a plain
-//! `crossbeam_channel`, and the relay's own OS thread relays those into an
-//! `rtrb` ring for the caller to drain. Outbound bytes go the other way: the
-//! transport pushes into an `rtrb::Producer<u8>` (never blocking; overflow is
-//! counted via `TransportReporter`, not surfaced as an error, per §1.5), and
+//! through a [`ChannelRelay<u8>`](ChannelRelay): the Tokio task pushes each
+//! byte it reads into a plain `crossbeam_channel`, and the relay's own OS
+//! thread relays those into an `rtrb` ring for the caller to drain. Outbound
+//! bytes go the other way: the transport pushes into an `rtrb::Producer<u8>`
+//! (never blocking; overflow is counted via `TransportReporter`, not
+//! surfaced as an error), and
 //! the same Tokio task drains the matching `Consumer<u8>` and writes to the
 //! master fd. The slave device path is available for external processes to
 //! connect to. An optional stable symlink may be created at a caller-supplied
@@ -50,7 +50,7 @@ pub struct PtyTransport {
     client_connected: Arc<AtomicBool>,
     symlink_path: Option<PathBuf>,
     /// Clone of the reporter supplied to `open`, for `send()`'s own
-    /// `note_outbound_drop` call (§2.1).
+    /// `note_outbound_drop` call.
     reporter: TransportReporter,
 }
 
@@ -67,10 +67,9 @@ impl PtyTransport {
     /// Same as [`open`](Self::open), with the inbound/outbound ring capacity
     /// parameterized. `pub(crate)` and used only by
     /// `outbound_overflow_increments_drop_counter_and_is_reported` below, to
-    /// force a deterministic ring overflow (capacity 1) rather than relying
-    /// on timing — see the "Resolved during design review" log in
-    /// `doc/transport-relay-redesign-plan.md` §7 for why the naive,
-    /// timing-based version of this test was rejected.
+    /// force a deterministic ring overflow (capacity 1) rather than racing
+    /// the concurrently running outbound-pump task to overflow the default
+    /// capacity through timing alone.
     pub(crate) fn open_with_capacity(
         symlink_path: Option<&Path>,
         reporter: TransportReporter,
@@ -157,10 +156,11 @@ impl Transport for PtyTransport {
     /// Superseded by the [`ChannelRelay<u8>`](ChannelRelay) returned
     /// alongside this transport from `open`/`open_with_capacity` — inbound
     /// bytes flow through that relay now, not through this method. Retained
-    /// only because `Transport::try_recv` isn't removed from the trait until
-    /// every device migrates to draining a relay directly (transport relay
-    /// redesign plan §10, checklist item 12). Until then, a device still
-    /// calling this method on a `PtyTransport` will not receive PTY input.
+    /// only because `Transport::try_recv` is still part of the trait:
+    /// `LedMatrix` (`device/led_matrix.rs`) hasn't yet migrated to draining
+    /// a relay directly and still calls it (via `try_recv_tagged`'s default
+    /// impl). Any device calling this method on a `PtyTransport` will not
+    /// receive PTY input.
     fn try_recv(&mut self) -> Option<u8> {
         None
     }
@@ -171,9 +171,9 @@ impl Transport for PtyTransport {
     /// external process has the slave open yet: PTY masters accept writes
     /// regardless of whether anyone has opened the slave side (the kernel
     /// buffers the output). `is_connected()` still reflects true external
-    /// attachment, independently of this. Never blocks and never errors
-    /// (§1.5/§2): outbound ring overflow is counted via `TransportReporter`,
-    /// not surfaced here.
+    /// attachment, independently of this. Never blocks and never errors:
+    /// outbound ring overflow is counted via `TransportReporter`, not
+    /// surfaced here.
     fn send(&mut self, byte: u8) {
         match self.outbound.push(byte) {
             Ok(()) => self.outbound_notify.notify_one(),
@@ -208,11 +208,11 @@ impl Drop for PtyTransport {
 /// Reads bytes from the master fd and pushes them into `in_tx` (consumed by
 /// the `ChannelRelay<u8>` returned from `open`); drains `outbound` (the
 /// transport's `send()` target) and writes those bytes to the master fd;
-/// reports outbound/inbound drop counts on a 1-second interval (§1.5).
+/// reports outbound/inbound drop counts on a 1-second interval.
 /// `client_connected` tracks real external attach/detach (via first
 /// successful read / EIO) for `is_connected()`, independent of the relay.
 /// Each attach/detach edge is also reported via `reporter.report_connected`/
-/// `report_disconnected` (§5.1), guarded so a spurious detach isn't reported
+/// `report_disconnected`, guarded so a spurious detach isn't reported
 /// on task exit when no client was ever attached.
 async fn run_pty_task(
     async_fd: AsyncFd<File>,
@@ -263,7 +263,7 @@ async fn run_pty_task(
     }
     // Guarded (`swap`, not `store`): this runs unconditionally on every task
     // exit, including shutdown before any client ever attached, which must
-    // not be reported as a disconnect (§5.1) — only a genuine false→true→false
+    // not be reported as a disconnect — only a genuine false→true→false
     // transition should.
     if client_connected.swap(false, Ordering::Release) {
         reporter.report_disconnected(None, "shutdown".to_string());

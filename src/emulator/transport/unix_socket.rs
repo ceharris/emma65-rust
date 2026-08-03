@@ -2,9 +2,9 @@
 //!
 //! A Tokio task owns the `UnixListener` and accepts connections in a loop,
 //! spawning a per-client task for each one so multiple clients can be
-//! connected concurrently — the "multipoint" transport shape (transport
-//! relay redesign plan §4.2), contrasted with point-to-point transports like
-//! [`PtyTransport`](super::PtyTransport) (§4.1). Inbound bytes from every
+//! connected concurrently — the "multipoint" transport shape, contrasted
+//! with point-to-point transports like
+//! [`PtyTransport`](super::PtyTransport). Inbound bytes from every
 //! client are tagged with their originating connection and relayed through a
 //! single [`ChannelRelay<TransportEvent>`](ChannelRelay), the same mechanism
 //! point-to-point transports use for `ChannelRelay<u8>`. Outbound bytes are
@@ -70,11 +70,11 @@ impl Transport for UnixSocketTransport {
     /// Superseded by the [`ChannelRelay<TransportEvent>`](ChannelRelay)
     /// returned alongside this transport from `listen`/`listen_with_capacity`
     /// — inbound events flow through that relay now, not through this
-    /// method. Retained only because `Transport::try_recv` isn't removed
-    /// from the trait until every device migrates to draining a relay
-    /// directly (transport relay redesign plan §10, checklist item 12).
-    /// Until then, a device still calling this method on a
-    /// `UnixSocketTransport` will not receive inbound data.
+    /// method. Retained only because `Transport::try_recv` is still part of
+    /// the trait: `LedMatrix` (`device/led_matrix.rs`) hasn't yet migrated
+    /// to draining a relay directly and still calls it (via
+    /// `try_recv_tagged`'s default impl). Any device calling this method on
+    /// a `UnixSocketTransport` will not receive inbound data.
     fn try_recv(&mut self) -> Option<u8> {
         None
     }

@@ -79,8 +79,8 @@ pub(crate) fn reporter(sender: ErrorSender, id: DeviceId) -> Box<impl Fn(Transpo
 }
 
 /// Bundles the callbacks a transport needs at construction time: error
-/// reporting, diagnostic drop counters (§1.5), and connect/disconnect edge
-/// reporting (§5.1). Built once per transport and cloned into every
+/// reporting, diagnostic drop counters, and connect/disconnect edge
+/// reporting. Built once per transport and cloned into every
 /// concurrent owner that needs to report — the CPU-thread-side `Transport`
 /// (`send`'s outbound-drop counting), the outbound-pump task, and, for
 /// multipoint transports, each per-client task — sharing one set of
@@ -88,9 +88,10 @@ pub(crate) fn reporter(sender: ErrorSender, id: DeviceId) -> Box<impl Fn(Transpo
 /// correctly regardless of which clone incremented or reported them.
 #[derive(Clone)]
 pub struct TransportReporter {
-    /// Bound lazily for the `TransportSlot` injection path (§2.2), where the
-    /// transport must be constructed before its device (and `DeviceId`)
-    /// exists. Every reporting method is a silent no-op until this is set.
+    /// Bound lazily for the [`TransportSlot`](crate::emulator::TransportSlot)
+    /// injection path, where the transport must be constructed before its
+    /// device (and `DeviceId`) exists. Every reporting method is a silent
+    /// no-op until this is set.
     device_id: Arc<OnceLock<DeviceId>>,
     error_sender: Option<ErrorSender>,
     outbound_drops: Arc<AtomicU64>,
@@ -98,10 +99,11 @@ pub struct TransportReporter {
 }
 
 impl TransportReporter {
-    /// Constructs a reporter whose `DeviceId` isn't known yet (§2.2) — for
-    /// the `TransportSlot` injection path (§9.4), where the transport must
-    /// be built before the device (and its `DeviceId`) exists. Every
-    /// reporting call before `bind` is a silent no-op.
+    /// Constructs a reporter whose `DeviceId` isn't known yet — for the
+    /// [`TransportSlot`](crate::emulator::TransportSlot) injection path,
+    /// where the transport must be built before the device (and its
+    /// `DeviceId`) exists. Every reporting call before `bind` is a silent
+    /// no-op.
     ///
     /// `pub` (rather than `pub(crate)`) so the two call sites that build an
     /// `InternalPipeTransport` directly for that injection path —
@@ -116,7 +118,7 @@ impl TransportReporter {
         }
     }
 
-    /// Binds the `DeviceId` once the caller determines it (§2.2). Every
+    /// Binds the `DeviceId` once the caller determines it. Every
     /// existing `Clone` of this reporter — including ones already handed to
     /// background tasks that started before the ID was known — observes the
     /// bound ID from that point on, since it lives behind the same `Arc` as
@@ -127,19 +129,19 @@ impl TransportReporter {
     }
 
     /// Reports a hard transport error. Currently only ever called with
-    /// `TransportError::Io` (§1.8).
+    /// `TransportError::Io`.
     pub fn report_error(&self, error: TransportError) {
         let Some(&device) = self.device_id.get() else { return };
         let Some(sender) = &self.error_sender else { return };
         let _ = sender.send(DeviceEvent::TransportError { device, error });
     }
 
-    /// Increments the outbound drop counter (§1.5). Every transport has one.
+    /// Increments the outbound drop counter. Every transport has one.
     pub fn note_outbound_drop(&self) {
         self.outbound_drops.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increments the inbound ingress-drop counter (§1.5). Multipoint only —
+    /// Increments the inbound ingress-drop counter. Multipoint only —
     /// P2P transports never call this.
     pub fn note_inbound_drop(&self) {
         self.inbound_drops.fetch_add(1, Ordering::Relaxed);
@@ -147,7 +149,7 @@ impl TransportReporter {
 
     /// Swaps both counters to 0 and emits `DeviceEvent::OutboundBytesDropped`/
     /// `InboundEventsDropped` for any nonzero count. Called from the existing
-    /// outbound-pump/ingress tokio tasks on a `tokio::time::interval` (§1.5).
+    /// outbound-pump/ingress tokio tasks on a `tokio::time::interval`.
     pub fn report_counts(&self) {
         let Some(&device) = self.device_id.get() else { return };
         let Some(sender) = &self.error_sender else { return };
@@ -163,7 +165,7 @@ impl TransportReporter {
         }
     }
 
-    /// Reports a connect edge (§5.1). `peer` is `None` for point-to-point
+    /// Reports a connect edge. `peer` is `None` for point-to-point
     /// transports and `Some(name)` per-client for multipoint ones.
     pub fn report_connected(&self, peer: Option<String>) {
         let Some(&device) = self.device_id.get() else { return };
@@ -171,7 +173,7 @@ impl TransportReporter {
         let _ = sender.send(DeviceEvent::TransportConnected { device, peer });
     }
 
-    /// Reports a disconnect edge (§5.1); see [`report_connected`](Self::report_connected)
+    /// Reports a disconnect edge; see [`report_connected`](Self::report_connected)
     /// for `peer`.
     pub fn report_disconnected(&self, peer: Option<String>, reason: String) {
         let Some(&device) = self.device_id.get() else { return };
@@ -343,10 +345,10 @@ impl TagAllocator {
 /// into the ring, parking on a full ring until [`ChannelRelay::drain_into`]
 /// frees space and unparks it. Using a plain OS thread (rather than an async
 /// task) for the parkable producer side avoids stalling a Tokio worker and
-/// everything else scheduled on it; see `doc/transport-relay-redesign-plan.md`
-/// §1.2 for the full rationale. Shared by every `Transport` implementation
-/// needing an inbound relay (`T` is `u8` for point-to-point transports,
-/// `TransportEvent` for multipoint ones).
+/// everything else scheduled on it — `thread::park`/`unpark` block only the
+/// dedicated relay thread, never a Tokio executor thread. Shared by every
+/// `Transport` implementation needing an inbound relay (`T` is `u8` for
+/// point-to-point transports, `TransportEvent` for multipoint ones).
 pub struct ChannelRelay<T> {
     /// Consumer side of the ring the relay thread pushes into.
     consumer: Consumer<T>,
@@ -405,7 +407,7 @@ impl<T: Send + 'static> ChannelRelay<T> {
 
     /// Wraps an already-running relay thread's `Consumer<T>`/`JoinHandle`
     /// directly, without spawning anything or requiring a `Receiver<T>`. For
-    /// callers like [`InternalPipeTransport`] (§4.4) that read from a raw
+    /// callers like [`InternalPipeTransport`] that read from a raw
     /// source with no `crossbeam_channel` hop and drive their own
     /// [`push_and_park`] loop against their own `Producer<T>`.
     pub(crate) fn from_parts(consumer: Consumer<T>, handle: JoinHandle<()>) -> Self {
@@ -471,7 +473,8 @@ impl TransportRelay {
     /// byte; `Connected`/`Disconnected` events are discarded here, since a
     /// device that doesn't distinguish clients has no use for them (peer
     /// connect/disconnect edges are reported separately via
-    /// `TransportReporter`, §5.1).
+    /// [`TransportReporter::report_connected`]/
+    /// [`TransportReporter::report_disconnected`]).
     pub fn drain_bytes_into(&mut self, mut f: impl FnMut(u8)) {
         match self {
             TransportRelay::Byte(relay) => relay.drain_into(f),
@@ -489,7 +492,7 @@ impl TransportRelay {
 /// succeeds (`true`) or `stop` signals shutdown while parked, in which case
 /// `item` is dropped and this returns `false`. Shared by
 /// [`ChannelRelay::spawn`]'s thread body and `InternalPipeTransport`'s custom
-/// relay thread (§4.4), so the retry loop exists in exactly one place.
+/// relay thread, so the retry loop exists in exactly one place.
 pub(crate) fn push_and_park<T>(producer: &mut Producer<T>, mut item: T, stop: &Receiver<()>) -> bool {
     loop {
         match producer.push(item) {
@@ -509,9 +512,9 @@ pub trait Transport: Send {
     fn try_recv(&mut self) -> Option<u8>;
 
     /// Never blocks and never returns an error. Outbound ring overflow is
-    /// diagnostic-only (§1.5, counted not reported); hard I/O errors are
-    /// reported asynchronously via the `TransportReporter` supplied at
-    /// construction (§1.8), not through this call's return value.
+    /// diagnostic-only (counted, not reported as an error); hard I/O errors
+    /// are reported asynchronously via the `TransportReporter` supplied at
+    /// construction, not through this call's return value.
     fn send(&mut self, byte: u8);
 
     fn is_connected(&self) -> bool;
@@ -531,10 +534,9 @@ pub trait Transport: Send {
 
 // --- Shared machinery for multi-client, ring-based transports (TCP, Unix
 // socket). Unified here once both transports were converted to the
-// `ChannelRelay`/`TransportReporter` shapes (transport relay redesign plan
-// §4.2) — `UnixSocketTransport` (item 4) briefly held a local duplicate of
-// these while `TcpSocketTransport` (item 5) still used the older
-// `ChannelBridge`-based versions; see the plan's implementation log for why.
+// `ChannelRelay`/`TransportReporter` shapes — `UnixSocketTransport` briefly
+// held a local duplicate of these while `TcpSocketTransport` still used an
+// older, `ChannelBridge`-based implementation, before both were unified here.
 
 /// Drains the outbound ring on notification, fanning bytes out to every
 /// connected client, and reports outbound/inbound drop counts on a
@@ -572,7 +574,7 @@ pub(crate) async fn pump_outbound(
 pub(crate) struct ClientSession {
     pub(crate) conn_tag: u8,
     /// Human-readable client identity for `DeviceEvent::TransportConnected`/
-    /// `TransportDisconnected` (§5.1) — `peer_addr()` for TCP, `peer_cred()`
+    /// `TransportDisconnected` — `peer_addr()` for TCP, `peer_cred()`
     /// (falling back to `conn_tag`) for Unix sockets. Captured by the caller
     /// at accept time, before the stream is split.
     pub(crate) peer: String,
@@ -625,7 +627,7 @@ where
                 // by releasing a slot, and neither slots nor the tag
                 // allocator outlive the bus, so a skipped event here has no
                 // observable effect. DeviceEvent::TransportDisconnected is a
-                // separate, UI-facing signal (§5.1) and still fires below.
+                // separate, UI-facing signal and still fires below.
                 reporter.report_disconnected(Some(peer), "shutdown".to_string());
                 drop(in_tx);
                 client_count.fetch_sub(1, Ordering::Release);
@@ -758,8 +760,8 @@ async fn propagate_shutdown(shutdown_rx: oneshot::Receiver<()>, shutdown_tx: wat
 /// ring-based listener transport (`TcpSocketTransport`, `UnixSocketTransport`)
 /// — construction (relay, outbound ring, shutdown plumbing, `run_listener_task`),
 /// and the `send`/`is_connected`/`shutdown` logic that used to be duplicated
-/// verbatim across both `Transport` impls (transport relay redesign plan
-/// §4.2 / PR #227 review). Each transport wraps this plus whatever
+/// verbatim across both `Transport` impls, before being extracted here.
+/// Each transport wraps this plus whatever
 /// listener-specific identity it needs to expose (a `PathBuf` for Unix, a
 /// `SocketAddr` for TCP).
 pub(crate) struct ListenerCore {

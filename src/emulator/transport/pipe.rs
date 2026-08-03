@@ -2,8 +2,8 @@
 //!
 //! Spawns a command and bridges the device's byte stream to the child's stdin
 //! (device → child) and the child's stdout (child → device), following the
-//! same relay shape as [`PtyTransport`](super::PtyTransport) (transport relay
-//! redesign plan, §4.3): a Tokio task reads `stdout` and pushes bytes into a
+//! same relay shape as [`PtyTransport`](super::PtyTransport): a Tokio task
+//! reads `stdout` and pushes bytes into a
 //! plain `crossbeam_channel`, and a [`ChannelRelay<u8>`](ChannelRelay) relays
 //! those into an `rtrb` ring for the caller to drain. Outbound bytes go the
 //! other way: the transport pushes into an `rtrb::Producer<u8>` (never
@@ -131,10 +131,11 @@ impl Transport for PipeTransport {
     /// Superseded by the [`ChannelRelay<u8>`](ChannelRelay) returned
     /// alongside this transport from `spawn`/`spawn_with_capacity` — inbound
     /// bytes flow through that relay now, not through this method. Retained
-    /// only because `Transport::try_recv` isn't removed from the trait until
-    /// every device migrates to draining a relay directly (transport relay
-    /// redesign plan §10, checklist item 12). Until then, a device still
-    /// calling this method on a `PipeTransport` will not receive child output.
+    /// only because `Transport::try_recv` is still part of the trait:
+    /// `LedMatrix` (`device/led_matrix.rs`) hasn't yet migrated to draining
+    /// a relay directly and still calls it (via `try_recv_tagged`'s default
+    /// impl). Any device calling this method on a `PipeTransport` will not
+    /// receive child output.
     fn try_recv(&mut self) -> Option<u8> {
         None
     }
@@ -177,7 +178,7 @@ impl Transport for PipeTransport {
 /// child's alive/exited state for `is_connected()` and `send()`'s gate,
 /// independent of the relay. On any exit — IO error, child process
 /// termination, or shutdown signal — calls `on_exit` with a describing
-/// error and reports the disconnect edge via `reporter` (§5.1); the matching
+/// error and reports the disconnect edge via `reporter`; the matching
 /// connect edge is reported once at `spawn`, since a spawned child is
 /// considered connected from the start.
 #[allow(clippy::too_many_arguments)]

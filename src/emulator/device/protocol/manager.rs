@@ -46,8 +46,7 @@ pub(crate) struct ProtocolManager<T> {
     encoding: ProtocolMessageEncoding,
     transport: Box<dyn Transport>,
     /// Paired with `transport`; drained once per [`poll_transport`](Self::poll_transport)
-    /// call (§9.3 of the transport relay redesign plan). Unlike the P2P
-    /// devices' `TransportRelay`, this is always the tagged variant directly
+    /// call. Unlike the P2P devices' `TransportRelay`, this is always the tagged variant directly
     /// — demultiplexing per-client requires the tag `TransportRelay::drain_bytes_into`
     /// would otherwise discard.
     relay: ChannelRelay<TransportEvent>,
@@ -74,8 +73,8 @@ impl<T> ProtocolManager<T> {
 
     /// Encodes `message` once and sends it via the transport, which fans it
     /// out to every currently connected client. Never blocks and never
-    /// errors (§1.5/§1.8) — the transport itself owns drop-counting and
-    /// error reporting via its `TransportReporter`.
+    /// errors — the transport itself owns drop-counting and error reporting
+    /// via its `TransportReporter`.
     pub fn send_to_all(&mut self, message: &T) {
         let mut bytes = Vec::new();
         self.encoder.encode(message, &mut bytes);
@@ -90,7 +89,7 @@ impl<T> ProtocolManager<T> {
         }
     }
 
-    /// Forwards to the owned transport's `shutdown()` (§6).
+    /// Forwards to the owned transport's [`shutdown`](Transport::shutdown).
     pub fn shutdown(&mut self) {
         self.transport.shutdown();
     }

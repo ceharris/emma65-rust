@@ -54,8 +54,7 @@ pub struct R6551 {
     name: &'static str,
     address: u16,
     transport: Option<Box<dyn Transport>>,
-    /// Paired with `transport`; drained into `rx_buffer` once per `tick()`
-    /// (§9.1 of the transport relay redesign plan).
+    /// Paired with `transport`; drained into `rx_buffer` once per `tick()`.
     relay: Option<TransportRelay>,
     /// Bytes drained from `relay` but not yet clocked into `rx_data` by
     /// `poll_transport`'s baud-rate pacing. Decouples "arrived from the

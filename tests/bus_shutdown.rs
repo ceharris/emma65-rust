@@ -1,8 +1,6 @@
-//! Integration test for §6 of the transport relay redesign plan
-//! (`doc/transport-relay-redesign-plan.md`): `Bus::drop` must signal every
-//! attached transport to shut down and the whole teardown must complete
-//! promptly rather than hanging, for both transport categories (P2P and
-//! multipoint).
+//! Integration test: `Bus::drop` must signal every attached transport to
+//! shut down and the whole teardown must complete promptly rather than
+//! hanging, for both transport categories (P2P and multipoint).
 
 use emma65::emulator::device::{Console, R6551};
 use emma65::emulator::{
@@ -12,11 +10,13 @@ use emma65::emulator::{
 use tokio::net::TcpStream;
 
 /// Builds a `Bus` with one P2P transport (`Console` over an
-/// `InternalPipeTransport::pair()`, relay-backed per §4.4) and one
-/// multipoint transport (`R6551` over a `TcpSocketTransport` with a
-/// connected client), then drops it. Confirms the drop completes within a
-/// bounded timeout rather than hanging on a relay thread's `join()` — the
-/// failure mode §6's shutdown-ordering work exists to prevent.
+/// `InternalPipeTransport::pair()`, relay-backed) and one multipoint
+/// transport (`R6551` over a `TcpSocketTransport` with a connected client),
+/// then drops it. Confirms the drop completes within a bounded timeout
+/// rather than hanging on a relay thread's `join()` — the failure mode
+/// `Bus::drop`'s `IoDevice::shutdown()` wiring exists to prevent, by
+/// signaling every attached transport to shut down before its `Drop` blocks
+/// on the relay thread joining.
 #[tokio::test(flavor = "multi_thread")]
 async fn bus_drop_shuts_down_all_transports_without_hanging() {
     let ((pipe_local, pipe_relay), _pipe_remote) =

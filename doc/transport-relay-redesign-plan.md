@@ -1418,7 +1418,7 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       (§9.4)
 - [x] All Open Questions (§7) resolved during design review; no
       remaining decisions deferred to implementation time
-- [ ] Documentation cleanup pass, once everything above is implemented: the
+- [x] Documentation cleanup pass, once everything above is implemented: the
       source code will almost certainly outlive this plan document, so
       remove every reference to this plan's section numbers (e.g. "§1.7",
       "§4.1") from doc comments added during this work, replacing each with
