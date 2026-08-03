@@ -1309,16 +1309,29 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
 - [ ] `IoDevice::shutdown()` (default no-op) + `ProtocolManager::shutdown()`
       + `impl Drop for Bus` calling `shutdown()` on every device before
       normal field-drop runs + integration test (§6)
-- [ ] `ProtocolManager`: drain a `ChannelRelay<TransportEvent>` instead of polling
+- [x] `ProtocolManager`: drain a `ChannelRelay<TransportEvent>` instead of polling
       `try_recv_tagged()`; drop `Result` from `send_to_all`/
-      `send_all_to_all`/`poll_transport` (§9.3)
-- [ ] `IoDevice` implementations (`Console`, `R6551`, `Mc6850`, `Via6522`,
+      `send_all_to_all`/`poll_transport` (§9.3). `poll_transport` now
+      returns `Vec<T>` (all messages decoded from one drain pass) instead
+      of `Option<T>` for just the first, per the analysis in §9.3's last
+      bullet.
+- [x] `IoDevice` implementations (`Console`, `R6551`, `Mc6850`, `Via6522`,
       and any other transport-owning device): hold transport + relay
       separately, drain the relay in `tick()`, drop the now-dead
-      `report_error`/`set_error_sender` plumbing (§9.1)
-- [ ] `DeviceModule::instantiate` implementations: build `TransportReporter`
+      `report_error`/`set_error_sender` plumbing (§9.1). Item 7 was
+      reordered into 7a (Console/R6551/Mc6850, done) / 7b (Via6522/Mc6840
+      via the shared `ProtocolManager`, done) / 7c
+      (`InternalPipeTransport` itself, next) once it became clear the
+      literal §4.4 spec — making `try_recv()` a permanent no-op stub —
+      would break every device's unit tests, which all depend on
+      `InternalPipeTransport::pair()` as a synchronous test double.
+- [x] `DeviceModule::instantiate` implementations: build `TransportReporter`
       before constructing the transport, thread the returned relay into the
-      device constructor, drop the `set_error_sender` call (§9.2)
+      device constructor, drop the `set_error_sender` call (§9.2). `via/6522`
+      and `ptm/6840` additionally reject a resolved `TransportRelay::Byte`
+      (P2P transport) with a `DeviceModuleError::Config`, since
+      `ProtocolManager` requires per-client tagging that pty/pipe
+      transports can't provide.
 - [ ] `TransportReporter::pending`/`bind` (§2.2), for the two call sites
       that must construct a transport before any `DeviceId` exists
 - [ ] `TransportSlot`/`console_transport` injection path (`registry.rs`,
