@@ -4,7 +4,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use super::ExpandedPathBuf;
-use crate::emulator::{PipeTransport, PtyTransport, TcpSocketTransport, Transport, TransportError, TransportReporter, UnixSocketTransport};
+use crate::emulator::{PipeTransport, PtyTransport, TcpSocketTransport, Transport, TransportError, TransportRelay, TransportReporter, UnixSocketTransport};
 
 /// A transport configuration spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,94 +28,92 @@ pub enum TransportSpec {
 impl TransportSpec {
     const DEFAULT_BIND_IP_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
-    /// Creates the transport, calling `on_child_exit` if the child process spawned by a
-    /// [`Pipe`](TransportSpec::Pipe) variant exits for any reason. For all other variants
-    /// the callback is never invoked.
+    /// Creates the transport and its paired relay, calling `on_child_exit` if the child
+    /// process spawned by a [`Pipe`](TransportSpec::Pipe) variant exits for any reason.
+    /// For all other variants the callback is never invoked.
     pub async fn to_transport_with_reporter<F>(
         &self,
         on_child_exit: F,
-    ) -> Result<Box<dyn Transport>, TransportError>
+    ) -> Result<(Box<dyn Transport>, TransportRelay), TransportError>
     where
         F: FnOnce(std::io::Error) + Send + 'static,
     {
         match self {
             TransportSpec::Pipe { command } => {
-                // See the Pty arm below for why a pending reporter and a
-                // leaked relay are used here: this call site isn't wired to
-                // thread a per-device TransportReporter/ChannelRelay through
-                // yet (checklist items 12/13 of the transport relay redesign
-                // plan).
+                // See the Pty arm below for why a pending reporter is used
+                // here: this call site isn't wired to thread a per-device
+                // TransportReporter through yet (checklist item 9.2 of the
+                // transport relay redesign plan). The relay, unlike earlier
+                // in this plan's implementation, is now returned rather than
+                // leaked — callers that don't yet drain it (checklist item
+                // 9.2 not done for them) are responsible for their own
+                // `std::mem::forget` until they do.
                 let reporter = TransportReporter::pending(None);
                 let (transport, relay) = PipeTransport::spawn(command, reporter, on_child_exit).await
                     .map_err(TransportError::Io)?;
-                std::mem::forget(relay);
-                Ok(Box::new(transport))
+                Ok((Box::new(transport), TransportRelay::Byte(relay)))
             }
             other => other.to_transport().await,
         }
     }
 
-    /// Creates the transport. For [`Pipe`](TransportSpec::Pipe) variants, child process
-    /// exit is silently ignored; use [`to_transport_with_reporter`](Self::to_transport_with_reporter)
-    /// to surface exit events as emulator errors.
-    pub async fn to_transport(&self) -> Result<Box<dyn Transport>, TransportError> {
+    /// Creates the transport and its paired relay. For [`Pipe`](TransportSpec::Pipe)
+    /// variants, child process exit is silently ignored; use
+    /// [`to_transport_with_reporter`](Self::to_transport_with_reporter) to surface exit
+    /// events as emulator errors.
+    pub async fn to_transport(&self) -> Result<(Box<dyn Transport>, TransportRelay), TransportError> {
         match self {
             TransportSpec::Tcp { port, address} => {
-                // See the Pty arm below for why a pending reporter and a
-                // leaked relay are used here: this call site isn't wired to
-                // thread a per-device TransportReporter/ChannelRelay through
-                // yet (checklist items 12/13 of the transport relay redesign
-                // plan).
+                // See the Pty arm below for why a pending reporter is used
+                // here: this call site isn't wired to thread a per-device
+                // TransportReporter through yet (checklist item 9.2 of the
+                // transport relay redesign plan).
                 let addr = SocketAddr::new(*address, *port);
                 let reporter = TransportReporter::pending(None);
                 let (transport, relay) = TcpSocketTransport::listen(addr, reporter).await?;
-                std::mem::forget(relay);
-                Ok(Box::new(transport))
+                Ok((Box::new(transport), TransportRelay::Tagged(relay)))
             }
             TransportSpec::Unix { path } => {
-                // See the Pty arm below for why a pending reporter and a
-                // leaked relay are used here: this call site isn't wired to
-                // thread a per-device TransportReporter/ChannelRelay through
-                // yet (checklist items 12/13 of the transport relay redesign
-                // plan).
+                // See the Pty arm below for why a pending reporter is used
+                // here: this call site isn't wired to thread a per-device
+                // TransportReporter through yet (checklist item 9.2 of the
+                // transport relay redesign plan).
                 let reporter = TransportReporter::pending(None);
                 let (transport, relay) = UnixSocketTransport::listen(path, reporter).await?;
-                std::mem::forget(relay);
-                Ok(Box::new(transport))
+                Ok((Box::new(transport), TransportRelay::Tagged(relay)))
             }
             TransportSpec::Pty { path} => {
                 // TransportSpec::to_transport is shared, device-agnostic
                 // construction machinery (used by every DeviceModule, not
                 // just Console) that isn't wired to thread a per-device
-                // TransportReporter/ChannelRelay through yet — that lands at
-                // checklist items 12/13 of the transport relay redesign
-                // plan, alongside the IoDevice migration that will actually
-                // consume the relay. Until then: a reporter that will never
-                // be bound to a DeviceId (so it silently reports nothing),
-                // and the relay is deliberately leaked rather than dropped —
-                // ChannelRelay::drop joins its relay thread, which only
-                // exits once every Sender feeding it is gone, a condition
-                // this generic call site has no way to satisfy on its own.
+                // TransportReporter through yet — that lands at checklist
+                // item 9.2 of the transport relay redesign plan. Until then:
+                // a reporter that will never be bound to a DeviceId (so it
+                // silently reports nothing). Callers that don't yet drain
+                // the returned relay are responsible for leaking it
+                // (`std::mem::forget`) themselves — `ChannelRelay::drop`
+                // joins its relay thread, which only exits once every
+                // `Sender` feeding it is gone (or, for a `spawn`-constructed
+                // relay, once its internal stop signal fires), a condition
+                // this generic call site has no way to satisfy on its own
+                // for a caller that never drains.
                 let reporter = TransportReporter::pending(None);
                 let (transport, relay) = if let Some(path) = path {
                     PtyTransport::open(Some(path), reporter)
                 } else {
                     PtyTransport::open(None, reporter)
                 }?;
-                std::mem::forget(relay);
-                Ok(Box::new(transport))
+                Ok((Box::new(transport), TransportRelay::Byte(relay)))
             }
             TransportSpec::Pipe { command } => {
-                // See the Pty arm above for why a pending reporter and a
-                // leaked relay are used here: this call site isn't wired to
-                // thread a per-device TransportReporter/ChannelRelay through
-                // yet (checklist items 12/13 of the transport relay redesign
-                // plan).
+                // See the Pty arm above for why a pending reporter is used
+                // here: this call site isn't wired to thread a per-device
+                // TransportReporter through yet (checklist item 9.2 of the
+                // transport relay redesign plan).
                 let reporter = TransportReporter::pending(None);
                 let (transport, relay) = PipeTransport::spawn(command, reporter, |_| {}).await
                     .map_err(TransportError::Io)?;
-                std::mem::forget(relay);
-                Ok(Box::new(transport))
+                Ok((Box::new(transport), TransportRelay::Byte(relay)))
             }
         }
     }

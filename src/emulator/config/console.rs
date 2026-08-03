@@ -51,9 +51,14 @@ impl DeviceModule for ConsoleModule {
         let console = {
             let mut dev = Console::new(self.name()).with_address(address);
             if let Some(transport_spec) = transport_spec {
-                let transport = transport_spec
+                // Not yet migrated to hold/drain a relay (transport relay
+                // redesign plan, checklist item 9.1); leak it until then —
+                // see `TransportSpec::to_transport`'s Pty arm doc comment
+                // for why this is safe.
+                let (transport, relay) = transport_spec
                     .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
+                std::mem::forget(relay);
                 dev.attach_transport(transport);
             } else if let Some(injected) = context.console_transport.as_ref()
                     .and_then(|slot| slot.lock().ok()?.take()) {

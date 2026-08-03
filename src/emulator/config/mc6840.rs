@@ -51,9 +51,14 @@ impl DeviceModule for Mc6840Module {
                 dev = dev.with_protocol(protocol);
             }
             if let Some(transport_spec) = transport_spec {
-                let transport = transport_spec
+                // Not yet migrated to hold/drain a relay (transport relay
+                // redesign plan, checklist item 9.1/9.3); leak it until then
+                // — see `TransportSpec::to_transport`'s Pty arm doc comment
+                // for why this is safe.
+                let (transport, relay) = transport_spec
                     .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
+                std::mem::forget(relay);
                 dev.attach_transport(transport);
             }
             if let Some(sender) = &context.error_sender {

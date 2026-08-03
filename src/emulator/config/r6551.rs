@@ -57,9 +57,14 @@ impl DeviceModule for R6551Module {
                 dev = dev.with_clock_hz(hz);
             }
             if let Some(spec) = transport_spec {
-                let transport = spec
+                // Not yet migrated to hold/drain a relay (transport relay
+                // redesign plan, checklist item 9.1); leak it until then —
+                // see `TransportSpec::to_transport`'s Pty arm doc comment
+                // for why this is safe.
+                let (transport, relay) = spec
                     .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
+                std::mem::forget(relay);
                 dev.attach_transport(transport);
             }
             if let Some(sender) = &context.error_sender {

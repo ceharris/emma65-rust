@@ -443,6 +443,39 @@ impl<T> Drop for ChannelRelay<T> {
     }
 }
 
+/// The relay half of whichever `(Transport, Relay)` pair a [`TransportSpec`](crate::emulator::TransportSpec)
+/// produces: `ChannelRelay<u8>` for point-to-point transports (Pty, Pipe,
+/// InternalPipe) or `ChannelRelay<TransportEvent>` for multipoint ones (Tcp,
+/// Unix socket). A device that only cares about the byte stream — not which
+/// client tag it arrived on — can drain either kind uniformly via
+/// [`drain_bytes_into`](Self::drain_bytes_into) without matching on the
+/// variant itself.
+pub enum TransportRelay {
+    /// A point-to-point transport's relay.
+    Byte(ChannelRelay<u8>),
+    /// A multipoint transport's relay.
+    Tagged(ChannelRelay<TransportEvent>),
+}
+
+impl TransportRelay {
+    /// Drains all currently available bytes, regardless of relay kind. For
+    /// [`Tagged`](Self::Tagged), only `TransportEvent::Data` events yield a
+    /// byte; `Connected`/`Disconnected` events are discarded here, since a
+    /// device that doesn't distinguish clients has no use for them (peer
+    /// connect/disconnect edges are reported separately via
+    /// `TransportReporter`, §5.1).
+    pub fn drain_bytes_into(&mut self, mut f: impl FnMut(u8)) {
+        match self {
+            TransportRelay::Byte(relay) => relay.drain_into(f),
+            TransportRelay::Tagged(relay) => relay.drain_into(|event| {
+                if let TransportEvent::Data(_, byte) = event {
+                    f(byte);
+                }
+            }),
+        }
+    }
+}
+
 /// Pushes `item` into `producer`, parking the current thread on
 /// `PushError::Full` and retrying once unparked, until either the push
 /// succeeds (`true`) or `stop` signals shutdown while parked, in which case
