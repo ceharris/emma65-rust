@@ -14,7 +14,7 @@ use crossbeam_channel::{Receiver, Sender};
 use tokio::net::UnixListener;
 use tokio::sync::{Notify, broadcast, oneshot, watch};
 
-use super::{BROADCAST_CAPACITY, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, pump_outbound, run_client_task};
+use super::{BROADCAST_CAPACITY, ChannelBridge, ClientSession, TagAllocator, Transport, TransportEvent, pump_outbound, run_client_task};
 
 /// Transport that listens for incoming Unix-domain socket connections.
 pub struct UnixSocketTransport {
@@ -60,11 +60,10 @@ impl Transport for UnixSocketTransport {
         }
     }
 
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        if self.client_count.load(Ordering::Acquire) == 0 {
-            return Ok(());
+    fn send(&mut self, byte: u8) {
+        if self.client_count.load(Ordering::Acquire) > 0 {
+            self.bridge.send(byte);
         }
-        self.bridge.send(byte)
     }
 
     fn is_connected(&self) -> bool {
@@ -157,7 +156,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(transport.try_recv(), Some(0xAB));
 
-        transport.send(0xCD).unwrap();
+        transport.send(0xCD);
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let mut buf = [0u8; 1];
         client.read_exact(&mut buf).await.unwrap();
@@ -194,7 +193,7 @@ mod tests {
         let path = transport.path().to_path_buf();
 
         assert!(!transport.is_connected());
-        assert!(transport.send(0xFF).is_ok());
+        transport.send(0xFF);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -267,7 +266,7 @@ mod tests {
         assert!(data.contains(&(connected_tags[0], if connected_tags[0] == data[0].0 { data[0].1 } else { data[1].1 })));
 
         // Fan-out: a single send() reaches both clients.
-        transport.send(0xEE).unwrap();
+        transport.send(0xEE);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let mut b1 = [0u8; 1];
         let mut b2 = [0u8; 1];

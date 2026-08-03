@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{BROADCAST_CAPACITY, ChannelBridge, ClientSession, TagAllocator, Transport, TransportError, TransportEvent, pump_outbound, run_client_task};
+use super::{BROADCAST_CAPACITY, ChannelBridge, ClientSession, TagAllocator, Transport, TransportEvent, pump_outbound, run_client_task};
 use crossbeam_channel::{Receiver, Sender};
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, broadcast, oneshot, watch};
@@ -58,11 +58,10 @@ impl Transport for TcpSocketTransport {
         }
     }
 
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        if self.client_count.load(Ordering::Acquire) == 0 {
-            return Ok(());
+    fn send(&mut self, byte: u8) {
+        if self.client_count.load(Ordering::Acquire) > 0 {
+            self.bridge.send(byte);
         }
-        self.bridge.send(byte)
     }
 
     fn is_connected(&self) -> bool {
@@ -151,7 +150,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(transport.try_recv(), Some(0xAB));
 
-        transport.send(0xCD).unwrap();
+        transport.send(0xCD);
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let mut buf = [0u8; 1];
         client.read_exact(&mut buf).await.unwrap();
@@ -182,7 +181,7 @@ mod tests {
         let (mut transport, _addr) = make_transport().await;
 
         assert!(!transport.is_connected());
-        assert!(transport.send(0xFF).is_ok());
+        transport.send(0xFF);
     }
 
     #[tokio::test]
@@ -246,7 +245,7 @@ mod tests {
             assert!(connected_tags.contains(tag));
         }
 
-        transport.send(0xEE).unwrap();
+        transport.send(0xEE);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let mut b1 = [0u8; 1];
         let mut b2 = [0u8; 1];

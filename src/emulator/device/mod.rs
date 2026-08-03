@@ -43,11 +43,22 @@ impl Display for DeviceId {
 #[derive(Debug)]
 pub enum DeviceEvent {
     /// A transport connection was established for the given device.
-    TransportConnected { device: DeviceId },
+    TransportConnected {
+        /// The device that gained a transport connection.
+        device: DeviceId,
+        /// Identifies which peer connected, for transports that accept more
+        /// than one concurrent client (e.g. TCP/Unix socket). `None` for
+        /// point-to-point transports, which have only one peer to
+        /// disambiguate.
+        peer: Option<String>,
+    },
     /// A transport connection was lost.
     TransportDisconnected {
         /// The device that lost its transport.
         device: DeviceId,
+        /// Identifies which peer disconnected; see
+        /// [`TransportConnected`](DeviceEvent::TransportConnected)'s `peer`.
+        peer: Option<String>,
         /// Human-readable reason for the disconnection.
         reason: String,
     },
@@ -69,7 +80,26 @@ pub enum DeviceEvent {
     RejectedWrite {
         device: DeviceId,
         address: u16,
-    }
+    },
+    /// Diagnostic count of outbound bytes dropped due to a full outbound
+    /// ring buffer. Purely diagnostic (never gates device/transport
+    /// behavior); the expected remediation is to resize the ring and
+    /// restart.
+    OutboundBytesDropped {
+        /// The device whose outbound ring overflowed.
+        device: DeviceId,
+        /// Number of bytes dropped since the last report.
+        count: u64,
+    },
+    /// Diagnostic count of inbound events dropped due to a full ingress
+    /// channel, for multipoint transports only. Purely diagnostic; see
+    /// [`OutboundBytesDropped`](DeviceEvent::OutboundBytesDropped).
+    InboundEventsDropped {
+        /// The device whose inbound ingress channel overflowed.
+        device: DeviceId,
+        /// Number of events dropped since the last report.
+        count: u64,
+    },
 }
 
 /// Sending half of a device event channel.
@@ -144,7 +174,7 @@ mod tests {
         let id = DeviceId(1);
 
         let handle = thread::spawn(move || {
-            sender.send(DeviceEvent::TransportConnected { device: id }).unwrap();
+            sender.send(DeviceEvent::TransportConnected { device: id, peer: None }).unwrap();
             sender.send(DeviceEvent::DeviceInfo {
                 device: id,
                 message: "hello".to_string(),

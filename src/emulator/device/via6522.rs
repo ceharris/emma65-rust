@@ -1125,7 +1125,7 @@ mod tests {
     fn send_bytes(remote: &mut InternalPipeTransport, s: &str) {
         for c in s.as_bytes() {
             let b = *c;
-            remote.send(b).unwrap();
+            remote.send(b);
         }
     }
 
@@ -1376,7 +1376,7 @@ mod tests {
     #[test]
     fn t1_one_shot_with_pb7_output_sends_pb7_low_at_start_when_needed() {
         let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20).unwrap();
+        remote.send(0x20);
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
 
@@ -1413,7 +1413,7 @@ mod tests {
     #[test]
     fn t1_pb7_output_mode_sends_pb7_low_if_needed_when_pb7_output_mode_disabled() {
         let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20).unwrap();
+        remote.send(0x20);
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
 
@@ -1609,7 +1609,7 @@ mod tests {
     #[test]
     fn write_orb_sends_port_b_state_change() {
         let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20).unwrap();
+        remote.send(0x20);
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
 
@@ -1629,11 +1629,11 @@ mod tests {
     #[test]
     fn incoming_port_b_message_updates_input_b() {
         let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20).unwrap(); // ASCII
+        remote.send(0x20); // ASCII
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        for b in b"BAB".iter() { remote.send(*b).unwrap(); }
+        for b in b"BAB".iter() { remote.send(*b); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1644,11 +1644,11 @@ mod tests {
     #[test]
     fn incoming_port_a_message_updates_input_a() {
         let (mut via, mut remote) = device_with_pipe();
-        remote.send(0x20).unwrap(); // ASCII
+        remote.send(0x20); // ASCII
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        for b in b"A55".iter() { remote.send(*b).unwrap(); }
+        for b in b"A55".iter() { remote.send(*b); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1665,11 +1665,11 @@ mod tests {
         via.write(0xC, 0x00); // PCR: CA1 negative edge (bit 0 = 0)
         via.ca1 = true; // start high
 
-        remote.send(0x20).unwrap();
+        remote.send(0x20);
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // handshake
 
-        for b in b"RCA1".iter() { remote.send(*b).unwrap(); }
+        for b in b"RCA1".iter() { remote.send(*b); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1684,11 +1684,11 @@ mod tests {
         via.write(0xC, 0x00); // PCR: CA1 negative edge
         via.ca1 = false;
 
-        remote.send(0x20).unwrap();
+        remote.send(0x20);
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"CA11".iter() { remote.send(*b).unwrap(); }
+        for b in b"CA11".iter() { remote.send(*b); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1702,11 +1702,11 @@ mod tests {
         via.write(0xC, 0x00); // PCR bits 3:1 = 000 → CA2 input, negative edge
         via.ca2 = true;
 
-        remote.send(0x20).unwrap();
+        remote.send(0x20);
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"RCA2".iter() { remote.send(*b).unwrap(); }
+        for b in b"RCA2".iter() { remote.send(*b); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1720,11 +1720,11 @@ mod tests {
         via.write(0xC, 0x00); // PCR: CB1 negative edge (bit 4 = 0)
         via.cb1 = true;
 
-        remote.send(0x20).unwrap();
+        remote.send(0x20);
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"RCB1".iter() { remote.send(*b).unwrap(); }
+        for b in b"RCB1".iter() { remote.send(*b); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
@@ -1739,11 +1739,11 @@ mod tests {
         via.write(0xC, 0x00); // PCR bits 7:5 = 000 → CB2 input, negative edge
         via.cb2 = true;
 
-        remote.send(0x20).unwrap();
+        remote.send(0x20);
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 
-        for b in b"RCB2".iter() { remote.send(*b).unwrap(); }
+        for b in b"RCB2".iter() { remote.send(*b); }
         std::thread::sleep(Duration::from_millis(1));
         via.tick(1);
 

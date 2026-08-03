@@ -70,7 +70,7 @@ impl<T> ProtocolManager<T> {
         let mut bytes = Vec::new();
         self.encoder.encode(message, &mut bytes);
         for b in bytes {
-            self.transport.send(b)?;
+            self.transport.send(b);
         }
         Ok(())
     }
@@ -148,9 +148,8 @@ mod tests {
             }
         }
 
-        fn send(&mut self, byte: u8) -> Result<(), TransportError> {
+        fn send(&mut self, byte: u8) {
             self.sent.lock().unwrap().push(byte);
-            Ok(())
         }
 
         fn is_connected(&self) -> bool { true }

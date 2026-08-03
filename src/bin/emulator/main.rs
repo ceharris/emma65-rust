@@ -69,14 +69,24 @@ async fn main() -> ExitCode {
             event = error_receiver.recv(), if events_open => match event {
                 Some(DeviceEvent::TransportError { device, error}) =>
                     eprintln!("device {}: transport error: {}", device.0, error),
-                Some(DeviceEvent::TransportDisconnected { device, reason}) =>
-                    eprintln!("device {} disconnected: {}", device.0, reason),
-                Some(DeviceEvent::TransportConnected { device }) =>
-                    println!("device {} connected", device.0),
+                Some(DeviceEvent::TransportDisconnected { device, peer, reason}) =>
+                    match peer {
+                        Some(peer) => eprintln!("device {} disconnected: {} ({})", device.0, reason, peer),
+                        None => eprintln!("device {} disconnected: {}", device.0, reason),
+                    },
+                Some(DeviceEvent::TransportConnected { device, peer }) =>
+                    match peer {
+                        Some(peer) => println!("device {} connected: {}", device.0, peer),
+                        None => println!("device {} connected", device.0),
+                    },
                 Some(DeviceEvent::DeviceInfo { device, message}) =>
                     eprintln!("device {}: {}", device.0, message),
                 Some(DeviceEvent::RejectedWrite { device, address }) =>
                     eprintln!("device rejected write {}: at address {}", device.0, address),
+                Some(DeviceEvent::OutboundBytesDropped { device, count }) =>
+                    eprintln!("device {}: {} outbound bytes dropped", device.0, count),
+                Some(DeviceEvent::InboundEventsDropped { device, count }) =>
+                    eprintln!("device {}: {} inbound events dropped", device.0, count),
                 None => events_open = false,      // all senders dropped
             },
 

@@ -144,9 +144,8 @@ impl IoDevice for Console {
         match address - self.address {
             0 => {          // data register
                 // send value to transport if we have one, otherwise write is a no-op
-                if let Some(transport) = self.transport.as_mut()
-                    && let Err(e) = transport.send(value) {
-                    (self.report_error)(e);
+                if let Some(transport) = self.transport.as_mut() {
+                    transport.send(value);
                 }
             },
             1 => {          // latch register
@@ -336,7 +335,7 @@ mod tests {
     #[test]
     fn tick_buffers_input_from_transport() {
         let (mut device, mut transport) = device_with_pipe();
-        transport.send(0x42).unwrap();
+        transport.send(0x42);
         device.tick(1);
         assert_eq!(device.ring.peek(), Some(0x42));
     }
@@ -345,7 +344,7 @@ mod tests {
     fn tick_latches_break_key_and_sets_interrupt_flag() {
         let (mut device, mut transport) = device_with_pipe();
         device.set_break_key(0x3);
-        transport.send(0x3).unwrap();
+        transport.send(0x3);
         device.tick(1);
         assert_eq!(device.latch, 0x3);
         assert!(device.interrupt_flag, "expected interrupt flag set");
@@ -355,7 +354,7 @@ mod tests {
     fn tick_clears_ring_on_break_key() {
         let (mut device, mut transport) = device_with_pipe();
         device.set_break_key(0x3);
-        transport.send(0x3).unwrap();
+        transport.send(0x3);
         device.ring.put(0x42);
         device.ring.put(0x43);
         device.tick(1);
@@ -367,7 +366,7 @@ mod tests {
         let (mut device, mut transport) = device_with_pipe();
         // send as many bytes as ring's capacity (one greater than what can be held)
         for i in 0..RING_CAPACITY {
-            transport.send(i as u8).unwrap();
+            transport.send(i as u8);
         }
         // attempt to buffer at ring's capacity (one greater than what can be held)
         for _ in 0..RING_CAPACITY {
@@ -479,7 +478,7 @@ mod tests {
         let _ = cpu.reset();
 
         // Send a byte from the remote end before the CPU starts.
-        remote.send(0x5A).unwrap();
+        remote.send(0x5A);
         std::thread::sleep(std::time::Duration::from_millis(1));
         loop {
             match cpu.step(None, true) {

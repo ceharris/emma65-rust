@@ -14,7 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::{Notify, oneshot};
 
-use super::{ChannelBridge, Transport, TransportError, TransportEvent};
+use super::{ChannelBridge, Transport, TransportEvent};
 
 /// Transport that connects a device to the stdin/stdout of a child process.
 ///
@@ -77,11 +77,10 @@ impl Transport for PipeTransport {
         }
     }
 
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        if !self.connected {
-            return Err(TransportError::Disconnected);
+    fn send(&mut self, byte: u8) {
+        if self.connected {
+            self.bridge.send(byte);
         }
-        self.bridge.send(byte)
     }
 
     fn is_connected(&self) -> bool {
@@ -197,7 +196,7 @@ mod tests {
         // Allow the Tokio task to send the Connected event
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
-        transport.send(0x42).unwrap();
+        transport.send(0x42);
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(transport.try_recv(), Some(0x42));
     }
@@ -212,7 +211,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Connected(0)));
 
-        transport.send(0x7A).unwrap();
+        transport.send(0x7A);
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Data(0, 0x7A)));
     }

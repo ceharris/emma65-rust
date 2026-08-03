@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
 
-use super::{Transport, TransportError, TransportEvent};
+use super::{Transport, TransportEvent};
 
 /// Bidirectional transport over a pair of OS pipes with non-blocking IO.
 pub struct InternalPipeTransport {
@@ -99,21 +99,14 @@ impl Transport for InternalPipeTransport {
         }
     }
 
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
+    fn send(&mut self, byte: u8) {
         if !self.connected {
-            return Err(TransportError::Disconnected);
+            return;
         }
         match self.tx.write_all(&[byte]) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(TransportError::Full),
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
-                self.mark_disconnected();
-                Err(TransportError::Disconnected)
-            }
-            Err(e) => {
-                self.mark_disconnected();
-                Err(TransportError::Io(e))
-            }
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_) => self.mark_disconnected(),
         }
     }
 
@@ -183,7 +176,7 @@ mod tests {
     #[test]
     fn send_recv_round_trip() {
         let (mut local, mut remote) = InternalPipeTransport::pair().unwrap();
-        local.send(0x42).unwrap();
+        local.send(0x42);
         std::thread::sleep(std::time::Duration::from_millis(1));
         assert_eq!(remote.try_recv(), Some(0x42));
     }
@@ -213,7 +206,7 @@ mod tests {
 
         assert_eq!(local.try_recv_tagged(), Some(TransportEvent::Connected(0)));
 
-        remote.send(0x7A).unwrap();
+        remote.send(0x7A);
         std::thread::sleep(std::time::Duration::from_millis(1));
         assert_eq!(local.try_recv_tagged(), Some(TransportEvent::Data(0, 0x7A)));
         assert_eq!(local.try_recv_tagged(), None);

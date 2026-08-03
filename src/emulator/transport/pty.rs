@@ -24,7 +24,7 @@ use nix::unistd;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, oneshot};
 
-use super::{ChannelBridge, Transport, TransportError, TransportEvent};
+use super::{ChannelBridge, Transport, TransportEvent};
 
 /// Transport over a pseudo-terminal (PTY).
 pub struct PtyTransport {
@@ -122,8 +122,8 @@ impl Transport for PtyTransport {
     /// protocol layer's initial state dump, which is now sent proactively
     /// as soon as `Connected` fires — before we can know a real reader
     /// exists. `is_connected()` still reflects true external attachment.
-    fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        self.bridge.send(byte)
+    fn send(&mut self, byte: u8) {
+        self.bridge.send(byte);
     }
 
     fn is_connected(&self) -> bool {
@@ -250,9 +250,10 @@ mod tests {
     async fn send_before_any_external_attach_succeeds() {
         let mut transport = PtyTransport::open(None).unwrap();
 
-        // No external process connected yet; send must not be silently dropped.
+        // No external process connected yet; send must not panic or block —
+        // guaranteed by the trait's signature now that it returns no Result.
         assert!(!transport.is_connected());
-        assert!(transport.send(0xFF).is_ok());
+        transport.send(0xFF);
     }
 
     #[tokio::test]
@@ -303,8 +304,8 @@ mod tests {
         // Consume the Connected event and write a "dump" before anyone
         // has opened the slave side.
         assert_eq!(transport.try_recv_tagged(), Some(TransportEvent::Connected(0)));
-        transport.send(0xD0).unwrap();
-        transport.send(0xD1).unwrap();
+        transport.send(0xD0);
+        transport.send(0xD1);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         // Now a reader attaches and should still see the buffered bytes.
@@ -321,7 +322,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let _ = transport.try_recv_tagged(); // consume Connected
 
-        transport.send(0xAB).unwrap();
+        transport.send(0xAB);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         // In cooked mode this would incorrectly come back as received data.

@@ -12,12 +12,12 @@ pub use self::tcp_socket::TcpSocketTransport;
 pub use self::unix_socket::UnixSocketTransport;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::emulator::{DeviceEvent, DeviceId, ErrorSender};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -52,6 +52,215 @@ pub(crate) fn reporter(sender: ErrorSender, id: DeviceId) -> Box<impl Fn(Transpo
     Box::new(move |error| {
         let _ = sender.send(DeviceEvent::TransportError { device: id, error });
     })
+}
+
+/// Bundles the callbacks a transport needs at construction time: error
+/// reporting, diagnostic drop counters (§1.5), and connect/disconnect edge
+/// reporting (§5.1). Built once per transport and cloned into every
+/// concurrent owner that needs to report — the CPU-thread-side `Transport`
+/// (`send`'s outbound-drop counting), the outbound-pump task, and, for
+/// multipoint transports, each per-client task — sharing one set of
+/// counters and one `ErrorSender` via `Arc` so counts/errors converge
+/// correctly regardless of which clone incremented or reported them.
+#[derive(Clone)]
+pub struct TransportReporter {
+    /// Bound lazily for the `TransportSlot` injection path (§2.2), where the
+    /// transport must be constructed before its device (and `DeviceId`)
+    /// exists. Every reporting method is a silent no-op until this is set.
+    device_id: Arc<OnceLock<DeviceId>>,
+    error_sender: Option<ErrorSender>,
+    outbound_drops: Arc<AtomicU64>,
+    inbound_drops: Arc<AtomicU64>,
+}
+
+impl TransportReporter {
+    /// Constructs a reporter already bound to `device_id`.
+    pub(crate) fn new(device_id: DeviceId, error_sender: Option<ErrorSender>) -> Self {
+        let reporter = Self::pending(error_sender);
+        reporter.bind(device_id);
+        reporter
+    }
+
+    /// Constructs a reporter whose `DeviceId` isn't known yet (§2.2) — for
+    /// the `TransportSlot` injection path (§9.4), where the transport must
+    /// be built before the device (and its `DeviceId`) exists. Every
+    /// reporting call before `bind` is a silent no-op.
+    pub(crate) fn pending(error_sender: Option<ErrorSender>) -> Self {
+        Self {
+            device_id: Arc::new(OnceLock::new()),
+            error_sender,
+            outbound_drops: Arc::new(AtomicU64::new(0)),
+            inbound_drops: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Binds the `DeviceId` once the caller determines it (§2.2). Every
+    /// existing `Clone` of this reporter — including ones already handed to
+    /// background tasks that started before the ID was known — observes the
+    /// bound ID from that point on, since it lives behind the same `Arc` as
+    /// the counters/`ErrorSender`. Exactly-once, enforced by the underlying
+    /// `OnceLock`; later calls are silently ignored.
+    pub(crate) fn bind(&self, device_id: DeviceId) {
+        let _ = self.device_id.set(device_id);
+    }
+
+    /// Reports a hard transport error. Currently only ever called with
+    /// `TransportError::Io` (§1.8).
+    pub fn report_error(&self, error: TransportError) {
+        let Some(&device) = self.device_id.get() else { return };
+        let Some(sender) = &self.error_sender else { return };
+        let _ = sender.send(DeviceEvent::TransportError { device, error });
+    }
+
+    /// Increments the outbound drop counter (§1.5). Every transport has one.
+    pub fn note_outbound_drop(&self) {
+        self.outbound_drops.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increments the inbound ingress-drop counter (§1.5). Multipoint only —
+    /// P2P transports never call this.
+    pub fn note_inbound_drop(&self) {
+        self.inbound_drops.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Swaps both counters to 0 and emits `DeviceEvent::OutboundBytesDropped`/
+    /// `InboundEventsDropped` for any nonzero count. Called from the existing
+    /// outbound-pump/ingress tokio tasks on a `tokio::time::interval` (§1.5).
+    pub fn report_counts(&self) {
+        let Some(&device) = self.device_id.get() else { return };
+        let Some(sender) = &self.error_sender else { return };
+
+        let outbound = self.outbound_drops.swap(0, Ordering::Relaxed);
+        if outbound > 0 {
+            let _ = sender.send(DeviceEvent::OutboundBytesDropped { device, count: outbound });
+        }
+
+        let inbound = self.inbound_drops.swap(0, Ordering::Relaxed);
+        if inbound > 0 {
+            let _ = sender.send(DeviceEvent::InboundEventsDropped { device, count: inbound });
+        }
+    }
+
+    /// Reports a connect edge (§5.1). `peer` is `None` for point-to-point
+    /// transports and `Some(name)` per-client for multipoint ones.
+    pub fn report_connected(&self, peer: Option<String>) {
+        let Some(&device) = self.device_id.get() else { return };
+        let Some(sender) = &self.error_sender else { return };
+        let _ = sender.send(DeviceEvent::TransportConnected { device, peer });
+    }
+
+    /// Reports a disconnect edge (§5.1); see [`report_connected`](Self::report_connected)
+    /// for `peer`.
+    pub fn report_disconnected(&self, peer: Option<String>, reason: String) {
+        let Some(&device) = self.device_id.get() else { return };
+        let Some(sender) = &self.error_sender else { return };
+        let _ = sender.send(DeviceEvent::TransportDisconnected { device, peer, reason });
+    }
+}
+
+#[cfg(test)]
+mod transport_reporter_tests {
+    use super::*;
+    use crate::emulator::device_event_channel;
+
+    #[test]
+    fn pending_reporter_is_no_op_until_bound() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::pending(Some(sender));
+
+        reporter.report_error(TransportError::Disconnected);
+        reporter.report_connected(None);
+        reporter.note_outbound_drop();
+        reporter.report_counts();
+
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn bind_enables_reporting_on_existing_clones() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::pending(Some(sender));
+        let clone = reporter.clone();
+
+        clone.bind(DeviceId(7));
+        reporter.report_connected(Some("peer".to_string()));
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::TransportConnected { device, peer }) => {
+                assert_eq!(device, DeviceId(7));
+                assert_eq!(peer, Some("peer".to_string()));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn report_error_sends_transport_error() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::new(DeviceId(1), Some(sender));
+
+        reporter.report_error(TransportError::Disconnected);
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::TransportError { device, error: TransportError::Disconnected }) => {
+                assert_eq!(device, DeviceId(1));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn report_counts_emits_only_nonzero_counters_and_resets_them() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::new(DeviceId(2), Some(sender));
+
+        reporter.note_outbound_drop();
+        reporter.note_outbound_drop();
+        reporter.report_counts();
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::OutboundBytesDropped { device, count }) => {
+                assert_eq!(device, DeviceId(2));
+                assert_eq!(count, 2);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        // Inbound counter was 0 the whole time, so no InboundEventsDropped fires.
+        assert!(receiver.try_recv().is_err());
+
+        // Counters were reset by the swap above; nothing new to report.
+        reporter.report_counts();
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn clones_share_counters_and_error_sender() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::new(DeviceId(3), Some(sender));
+        let clone = reporter.clone();
+
+        clone.note_inbound_drop();
+        reporter.report_counts();
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::InboundEventsDropped { device, count }) => {
+                assert_eq!(device, DeviceId(3));
+                assert_eq!(count, 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_error_sender_is_a_silent_no_op() {
+        let reporter = TransportReporter::new(DeviceId(4), None);
+        // Must not panic even with no sender to report through.
+        reporter.report_error(TransportError::Disconnected);
+        reporter.report_connected(None);
+        reporter.report_disconnected(None, "gone".to_string());
+        reporter.note_outbound_drop();
+        reporter.report_counts();
+    }
 }
 
 /// An event yielded by [`Transport::try_recv_tagged`] for transports that
@@ -149,14 +358,11 @@ impl<R: Send + 'static> ChannelBridge<R> {
         }
     }
 
-    pub(crate) fn send(&mut self, byte: u8) -> Result<(), TransportError> {
-        match self.tx.try_send(byte) {
-            Ok(()) => {
-                self.out_notify.notify_one();
-                Ok(())
-            },
-            Err(crossbeam_channel::TrySendError::Full(_)) => Err(TransportError::Full),
-            Err(crossbeam_channel::TrySendError::Disconnected(_)) => Err(TransportError::Disconnected),
+    pub(crate) fn send(&mut self, byte: u8) {
+        // Outbound overflow/disconnection is diagnostic-only (§1.5) — never
+        // surfaced as an error to the caller.
+        if self.tx.try_send(byte).is_ok() {
+            self.out_notify.notify_one();
         }
     }
 
@@ -263,7 +469,11 @@ pub(crate) fn push_and_park<T>(producer: &mut Producer<T>, mut item: T) {
 pub trait Transport: Send {
     fn try_recv(&mut self) -> Option<u8>;
 
-    fn send(&mut self, byte: u8) -> Result<(), TransportError>;
+    /// Never blocks and never returns an error. Outbound ring overflow is
+    /// diagnostic-only (§1.5, counted not reported); hard I/O errors are
+    /// reported asynchronously via the `TransportReporter` supplied at
+    /// construction (§1.8), not through this call's return value.
+    fn send(&mut self, byte: u8);
 
     fn is_connected(&self) -> bool;
 

@@ -136,9 +136,8 @@ impl IoDevice for Mc6850 {
                 }
             }
             1 => {
-                if let Some(transport) = self.transport.as_mut()
-                        && let Err(e) = transport.send(value) {
-                    (self.error_reporter)(e);
+                if let Some(transport) = self.transport.as_mut() {
+                    transport.send(value);
                 }
                 self.tdre = false;
                 self.tx_pending = true;
@@ -234,7 +233,7 @@ mod tests {
     #[test]
     fn master_reset_clears_rdrf() {
         let (mut device, mut remote) = device_with_pipe();
-        remote.send(0xAA).unwrap();
+        remote.send(0xAA);
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // RDRF
         assert_ne!(device.peek(0) & 0x01, 0); // RDRF set
@@ -287,7 +286,7 @@ mod tests {
     #[test]
     fn rx_byte_sets_rdrf() {
         let (mut device, mut remote) = device_with_pipe();
-        remote.send(0xBB).unwrap();
+        remote.send(0xBB);
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
         assert_ne!(device.peek(0) & 0x01, 0); // RDRF set
@@ -296,7 +295,7 @@ mod tests {
     #[test]
     fn rx_read_returns_byte_and_clears_rdrf() {
         let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x44).unwrap();
+        remote.send(0x44);
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
         assert_eq!(device.read(1), 0x44);
@@ -306,8 +305,8 @@ mod tests {
     #[test]
     fn second_byte_held_in_transport_until_first_read() {
         let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x01).unwrap();
-        remote.send(0x02).unwrap();
+        remote.send(0x01);
+        remote.send(0x02);
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1); // receives 0x01 → RDRF
         device.tick(1); // 0x02 stays in pipe (RDRF still set)
@@ -322,7 +321,7 @@ mod tests {
     fn irq_on_rdrf_when_rx_irq_enabled() {
         let (mut device, mut remote) = device_with_pipe();
         device.write(0, 0x81); // RIE=1, CD=01
-        remote.send(0x01).unwrap();
+        remote.send(0x01);
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
         assert!(device.irq_active());
@@ -332,7 +331,7 @@ mod tests {
     fn no_irq_on_rdrf_when_rx_irq_disabled() {
         let (mut device, mut remote) = device_with_pipe();
         device.write(0, 0x01); // RIE=0, CD=01
-        remote.send(0x01).unwrap();
+        remote.send(0x01);
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
         assert!(!device.irq_active());
@@ -357,7 +356,7 @@ mod tests {
     #[test]
     fn peek_does_not_clear_rdrf() {
         let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x99).unwrap();
+        remote.send(0x99);
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
         let _ = device.peek(1);
@@ -367,7 +366,7 @@ mod tests {
     #[test]
     fn peek_returns_rx_data_without_consuming() {
         let (mut device, mut remote) = device_with_pipe();
-        remote.send(0x33).unwrap();
+        remote.send(0x33);
         std::thread::sleep(Duration::from_millis(1));
         device.tick(1);
         assert_eq!(device.peek(1), 0x33);
