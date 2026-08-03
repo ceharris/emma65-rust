@@ -18,9 +18,9 @@ pub struct CpuLiveSnapshot {
     pub stack_page: Vec<u8>,
     /// Total cycles executed since the last reset.
     pub cycles: u64,
-    /// Cycles since last snapshot
+    /// Cycles since CPU was started snapshot
     pub cycles_delta: u64,
-    /// Elapsed time since last snapshot
+    /// Elapsed time since CPU was started
     pub elapsed: Duration,
     /// True if any device is currently asserting IRQ.
     pub irq_active: bool,
