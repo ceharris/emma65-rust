@@ -362,11 +362,17 @@ pub struct ChannelRelay<T> {
 impl<T: Send + 'static> ChannelRelay<T> {
     /// Spawns a relay thread that waits on either `rx` or its own internal
     /// stop signal, pushing each item received from `rx` into a new ring of
-    /// `capacity` via [`push_and_park`]. Exits when `rx` disconnects *or*
-    /// when `Drop` signals it to stop — see the
+    /// `capacity` via the crate-internal `push_and_park` retry helper.
+    /// Exits when `rx` disconnects *or* when `Drop` signals it to stop — see the
     /// [module documentation](crate::emulator::transport) for why both
     /// exist.
-    pub(crate) fn spawn(rx: Receiver<T>, capacity: usize) -> Self {
+    ///
+    /// `pub` (rather than `pub(crate)`, as every in-crate `Transport`
+    /// implementation's own use of this constructor would otherwise
+    /// require) so that tests exercising a device end-to-end can hand-feed
+    /// a relay from a plain `crossbeam_channel` they control, independent
+    /// of any real transport's timing.
+    pub fn spawn(rx: Receiver<T>, capacity: usize) -> Self {
         let (mut producer, consumer) = RingBuffer::new(capacity);
         let (stop_tx, stop_rx) = bounded::<()>(1);
         let handle = thread::spawn(move || {

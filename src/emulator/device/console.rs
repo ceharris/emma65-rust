@@ -46,9 +46,8 @@
 //!
 
 use super::ring::Ring;
-use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use crate::emulator::transport;
-use crate::emulator::transport::{Transport, TransportError};
+use crate::emulator::device::IoDevice;
+use crate::emulator::transport::{Transport, TransportRelay};
 use log::debug;
 
 pub use super::ring::RING_CAPACITY;
@@ -58,7 +57,13 @@ pub struct Console {
     name: &'static str,
     address: u16,
     transport: Option<Box<dyn Transport>>,
-    report_error: Box<dyn Fn(TransportError) + Send>,
+    /// Paired with `transport`, drained once per qualifying `tick()` (§9.1 of
+    /// the transport relay redesign plan). `None` both when `transport` is
+    /// `None` and — temporarily — when `transport` was attached via the
+    /// `TransportSlot` injection path (§9.4, not yet widened to carry a
+    /// relay), in which case input never reaches this device until §9.4
+    /// lands.
+    relay: Option<TransportRelay>,
     break_key: Option<u8>,
     ring: Ring<u8>,
     latch: u8,
@@ -75,7 +80,7 @@ impl Console {
             name,
             address: 0,
             transport: None,
-            report_error: transport::no_op_reporter(),
+            relay: None,
             break_key: None,
             ring: Ring::new(0u8),
             latch: 0,
@@ -97,14 +102,13 @@ impl Console {
         self
     }
 
-    /// Attaches a transport for byte-stream IO.
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
+    /// Attaches a transport for byte-stream IO, with its paired relay if one
+    /// is available. `relay` is `None` only for the `TransportSlot`
+    /// injection path (§9.4, not yet widened to carry one) — see the
+    /// `relay` field's doc comment.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: Option<TransportRelay>) {
         self.transport = Some(transport);
-    }
-
-    /// Sets the error sender for async transport event reporting.
-    pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.report_error = transport::reporter(sender, id);
+        self.relay = relay;
     }
 
     /// Sets the break key to recognize when reading from the transport
@@ -180,14 +184,20 @@ impl IoDevice for Console {
         }
         self.cycles_since_poll = 0;
 
-        if let Some(b) = self.transport.as_mut().and_then(|t| t.try_recv()) {
-            if let Some(break_key) = self.break_key && b == break_key {
-                self.latch = b;
-                self.ring.clear();
-                self.interrupt_flag = true;
-            } else {
-                self.ring.put(b);
-            }
+        let break_key = self.break_key;
+        let ring = &mut self.ring;
+        let latch = &mut self.latch;
+        let interrupt_flag = &mut self.interrupt_flag;
+        if let Some(relay) = self.relay.as_mut() {
+            relay.drain_bytes_into(|b| {
+                if let Some(break_key) = break_key && b == break_key {
+                    *latch = b;
+                    ring.clear();
+                    *interrupt_flag = true;
+                } else {
+                    ring.put(b);
+                }
+            });
         }
     }
 
@@ -208,6 +218,8 @@ impl IoDevice for Console {
 mod tests {
     use super::*;
     use crate::emulator::InternalPipeTransport;
+    use crate::emulator::transport::ChannelRelay;
+    use crossbeam_channel::{Sender, unbounded};
     use std::time::Duration;
 
     const DEVICE_NAME: &str = "console";
@@ -216,11 +228,32 @@ mod tests {
         Console::new(DEVICE_NAME)
     }
 
-    fn device_with_pipe() -> (Console, InternalPipeTransport) {
+    /// A `ChannelRelay<u8>` fed by a plain, unbounded `crossbeam_channel` (so
+    /// the test's own `tx.send()` calls never block regardless of how fast
+    /// the relay thread drains into its `capacity`-sized ring), for
+    /// deterministic control over exactly what a device's `tick()` observes
+    /// as "arrived" — independent of `InternalPipeTransport`'s own OS-pipe
+    /// timing. `InternalPipeTransport` doesn't produce a relay of its own
+    /// yet (its rewrite is the transport relay redesign plan's checklist
+    /// item 7, deliberately ordered *after* this device migration — see
+    /// `doc/transport-relay-redesign-plan.md`'s §10 checklist).
+    fn spawn_byte_relay(capacity: usize) -> (Sender<u8>, ChannelRelay<u8>) {
+        let (tx, rx) = unbounded();
+        (tx, ChannelRelay::spawn(rx, capacity))
+    }
+
+    /// `remote` is the device's outbound-write sink (verified via
+    /// `remote.try_recv()`); `tx` feeds the device's inbound relay directly,
+    /// simulating bytes arriving from an external peer. `relay_capacity`
+    /// should comfortably exceed however many bytes a test sends before its
+    /// first `tick()`, so the relay thread has fully drained (not parked)
+    /// by the time `tick()` runs.
+    fn device_with_pipe(relay_capacity: usize) -> (Console, InternalPipeTransport, Sender<u8>) {
         let (local, remote) = InternalPipeTransport::pair().unwrap();
+        let (tx, relay) = spawn_byte_relay(relay_capacity);
         let mut device = device();
-        device.attach_transport(Box::new(local));
-        (device, remote)
+        device.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
+        (device, remote, tx)
     }
 
     #[test]
@@ -288,10 +321,10 @@ mod tests {
 
     #[test]
     fn write_data_register_sends_byte_to_transport() {
-        let (mut device, mut transport) = device_with_pipe();
+        let (mut device, mut remote, _tx) = device_with_pipe(256);
         device.write(0, 0x42);
         std::thread::sleep(Duration::from_millis(1));
-        assert_eq!(transport.try_recv(), Some(0x42));
+        assert_eq!(remote.try_recv(), Some(0x42));
     }
 
     #[test]
@@ -334,17 +367,19 @@ mod tests {
 
     #[test]
     fn tick_buffers_input_from_transport() {
-        let (mut device, mut transport) = device_with_pipe();
-        transport.send(0x42);
+        let (mut device, _remote, tx) = device_with_pipe(256);
+        tx.send(0x42).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert_eq!(device.ring.peek(), Some(0x42));
     }
 
     #[test]
     fn tick_latches_break_key_and_sets_interrupt_flag() {
-        let (mut device, mut transport) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe(256);
         device.set_break_key(0x3);
-        transport.send(0x3);
+        tx.send(0x3).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert_eq!(device.latch, 0x3);
         assert!(device.interrupt_flag, "expected interrupt flag set");
@@ -352,22 +387,26 @@ mod tests {
 
     #[test]
     fn tick_clears_ring_on_break_key() {
-        let (mut device, mut transport) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe(256);
         device.set_break_key(0x3);
-        transport.send(0x3);
+        tx.send(0x3).unwrap();
         device.ring.put(0x42);
         device.ring.put(0x43);
+        std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
         assert!(device.ring.is_empty(), "expected empty ring");
     }
 
     #[test]
     fn tick_tail_drop_when_ring_full() {
-        let (mut device, mut transport) = device_with_pipe();
+        let (mut device, _remote, tx) = device_with_pipe(RING_CAPACITY);
         // send as many bytes as ring's capacity (one greater than what can be held)
         for i in 0..RING_CAPACITY {
-            transport.send(i as u8);
+            tx.send(i as u8).unwrap();
         }
+        // RING_CAPACITY (65536) individual relay-thread recv+push cycles need
+        // more time to fully drain than the few-byte case elsewhere in this file.
+        std::thread::sleep(Duration::from_millis(200));
         // attempt to buffer at ring's capacity (one greater than what can be held)
         for _ in 0..RING_CAPACITY {
             device.tick(1);
@@ -386,8 +425,9 @@ mod tests {
         };
 
         let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+        let (_tx, relay) = spawn_byte_relay(256);
         let mut console = device().with_address(0xF000);
-        console.attach_transport(Box::new(local));
+        console.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
 
         // Map all of RAM (including reset vector region) plus console at 0xF000.
         // Using RAM for 0xFF00–0xFFFF lets us write the reset vector after build().
@@ -443,9 +483,10 @@ mod tests {
             AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };
 
-        let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+        let (local, _remote) = InternalPipeTransport::pair().unwrap();
+        let (tx, relay) = spawn_byte_relay(256);
         let mut console = device().with_address(0xF000);
-        console.attach_transport(Box::new(local));
+        console.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
 
         let bus = BusConfig::new()
             .ram_with_fill(AddressRange::new(0x0000, 0xEFFF), 0).unwrap()
@@ -478,8 +519,8 @@ mod tests {
         let _ = cpu.reset();
 
         // Send a byte from the remote end before the CPU starts.
-        remote.send(0x5A);
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        tx.send(0x5A).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
         loop {
             match cpu.step(None, true) {
                 StepResult::Stopped => break,

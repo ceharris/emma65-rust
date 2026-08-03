@@ -1,5 +1,5 @@
 use emma65::emulator::device::{Console, Mc6850, R6551, Via6522};
-use emma65::emulator::{AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, Mnemonic, StepResult, Transport};
+use emma65::emulator::{AddressRange, Bus, ChannelRelay, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, Mnemonic, StepResult, Transport, TransportRelay};
 
 const MAX_STEPS: u32 = 10_000;
 
@@ -118,8 +118,12 @@ fn page_crossing_adds_cycle() {
 #[test]
 fn console_full_system_echo() {
     let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    // `remote` verifies the echoed outbound byte; `tx` feeds the console's
+    // inbound relay directly, simulating a byte arriving from an external
+    // peer (`InternalPipeTransport` doesn't produce its own relay yet).
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut console = Console::new("console").with_address(0xDF00);
-    console.attach_transport(Box::new(local));
+    console.attach_transport(Box::new(local), Some(TransportRelay::Byte(ChannelRelay::spawn(rx, 256))));
 
     // 64 KB RAM; Console at $DF00–$DF01.
     let bus = Bus::config()
@@ -153,9 +157,9 @@ fn console_full_system_echo() {
     cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
     cpu.reset().unwrap();
 
-    // Send the byte *before* starting execution so the pipe buffer is ready.
-    remote.send(0x55);
-    std::thread::sleep(std::time::Duration::from_millis(1));
+    // Send the byte *before* starting execution so the relay has drained it.
+    tx.send(0x55).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
 
     step_to_stop(&mut cpu);
 
