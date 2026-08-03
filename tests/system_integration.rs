@@ -175,8 +175,9 @@ fn console_full_system_echo() {
 #[test]
 fn _transmit() {
     let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (_tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("").with_address(0xDF00);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -211,9 +212,10 @@ fn _transmit() {
 /// Remote sends a byte; CPU polls R6551 RDRF status and reads the received byte.
 #[test]
 fn _receive() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair().unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("").with_address(0xDF00);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -254,8 +256,8 @@ fn _receive() {
     cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
     cpu.reset().unwrap();
 
-    remote.send(0x55);
-    std::thread::sleep(std::time::Duration::from_millis(1));
+    tx.send(0x55).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
 
     step_to_stop(&mut cpu);
 
@@ -378,9 +380,10 @@ fn mc6850_transmit_and_receive() {
 /// ISR: LDA $DF00 (clears RDRF, deasserts IRQ); STA $0300; RTI.
 #[test]
 fn _irq_driven_receive() {
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair().unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("").with_address(0xDF00);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()
@@ -431,7 +434,7 @@ fn _irq_driven_receive() {
     // WAI before the byte arrives (avoiding the IRQ firing before WAI executes).
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        remote.send(0x55);
+        tx.send(0x55).unwrap();
     });
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -452,8 +455,9 @@ fn _irq_driven_receive() {
 #[test]
 fn _irq_driven_transmit() {
     let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (_tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("").with_address(0xDF00);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     let bus = Bus::config()
         .ram_with_fill(AddressRange::new(0x0000, 0xDEFF), 0).unwrap()

@@ -217,9 +217,10 @@ fn build_acia_cpu(acia: R6551, prog: &[u8]) -> emma65::emulator::Cpu {
 async fn _external_clock_throughput_at_1_8432_mhz() {
     const N: usize = 100;
 
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair().unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new(""); // control defaults to 0x00 → external clock
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     // Program: poll RDRF (status bit 3), read each byte into $0300+X, loop N times, STP.
     // $0200: LDA #$03       A9 03      -- IRD and DTR bits
@@ -252,10 +253,11 @@ async fn _external_clock_throughput_at_1_8432_mhz() {
 
     let cpu = build_acia_cpu(acia, prog);
 
-    // Pre-fill the pipe with N bytes before starting the CPU.
+    // Pre-fill the relay with N bytes before starting the CPU.
     for i in 0..N {
-        remote.send(i as u8);
+        tx.send(i as u8).unwrap();
     }
+    std::thread::sleep(std::time::Duration::from_millis(5));
 
     let handle = run(cpu);
 
@@ -288,10 +290,11 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
     const CLOCK_HZ: u64 = 1_843_200;
     const CYCLES_PER_BYTE: u64 = CLOCK_HZ * 10 / BAUD; // 960
 
-    let (local, mut remote) = InternalPipeTransport::pair().unwrap();
+    let (local, _remote) = InternalPipeTransport::pair().unwrap();
+    let (tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut acia = R6551::new("")
         .with_clock_hz(CLOCK_HZ);
-    acia.attach_transport(Box::new(local));
+    acia.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     // Control = 0x1F: internal clock (bit 4=1), 19200 baud (bits 3-0 = 0xF)
     // Write control register in the program before polling.
@@ -330,8 +333,9 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
     let cpu = build_acia_cpu(acia, prog);
 
     for i in 0..N {
-        remote.send(i as u8);
+        tx.send(i as u8).unwrap();
     }
+    std::thread::sleep(std::time::Duration::from_millis(5));
 
     let wall_start = std::time::Instant::now();
     let handle = run(cpu);
