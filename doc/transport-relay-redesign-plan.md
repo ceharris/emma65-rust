@@ -1259,8 +1259,17 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       way to close). Accepted per-user direction: prioritize compileable,
       narrowly-scoped, reviewable units over preserving PTY input at every
       commit on this branch.
-- [ ] `UnixSocketTransport` rewrite + tests (§4.2) — reference multipoint
-      implementation, including ingress `try_send` + drop counter
+- [x] `UnixSocketTransport` rewrite + tests (§4.2) — reference multipoint
+      implementation, including ingress `try_send` + drop counter. Deviates
+      from the literal spec in one deliberate way, confirmed with the user
+      via AskUserQuestion: `pump_outbound`/`run_client_task`/`ClientSession`
+      are duplicated locally in `unix_socket.rs` (new ring/reporter shapes)
+      rather than changed in place in `mod.rs`, since `mod.rs`'s versions
+      are still used as-is by `TcpSocketTransport` (item 5, not yet
+      converted) and changing them there would break its compile before its
+      own item lands. Dedupe once both transports are converted, per this
+      section's existing note to look for shared-code opportunities once
+      both exist.
 - [ ] `TcpSocketTransport` rewrite + tests (§4.2) — should mostly mirror
       Unix socket; look for shared-code opportunities
 - [ ] `PipeTransport` rewrite + tests (§4.3)
