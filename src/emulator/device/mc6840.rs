@@ -548,7 +548,7 @@ impl Mc6840 {
     }
 
     fn poll_transports(&mut self) {
-        if self.protocol_manager.is_some() {
+        if self.protocol_manager.as_ref().is_some_and(|pm| pm.has_pending()) {
             let state = self.current_state();
             let messages = self.protocol_manager.as_mut().unwrap().poll_transport(&state);
             for message in messages {
@@ -689,15 +689,21 @@ impl IoDevice for Mc6840 {
     }
 
     fn tick(&mut self, cycles: u32) {
-        let before = AsyncIoState::new(&self.timers);
         self.poll_transports();
+        // Snapshotting/diffing/encoding a live state update has no observer
+        // (and, with a timer actually running, would otherwise happen on
+        // nearly every tick) unless a client is actually connected.
+        let has_clients = self.protocol_manager.as_ref().is_some_and(|pm| pm.has_clients());
+        let before = has_clients.then(|| AsyncIoState::new(&self.timers));
         if !self.reset_active {
             for _ in 0..cycles {
                 self.tick_timers();
             }
         }
-        let after = AsyncIoState::new(&self.timers);
-        self.send_state_to_all(self.updated_state(&before, &after));
+        if let Some(before) = before {
+            let after = AsyncIoState::new(&self.timers);
+            self.send_state_to_all(self.updated_state(&before, &after));
+        }
     }
 
     fn reset(&mut self) {

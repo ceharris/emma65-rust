@@ -308,7 +308,7 @@ impl Via6522 {
     }
 
     fn poll_transports(&mut self) {
-        if self.protocol_manager.is_some() {
+        if self.protocol_manager.as_ref().is_some_and(|pm| pm.has_pending()) {
             let state = self.current_state();
             let messages = self.protocol_manager.as_mut().unwrap().poll_transport(&state);
             for message in messages {

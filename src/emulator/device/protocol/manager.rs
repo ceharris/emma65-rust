@@ -94,6 +94,33 @@ impl<T> ProtocolManager<T> {
         self.transport.shutdown();
     }
 
+    /// Returns `true` if the relay has at least one event buffered.
+    ///
+    /// `Via6522`/`Mc6840` call this before building the (heap-allocating)
+    /// snapshot they pass to [`poll_transport`](Self::poll_transport) as
+    /// `init_state` — that snapshot is only ever consumed when a
+    /// `TransportEvent::Connected` shows up in this call's drained batch,
+    /// which never happens while the relay is empty (the overwhelmingly
+    /// common case with no client attached). Skipping straight to "nothing
+    /// to do" in that case avoids paying for a state snapshot on every
+    /// single `tick()` — previously unconditional, and significant at an
+    /// unthrottled clock speed's tick rate.
+    pub fn has_pending(&self) -> bool {
+        !self.relay.is_empty()
+    }
+
+    /// Returns `true` if at least one client is currently connected.
+    ///
+    /// `Mc6840::tick()` calls this before encoding and broadcasting a live
+    /// timer-state update — with zero clients connected, that work (a
+    /// `Vec<PtmProtocolMessage>` allocation, encoding, and a ring push per
+    /// encoded byte) has no observer and would otherwise still run on every
+    /// tick in which any timer's clock/gate/output state changes, which is
+    /// most of them while a timer is actually running.
+    pub fn has_clients(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
     /// Drains every event currently buffered in the relay, dispatching
     /// connect/data/disconnect handling for each, and returns every
     /// newly-decoded message in arrival order.
