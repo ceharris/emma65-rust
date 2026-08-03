@@ -220,7 +220,7 @@
 //! adapter immediately sends a dump of all registers via a sequence of SEND_REGISTER messages.
 //! The virtual display should respond by sending the appropriate IFR value.
 //!
-use crate::emulator::{AddressRange, DeviceId, ErrorSender, IoDevice, Transport, TransportError, TransportEvent, transport};
+use crate::emulator::{AddressRange, ChannelRelay, IoDevice, Transport, TransportEvent};
 use log::debug;
 
 const IFR_IRQ:   u8 = 0b1000_0000;
@@ -242,7 +242,8 @@ pub struct LedMatrix {
     name: &'static str,
     address_range: AddressRange,
     transport: Option<Box<dyn Transport>>,
-    error_reporter: Box<dyn Fn(TransportError) + Send>,
+    /// Paired with `transport`; drained into connection/IFR state each `tick()`.
+    relay: Option<ChannelRelay<TransportEvent>>,
 
     x: u8,
     y: u8,
@@ -263,7 +264,7 @@ impl LedMatrix {
             name,
             address_range,
             transport: None,
-            error_reporter: transport::no_op_reporter(),
+            relay: None,
             x: 0,
             y: 0,
             width: 0,
@@ -277,14 +278,10 @@ impl LedMatrix {
         }
     }
 
-    /// Attaches a transport for byte-stream IO.
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>) {
+    /// Attaches a transport and its paired tagged relay for byte-stream IO.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: ChannelRelay<TransportEvent>) {
         self.transport = Some(transport);
-    }
-
-    /// Sets the error sender for async transport event reporting.
-    pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
-        self.error_reporter = transport::reporter(sender, id);
+        self.relay = Some(relay);
     }
 
     fn write_ifr(&mut self, value: u8) {
@@ -305,9 +302,12 @@ impl LedMatrix {
     }
 
     fn poll_transport(&mut self) {
+        let mut relay = self.relay.take();
         let mut transport = self.transport.take();
-        if let Some(transport) = transport.as_mut() {
-            while let Some(event) = transport.try_recv_tagged() {
+        if let (Some(relay), Some(transport)) = (relay.as_mut(), transport.as_mut()) {
+            let mut events = Vec::new();
+            relay.drain_into(|event| events.push(event));
+            for event in events {
                 match event {
                     TransportEvent::Connected(tag) => {
                         self.send_registers(transport);
@@ -330,6 +330,7 @@ impl LedMatrix {
                 }
             }
         }
+        self.relay = relay;
         self.transport = transport;
     }
 
@@ -469,74 +470,47 @@ impl IoDevice for LedMatrix {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::TransportEvent;
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
+    use crate::emulator::transport::InternalPipeTransport;
+    use crossbeam_channel::{Sender, unbounded};
+    use std::time::Duration;
 
     const DEVICE_NAME: &str = "LedMatrixDisplay";
     const DEVICE_ADDRESS: u16 = 0xD000;
-
-    struct MockTransport {
-        sent: Arc<Mutex<Vec<TransportEvent>>>,
-        received: VecDeque<TransportEvent>,
-    }
-
-    impl MockTransport {
-        /// Returns the transport plus a handle to its captured output, since
-        /// the transport itself gets moved into the `ProtocolManager`.
-        fn new(events: Vec<TransportEvent>) -> (Self, Arc<Mutex<Vec<TransportEvent>>>) {
-            let sent = Arc::new(Mutex::new(Vec::new()));
-            (Self { sent: Arc::clone(&sent), received: events.into() }, sent)
-        }
-    }
-
-    impl Transport for MockTransport {
-
-        fn try_recv(&mut self) -> Option<u8> {
-            loop {
-                {
-                    let event = self.received.pop_front()?;
-                    if let TransportEvent::Data(_, value) = event {
-                        return Some(value)
-                    }
-                }
-            }
-        }
-
-        fn send(&mut self, value: u8) {
-            self.sent.lock().unwrap().push(TransportEvent::Data(1, value));
-        }
-
-        fn is_connected(&self) -> bool { true }
-
-        fn try_recv_tagged(&mut self) -> Option<TransportEvent> {
-            self.received.pop_front()
-        }
-
-        fn shutdown(&mut self) {}
-
-    }
+    /// Client tag used for every simulated peripheral connection in these tests.
+    const TAG: u8 = 1;
 
     fn device() -> LedMatrix {
         LedMatrix::new(DEVICE_NAME, AddressRange::new(DEVICE_ADDRESS, DEVICE_ADDRESS + 7))
     }
 
-    fn device_with_transport() -> (LedMatrix, Arc<Mutex<Vec<TransportEvent>>>) {
-        let mut device = LedMatrix::new(DEVICE_NAME, 
-                                        AddressRange::new(DEVICE_ADDRESS, DEVICE_ADDRESS + 7));
-        let (transport, data) = MockTransport::new(Vec::new());
-        device.attach_transport(Box::new(transport));
-        (device, data)
-    }
-
-    fn device_with_transport_events(events: Vec<TransportEvent>)
-        -> (LedMatrix, Arc<Mutex<Vec<TransportEvent>>>) {
-
+    /// `remote` is the device's outbound-write sink (verified via
+    /// `collect_bytes`); `tx` feeds the device's inbound tagged relay
+    /// directly, simulating a virtual display connecting/disconnecting or
+    /// sending IFR updates. `pair_direct()` gives both ends of the test pipe
+    /// no relay of their own, so this hand-fed tagged relay stands in for it.
+    fn device_with_pipe() -> (LedMatrix, InternalPipeTransport, Sender<TransportEvent>) {
+        let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
+        let (tx, rx) = unbounded();
+        let relay = ChannelRelay::spawn(rx, 256);
         let mut device = LedMatrix::new(DEVICE_NAME,
                                         AddressRange::new(DEVICE_ADDRESS, DEVICE_ADDRESS + 7));
-        let (transport, data) = MockTransport::new(events);
-        device.attach_transport(Box::new(transport));
-        (device, data)
+        device.attach_transport(Box::new(local), relay);
+        (device, remote, tx)
+    }
+
+    /// Sends `event` into the device's inbound relay and waits for the relay
+    /// thread to have made it visible to the next `drain_into` call.
+    fn send_event(tx: &Sender<TransportEvent>, event: TransportEvent) {
+        tx.send(event).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    fn collect_bytes(remote: &mut InternalPipeTransport) -> Vec<u8> {
+        let mut buf = Vec::new();
+        while let Some(b) = remote.try_recv() {
+            buf.push(b);
+        }
+        buf
     }
 
     #[test]
@@ -579,8 +553,7 @@ mod tests {
 
     #[test]
     fn poll_transport_on_connected() {
-        let (mut device, protocol_data) =
-            device_with_transport_events(vec![TransportEvent::Connected(1)]);
+        let (mut device, mut remote, tx) = device_with_pipe();
         device.x = 1;
         device.y = 2;
         device.width = 3;
@@ -589,25 +562,23 @@ mod tests {
         device.ifr = 6;
         device.ier = 7;
         device.cmd_data = 8;
+        send_event(&tx, TransportEvent::Connected(TAG));
         device.poll_transport();
-        assert_eq!(device.connection_tag, Some(1));
-        for i in 0..8 {
-            assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 8 - i)));
-            assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 7 - i)));
-        }
+        assert_eq!(device.connection_tag, Some(TAG));
+        assert_eq!(collect_bytes(&mut remote), vec![
+            0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8,
+        ]);
     }
 
     #[test]
     fn poll_transport_after_connected_observes_expected_tag() {
-        let (mut device, _) = device_with_transport_events(
-            vec![
-                TransportEvent::Data(1, IFR_READY),
-                TransportEvent::Data(1, IFR_BLIT),
-                TransportEvent::Data(1, 0),
-                TransportEvent::Data(1, !IFR_MASK),
-            ]
-        );
-        device.connection_tag = Some(1);
+        let (mut device, _remote, tx) = device_with_pipe();
+        device.connection_tag = Some(TAG);
+        tx.send(TransportEvent::Data(TAG, IFR_READY)).unwrap();
+        tx.send(TransportEvent::Data(TAG, IFR_BLIT)).unwrap();
+        tx.send(TransportEvent::Data(TAG, 0)).unwrap();
+        tx.send(TransportEvent::Data(TAG, !IFR_MASK)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
         device.poll_transport();
         assert_eq!(device.ifr, IFR_IRQ | IFR_READY | IFR_BLIT);
         device.poll_transport();
@@ -616,38 +587,37 @@ mod tests {
 
     #[test]
     fn poll_transport_after_connected_ignores_other_tag() {
-        let (mut device, protocol_data) = device_with_transport();
+        let (mut device, _remote, tx) = device_with_pipe();
         device.ifr = 0;
         device.connection_tag = Some(2);
-        protocol_data.lock().unwrap().push(TransportEvent::Data(1, IFR_READY));
+        send_event(&tx, TransportEvent::Data(TAG, IFR_READY));
         device.poll_transport();
         assert_eq!(device.ifr, 0);
     }
 
     #[test]
     fn poll_transport_clears_connection_tag_on_disconnect_for_same_tag() {
-        let (mut device, _) =
-            device_with_transport_events(vec![TransportEvent::Disconnected(1)]);
-        device.connection_tag = Some(1);
+        let (mut device, _remote, tx) = device_with_pipe();
+        device.connection_tag = Some(TAG);
+        send_event(&tx, TransportEvent::Disconnected(TAG));
         device.poll_transport();
         assert_eq!(device.connection_tag, None);
     }
 
     #[test]
     fn poll_transport_ignores_disconnect_for_other_tag() {
-        let (mut device, _) =
-            device_with_transport_events(vec![TransportEvent::Disconnected(1)]);
+        let (mut device, _remote, tx) = device_with_pipe();
         device.connection_tag = Some(2);
+        send_event(&tx, TransportEvent::Disconnected(TAG));
         device.poll_transport();
         assert_eq!(device.connection_tag, Some(2));
     }
 
     #[test]
     fn send_register() {
-        let (mut device, protocol_data) = device_with_transport();
+        let (mut device, mut remote, _tx) = device_with_pipe();
         device.send_register(0x55, 0xAA);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 0xAA)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 0x55)));
+        assert_eq!(collect_bytes(&mut remote), vec![0x55, 0xAA]);
     }
 
     #[test]
@@ -674,76 +644,60 @@ mod tests {
 
     #[test]
     fn write_registers_parameters() {
-        let (mut device, protocol_data) = device_with_transport();
+        let (mut device, mut remote, _tx) = device_with_pipe();
         // writing X should clamp to display width in pixels less one
         device.write(DEVICE_ADDRESS, 0xFF);
         assert_eq!(device.x, (WIDTH_IN_PIXELS - 1) as u8);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.x)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 0)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        assert_eq!(collect_bytes(&mut remote), vec![0, device.x]);
         // writing Y should clamp to display height in pixels less one
         device.write(DEVICE_ADDRESS + 1, 0xFF);
         assert_eq!(device.y, (HEIGHT_IN_PIXELS - 1) as u8);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.y)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 1)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        assert_eq!(collect_bytes(&mut remote), vec![1, device.y]);
         // writing WIDTH should clamp to display width in pixels less one
         device.write(DEVICE_ADDRESS + 2, 0xFF);
         assert_eq!(device.width, (WIDTH_IN_PIXELS - 1) as u8);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.width)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 2)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        assert_eq!(collect_bytes(&mut remote), vec![2, device.width]);
         // writing HEIGHT should clamp to display height in pixels
         device.write(DEVICE_ADDRESS + 3, 0xFF);
         assert_eq!(device.height, (HEIGHT_IN_PIXELS - 1) as u8);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.height)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 3)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        assert_eq!(collect_bytes(&mut remote), vec![3, device.height]);
         // writing COLOR should transfer value written
         device.write(DEVICE_ADDRESS + 4, 0xFF);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.color)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 4)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        assert_eq!(collect_bytes(&mut remote), vec![4, device.color]);
     }
 
     #[test]
     fn write_ifr_register() {
-        let (mut device, protocol_data) = device_with_transport();
+        let (mut device, mut remote, _tx) = device_with_pipe();
         // Here we're just confirming that the address targets the IFR.
         // See `write_ifr_to_clear_bits` for the more comprehensive test.
         device.ifr = IFR_IRQ | IFR_READY;
         device.write(DEVICE_ADDRESS + 5, IFR_READY);
         assert_eq!(device.ifr, 0);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.ifr)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 5)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        assert_eq!(collect_bytes(&mut remote), vec![5, device.ifr]);
     }
 
     #[test]
     fn write_ier_register() {
-        let (mut device, protocol_data) = device_with_transport();
+        let (mut device, mut remote, _tx) = device_with_pipe();
         // Here we're just confirming that the address targets the IFR.
         // See `write_ier_to_set_bits` and `write_ier_to_clear_bits` as the more comprehensive tests.
         device.ier = IFR_READY;
         device.write(DEVICE_ADDRESS + 6, IFR_READY);
         assert_eq!(device.ier, 0);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.ier)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 6)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        assert_eq!(collect_bytes(&mut remote), vec![6, device.ier]);
     }
 
     #[test]
     fn write_cmd_data_register() {
-        let (mut device, protocol_data) = device_with_transport();
+        let (mut device, mut remote, _tx) = device_with_pipe();
         // Here we're just confirming that the address targets the IFR.
         // See `write_ier_to_set_bits` and `write_ier_to_clear_bits` as the more comprehensive tests.
         device.ifr = IFR_IRQ | IFR_READY;
         device.write(DEVICE_ADDRESS + 7, 0x55);
         assert_eq!(device.cmd_data, 0x55);
         assert_eq!(device.ifr, 0);
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, device.cmd_data)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), Some(TransportEvent::Data(1, 7)));
-        assert_eq!(protocol_data.lock().unwrap().pop(), None);
+        assert_eq!(collect_bytes(&mut remote), vec![7, device.cmd_data]);
     }
 
     #[test]
