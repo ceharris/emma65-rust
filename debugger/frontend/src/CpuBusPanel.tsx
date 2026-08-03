@@ -25,6 +25,12 @@ interface Props {
   onReset: (snap: RegisterSnapshot) => void;
 }
 
+/** Splits "1.8432 MHz" into ["1.8432", "MHz"] so the value and unit can be styled separately. */
+function splitSpeed(speed: string): [string, string] {
+  const idx = speed.lastIndexOf(" ");
+  return idx === -1 ? [speed, ""] : [speed.slice(0, idx), speed.slice(idx + 1)];
+}
+
 /** Formats a number with comma thousands separators. */
 function formatCycles(n: number): string {
   return n.toLocaleString();
@@ -169,6 +175,8 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
     runStopClass = "indicator-stop";
   }
 
+  const [speedValue, speedUnit] = splitSpeed(cpuBus?.effective_speed ?? "0 MHz");
+
   return (
     <div className="cpu-bus-panel">
       <span className="panel-title">CPU and Bus</span>
@@ -188,7 +196,8 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
           <span className="cycles-label">cycles</span>
         </div>
         <div className="cpu-bus-row cpu-bus-speed">
-          <span className="speed-value">{cpuBus?.effective_speed ?? "—"}</span>
+          <span className="speed-value">{speedValue}</span>
+          <span className="speed-unit">{speedUnit}</span>
         </div>
         <div className="cpu-bus-row cpu-bus-buttons">
           <button

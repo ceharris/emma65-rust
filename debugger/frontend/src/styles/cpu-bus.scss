@@ -65,9 +65,15 @@
 }
 
 .speed-value {
-  color: var(--color-muted);
+  color: var(--color-number);
   font-variant-numeric: tabular-nums;
   font-size: var(--font-size-btn);
+}
+
+.speed-unit {
+  color: var(--color-muted);
+  font-size: var(--font-size-btn);
+  margin-left: 3px;
 }
 
 .cpu-bus-buttons {

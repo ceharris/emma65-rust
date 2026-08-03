@@ -96,6 +96,10 @@ pub struct LiveSnapshotRx(pub Mutex<Option<tokio::sync::watch::Receiver<Option<C
 /// the right page during free-run.
 pub struct MemoryViewAddr(pub Arc<AtomicU16>);
 
+/// Placeholder `effective_speed` shown while the CPU isn't free-running (no
+/// live snapshot to compute a rate from).
+const EFFECTIVE_SPEED_UNKNOWN: &str = "0 MHz";
+
 /// Cached CPU/bus state (IRQ, NMI, cycle count) for use when the CPU is free-running.
 ///
 /// Updated every time the CPU is available: after each step, reset, or run completion.
@@ -1070,7 +1074,7 @@ fn snapshot_cpu_bus(cpu: &Cpu) -> CpuBusSnapshot {
         irq_active: cpu.interrupts().irq_active(),
         nmi_pending: cpu.interrupts().nmi_pending(),
         cycles: cpu.cycles(),
-        effective_speed: "N/A".to_string(),
+        effective_speed: EFFECTIVE_SPEED_UNKNOWN.to_string(),
         cpu_stopped: cpu.is_stopped(),
         cpu_waiting: cpu.is_waiting(),
     }
@@ -1184,7 +1188,7 @@ pub fn run() {
             irq_active: false,
             nmi_pending: false,
             cycles: 0,
-            effective_speed: "N/A".to_string(),
+            effective_speed: EFFECTIVE_SPEED_UNKNOWN.to_string(),
             cpu_stopped: false,
             cpu_waiting: false,
         })))
