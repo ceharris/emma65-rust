@@ -458,6 +458,12 @@ impl IoDevice for LedMatrix {
         self.name
     }
 
+    fn shutdown(&mut self) {
+        if let Some(transport) = self.transport.as_mut() {
+            transport.shutdown();
+        }
+    }
+
 }
 
 #[cfg(test)]

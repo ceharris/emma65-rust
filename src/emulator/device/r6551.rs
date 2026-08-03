@@ -336,6 +336,12 @@ impl IoDevice for R6551 {
     fn name(&self) -> &str {
         self.name
     }
+
+    fn shutdown(&mut self) {
+        if let Some(transport) = self.transport.as_mut() {
+            transport.shutdown();
+        }
+    }
 }
 
 #[cfg(test)]

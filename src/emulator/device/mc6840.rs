@@ -717,6 +717,12 @@ impl IoDevice for Mc6840 {
 
     fn name(&self) -> &str { self.name }
 
+    fn shutdown(&mut self) {
+        if let Some(pm) = self.protocol_manager.as_mut() {
+            pm.shutdown();
+        }
+    }
+
 }
 
 #[cfg(test)]

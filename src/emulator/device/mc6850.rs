@@ -197,6 +197,12 @@ impl IoDevice for Mc6850 {
         "acia/6850"
     }
 
+    fn shutdown(&mut self) {
+        if let Some(transport) = self.transport.as_mut() {
+            transport.shutdown();
+        }
+    }
+
 }
 
 #[cfg(test)]

@@ -317,7 +317,22 @@ impl Bus {
     pub fn symbol_table_mut(&mut self) -> &mut SymbolTable {
         &mut self.symbol_table
     }
-    
+
+}
+
+impl Drop for Bus {
+    /// Signals every device's transport to begin shutdown before Rust's
+    /// normal field-drop order runs each device's own `Drop` impl. This
+    /// ordering matters: a device's `shutdown()` call lets the owning
+    /// transport's background task start its shutdown branch (dropping its
+    /// inbound sender first) *before* the same device's `Drop` reaches its
+    /// `ChannelRelay` field and blocks on `join()` — doing it the other way
+    /// round would join a relay thread that hasn't been told to stop yet.
+    fn drop(&mut self) {
+        for (_, device) in self.devices.iter_mut() {
+            device.shutdown();
+        }
+    }
 }
 
 // Temporary match result types to avoid holding region borrows.

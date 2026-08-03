@@ -1085,6 +1085,12 @@ impl IoDevice for Via6522 {
         "via/6522"
     }
 
+    fn shutdown(&mut self) {
+        if let Some(pm) = self.protocol_manager.as_mut() {
+            pm.shutdown();
+        }
+    }
+
 }
 
 #[cfg(test)]

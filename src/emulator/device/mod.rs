@@ -161,6 +161,18 @@ pub trait IoDevice: Send {
     /// Returns a human-readable name for this device, used in diagnostics and tracing.
     fn name(&self) -> &str { "unknown" }
 
+    /// Signals any transport owned by this device to begin shutdown.
+    ///
+    /// Called by `Bus::drop` on every device before Rust's normal field-drop
+    /// order runs each device's own `Drop` impl, so that the owning
+    /// transport's background task has a chance to start its shutdown
+    /// branch (dropping its inbound sender first, per the shutdown contract
+    /// documented in `transport::mod`) before that same device's `Drop`
+    /// reaches its `ChannelRelay` field and blocks on `join()`.
+    ///
+    /// Default no-op, so devices without a transport need no changes.
+    fn shutdown(&mut self) {}
+
 }
 
 #[cfg(test)]

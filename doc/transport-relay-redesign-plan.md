@@ -1361,9 +1361,25 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       done), `report_connected` fires before `TransportReporter::bind` runs
       and is therefore silently dropped — an accepted gap in the same
       "unbound window" category as §2.2, not something this item resolves.
-- [ ] `IoDevice::shutdown()` (default no-op) + `ProtocolManager::shutdown()`
+- [x] `IoDevice::shutdown()` (default no-op) + `ProtocolManager::shutdown()`
       + `impl Drop for Bus` calling `shutdown()` on every device before
-      normal field-drop runs + integration test (§6)
+      normal field-drop runs + integration test (§6). `ProtocolManager::shutdown`
+      was already present (forwarding to its transport) from earlier work;
+      this item added `IoDevice::shutdown` (default no-op) and overrides on
+      every transport-owning device (`Console`, `R6551`, `Mc6850` call
+      `self.transport.shutdown()`; `Via6522`, `Mc6840` call
+      `self.protocol_manager.shutdown()`), plus `LedMatrix` — not explicitly
+      named in §6's device list but also holds a `Box<dyn Transport>`
+      directly, so given the same override for consistency even though it
+      isn't yet migrated onto the relay design (§9.1, still deferred).
+      `impl Drop for Bus` iterates `self.devices` calling `shutdown()` before
+      normal field-drop. New integration test
+      `tests/bus_shutdown.rs::bus_drop_shuts_down_all_transports_without_hanging`
+      builds a `Bus` with one P2P device (`Console` over a relay-backed
+      `InternalPipeTransport::pair()`) and one multipoint device (`R6551`
+      over a `TcpSocketTransport` with a connected client), drops it inside
+      `spawn_blocking` + `tokio::time::timeout`, and asserts the drop
+      completes within 5s rather than hanging.
 - [x] `ProtocolManager`: drain a `ChannelRelay<TransportEvent>` instead of polling
       `try_recv_tagged()`; drop `Result` from `send_to_all`/
       `send_all_to_all`/`poll_transport` (§9.3). `poll_transport` now
