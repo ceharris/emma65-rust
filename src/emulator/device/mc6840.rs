@@ -196,6 +196,14 @@ impl Synchronizer {
         self.sample_for(level, Edge::Falling)
     }
 
+    /// True if the pipeline has already fully absorbed a constant `level` —
+    /// i.e. every further `sample_for(level, _)` call is guaranteed to report
+    /// no edge until `level` actually changes. Lets a caller batch-advance a
+    /// run of same-level cycles without simulating each one individually.
+    fn settled_at(&self, level: bool) -> bool {
+        self.prev_recognized == level && self.pipeline.iter().all(|&l| l == level)
+    }
+
 }
 
 /// A timer unit of the MC6840 PTM.
@@ -434,11 +442,117 @@ impl Timer {
             if self.is_comparing() && self.compare_status == CompareStatus::Started && !self.irq_active() {
                 self.check_comparison(edge_detected);
             }
-            let clock_triggered = self.clock_sync.sample(self.clock_level);
+            // clock_sync's result is only consulted when external_clock is set, so
+            // skip sampling its pipeline (and the array-shift it costs) otherwise.
+            let clock_triggered = self.external_clock && self.clock_sync.sample(self.clock_level);
             if !self.external_clock || clock_triggered {
                 self.clock();
             }
         }
+    }
+
+    /// Advances this timer by `cycles` E-clock cycles. Behaviorally equivalent
+    /// to calling `tick()` `cycles` times, but for the common case — internal
+    /// clock, generating (non-comparing) mode, not dual-8-bit, unprescaled,
+    /// and no pending edge on the gate synchronizer — computes the result in
+    /// O(1) via [`Self::fast_forward`] instead of simulating every cycle.
+    /// `gate_level`/`clock_level`/mode are fixed for the whole call (the only
+    /// way they can change is a register write or an inbound protocol
+    /// message, both of which happen between calls, never during one), so a
+    /// fast-forwardable state at any point during the batch stays
+    /// fast-forwardable for the remainder of it.
+    fn tick_batch(&mut self, cycles: u32) {
+        let mut remaining = cycles;
+        // At most `depth` (4) real ticks are ever needed to flush a pending
+        // gate-edge transient, since a constant input level fully saturates
+        // the synchronizer's pipeline within `depth` samples.
+        while remaining > 0 && !self.can_fast_forward() {
+            self.tick();
+            remaining -= 1;
+        }
+        if remaining > 0 {
+            self.fast_forward(remaining);
+        }
+    }
+
+    /// True if the remaining cycles in the current batch can be computed in
+    /// closed form rather than simulated one at a time.
+    fn can_fast_forward(&self) -> bool {
+        !self.external_clock
+            && self.is_generating()
+            && !self.dual8bit_mode
+            && self.prescaler.is_none()
+            && self.gate_sync.settled_at(self.gate_level)
+    }
+
+    /// Closed-form equivalent of calling `clock_counter()` `remaining` times,
+    /// for the regime `can_fast_forward()` guarantees (no gate edges, so
+    /// `init()` never fires during the batch).
+    fn fast_forward(&mut self, remaining: u32) {
+        if !self.triggered {
+            return;
+        }
+        if self.is_continuous() {
+            self.fast_forward_continuous(remaining);
+        } else {
+            self.fast_forward_single_shot(remaining);
+        }
+    }
+
+    fn fast_forward_continuous(&mut self, remaining: u32) {
+        if self.gate_level {
+            // Continuous mode pauses counting entirely while gated; matches
+            // clock_counter()'s early return on every cycle in this state.
+            return;
+        }
+        // A latch of 0 means a full 65536-count period; `carry_in` (set by
+        // load()) defers is_zero() by one extra tick to model that, so a
+        // "virtual" counter of `effective_count` stands in for it here.
+        let effective_count: u32 = if self.latch == 0 { 0x1_0000 } else { self.latch as u32 };
+        let virtual_counter: u32 = if self.carry_in { effective_count } else { self.counter as u32 };
+        let ticks_to_reload = virtual_counter + 1;
+        if remaining < ticks_to_reload {
+            self.counter = (virtual_counter - remaining) as u16;
+            self.carry_in = false;
+            return;
+        }
+        let remaining = remaining - ticks_to_reload;
+        self.irq_active = self.irq_enabled;
+        let mut reloads = 1u32;
+        let period = effective_count + 1;
+        let extra_reloads = remaining / period;
+        let rem = remaining % period;
+        reloads += extra_reloads;
+        if rem > 0 {
+            self.counter = (effective_count - rem) as u16;
+            self.carry_in = false;
+        } else {
+            self.counter = self.latch;
+            self.carry_in = self.latch == 0;
+        }
+        if reloads % 2 == 1 {
+            self.output_state = !self.output_state;
+        }
+    }
+
+    fn fast_forward_single_shot(&mut self, remaining: u32) {
+        // load() only sets carry_in when is_continuous(), so it's always
+        // false here — the counter value alone tracks time-to-fire.
+        let virtual_counter = self.counter as u32;
+        let ticks_to_fire = virtual_counter + 1;
+        if remaining < ticks_to_fire {
+            self.counter = (virtual_counter - remaining) as u16;
+            // Every decrementing tick sets output_state true in single-shot
+            // mode; only remaining == 0 (a no-op batch) would leave it be.
+            self.output_state = true;
+            return;
+        }
+        // Fires exactly once, then triggered goes false and every further
+        // cycle in the batch (if any) is already a no-op via clock_counter().
+        self.counter = 0;
+        self.triggered = false;
+        self.irq_active = self.irq_enabled;
+        self.output_state = false;
     }
 
 }
@@ -563,9 +677,9 @@ impl Mc6840 {
         }
     }
 
-    fn tick_timers(&mut self) {
+    fn tick_timers(&mut self, cycles: u32) {
         for timer_id in 0..3 {
-            self.timers[timer_id].tick();
+            self.timers[timer_id].tick_batch(cycles);
         }
     }
 
@@ -696,9 +810,7 @@ impl IoDevice for Mc6840 {
         let has_clients = self.protocol_manager.as_ref().is_some_and(|pm| pm.has_clients());
         let before = has_clients.then(|| AsyncIoState::new(&self.timers));
         if !self.reset_active {
-            for _ in 0..cycles {
-                self.tick_timers();
-            }
+            self.tick_timers(cycles);
         }
         if let Some(before) = before {
             let after = AsyncIoState::new(&self.timers);
@@ -1185,6 +1297,98 @@ mod tests {
         assert_eq!(timer.counter, 1);
         timer.tick();
         assert_eq!(timer.counter, 0);
+    }
+
+    fn setup_generate_mode_timer(mode: u8, latch: u16, irq_enabled: bool, gate_level: bool, pre_advance: u32) -> Timer {
+        let mut timer = Timer::new();
+        timer.gate_level = gate_level;
+        timer.set_control_register(mode);
+        timer.irq_enabled = irq_enabled;
+        timer.latch = latch;
+        timer.init();
+        for _ in 0..pre_advance {
+            timer.tick();
+        }
+        timer
+    }
+
+    // Differential check for `Timer::tick_batch()`'s closed-form fast path
+    // (continuous/single-shot, internally clocked, non-dual-8-bit,
+    // unprescaled): its result must always match calling `tick()` in a loop,
+    // across a grid of starting states (via `pre_advance`, which also
+    // exercises tick_batch's gate-synchronizer-settling flush phase when 0)
+    // and batch sizes small and large enough to cross zero, one, or many
+    // reload/fire boundaries.
+    #[test]
+    fn tick_batch_matches_sequential_tick_for_generate_mode() {
+        let modes = [
+            CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS,
+            CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT,
+        ];
+        let latches = [0u16, 1, 2, 5, 0xFFFF];
+        let pre_advances = [0u32, 1, 4, 6];
+        let gate_levels = [false, true];
+        let irq_enabled_values = [false, true];
+        let cycles_values = [0u32, 1, 2, 3, 4, 5, 8, 17, 50];
+
+        for &mode in &modes {
+            for &latch in &latches {
+                for &pre_advance in &pre_advances {
+                    for &gate_level in &gate_levels {
+                        for &irq_enabled in &irq_enabled_values {
+                            for &cycles in &cycles_values {
+                                let mut expected = setup_generate_mode_timer(mode, latch, irq_enabled, gate_level, pre_advance);
+                                let mut actual = setup_generate_mode_timer(mode, latch, irq_enabled, gate_level, pre_advance);
+                                for _ in 0..cycles {
+                                    expected.tick();
+                                }
+                                actual.tick_batch(cycles);
+                                let context = format!(
+                                    "mode={mode:#04x} latch={latch} pre_advance={pre_advance} gate_level={gate_level} irq_enabled={irq_enabled} cycles={cycles}"
+                                );
+                                assert_eq!(actual.counter, expected.counter, "counter mismatch: {context}");
+                                assert_eq!(actual.carry_in, expected.carry_in, "carry_in mismatch: {context}");
+                                assert_eq!(actual.triggered, expected.triggered, "triggered mismatch: {context}");
+                                assert_eq!(actual.output_state, expected.output_state, "output_state mismatch: {context}");
+                                assert_eq!(actual.irq_active, expected.irq_active, "irq_active mismatch: {context}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Same check, but for batch sizes large enough to cross many reload/fire
+    // boundaries in a single tick_batch() call -- the case the closed-form
+    // math (as opposed to a per-cycle loop) actually exists to handle.
+    #[test]
+    fn tick_batch_matches_sequential_tick_across_many_reload_boundaries() {
+        let modes = [
+            CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS,
+            CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT,
+        ];
+        let latches = [0u16, 1, 5, 0xFFFF];
+        let cycles_values = [1000u32, 70_000];
+
+        for &mode in &modes {
+            for &latch in &latches {
+                for &cycles in &cycles_values {
+                    let mut expected = setup_generate_mode_timer(mode, latch, true, false, 0);
+                    let mut actual = setup_generate_mode_timer(mode, latch, true, false, 0);
+                    for _ in 0..cycles {
+                        expected.tick();
+                    }
+                    actual.tick_batch(cycles);
+                    let context = format!("mode={mode:#04x} latch={latch} cycles={cycles}");
+                    assert_eq!(actual.counter, expected.counter, "counter mismatch: {context}");
+                    assert_eq!(actual.carry_in, expected.carry_in, "carry_in mismatch: {context}");
+                    assert_eq!(actual.triggered, expected.triggered, "triggered mismatch: {context}");
+                    assert_eq!(actual.output_state, expected.output_state, "output_state mismatch: {context}");
+                    assert_eq!(actual.irq_active, expected.irq_active, "irq_active mismatch: {context}");
+                }
+            }
+        }
     }
 
     #[test]
