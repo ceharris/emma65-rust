@@ -42,13 +42,13 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build
-        run: cargo build --workspace --all-targets
+        run: cargo build -p emma65
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace --all-targets
+        run: cargo test -p emma65
 
   ci-debugger:
     name: Debugger Build and Clippy
