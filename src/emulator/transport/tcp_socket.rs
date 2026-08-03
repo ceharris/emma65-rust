@@ -15,7 +15,7 @@
 //! The accept loop itself (`pump_outbound`, `run_client_task`,
 //! `ClientSession`, and the loop body driving them) is shared with
 //! [`UnixSocketTransport`](super::UnixSocketTransport) via
-//! `super::run_listener_task`, generic over the [`ClientListener`] trait —
+//! `super::run_listener_task`, generic over the `ClientListener` trait —
 //! this module supplies only the `TcpListener`-specific `accept`/peer-naming
 //! logic (PR #227 review). Construction and the `Transport` plumbing
 //! (`send`/`is_connected`/`shutdown`) are likewise shared via
