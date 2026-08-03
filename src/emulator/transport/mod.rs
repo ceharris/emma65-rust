@@ -36,9 +36,10 @@ pub use self::unix_socket::UnixSocketTransport;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use crate::emulator::{DeviceEvent, DeviceId, ErrorSender};
-use crossbeam_channel::{Receiver, Select, Sender, TryRecvError, bounded};
+use crossbeam_channel::{Receiver, Select, Sender, TryRecvError, TrySendError, bounded};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -548,20 +549,36 @@ pub trait Transport: Send {
     fn shutdown(&mut self);
 }
 
-// --- Shared machinery for multi-client, channel-based transports (TCP, Unix socket) ---
+// --- Shared machinery for multi-client, ring-based transports (TCP, Unix
+// socket). Unified here once both transports were converted to the
+// `ChannelRelay`/`TransportReporter` shapes (transport relay redesign plan
+// §4.2) — `UnixSocketTransport` (item 4) briefly held a local duplicate of
+// these while `TcpSocketTransport` (item 5) still used the older
+// `ChannelBridge`-based versions; see the plan's implementation log for why.
 
+/// Drains the outbound ring on notification, fanning bytes out to every
+/// connected client, and reports outbound/inbound drop counts on a
+/// 1-second interval.
 pub(crate) async fn pump_outbound(
-    out_rx: Receiver<u8>,
+    mut outbound: Consumer<u8>,
     fanout_tx: broadcast::Sender<u8>,
-    out_notify: Arc<Notify>,
-    mut shutdown_rx: watch::Receiver<bool>) {
+    outbound_notify: Arc<Notify>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    reporter: TransportReporter,
+) {
+    let mut report_interval = tokio::time::interval(Duration::from_secs(1));
+    report_interval.tick().await; // first tick fires immediately; skip it
+
     loop {
         tokio::select! {
             _ = shutdown_rx.changed() => break,
-            _ = out_notify.notified() => {
-                while let Ok(byte) = out_rx.try_recv() {
+            _ = outbound_notify.notified() => {
+                while let Ok(byte) = outbound.pop() {
                     let _ = fanout_tx.send(byte);
                 }
+            }
+            _ = report_interval.tick() => {
+                reporter.report_counts();
             }
         }
     }
@@ -569,8 +586,9 @@ pub(crate) async fn pump_outbound(
 
 /// Per-connection context needed to run a client session: identity, the
 /// channels bridging it to the sync side and to the other clients' fan-out,
-/// the shutdown signal, and the shared bookkeeping (`client_count`,
-/// `tag_allocator`) it must update on exit.
+/// the shutdown signal, the shared bookkeeping (`client_count`,
+/// `tag_allocator`) it must update on exit, and the reporter for ingress
+/// drop-counting.
 pub(crate) struct ClientSession {
     pub(crate) conn_tag: u8,
     pub(crate) in_tx: Sender<TransportEvent>,
@@ -578,13 +596,15 @@ pub(crate) struct ClientSession {
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) client_count: Arc<AtomicUsize>,
     pub(crate) tag_allocator: Arc<TagAllocator>,
+    pub(crate) reporter: TransportReporter,
 }
 
 /// Handles one connected client for the lifetime of its session: reads bytes
-/// tagged with `session.conn_tag` into `session.in_tx`, and writes bytes
-/// fanned out via `session.fanout_rx` to the client. Generic over any
-/// split-able async stream, so it's shared between `TcpTransport` and
-/// `UnixSocketTransport`.
+/// tagged with `session.conn_tag` into `session.in_tx` (via `try_send`,
+/// counting a `Full` inbound ring as a drop via `TransportReporter` rather
+/// than blocking), and writes bytes fanned out via `session.fanout_rx` to
+/// the client. Generic over any split-able async stream, so it's shared
+/// between `TcpSocketTransport` and `UnixSocketTransport`.
 pub(crate) async fn run_client_task<R, W>(mut reader: R, mut writer: W,
     session: ClientSession)
 where
@@ -598,9 +618,10 @@ where
         mut shutdown_rx,
         client_count,
         tag_allocator,
+        reporter,
     } = session;
 
-    if in_tx.send(TransportEvent::Connected(conn_tag)).is_err() {
+    if in_tx.try_send(TransportEvent::Connected(conn_tag)).is_err() {
         client_count.fetch_sub(1, Ordering::Release);
         tag_allocator.release(conn_tag);
         return;
@@ -609,13 +630,25 @@ where
     let mut buf = [0u8; 1];
     loop {
         tokio::select! {
-            _ = shutdown_rx.changed() => break,
+            _ = shutdown_rx.changed() => {
+                // Skip the terminal Disconnected send on whole-bus shutdown:
+                // ProtocolManager::poll_transport only reacts to Disconnected
+                // by releasing a slot, and neither slots nor the tag
+                // allocator outlive the bus, so a skipped event here has no
+                // observable effect.
+                drop(in_tx);
+                client_count.fetch_sub(1, Ordering::Release);
+                tag_allocator.release(conn_tag);
+                return;
+            }
 
             result = reader.read(&mut buf) => {
                 match result {
                     Ok(1) => {
-                        if in_tx.send(TransportEvent::Data(conn_tag, buf[0])).is_err() {
-                            break;
+                        match in_tx.try_send(TransportEvent::Data(conn_tag, buf[0])) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => reporter.note_inbound_drop(),
+                            Err(TrySendError::Disconnected(_)) => break,
                         }
                     }
                     _ => break,
@@ -636,7 +669,7 @@ where
         }
     }
 
-    let _ = in_tx.send(TransportEvent::Disconnected(conn_tag));
+    let _ = in_tx.try_send(TransportEvent::Disconnected(conn_tag));
     client_count.fetch_sub(1, Ordering::Release);
     tag_allocator.release(conn_tag);
 }

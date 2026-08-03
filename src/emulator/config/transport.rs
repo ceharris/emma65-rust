@@ -54,12 +54,16 @@ impl TransportSpec {
     pub async fn to_transport(&self) -> Result<Box<dyn Transport>, TransportError> {
         match self {
             TransportSpec::Tcp { port, address} => {
+                // See the Pty arm below for why a pending reporter and a
+                // leaked relay are used here: this call site isn't wired to
+                // thread a per-device TransportReporter/ChannelRelay through
+                // yet (checklist items 12/13 of the transport relay redesign
+                // plan).
                 let addr = SocketAddr::new(*address, *port);
-                let transport = TcpSocketTransport::listen(addr).await;
-                match transport {
-                    Ok(transport) => Ok(Box::new(transport)),
-                    Err(e) => Err(TransportError::Io(e))
-                }
+                let reporter = TransportReporter::pending(None);
+                let (transport, relay) = TcpSocketTransport::listen(addr, reporter).await?;
+                std::mem::forget(relay);
+                Ok(Box::new(transport))
             }
             TransportSpec::Unix { path } => {
                 // See the Pty arm below for why a pending reporter and a

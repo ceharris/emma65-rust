@@ -12,26 +12,21 @@
 //! is counted via [`TransportReporter`], not surfaced as an error) and
 //! fanned out to every connected client via a `broadcast::channel`.
 //!
-//! `pump_outbound`, `run_client_task`, and `ClientSession` here are
-//! deliberately *not* the shared versions of the same names in
-//! `super` — those are still used as-is by [`TcpSocketTransport`]
-//! (super::TcpSocketTransport), not yet converted to this redesign
-//! (checklist item 5). Duplicating them locally keeps this rewrite isolated
-//! and compiling on its own; look for an opportunity to reunify once both
-//! transports are converted.
+//! `pump_outbound`, `run_client_task`, and `ClientSession` are shared with
+//! [`TcpSocketTransport`](super::TcpSocketTransport) in `super` — both
+//! transports were converted to this shape (transport relay redesign plan
+//! §4.2), so the machinery lives in one place rather than being duplicated.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
-use crossbeam_channel::{Sender, TrySendError, bounded};
+use crossbeam_channel::{Sender, bounded};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::{Notify, broadcast, oneshot, watch};
 
-use super::{BROADCAST_CAPACITY, CHANNEL_CAPACITY, ChannelRelay, TagAllocator, Transport, TransportEvent, TransportReporter};
+use super::{BROADCAST_CAPACITY, CHANNEL_CAPACITY, ChannelRelay, ClientSession, TagAllocator, Transport, TransportEvent, TransportReporter, pump_outbound, run_client_task};
 
 /// Transport that listens for incoming Unix-domain socket connections.
 pub struct UnixSocketTransport {
@@ -205,121 +200,6 @@ async fn run_unix_task(
             },
         ));
     }
-}
-
-/// Drains the outbound ring on notification, fanning bytes out to every
-/// connected client, and reports outbound/inbound drop counts on a
-/// 1-second interval.
-async fn pump_outbound(
-    mut outbound: Consumer<u8>,
-    fanout_tx: broadcast::Sender<u8>,
-    outbound_notify: Arc<Notify>,
-    mut shutdown_rx: watch::Receiver<bool>,
-    reporter: TransportReporter,
-) {
-    let mut report_interval = tokio::time::interval(Duration::from_secs(1));
-    report_interval.tick().await; // first tick fires immediately; skip it
-
-    loop {
-        tokio::select! {
-            _ = shutdown_rx.changed() => break,
-            _ = outbound_notify.notified() => {
-                while let Ok(byte) = outbound.pop() {
-                    let _ = fanout_tx.send(byte);
-                }
-            }
-            _ = report_interval.tick() => {
-                reporter.report_counts();
-            }
-        }
-    }
-}
-
-/// Per-connection context needed to run a client session: identity, the
-/// channels bridging it to the sync side and to the other clients' fan-out,
-/// the shutdown signal, the shared bookkeeping (`client_count`,
-/// `tag_allocator`) it must update on exit, and the reporter for ingress
-/// drop-counting.
-struct ClientSession {
-    conn_tag: u8,
-    in_tx: Sender<TransportEvent>,
-    fanout_rx: broadcast::Receiver<u8>,
-    shutdown_rx: watch::Receiver<bool>,
-    client_count: Arc<AtomicUsize>,
-    tag_allocator: Arc<TagAllocator>,
-    reporter: TransportReporter,
-}
-
-/// Handles one connected client for the lifetime of its session: reads bytes
-/// tagged with `session.conn_tag` into `session.in_tx` (via `try_send`,
-/// counting a `Full` inbound ring as a drop rather than blocking), and
-/// writes bytes fanned out via `session.fanout_rx` to the client.
-async fn run_client_task<R, W>(mut reader: R, mut writer: W, session: ClientSession)
-where
-    R: AsyncRead + Unpin + Send,
-    W: AsyncWrite + Unpin + Send,
-{
-    let ClientSession {
-        conn_tag,
-        in_tx,
-        mut fanout_rx,
-        mut shutdown_rx,
-        client_count,
-        tag_allocator,
-        reporter,
-    } = session;
-
-    if in_tx.try_send(TransportEvent::Connected(conn_tag)).is_err() {
-        client_count.fetch_sub(1, Ordering::Release);
-        tag_allocator.release(conn_tag);
-        return;
-    }
-
-    let mut buf = [0u8; 1];
-    loop {
-        tokio::select! {
-            _ = shutdown_rx.changed() => {
-                // Skip the terminal Disconnected send on whole-bus shutdown:
-                // ProtocolManager::poll_transport only reacts to Disconnected
-                // by releasing a slot, and neither slots nor the tag
-                // allocator outlive the bus, so a skipped event here has no
-                // observable effect (transport relay redesign plan §4.2).
-                drop(in_tx);
-                client_count.fetch_sub(1, Ordering::Release);
-                tag_allocator.release(conn_tag);
-                return;
-            }
-
-            result = reader.read(&mut buf) => {
-                match result {
-                    Ok(1) => {
-                        match in_tx.try_send(TransportEvent::Data(conn_tag, buf[0])) {
-                            Ok(()) => {}
-                            Err(TrySendError::Full(_)) => reporter.note_inbound_drop(),
-                            Err(TrySendError::Disconnected(_)) => break,
-                        }
-                    }
-                    _ => break,
-                }
-            }
-
-            byte = fanout_rx.recv() => {
-                match byte {
-                    Ok(byte) => {
-                        if writer.write_all(&[byte]).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        }
-    }
-
-    let _ = in_tx.try_send(TransportEvent::Disconnected(conn_tag));
-    client_count.fetch_sub(1, Ordering::Release);
-    tag_allocator.release(conn_tag);
 }
 
 #[cfg(test)]
