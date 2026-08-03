@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::Console;
+use crate::emulator::transport::TransportRelay;
 use crate::emulator::{AddressRange, BusConfig};
 
 // Size of the device on the bus (in contiguous bytes of address space)
@@ -54,14 +55,17 @@ impl DeviceModule for ConsoleModule {
                 let (transport, relay) = transport_spec
                     .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
-                dev.attach_transport(transport, Some(relay));
-            } else if let Some(injected) = context.console_transport.as_ref()
+                dev.attach_transport(transport, relay);
+            } else if let Some((transport, relay, reporter)) = context.console_transport.as_ref()
                     .and_then(|slot| slot.lock().ok()?.take()) {
-                // TransportSlot doesn't carry a relay yet (transport relay
-                // redesign plan, checklist item 9.4) — input from this
-                // injected transport won't reach the console until that
-                // widening lands.
-                dev.attach_transport(injected, None);
+                // The reporter was constructed via `TransportReporter::pending`
+                // before this device's id existed (the `TransportSlot`
+                // injection path builds its transport ahead of
+                // `DeviceModule::instantiate`); bind it now so every clone
+                // already handed to the transport's background machinery
+                // starts reporting under the right id.
+                reporter.bind(device_id);
+                dev.attach_transport(transport, TransportRelay::Byte(relay));
             }
             if let Some(break_key) = config.break_key {
                 dev.set_break_key(break_key);
@@ -80,16 +84,29 @@ impl DeviceModule for ConsoleModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::transport::{InternalPipeTransport, Transport};
+    use crate::emulator::TransportSlot;
+    use crate::emulator::transport::{InternalPipeTransport, Transport, TransportReporter};
     use std::sync::{Arc, Mutex};
+
+    /// Builds a `TransportSlot` the same way `main.rs`/`load_session` do: a
+    /// real relay-backed `InternalPipeTransport` pair, plus an unbound
+    /// `TransportReporter` (device id assigned later, by `instantiate`).
+    /// Returns the slot, the reporter (cloned, so the caller can exercise it
+    /// after `instantiate` binds the original), and the pair's remote end.
+    fn injected_slot() -> (TransportSlot, TransportReporter, InternalPipeTransport) {
+        let reporter = TransportReporter::pending(None);
+        let ((local, relay), remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
+        let slot = Arc::new(Mutex::new(Some((Box::new(local) as Box<dyn Transport>, relay, reporter.clone()))));
+        (slot, reporter, remote)
+    }
 
     #[tokio::test]
     async fn instantiate_with_injected_transport() {
-        let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
+        let (slot, _reporter, mut remote) = injected_slot();
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
-            console_transport: Some(Arc::new(Mutex::new(Some(Box::new(local))))),
+            console_transport: Some(slot),
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let bus_config = ConsoleModule.instantiate(
@@ -103,8 +120,7 @@ mod tests {
 
     #[tokio::test]
     async fn injected_transport_is_consumed() {
-        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
-        let slot = Arc::new(Mutex::new(Some(Box::new(local) as Box<dyn crate::emulator::transport::Transport>)));
+        let (slot, _reporter, _remote) = injected_slot();
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
@@ -121,8 +137,7 @@ mod tests {
     async fn injected_transport_ignored_when_transport_spec_is_set() {
         // When a transport= attribute is configured, the context transport must not be consumed,
         // so that the caller can detect whether stdio will be used (e.g. to enter raw mode).
-        let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
-        let slot = Arc::new(Mutex::new(Some(Box::new(local) as Box<dyn crate::emulator::transport::Transport>)));
+        let (slot, _reporter, _remote) = injected_slot();
         let mut attributes = HashMap::new();
         // pipe transport is the only variant we can create without an OS resource in a unit test
         attributes.insert(
@@ -139,6 +154,33 @@ mod tests {
             BusConfig::new(), 0xFFF8, &attributes, &context, id_allocator).await;
 
         assert!(slot.lock().unwrap().is_some(), "context transport should not be consumed when transport_spec is set");
+    }
+
+    #[tokio::test]
+    async fn injected_transport_reporter_is_bound_to_allocated_device_id() {
+        let (error_sender, mut error_receiver) = crate::emulator::device_event_channel();
+        let reporter = TransportReporter::pending(Some(error_sender));
+        let ((local, relay), _remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
+        let context = InstantiationContext {
+            clock_hz: None,
+            error_sender: None,
+            console_transport: Some(Arc::new(Mutex::new(Some((
+                Box::new(local) as Box<dyn Transport>, relay, reporter.clone(),
+            ))))),
+        };
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+        let _bus_config = ConsoleModule.instantiate(
+            BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
+
+        // Before `instantiate` runs, this reporter is unbound (no `DeviceId` exists yet at
+        // construction) so every reporting call is a silent no-op; `instantiate` must call
+        // `bind` on the copy it pulls out of the slot for this clone to start reporting too.
+        reporter.report_connected(Some("test-peer".to_string()));
+        match error_receiver.recv().await {
+            Some(crate::emulator::DeviceEvent::TransportConnected { peer, .. }) =>
+                assert_eq!(peer, Some("test-peer".to_string())),
+            other => panic!("expected TransportConnected event, got {other:?}"),
+        }
     }
 
     #[tokio::test]

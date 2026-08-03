@@ -1403,14 +1403,19 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       (P2P transport) with a `DeviceModuleError::Config`, since
       `ProtocolManager` requires per-client tagging that pty/pipe
       transports can't provide.
-- [ ] `TransportReporter::pending`/`bind` (§2.2), for the two call sites
-      that must construct a transport before any `DeviceId` exists
-- [ ] `TransportSlot`/`console_transport` injection path (`registry.rs`,
-      `console.rs`, `main.rs`, `debugger/src-tauri/src/lib.rs`): widen to
-      carry `(Box<dyn Transport>, ChannelRelay<u8>, TransportReporter)`;
-      `pair()`'s asymmetric return needs `debugger/src-tauri`'s
-      `load_session`/`into_split()` usage re-verified against the final
-      signature (§9.4)
+- [x] `TransportReporter::pending`/`bind` (§2.2), for the two call sites
+      that must construct a transport before any `DeviceId` exists —
+      landed together with the `TransportSlot` widening below, since
+      `bind` has nowhere to be called from until the slot carries the
+      reporter through to `ConsoleModule::instantiate`
+- [x] `TransportSlot`/`console_transport` injection path (`registry.rs`,
+      `console.rs`, `main.rs`, `debugger/src-tauri/src/lib.rs`): widened to
+      carry `(Box<dyn Transport>, ChannelRelay<u8>, TransportReporter)`
+      exactly as spec'd; `pair()`'s asymmetric return needed no changes at
+      `debugger/src-tauri`'s `load_session`/`into_split()` call site —
+      `remote` (the `into_split()` half) was and remains untouched by this
+      widening, only `local`'s slot entry gained the two extra elements
+      (§9.4)
 - [x] All Open Questions (§7) resolved during design review; no
       remaining decisions deferred to implementation time
 - [ ] Documentation cleanup pass, once everything above is implemented: the

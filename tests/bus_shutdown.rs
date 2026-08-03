@@ -22,7 +22,7 @@ async fn bus_drop_shuts_down_all_transports_without_hanging() {
     let ((pipe_local, pipe_relay), _pipe_remote) =
         InternalPipeTransport::pair(TransportReporter::pending(None)).unwrap();
     let mut console = Console::new("console").with_address(0x8000);
-    console.attach_transport(Box::new(pipe_local), Some(TransportRelay::Byte(pipe_relay)));
+    console.attach_transport(Box::new(pipe_local), TransportRelay::Byte(pipe_relay));
 
     let (tcp_transport, tcp_relay) =
         TcpSocketTransport::listen("127.0.0.1:0".parse().unwrap(), TransportReporter::pending(None))

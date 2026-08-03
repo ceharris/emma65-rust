@@ -214,7 +214,8 @@ mod tests {
     #[tokio::test]
     async fn send_while_no_client_does_not_count_as_a_drop() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(101), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(101));
         let (mut transport, relay) = UnixSocketTransport::listen(tmp_socket_path("unix_no_client_no_drop"), reporter.clone()).await.unwrap();
         let path = transport.path().to_path_buf();
 
@@ -332,7 +333,8 @@ mod tests {
     #[tokio::test]
     async fn outbound_overflow_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(99), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(99));
         let (mut transport, relay) = UnixSocketTransport::listen_with_capacity(tmp_socket_path("unix_outbound_overflow"), reporter.clone(), 1).await.unwrap();
         let path = transport.path().to_path_buf();
 
@@ -364,7 +366,8 @@ mod tests {
     #[tokio::test]
     async fn inbound_overflow_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(100), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(100));
         let (transport, relay) = UnixSocketTransport::listen_with_capacity(tmp_socket_path("unix_inbound_overflow"), reporter.clone(), 1).await.unwrap();
         let path = transport.path().to_path_buf();
 
@@ -395,7 +398,8 @@ mod tests {
     #[tokio::test]
     async fn client_connect_disconnect_reports_peer_events() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(102), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(102));
         let (transport, relay) = UnixSocketTransport::listen(tmp_socket_path("unix_peer_events"), reporter).await.unwrap();
         let path = transport.path().to_path_buf();
 

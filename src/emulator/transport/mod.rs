@@ -98,13 +98,6 @@ pub struct TransportReporter {
 }
 
 impl TransportReporter {
-    /// Constructs a reporter already bound to `device_id`.
-    pub(crate) fn new(device_id: DeviceId, error_sender: Option<ErrorSender>) -> Self {
-        let reporter = Self::pending(error_sender);
-        reporter.bind(device_id);
-        reporter
-    }
-
     /// Constructs a reporter whose `DeviceId` isn't known yet (§2.2) — for
     /// the `TransportSlot` injection path (§9.4), where the transport must
     /// be built before the device (and its `DeviceId`) exists. Every
@@ -226,7 +219,8 @@ mod transport_reporter_tests {
     #[test]
     fn report_error_sends_transport_error() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(1), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(1));
 
         reporter.report_error(TransportError::Disconnected);
 
@@ -241,7 +235,8 @@ mod transport_reporter_tests {
     #[test]
     fn report_counts_emits_only_nonzero_counters_and_resets_them() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(2), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(2));
 
         reporter.note_outbound_drop();
         reporter.note_outbound_drop();
@@ -265,7 +260,8 @@ mod transport_reporter_tests {
     #[test]
     fn clones_share_counters_and_error_sender() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(3), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(3));
         let clone = reporter.clone();
 
         clone.note_inbound_drop();
@@ -282,7 +278,8 @@ mod transport_reporter_tests {
 
     #[test]
     fn no_error_sender_is_a_silent_no_op() {
-        let reporter = TransportReporter::new(DeviceId(4), None);
+        let reporter = TransportReporter::pending(None);
+        reporter.bind(DeviceId(4));
         // Must not panic even with no sender to report through.
         reporter.report_error(TransportError::Disconnected);
         reporter.report_connected(None);

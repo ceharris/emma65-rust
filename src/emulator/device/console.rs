@@ -57,12 +57,10 @@ pub struct Console {
     name: &'static str,
     address: u16,
     transport: Option<Box<dyn Transport>>,
-    /// Paired with `transport`, drained once per qualifying `tick()` (§9.1 of
-    /// the transport relay redesign plan). `None` both when `transport` is
-    /// `None` and — temporarily — when `transport` was attached via the
-    /// `TransportSlot` injection path (§9.4, not yet widened to carry a
-    /// relay), in which case input never reaches this device until §9.4
-    /// lands.
+    /// Paired with `transport`, drained once per `tick()`. `None` exactly
+    /// when `transport` is `None` — every path that attaches a transport
+    /// (a configured `TransportSpec` or an injected `TransportSlot`) also
+    /// supplies its relay.
     relay: Option<TransportRelay>,
     break_key: Option<u8>,
     ring: Ring<u8>,
@@ -92,13 +90,10 @@ impl Console {
         self
     }
 
-    /// Attaches a transport for byte-stream IO, with its paired relay if one
-    /// is available. `relay` is `None` only for the `TransportSlot`
-    /// injection path (§9.4, not yet widened to carry one) — see the
-    /// `relay` field's doc comment.
-    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: Option<TransportRelay>) {
+    /// Attaches a transport for byte-stream IO, along with its paired relay.
+    pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: TransportRelay) {
         self.transport = Some(transport);
-        self.relay = relay;
+        self.relay = Some(relay);
     }
 
     /// Sets the break key to recognize when reading from the transport
@@ -240,7 +235,7 @@ mod tests {
         let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, relay) = spawn_byte_relay(relay_capacity);
         let mut device = device();
-        device.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
+        device.attach_transport(Box::new(local), TransportRelay::Byte(relay));
         (device, remote, tx)
     }
 
@@ -415,7 +410,7 @@ mod tests {
         let (local, mut remote) = InternalPipeTransport::pair_direct().unwrap();
         let (_tx, relay) = spawn_byte_relay(256);
         let mut console = device().with_address(0xF000);
-        console.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
+        console.attach_transport(Box::new(local), TransportRelay::Byte(relay));
 
         // Map all of RAM (including reset vector region) plus console at 0xF000.
         // Using RAM for 0xFF00–0xFFFF lets us write the reset vector after build().
@@ -474,7 +469,7 @@ mod tests {
         let (local, _remote) = InternalPipeTransport::pair_direct().unwrap();
         let (tx, relay) = spawn_byte_relay(256);
         let mut console = device().with_address(0xF000);
-        console.attach_transport(Box::new(local), Some(TransportRelay::Byte(relay)));
+        console.attach_transport(Box::new(local), TransportRelay::Byte(relay));
 
         let bus = BusConfig::new()
             .ram_with_fill(AddressRange::new(0x0000, 0xEFFF), 0).unwrap()

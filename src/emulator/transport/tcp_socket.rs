@@ -197,7 +197,8 @@ mod tests {
     #[tokio::test]
     async fn send_while_no_client_does_not_count_as_a_drop() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(103), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(103));
         let (mut transport, relay) = TcpSocketTransport::listen("127.0.0.1:0".parse().unwrap(), reporter.clone()).await.unwrap();
 
         assert!(!transport.is_connected());
@@ -306,7 +307,8 @@ mod tests {
     #[tokio::test]
     async fn outbound_overflow_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(99), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(99));
         let (mut transport, relay) = TcpSocketTransport::listen_with_capacity("127.0.0.1:0".parse().unwrap(), reporter.clone(), 1).await.unwrap();
         let addr = transport.local_addr();
 
@@ -337,7 +339,8 @@ mod tests {
     #[tokio::test]
     async fn inbound_overflow_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(100), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(100));
         let (transport, relay) = TcpSocketTransport::listen_with_capacity("127.0.0.1:0".parse().unwrap(), reporter.clone(), 1).await.unwrap();
         let addr = transport.local_addr();
 
@@ -367,7 +370,8 @@ mod tests {
     #[tokio::test]
     async fn client_connect_disconnect_reports_peer_events() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(102), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(102));
         let (transport, relay) = TcpSocketTransport::listen("127.0.0.1:0".parse().unwrap(), reporter).await.unwrap();
         let addr = transport.local_addr();
 

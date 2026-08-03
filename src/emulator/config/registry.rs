@@ -1,15 +1,21 @@
 use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrModule, Mc6840Module, Mc6850Module, PhoebeModule, R6551Module, RamModule, RomModule, Via6522Module, VireoModule};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::config::led_matrix::LedMatrixModule;
-use crate::emulator::transport::{Transport, TransportError};
+use crate::emulator::transport::{ChannelRelay, Transport, TransportError, TransportReporter};
 use crate::emulator::{BusConfig, DeviceEvent, DeviceId, ErrorSender};
 use figment::value::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-/// A shareable slot holding an optional transport, suitable for one-time consumption.
-pub type TransportSlot = Arc<Mutex<Option<Box<dyn Transport>>>>;
+/// A shareable slot holding an optional pre-built transport, suitable for
+/// one-time consumption by a device module that runs after the slot is
+/// filled. The transport is paired with its inbound `ChannelRelay<u8>` and a
+/// `TransportReporter` constructed via `TransportReporter::pending` — the
+/// caller that fills this slot builds the transport before any `DeviceId`
+/// exists, so the reporter starts unbound and the device module that
+/// consumes the slot binds it once the device's id is allocated.
+pub type TransportSlot = Arc<Mutex<Option<(Box<dyn Transport>, ChannelRelay<u8>, TransportReporter)>>>;
 
 /// A context of application attributes that may be used by device modules during instantiation.
 #[derive(Clone)]
@@ -18,11 +24,12 @@ pub struct InstantiationContext {
     pub clock_hz: Option<u64>,
     /// An error sender that can be cloned into any device that needs it.
     pub error_sender: Option<ErrorSender>,
-    /// A pre-created transport to inject into the console device.
+    /// A pre-created transport, relay, and reporter to inject into the
+    /// console device.
     ///
     /// When present, the console device module uses this transport instead of
-    /// constructing one from a `TransportSpec`. The transport is taken (consumed)
-    /// on first use, leaving `None` in its place.
+    /// constructing one from a `TransportSpec`. The slot's contents are taken
+    /// (consumed) on first use, leaving `None` in its place.
     pub console_transport: Option<TransportSlot>,
 }
 

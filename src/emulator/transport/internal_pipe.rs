@@ -555,7 +555,8 @@ mod tests {
     #[test]
     fn outbound_full_pipe_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(99), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(99));
         let ((mut local, relay), _remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
         assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
 

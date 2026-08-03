@@ -23,18 +23,16 @@ async fn main() -> ExitCode {
     // Always offer stdin/stdout to the console via the context. If the console has no
     // `transport=` attribute it will take this transport; if it does have one it will ignore it.
     // Checking whether the slot was consumed after build tells us whether to enter raw mode.
-    let (transport, relay) = InternalPipeTransport::stdio(TransportReporter::pending(None)).unwrap_or_else(|e| {
+    //
+    // No `DeviceId` exists yet at this point (the console's isn't allocated until
+    // `ConsoleModule::instantiate` runs deep inside `build_with_context` below), so the
+    // reporter starts unbound; `ConsoleModule::instantiate` binds it once the id is known.
+    let reporter = TransportReporter::pending(None);
+    let (transport, relay) = InternalPipeTransport::stdio(reporter.clone()).unwrap_or_else(|e| {
         eprintln!("error: failed to attach console to stdin/stdout: {e}");
         std::process::exit(1);
     });
-    // TransportSlot only carries a Box<dyn Transport> today, not its paired
-    // relay — widening it to also carry one is transport relay redesign
-    // plan checklist item 9.4, not yet done. Until then this relay has
-    // nothing to drain it (Console::attach_transport's relay param is None
-    // for the injected-transport path), so stdin input is a known,
-    // temporary gap; forget it rather than let it sit undrained.
-    std::mem::forget(relay);
-    let console_transport_slot = Arc::new(Mutex::new(Some(Box::new(transport) as Box<dyn Transport>)));
+    let console_transport_slot = Arc::new(Mutex::new(Some((Box::new(transport) as Box<dyn Transport>, relay, reporter))));
     let context = InstantiationContext {
         clock_hz: config.emulator.clock_speed_hz,
         error_sender: None,

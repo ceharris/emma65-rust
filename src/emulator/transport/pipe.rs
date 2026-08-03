@@ -358,7 +358,8 @@ mod tests {
     #[tokio::test]
     async fn outbound_overflow_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
-        let reporter = TransportReporter::new(DeviceId(99), Some(sender));
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(99));
         let (mut transport, relay) = PipeTransport::spawn_with_capacity(
             &["cat".to_string()],
             reporter.clone(),

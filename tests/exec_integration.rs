@@ -33,7 +33,7 @@ async fn free_run_console_output() {
     // (inbound path) is unused, so a hand-fed one with no data is enough.
     let (_tx, rx) = crossbeam_channel::unbounded::<u8>();
     let mut console = Console::new("console").with_address(0xF000);
-    console.attach_transport(Box::new(local), Some(TransportRelay::Byte(ChannelRelay::spawn(rx, 256))));
+    console.attach_transport(Box::new(local), TransportRelay::Byte(ChannelRelay::spawn(rx, 256)));
 
     // 64 KB RAM; Console at $F000–$F001.
     let bus = Bus::config()
