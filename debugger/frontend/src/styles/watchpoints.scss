@@ -49,14 +49,23 @@
   }
 }
 
+// flex: 1 1 auto + min-height: 0 on these two (matching .watchpoint-body)
+// ensures they claim all leftover vertical space in .watchpoint-panel even
+// when their own content is short, so .wp-vars-section is always pushed
+// flush to the bottom of the panel rather than floating right below a
+// short watchpoint list.
 .watchpoint-empty {
   display: block;
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 16px;
   color: var(--color-muted-2);
   font-size: var(--font-size-mono);
 }
 
 .watchpoint-error {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 10px;
   color: var(--color-error);
   font-size: var(--font-size-mono);
