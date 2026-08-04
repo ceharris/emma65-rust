@@ -481,6 +481,19 @@ mod tests {
     }
 
     #[test]
+    fn build_snapshot_omits_variable_after_only_assigning_watchpoint_removed() {
+        // Regression test for issue #252: a variable introduced by a walrus
+        // assignment must disappear from the panel's variables section once
+        // the watchpoint that assigned it is removed, not linger with its
+        // last value.
+        let mut watch = WatchData { evaluator: evaluator_with(&["x := A"]), compile_error: None, enabled: vec![true] };
+        watch.evaluator.remove(0);
+        watch.enabled.remove(0);
+        let snapshot = build_snapshot(None, &mut watch);
+        assert!(snapshot.variables.is_empty());
+    }
+
+    #[test]
     fn recompile_sources_replaces_one_source_and_preserves_order() {
         let sources = vec!["A == 0".to_string(), "X == 1".to_string(), "Y == 2".to_string()];
         let evaluator = recompile_sources(&sources, &SymbolTable::new()).unwrap();
