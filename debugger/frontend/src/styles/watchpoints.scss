@@ -14,6 +14,7 @@
 .watchpoint-header {
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 4px 10px;
   background-color: var(--color-bg-alt);
   border-bottom: 1px solid var(--color-border);
@@ -23,6 +24,28 @@
     padding: 0;
     border-bottom: none;
     background: none;
+  }
+}
+
+.watchpoint-add-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  line-height: 1;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover:not(:disabled) {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &:disabled {
+    color: var(--color-muted-2);
+    cursor: default;
   }
 }
 
@@ -59,6 +82,41 @@
   &:hover {
     background-color: var(--color-bg-hover);
   }
+
+  &.selected {
+    background-color: var(--color-bg-selected);
+
+    &:hover {
+      background-color: var(--color-bg-selected-hover);
+    }
+  }
+}
+
+.watchpoint-remove-btn {
+  flex: 0 0 auto;
+  visibility: hidden;
+  background: none;
+  border: none;
+  color: var(--color-muted);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-mono);
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  .watchpoint-row:hover &,
+  .watchpoint-row.selected & {
+    visibility: visible;
+  }
+
+  &:hover:not(:disabled) {
+    color: var(--color-danger-strong);
+  }
+
+  &:disabled {
+    cursor: default;
+  }
 }
 
 .watchpoint-source {
@@ -83,3 +141,92 @@
 .wp-true  { color: var(--color-success); }
 .wp-false { color: var(--color-idle); }
 .wp-error { color: var(--color-error); }
+
+.wp-add-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wp-add-dialog {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+  min-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--font-ui);
+}
+
+.wp-add-title {
+  font-size: var(--font-size-btn);
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-accent);
+}
+
+.wp-add-field {
+  display: flex;
+  align-items: center;
+}
+
+.wp-add-input {
+  flex: 1;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  padding: 3px 6px;
+  border-radius: 3px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent);
+  }
+
+  &.invalid {
+    border-color: var(--color-danger-strong);
+  }
+}
+
+.wp-add-error {
+  font-size: var(--font-size-btn);
+  color: var(--color-danger-strong);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wp-add-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wp-add-btn-action {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 3px 12px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &.wp-add-btn-ok {
+    color: var(--color-accent);
+  }
+}

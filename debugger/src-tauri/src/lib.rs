@@ -11,7 +11,8 @@ use emma65::emulator::{Config, Cpu, Disassembler, DeviceRegistry, EmulatorSessio
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
 
-/// Read-only watchpoint panel: loads/compiles `watchpoints.emw` and evaluates it on demand.
+/// Watchpoint panel: loads/compiles `watchpoints.emw`, evaluates it on demand,
+/// and supports adding/removing watchpoints with persistence back to the file.
 mod watchpoints;
 
 /// Register panel: register snapshot/edit commands and changed-flag tracking.
@@ -181,6 +182,8 @@ pub fn run() {
             theme::get_theme,
             theme::set_theme,
             watchpoints::get_watchpoints,
+            watchpoints::add_watchpoint,
+            watchpoints::remove_watchpoint,
         ])
         .setup(|app| {
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
