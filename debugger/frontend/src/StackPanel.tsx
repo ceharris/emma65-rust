@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { DataRadix, RadixButton, STACK_RADIX_CYCLE, useRadixCycle } from "./RadixControl";
 import "./styles/stack.scss";
 
 interface StackSnapshot {
@@ -13,18 +14,7 @@ const VISIBLE_PAIRS = 8;
 
 // --- radix cycling ---
 
-type DataRadix = "hex" | "udec" | "sdec" | "oct";
-
-const DATA_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "sdec", "oct"];
-
-const DATA_RADIX_LABEL: Record<DataRadix, string> = {
-  hex:  "HEX",
-  udec: "DEC",
-  sdec: "±DEC",
-  oct:  "OCT",
-};
-
-
+/** Formats a stack byte in `radix`. Not reachable with "bin" — `dataRadix` is always confined to `STACK_RADIX_CYCLE` — but the switch stays exhaustive over the shared `DataRadix` type. */
 function formatData(value: number | null, radix: DataRadix): string {
   if (value !== null) {
     switch (radix) {
@@ -32,6 +22,7 @@ function formatData(value: number | null, radix: DataRadix): string {
       case "udec": return value.toString(10);
       case "sdec": return ((value << 24) >> 24).toString(10);
       case "oct":  return value.toString(8).padStart(3, "0");
+      case "bin":  return value.toString(2).padStart(8, "0");
     }
   }
   else {
@@ -40,6 +31,7 @@ function formatData(value: number | null, radix: DataRadix): string {
       case "udec": return "---";
       case "sdec": return "----";
       case "oct": return "---";
+      case "bin": return "--------";
     }
   }
 }
@@ -50,6 +42,7 @@ function radixDataWidth(radix: DataRadix): number {
     case "udec": return 60;
     case "sdec": return 65;
     case "oct": return 60;
+    case "bin": return 100;
   }
 }
 
@@ -115,9 +108,9 @@ function buildRows(s: number, page: number[], alignOdd: boolean): StackRow[] {
 
 export default function StackPanel() {
   const [snap, setSnap] = useState<StackSnapshot | null>(null);
-  const [dataRadix, setDataRadix] = useState<DataRadix>("hex");
+  const [dataRadix, cycleDataRadix] = useRadixCycle(STACK_RADIX_CYCLE, "hex");
   const [alignOdd, setAlignOdd] = useState(false);
-  const [dataWidth, setDataWidth] = useState(50);
+  const dataWidth = radixDataWidth(dataRadix);
 
   const fetchStack = useCallback(async () => {
     try {
@@ -141,15 +134,6 @@ export default function StackPanel() {
     };
   }, [fetchStack]);
 
-  const cycleDataRadix = useCallback(() => {
-    setDataRadix((prevRadix) => {
-      const i = DATA_RADIX_CYCLE.indexOf(prevRadix);
-      const nextRadix = DATA_RADIX_CYCLE[(i + 1) % DATA_RADIX_CYCLE.length];
-      setDataWidth(radixDataWidth(nextRadix));
-      return nextRadix;
-    });
-  }, []);
-
   const toggleAlign = useCallback(() => {
     setAlignOdd((v) => !v);
   }, []);
@@ -158,9 +142,7 @@ export default function StackPanel() {
     <div className="stack-panel">
       <div className="stack-header">
         <span className="panel-title">Stack</span>
-        <button className="radix-btn" onClick={cycleDataRadix} title="Cycle radix">
-          {DATA_RADIX_LABEL[dataRadix]}
-        </button>
+        <RadixButton radix={dataRadix} onCycle={cycleDataRadix} />
         <button
           className="align-btn"
           onClick={toggleAlign}

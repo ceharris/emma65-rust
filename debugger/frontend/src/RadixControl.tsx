@@ -3,7 +3,14 @@ import { useCallback, useState } from "react";
 /** The five numeric bases a data value can be displayed in. */
 export type DataRadix = "hex" | "udec" | "sdec" | "oct" | "bin";
 
+/** The full 5-option cycle: hex, unsigned dec, signed dec, octal, binary. */
 export const DATA_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "sdec", "oct", "bin"];
+
+/** The 3-option cycle used for addresses (no signed display): hex, unsigned dec, octal. */
+export const ADDR_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "oct"];
+
+/** The 4-option cycle used by the stack view (no binary): hex, unsigned dec, signed dec, octal. */
+export const STACK_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "sdec", "oct"];
 
 const DATA_RADIX_LABEL: Record<DataRadix, string> = {
   hex:  "HEX",
@@ -35,16 +42,21 @@ export function formatDataRadix(value: number, radix: DataRadix, widthBits?: num
   }
 }
 
+/** Owns a `DataRadix` value and a handler that cycles it through `cycle`. */
+export function useRadixCycle(cycle: DataRadix[], initial: DataRadix): [DataRadix, () => void] {
+  const [radix, setRadix] = useState<DataRadix>(initial);
+  const doCycle = useCallback(() => {
+    setRadix((r) => {
+      const i = cycle.indexOf(r);
+      return cycle[(i + 1) % cycle.length];
+    });
+  }, [cycle]);
+  return [radix, doCycle];
+}
+
 /** Owns a `DataRadix` value and a handler that cycles it through `DATA_RADIX_CYCLE`. */
 export function useDataRadix(initial: DataRadix = "hex"): [DataRadix, () => void] {
-  const [radix, setRadix] = useState<DataRadix>(initial);
-  const cycle = useCallback(() => {
-    setRadix((r) => {
-      const i = DATA_RADIX_CYCLE.indexOf(r);
-      return DATA_RADIX_CYCLE[(i + 1) % DATA_RADIX_CYCLE.length];
-    });
-  }, []);
-  return [radix, cycle];
+  return useRadixCycle(DATA_RADIX_CYCLE, initial);
 }
 
 interface RadixButtonProps {
