@@ -84,7 +84,7 @@ export default function App() {
       <div className="app-layout">
         <div className="col col-left">
           <MemoryPanel execState={execState} />
-          <WatchpointPanel />
+          <WatchpointPanel execState={execState} />
         </div>
         <div className="col col-center">
           <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
