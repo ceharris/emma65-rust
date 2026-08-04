@@ -126,6 +126,14 @@ body {
   overflow: hidden;
 }
 
+// Placeholder text defaults to a color close to real input text in most
+// browsers; dim and italicize it everywhere so it reads as a hint, not a value.
+::placeholder {
+  color: var(--color-muted);
+  font-style: italic;
+  opacity: 1;
+}
+
 // --- splash screen (init / error) ---
 
 .app-splash {
