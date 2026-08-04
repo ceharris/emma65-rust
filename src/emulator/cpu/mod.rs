@@ -13,7 +13,7 @@ use crate::emulator::bus::{Bus, BusOp, InterruptController};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::{ClockSpeed, StepResult};
 use crate::emulator::{TraceCallback, TraceRecord};
-use crate::watch::{Operand, WatchContext, WatchEvaluator};
+use crate::watch::{Operand, WatchContext, WatchError, WatchEvaluator};
 use log::debug;
 use opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use status::StatusRegister;
@@ -145,6 +145,17 @@ impl Cpu {
     /// Returns a mutable reference to the watch evaluator.
     pub fn evaluator_mut(&mut self) -> &mut WatchEvaluator {
         &mut self.evaluator
+    }
+
+    /// Evaluates each of `evaluator`'s watchpoints against this CPU's current
+    /// register and (peek-only, side-effect-free) bus state.
+    ///
+    /// Independent of `self.evaluator` — the CPU's own watch-triggered
+    /// halting evaluator used by `step()` — and does not affect execution.
+    /// For a caller-owned evaluator driving a display-only watchpoint view.
+    pub fn evaluate_watchpoints(&self, evaluator: &mut WatchEvaluator) -> Vec<Result<Operand, WatchError>> {
+        let ctx = CpuWatchContext { regs: &self.regs, bus: &self.bus };
+        evaluator.evaluate_each(&ctx)
     }
 
     /// Adds `addr` to the breakpoint set.
@@ -2075,6 +2086,44 @@ mod tests {
         ));
         // Instruction must NOT have executed.
         assert_eq!(cpu.regs.pc, 0x0200);
+    }
+
+    // --- Cpu::evaluate_watchpoints ---
+
+    #[test]
+    fn evaluate_watchpoints_returns_values_against_live_cpu_state() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.registers_mut().a = 0x42;
+        let mut compiler = make_compiler();
+        let mut evaluator = WatchEvaluator::new();
+        let wp_true = compiler.compile("A == $42", &mut evaluator).unwrap();
+        let wp_false = compiler.compile("A == 0", &mut evaluator).unwrap();
+        let wp_error = compiler.compile("A / 0", &mut evaluator).unwrap();
+        evaluator.add(wp_true);
+        evaluator.add(wp_false);
+        evaluator.add(wp_error);
+        let results = cpu.evaluate_watchpoints(&mut evaluator);
+        assert_eq!(results, vec![
+            Ok(1),
+            Ok(0),
+            Err(WatchError::DivisionByZero),
+        ]);
+    }
+
+    #[test]
+    fn evaluate_watchpoints_is_independent_of_cpu_evaluator() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xEA]); // NOP
+        // A == 0 is true from the start (A is 0 after reset), but this
+        // evaluator is never installed via cpu.evaluator_mut(), so it must
+        // have no effect on cpu.step().
+        let mut compiler = make_compiler();
+        let mut evaluator = WatchEvaluator::new();
+        let wp = compiler.compile("A == 0", &mut evaluator).unwrap();
+        evaluator.add(wp);
+        let _ = cpu.evaluate_watchpoints(&mut evaluator);
+        assert!(matches!(cpu.step(None, true), StepResult::Executed(_)));
+        assert_eq!(cpu.regs.pc, 0x0201);
     }
 
 
