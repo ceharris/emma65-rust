@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::CpuState;
-use crate::cpu_bus::{CpuBusCache, snapshot_cpu_bus};
+use crate::cpu_bus::{CpuBusCache, UiIrqSourceState, snapshot_cpu_bus};
 use crate::memory::MemoryViewAddr;
 use crate::registers::{ChangedFlagsState, RegisterSnapshot};
 use emma65::emulator::cpu::StepResult;
@@ -300,9 +300,10 @@ pub fn run_cpu(
     spawn_running_tick(app.clone());
 
     tauri::async_runtime::spawn(async move {
-        let (result, cpu) = handle.take_cpu_with_result().await;
+        let (result, mut cpu) = handle.take_cpu_with_result().await;
         let pc = cpu.registers().pc;
         let result = Some(result);
+        clear_ui_interrupts_on_reset(&app, &mut cpu, &result);
         let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
         finish_run(&app, cpu, 0, cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc);
     });
@@ -339,7 +340,7 @@ pub fn step_over(
     skip_breakpoint_pc.0.lock().unwrap().take();
     let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
     let p_before = cpu.registers().p.to_byte();
-    let (stopper, stop_rx) = RunStopper::channel();
+    let (stopper, stop_rx, mut cmd_rx) = RunStopper::channel();
     *run_stopper_state.0.lock().unwrap() = Some(stopper);
 
     let (live_tx, live_rx) = tokio::sync::watch::channel(None);
@@ -349,9 +350,10 @@ pub fn step_over(
     let addr_arc = Arc::clone(&mem_view_addr.0);
     std::thread::spawn(move || {
         let mut cpu = cpu;
-        let result = exec_step_over_subroutine(&mut cpu, &stop_rx, Some(&live_tx), &addr_arc);
+        let result = exec_step_over_subroutine(&mut cpu, &stop_rx, &mut cmd_rx, Some(&live_tx), &addr_arc);
         let pc = cpu.registers().pc;
         let changed = p_before ^ cpu.registers().p.to_byte();
+        clear_ui_interrupts_on_reset(&app, &mut cpu, &result);
         let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
         finish_run(&app, cpu, changed, cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc);
     });
@@ -376,7 +378,7 @@ pub fn step_return(
     skip_breakpoint_pc.0.lock().unwrap().take();
     let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
     let p_before = cpu.registers().p.to_byte();
-    let (stopper, stop_rx) = RunStopper::channel();
+    let (stopper, stop_rx, mut cmd_rx) = RunStopper::channel();
     *run_stopper_state.0.lock().unwrap() = Some(stopper);
 
     let (live_tx, live_rx) = tokio::sync::watch::channel(None);
@@ -386,14 +388,29 @@ pub fn step_return(
     let addr_arc = Arc::clone(&mem_view_addr.0);
     std::thread::spawn(move || {
         let mut cpu = cpu;
-        let result = exec_step_return(&mut cpu, &stop_rx, Some(&live_tx), &addr_arc);
+        let result = exec_step_return(&mut cpu, &stop_rx, &mut cmd_rx, Some(&live_tx), &addr_arc);
         let pc = cpu.registers().pc;
         let changed = p_before ^ cpu.registers().p.to_byte();
+        clear_ui_interrupts_on_reset(&app, &mut cpu, &result);
         let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
         finish_run(&app, cpu, changed, cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc);
     });
 
     Ok(())
+}
+
+/// If `result` is a mid-run RESET, clears any NMI/IRQ state the debugger UI itself
+/// introduced (mirroring the explicit `reset_cpu` command) and emits
+/// `debugger-cpu-reset` so the frontend can stop auto-step if active.
+fn clear_ui_interrupts_on_reset(app: &AppHandle, cpu: &mut Cpu, result: &Option<StepResult>) {
+    if !matches!(result, Some(StepResult::Reset)) {
+        return;
+    }
+    if let Some(ui_irq_source) = *app.state::<UiIrqSourceState>().0.lock().unwrap() {
+        cpu.interrupts_mut().release_irq(ui_irq_source);
+    }
+    cpu.interrupts_mut().take_nmi();
+    let _ = app.emit("debugger-cpu-reset", ());
 }
 
 /// Extracts the execution-result flags from an optional `StepResult`.

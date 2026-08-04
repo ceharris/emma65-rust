@@ -126,9 +126,13 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
 
   const handleReset = useCallback(async () => {
     try {
-      const snap = await invoke<RegisterSnapshot>("reset_cpu");
+      // While free-running, reset_cpu returns null: the run halts asynchronously
+      // and the register update instead arrives via the debugger-run-stopped event.
+      const snap = await invoke<RegisterSnapshot | null>("reset_cpu");
       setIrqAsserted(false);
-      onReset(snap);
+      if (snap !== null) {
+        onReset(snap);
+      }
     } catch (e) {
       console.error("reset_cpu failed:", e);
     }
@@ -203,7 +207,6 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
           <button
             className="exec-btn nmi-btn"
             onClick={handleTriggerNmi}
-            disabled={execState === "running"}
             title="Trigger NMI"
           >
             NMI
@@ -211,7 +214,6 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
           <button
             className={`exec-btn irq-btn${irqAsserted ? " active" : ""}`}
             onClick={handleToggleIrq}
-            disabled={execState === "running"}
             title="Assert/Release IRQ"
           >
             IRQ
@@ -219,7 +221,6 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
           <button
             className="exec-btn reset-btn"
             onClick={handleReset}
-            disabled={execState !== "stopped"}
             title="Reset CPU"
           >
             Reset

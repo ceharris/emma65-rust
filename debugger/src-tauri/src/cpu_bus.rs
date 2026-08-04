@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use emma65::emulator::{Cpu, IrqSource};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::disassembly::SkipBreakpointPc;
+use crate::disassembly::{LiveSnapshotRx, RunStopperState, SkipBreakpointPc};
 use crate::registers::{ChangedFlagsState, RegisterSnapshot};
 use crate::CpuState;
 
@@ -62,10 +62,17 @@ pub struct CpuBusState {
 }
 
 /// Resets the CPU (reads reset vector, reinitializes registers) and returns the
-/// post-reset register snapshot.
+/// post-reset register snapshot, or `None` if the CPU was free-running.
 ///
-/// Resets `ChangedFlagsState` to 0 and emits `debugger-halted` with the new PC,
-/// then emits `debugger-cpu-reset` so the frontend can stop auto-step if active.
+/// While free-running (Run, Step Over, or Step Return in progress), this instead
+/// signals a RESET into the running CPU via `RunStopper::trigger_reset` and
+/// returns immediately; the run halts on its own and the free-run completion
+/// handler emits `debugger-halted`/`debugger-run-stopped`/`debugger-cpu-reset`
+/// with the real post-reset snapshot.
+///
+/// Otherwise resets `ChangedFlagsState` to 0 and emits `debugger-halted` with
+/// the new PC, then emits `debugger-cpu-reset` so the frontend can stop
+/// auto-step if active.
 #[tauri::command]
 pub fn reset_cpu(
     app: AppHandle,
@@ -74,7 +81,13 @@ pub fn reset_cpu(
     cpu_bus_cache: State<CpuBusCache>,
     skip_breakpoint_pc: State<SkipBreakpointPc>,
     ui_irq_source: State<UiIrqSourceState>,
-) -> Result<RegisterSnapshot, String> {
+    run_stopper_state: State<RunStopperState>,
+) -> Result<Option<RegisterSnapshot>, String> {
+    if let Some(stopper) = run_stopper_state.0.lock().unwrap().as_ref() {
+        stopper.trigger_reset();
+        return Ok(None);
+    }
+
     let ui_irq_source = ui_irq_source.0.lock().unwrap().ok_or("CPU not ready")?;
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
@@ -105,45 +118,103 @@ pub fn reset_cpu(
 
     let _ = app.emit("debugger-halted", regs.pc);
     let _ = app.emit("debugger-cpu-reset", ());
-    Ok(snapshot)
+    Ok(Some(snapshot))
 }
 
-/// Latches a pending NMI. Only callable while the CPU is stopped (not free-running).
+/// Latches a pending NMI.
+///
+/// While free-running, signals the running CPU via `RunStopper::trigger_nmi`
+/// instead of locking `CpuState`, and returns the best-known current state.
 #[tauri::command]
 pub fn trigger_nmi(
     cpu_state: State<CpuState>,
     cpu_bus_cache: State<CpuBusCache>,
+    run_stopper_state: State<RunStopperState>,
+    live_snapshot_rx: State<LiveSnapshotRx>,
 ) -> Result<CpuBusState, String> {
+    // Scoped so the lock is released before `current_cpu_bus_state` re-locks
+    // `run_stopper_state` below; `if let` on a `.lock()` temporary would
+    // otherwise hold the guard for the whole block and self-deadlock.
+    let is_running = {
+        let guard = run_stopper_state.0.lock().unwrap();
+        if let Some(stopper) = guard.as_ref() {
+            stopper.trigger_nmi();
+            true
+        } else {
+            false
+        }
+    };
+    if is_running {
+        return Ok(current_cpu_bus_state(&cpu_bus_cache, &run_stopper_state, &live_snapshot_rx));
+    }
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
     cpu.interrupts_mut().signal_nmi();
     Ok(refresh_cpu_bus_cache(cpu, &cpu_bus_cache))
 }
 
-/// Asserts the IRQ line from the debugger UI's own IRQ source. Only callable
-/// while the CPU is stopped (not free-running).
+/// Asserts the IRQ line from the debugger UI's own IRQ source.
+///
+/// While free-running, signals the running CPU via `RunStopper::assert_irq`
+/// instead of locking `CpuState`, and returns the best-known current state.
 #[tauri::command]
 pub fn assert_irq(
     cpu_state: State<CpuState>,
     cpu_bus_cache: State<CpuBusCache>,
     ui_irq_source: State<UiIrqSourceState>,
+    run_stopper_state: State<RunStopperState>,
+    live_snapshot_rx: State<LiveSnapshotRx>,
 ) -> Result<CpuBusState, String> {
     let ui_irq_source = ui_irq_source.0.lock().unwrap().ok_or("CPU not ready")?;
+    // Scoped so the lock is released before `current_cpu_bus_state` re-locks
+    // `run_stopper_state` below; `if let` on a `.lock()` temporary would
+    // otherwise hold the guard for the whole block and self-deadlock.
+    let is_running = {
+        let guard = run_stopper_state.0.lock().unwrap();
+        if let Some(stopper) = guard.as_ref() {
+            stopper.assert_irq(ui_irq_source);
+            true
+        } else {
+            false
+        }
+    };
+    if is_running {
+        return Ok(current_cpu_bus_state(&cpu_bus_cache, &run_stopper_state, &live_snapshot_rx));
+    }
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
     cpu.interrupts_mut().assert_irq(ui_irq_source);
     Ok(refresh_cpu_bus_cache(cpu, &cpu_bus_cache))
 }
 
-/// Releases the IRQ line from the debugger UI's own IRQ source. Only callable
-/// while the CPU is stopped (not free-running).
+/// Releases the IRQ line from the debugger UI's own IRQ source.
+///
+/// While free-running, signals the running CPU via `RunStopper::release_irq`
+/// instead of locking `CpuState`, and returns the best-known current state.
 #[tauri::command]
 pub fn release_irq(
     cpu_state: State<CpuState>,
     cpu_bus_cache: State<CpuBusCache>,
     ui_irq_source: State<UiIrqSourceState>,
+    run_stopper_state: State<RunStopperState>,
+    live_snapshot_rx: State<LiveSnapshotRx>,
 ) -> Result<CpuBusState, String> {
     let ui_irq_source = ui_irq_source.0.lock().unwrap().ok_or("CPU not ready")?;
+    // Scoped so the lock is released before `current_cpu_bus_state` re-locks
+    // `run_stopper_state` below; `if let` on a `.lock()` temporary would
+    // otherwise hold the guard for the whole block and self-deadlock.
+    let is_running = {
+        let guard = run_stopper_state.0.lock().unwrap();
+        if let Some(stopper) = guard.as_ref() {
+            stopper.release_irq(ui_irq_source);
+            true
+        } else {
+            false
+        }
+    };
+    if is_running {
+        return Ok(current_cpu_bus_state(&cpu_bus_cache, &run_stopper_state, &live_snapshot_rx));
+    }
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
     cpu.interrupts_mut().release_irq(ui_irq_source);
@@ -152,8 +223,8 @@ pub fn release_irq(
 
 /// Refreshes `CpuBusCache` from `cpu` and returns the corresponding `CpuBusState`.
 ///
-/// `is_running` is always `false` here: `CpuState` only holds `Some(Cpu)` while
-/// the CPU is not free-running (it's taken by the run loop otherwise).
+/// `is_running` is always `false` here: this is only called from the direct-lock
+/// (not free-running) path of `trigger_nmi`/`assert_irq`/`release_irq`.
 fn refresh_cpu_bus_cache(cpu: &Cpu, cpu_bus_cache: &State<CpuBusCache>) -> CpuBusState {
     let snap = snapshot_cpu_bus(cpu);
     *cpu_bus_cache.0.lock().unwrap() = snap.clone();
@@ -180,16 +251,15 @@ pub fn snapshot_cpu_bus(cpu: &Cpu) -> CpuBusSnapshot {
     }
 }
 
-/// Returns the current CPU/bus signals and cycle count, plus whether the CPU is free-running.
+/// Computes the current CPU/bus signals and cycle count, plus whether the CPU is free-running.
 ///
 /// All signals come from the cache updated after each step or run completion, except while
 /// free-running (Run, Step Over, Step Return), when they're read from the live snapshot channel
 /// so the display updates at the tick rate rather than only at halt.
-#[tauri::command]
-pub fn get_cpu_bus_state(
-    cpu_bus_cache: State<CpuBusCache>,
-    run_stopper_state: State<crate::disassembly::RunStopperState>,
-    live_snapshot_rx: State<crate::disassembly::LiveSnapshotRx>,
+fn current_cpu_bus_state(
+    cpu_bus_cache: &State<CpuBusCache>,
+    run_stopper_state: &State<RunStopperState>,
+    live_snapshot_rx: &State<LiveSnapshotRx>,
 ) -> CpuBusState {
     let snap = cpu_bus_cache.0.lock().unwrap().clone();
     let is_running = run_stopper_state.0.lock().unwrap().is_some();
@@ -213,4 +283,14 @@ pub fn get_cpu_bus_state(
         cpu_stopped: live.as_ref().map_or(snap.cpu_stopped, |s| s.cpu_stopped),
         cpu_waiting: live.as_ref().map_or(snap.cpu_waiting, |s| s.cpu_waiting),
     }
+}
+
+/// Returns the current CPU/bus signals and cycle count, plus whether the CPU is free-running.
+#[tauri::command]
+pub fn get_cpu_bus_state(
+    cpu_bus_cache: State<CpuBusCache>,
+    run_stopper_state: State<RunStopperState>,
+    live_snapshot_rx: State<LiveSnapshotRx>,
+) -> CpuBusState {
+    current_cpu_bus_state(&cpu_bus_cache, &run_stopper_state, &live_snapshot_rx)
 }

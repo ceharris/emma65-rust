@@ -1,10 +1,11 @@
 //! Execution control; provides the main entry points for execution on the emulated CPU.
 
+use crate::emulator::bus::IrqSource;
 use crate::emulator::cpu::opcodes::DecodedOp;
 use crate::emulator::cpu::{Cpu, Registers, StepResult};
 use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
 use std::time::{Duration, Instant};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// A lightweight snapshot of CPU state published by the run loop after each
 /// instruction batch so callers can display live state without stopping the CPU.
@@ -66,6 +67,45 @@ const JSR_BYTE_LEN: u16 = 3;
 const UNLIMITED_SENTINEL: u64 = 0;
 const BATCH_SIZE: u32 = 1000;
 
+/// A command that mutates a running CPU's interrupt state, applied by
+/// [`run_loop`], [`step_over_subroutine`], or [`step_return`].
+///
+/// [`run_loop`] drains the channel once per batch (≤[`BATCH_SIZE`]
+/// instructions) rather than once per instruction: a per-instruction
+/// `try_recv()` measurably cuts unthrottled throughput (~12% in a bare
+/// RAM-only benchmark), while a batch's worth of delay is imperceptible for
+/// a UI-driven command. [`step_over_subroutine`] and [`step_return`] drain
+/// once per instruction instead, since those operations are typically much
+/// shorter than a full batch and must not silently drop a queued command.
+#[derive(Debug, Clone, Copy)]
+pub enum InterruptCommand {
+    /// Asserts the IRQ line from the given source.
+    AssertIrq(IrqSource),
+    /// Releases the IRQ line from the given source.
+    ReleaseIrq(IrqSource),
+    /// Latches a pending NMI.
+    TriggerNmi,
+    /// Latches a pending RESET.
+    TriggerReset,
+}
+
+/// Applies `cmd` to `cpu`'s interrupt controller.
+fn apply_interrupt_command(cpu: &mut Cpu, cmd: InterruptCommand) {
+    match cmd {
+        InterruptCommand::AssertIrq(source) => cpu.interrupts_mut().assert_irq(source),
+        InterruptCommand::ReleaseIrq(source) => cpu.interrupts_mut().release_irq(source),
+        InterruptCommand::TriggerNmi => cpu.interrupts_mut().signal_nmi(),
+        InterruptCommand::TriggerReset => cpu.interrupts_mut().signal_reset(),
+    }
+}
+
+/// Drains and applies all commands currently queued on `cmd_rx`, without blocking.
+fn drain_interrupt_commands(cpu: &mut Cpu, cmd_rx: &mut mpsc::UnboundedReceiver<InterruptCommand>) {
+    while let Ok(cmd) = cmd_rx.try_recv() {
+        apply_interrupt_command(cpu, cmd);
+    }
+}
+
 /// Target clock frequency for the emulated CPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClockSpeed {
@@ -100,26 +140,64 @@ impl ClockSpeed {
     }
 }
 
-/// Clonable handle for signaling a free-running CPU thread to stop.
+/// Clonable handle for signaling a free-running CPU thread to stop, or to apply
+/// an [`InterruptCommand`] without stopping it.
 ///
 /// Obtained from [`RunHandle::stopper`] or created independently via
-/// [`RunStopper::channel`]. Multiple stoppers share the same underlying stop
-/// channel, so any one of them can halt the run.
-pub struct RunStopper(watch::Sender<bool>);
+/// [`RunStopper::channel`]. Multiple stoppers share the same underlying
+/// channels, so any one of them can halt the run or send a command.
+pub struct RunStopper {
+    stop_tx: watch::Sender<bool>,
+    cmd_tx: mpsc::UnboundedSender<InterruptCommand>,
+}
 
 impl RunStopper {
-    /// Creates a `(stopper, receiver)` pair for use with [`step_over_subroutine`]
-    /// and [`step_return`].
-    pub fn channel() -> (Self, watch::Receiver<bool>) {
-        let (tx, rx) = watch::channel(false);
-        (Self(tx), rx)
+    /// Creates a `(stopper, stop_receiver, command_receiver)` triple for use
+    /// with [`step_over_subroutine`] and [`step_return`].
+    pub fn channel() -> (Self, watch::Receiver<bool>, mpsc::UnboundedReceiver<InterruptCommand>) {
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        (Self { stop_tx, cmd_tx }, stop_rx, cmd_rx)
     }
 
     /// Signals the CPU thread to stop after the current instruction.
     ///
     /// Non-blocking. The CPU will stop before the next instruction fetch.
     pub fn stop(&self) {
-        let _ = self.0.send(true);
+        let _ = self.stop_tx.send(true);
+    }
+
+    /// Asserts the IRQ line from `source` on the running CPU.
+    ///
+    /// Non-blocking; applied between instructions. Does not stop the run —
+    /// the CPU services the interrupt transparently, the same as a
+    /// device-sourced IRQ.
+    pub fn assert_irq(&self, source: IrqSource) {
+        let _ = self.cmd_tx.send(InterruptCommand::AssertIrq(source));
+    }
+
+    /// Releases the IRQ line from `source` on the running CPU.
+    ///
+    /// Non-blocking; applied between instructions.
+    pub fn release_irq(&self, source: IrqSource) {
+        let _ = self.cmd_tx.send(InterruptCommand::ReleaseIrq(source));
+    }
+
+    /// Latches a pending NMI on the running CPU.
+    ///
+    /// Non-blocking; applied between instructions. Does not stop the run —
+    /// the CPU services the NMI transparently.
+    pub fn trigger_nmi(&self) {
+        let _ = self.cmd_tx.send(InterruptCommand::TriggerNmi);
+    }
+
+    /// Latches a pending RESET on the running CPU.
+    ///
+    /// Non-blocking; applied between instructions. Once serviced, the CPU
+    /// returns [`StepResult::Reset`], which halts the run (the same way a
+    /// breakpoint does) so the caller can inspect post-reset state.
+    pub fn trigger_reset(&self) {
+        let _ = self.cmd_tx.send(InterruptCommand::TriggerReset);
     }
 }
 
@@ -131,6 +209,8 @@ impl RunStopper {
 pub struct RunHandle {
     /// Sends `true` to ask the CPU thread to stop after the current instruction.
     stop_tx: watch::Sender<bool>,
+    /// Sends [`InterruptCommand`]s to be applied between instructions.
+    cmd_tx: mpsc::UnboundedSender<InterruptCommand>,
     /// Receives the `StepResult` that caused execution to stop.
     result_rx: oneshot::Receiver<StepResult>,
     /// Receives ownership of the CPU after the thread exits.
@@ -140,12 +220,12 @@ pub struct RunHandle {
 }
 
 impl RunHandle {
-    /// Returns a [`RunStopper`] that shares the underlying stop channel.
+    /// Returns a [`RunStopper`] that shares the underlying stop and command channels.
     ///
-    /// The stopper can be cloned and stored independently; calling
-    /// [`RunStopper::stop`] on any clone halts the run.
+    /// The stopper can be cloned and stored independently; calling any of its
+    /// methods on any clone affects this run.
     pub fn stopper(&self) -> RunStopper {
-        RunStopper(self.stop_tx.clone())
+        RunStopper { stop_tx: self.stop_tx.clone(), cmd_tx: self.cmd_tx.clone() }
     }
 
     /// Signals the CPU thread to stop after the current instruction.
@@ -226,6 +306,9 @@ pub fn step_over_breakpoint(cpu: &mut Cpu, skip_pc: u16) -> StepResult {
 /// operation is interrupted and `None` is returned with the CPU left at its
 /// current PC. Returns `Some(result)` on natural completion.
 ///
+/// `cmd_rx` is drained between instructions, applying any queued
+/// [`InterruptCommand`]s to the CPU.
+///
 /// If `live_tx` is `Some`, a [`CpuLiveSnapshot`] is published periodically
 /// (based on a fixed batch size) so callers can display live state while a long
 /// subroutine runs. `mem_view_addr` selects which 256-byte page is captured in
@@ -233,6 +316,7 @@ pub fn step_over_breakpoint(cpu: &mut Cpu, skip_pc: u16) -> StepResult {
 pub fn step_over_subroutine(
     cpu: &mut Cpu,
     stop_rx: &watch::Receiver<bool>,
+    cmd_rx: &mut mpsc::UnboundedReceiver<InterruptCommand>,
     live_tx: Option<&watch::Sender<Option<CpuLiveSnapshot>>>,
     mem_view_addr: &Arc<AtomicU16>,
 ) -> Option<StepResult> {
@@ -260,6 +344,7 @@ pub fn step_over_subroutine(
             if !already_set { cpu.remove_breakpoint(target); }
             return None;
         }
+        drain_interrupt_commands(cpu, cmd_rx);
         let res = if first {
             first = false;
             step_over_breakpoint(cpu, pc)
@@ -315,6 +400,9 @@ pub fn step_over_subroutine(
 /// operation is interrupted and `None` is returned with the CPU left at its
 /// current PC. Returns `Some(result)` on natural completion.
 ///
+/// `cmd_rx` is drained between instructions, applying any queued
+/// [`InterruptCommand`]s to the CPU.
+///
 /// If `live_tx` is `Some`, a [`CpuLiveSnapshot`] is published periodically
 /// (based on a fixed batch size) so callers can display live state while a long
 /// subroutine runs. `mem_view_addr` selects which 256-byte page is captured in
@@ -322,6 +410,7 @@ pub fn step_over_subroutine(
 pub fn step_return(
     cpu: &mut Cpu,
     stop_rx: &watch::Receiver<bool>,
+    cmd_rx: &mut mpsc::UnboundedReceiver<InterruptCommand>,
     live_tx: Option<&watch::Sender<Option<CpuLiveSnapshot>>>,
     mem_view_addr: &Arc<AtomicU16>,
 ) -> Option<StepResult> {
@@ -336,6 +425,7 @@ pub fn step_return(
         if *stop_rx.borrow() {
             return None;
         }
+        drain_interrupt_commands(cpu, cmd_rx);
         let pc = cpu.registers().pc;
         let res = if first {
             first = false;
@@ -384,22 +474,25 @@ pub fn run(cpu: Cpu) -> RunHandle {
 /// it at any time while running.
 pub fn run_from(cpu: Cpu, skip_pc: Option<u16>, mem_view_addr: Arc<AtomicU16>) -> RunHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
     let (cpu_tx, cpu_rx) = oneshot::channel();
     let (live_tx, live_rx) = watch::channel(None);
 
     std::thread::spawn(move || {
-        run_loop(cpu, skip_pc, mem_view_addr, stop_rx, live_tx, result_tx, cpu_tx);
+        run_loop(cpu, skip_pc, mem_view_addr, stop_rx, cmd_rx, live_tx, result_tx, cpu_tx);
     });
 
-    RunHandle { stop_tx, result_rx, cpu_rx, live_rx }
+    RunHandle { stop_tx, cmd_tx, result_rx, cpu_rx, live_rx }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_loop(
     mut cpu: Cpu,
     skip_pc: Option<u16>,
     mem_view_addr: Arc<AtomicU16>,
     stop_rx: watch::Receiver<bool>,
+    mut cmd_rx: mpsc::UnboundedReceiver<InterruptCommand>,
     live_tx: watch::Sender<Option<CpuLiveSnapshot>>,
     result_tx: oneshot::Sender<StepResult>,
     cpu_tx: oneshot::Sender<Cpu>,
@@ -412,6 +505,12 @@ fn run_loop(
     let check_breakpoints = !cpu.breakpoints().is_empty() || !cpu.evaluator().is_empty();
 
     let final_result = 'outer: loop {
+        // Drained once per batch rather than once per instruction: a
+        // per-instruction `try_recv()` measurably cuts unthrottled
+        // throughput (see InterruptCommand doc comment), while a batch's
+        // worth of delay (≤1000 instructions, sub-millisecond even at
+        // throttled clock speeds) is imperceptible for a UI-driven command.
+        drain_interrupt_commands(&mut cpu, &mut cmd_rx);
         for _ in 0..BATCH_SIZE {
             if *stop_rx.borrow() {
                 break 'outer None;
@@ -635,11 +734,122 @@ mod tests {
         assert_eq!(cpu.registers().pc, 0x0200);
     }
 
+    // --- interrupt commands while running ---
+
+    /// Builds a CPU with an infinite `CLI; NOP; BRA` loop at $0200 (so IRQ is
+    /// unmasked) and an IRQ ISR at $0300 that writes $42 to $0000 then returns.
+    fn make_cpu_with_irq_loop() -> Cpu {
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x58, 0xEA, 0x80, 0xFD]); // CLI, NOP, BRA -3
+        write(&mut cpu, 0x0300, &[0xA9, 0x42, 0x8D, 0x00, 0x00, 0x40]); // LDA #$42, STA $0000, RTI
+        cpu.bus_mut().write(0xFFFE, 0x00).unwrap(); // IRQ vector lo -> $0300
+        cpu.bus_mut().write(0xFFFF, 0x03).unwrap(); // IRQ vector hi
+        cpu
+    }
+
+    /// Builds a CPU with an infinite `NOP; BRA` loop at $0200 and an NMI ISR at
+    /// $0300 that writes $99 to $0000 then returns.
+    fn make_cpu_with_nmi_loop() -> Cpu {
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xEA, 0x80, 0xFE]); // NOP, BRA -2
+        write(&mut cpu, 0x0300, &[0xA9, 0x99, 0x8D, 0x00, 0x00, 0x40]); // LDA #$99, STA $0000, RTI
+        cpu.bus_mut().write(0xFFFA, 0x00).unwrap(); // NMI vector lo -> $0300
+        cpu.bus_mut().write(0xFFFB, 0x03).unwrap(); // NMI vector hi
+        cpu
+    }
+
+    /// Reads the byte at $0000, used as a marker address by the ISRs above.
+    fn read_marker(cpu: &Cpu) -> u8 {
+        let mut buf = [0u8];
+        let _ = cpu.bus().peek_range(0x0000, &mut buf);
+        buf[0]
+    }
+
+    #[tokio::test]
+    async fn run_stopper_assert_irq_services_without_halting_run() {
+        // Asserting IRQ via a RunStopper on a running CPU thread must be applied
+        // and serviced without stopping the free run.
+        let cpu = make_cpu_with_irq_loop();
+        let handle = run(cpu);
+        let stopper = handle.stopper();
+        // Give the loop time to execute CLI at least once.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        stopper.assert_irq(IrqSource(0));
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let cpu = handle.take_cpu().await;
+        assert_eq!(read_marker(&cpu), 0x42, "IRQ ISR should have run while free-running");
+    }
+
+    #[tokio::test]
+    async fn run_stopper_trigger_nmi_services_without_halting_run() {
+        // Triggering NMI via a RunStopper on a running CPU thread must be applied
+        // and serviced without stopping the free run.
+        let cpu = make_cpu_with_nmi_loop();
+        let handle = run(cpu);
+        let stopper = handle.stopper();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        stopper.trigger_nmi();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let cpu = handle.take_cpu().await;
+        assert_eq!(read_marker(&cpu), 0x99, "NMI ISR should have run while free-running");
+    }
+
+    #[tokio::test]
+    async fn run_stopper_trigger_reset_halts_run() {
+        // Triggering RESET via a RunStopper must halt the free run (like a
+        // breakpoint) and leave the CPU at the reset vector's target.
+        let cpu = make_cpu_with_speed(ClockSpeed::unlimited());
+        let handle = run(cpu);
+        let stopper = handle.stopper();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        stopper.trigger_reset();
+        let (result, cpu) = handle.take_cpu_with_result().await;
+        assert!(matches!(result, StepResult::Reset), "expected Reset");
+        assert_eq!(cpu.registers().pc, NOP_ADDR);
+    }
+
+    #[test]
+    fn step_over_subroutine_applies_queued_interrupt_command() {
+        // A command queued before the call must be applied before the first
+        // instruction of a JSR-atomic step executes.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0x60]); // NOP, NOP, RTS
+        let (stopper, stop_rx, mut cmd_rx) = RunStopper::channel();
+        stopper.assert_irq(IrqSource(5));
+        let result = step_over_subroutine(&mut cpu, &stop_rx, &mut cmd_rx, None, &no_mem()).unwrap();
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert!(cpu.interrupts().irq_active());
+    }
+
+    #[test]
+    fn step_return_applies_nmi_command_from_channel() {
+        // Same scenario as step_return_nmi_during_subroutine_does_not_prematurely_halt,
+        // but delivering the NMI through the command channel instead of a direct call.
+        let mut cpu = make_cpu_at(0x0200);
+        cpu.bus_mut().write(0xFFFA, 0x00).unwrap(); // NMI vector lo
+        cpu.bus_mut().write(0xFFFB, 0x04).unwrap(); // NMI vector hi → $0400
+        write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
+        write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0xEA, 0x60]); // NOP, NOP, NOP, RTS
+        write(&mut cpu, 0x0400, &[0x40]); // ISR: RTI
+        step_into(&mut cpu); // JSR $0300 — S = 0xFD
+        let (stopper, stop_rx, mut cmd_rx) = RunStopper::channel();
+        stopper.trigger_nmi();
+        let result = step_return(&mut cpu, &stop_rx, &mut cmd_rx, None, &no_mem()).unwrap();
+        assert!(matches!(result, StepResult::Executed(_)));
+        assert_eq!(cpu.registers().pc, 0x0203);
+    }
+
     // --- step_over / step_return helpers ---
 
     /// Returns a stop receiver that never fires, for use in tests that don't need interruption.
     fn no_stop() -> watch::Receiver<bool> {
         watch::channel(false).1
+    }
+
+    /// Returns a command receiver with no sender, for tests that don't exercise interrupt commands.
+    fn no_cmd() -> mpsc::UnboundedReceiver<InterruptCommand> {
+        mpsc::unbounded_channel().1
     }
 
     /// Returns a dummy memory-view-address arc for tests that don't exercise live snapshots.
@@ -677,7 +887,7 @@ mod tests {
         // NOP at $0200; step_over should execute it and advance PC by 1.
         let mut cpu = make_cpu_at(0x0200);
         write(&mut cpu, 0x0200, &[0xEA]); // NOP
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0201);
     }
@@ -689,7 +899,7 @@ mod tests {
         let mut cpu = make_cpu_at(0x0200);
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -703,7 +913,7 @@ mod tests {
         write(&mut cpu, 0x0300, &[0x20, 0x00, 0x04]); // JSR $0400
         write(&mut cpu, 0x0303, &[0x60]);               // RTS
         write(&mut cpu, 0x0400, &[0x60]);               // RTS
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -715,7 +925,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
         cpu.add_breakpoint(0x0300);
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Breakpoint(0x0300)));
         assert_eq!(cpu.registers().pc, 0x0300);
     }
@@ -728,7 +938,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xEA, 0x60]);        // NOP, RTS
         cpu.add_breakpoint(0x0203);
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         // Must surface as Breakpoint since caller owns it.
         assert!(matches!(result, StepResult::Breakpoint(0x0203)));
         // Breakpoint must still be present after step_over returns.
@@ -741,7 +951,7 @@ mod tests {
         let mut cpu = make_cpu_at(0x0200);
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xDB]);               // STP
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Stopped));
     }
 
@@ -755,7 +965,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0x60]); // NOP, NOP, RTS
         step_into(&mut cpu); // JSR — now at $0300, S = 0xFD
-        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -771,7 +981,7 @@ mod tests {
         cpu.bus_mut().write(0x0100 | s.wrapping_sub(2) as u16, 0x24).unwrap(); // P
         cpu.registers_mut().s = s.wrapping_sub(3);
         write(&mut cpu, 0x0200, &[0x40]); // RTI
-        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0300);
     }
@@ -796,7 +1006,7 @@ mod tests {
         cpu.registers_mut().s = 0x00;               // so S+1=0x01, S+2=0x02
         // initial_s for step_return will be 0x00; after RTS, S = 0x02 (wrapped).
         // (0x02_u8.wrapping_sub(0x00) as i8) = 2 > 0 ✓
-        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -808,7 +1018,7 @@ mod tests {
         write(&mut cpu, 0x0300, &[0xEA, 0xEA, 0x60]); // NOP, NOP, RTS
         step_into(&mut cpu); // JSR — now inside subroutine
         cpu.add_breakpoint(0x0301);
-        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Breakpoint(0x0301)));
     }
 
@@ -818,7 +1028,7 @@ mod tests {
         write(&mut cpu, 0x0200, &[0x20, 0x00, 0x03]); // JSR $0300
         write(&mut cpu, 0x0300, &[0xDB]);               // STP before RTS
         step_into(&mut cpu); // JSR
-        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Stopped));
     }
 
@@ -833,7 +1043,7 @@ mod tests {
         step_into(&mut cpu); // JSR $0300
         step_into(&mut cpu); // JSR $0400 — now inside inner subroutine
         let s_inside = cpu.registers().s;
-        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         // Returned to $0303 (after inner JSR).
         assert_eq!(cpu.registers().pc, 0x0303);
@@ -858,7 +1068,7 @@ mod tests {
         write(&mut cpu, 0x0400, &[0x40]); // ISR: RTI
         step_into(&mut cpu); // JSR $0300 — S = 0xFD
         cpu.interrupts_mut().signal_nmi();
-        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
     }
@@ -899,7 +1109,7 @@ mod tests {
         let mut cpu = make_cpu_at(0x0200);
         write(&mut cpu, 0x0200, &[0xEA]); // NOP
         cpu.add_breakpoint(0x0200);
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0201);
         assert!(cpu.breakpoints().contains(&0x0200));
@@ -915,7 +1125,7 @@ mod tests {
         write(&mut cpu, 0x0203, &[0xEA]);              // NOP
         write(&mut cpu, 0x0300, &[0x60]);              // RTS
         cpu.add_breakpoint(0x0200);
-        let result = step_over_subroutine(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_over_subroutine(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
         assert!(cpu.breakpoints().contains(&0x0200));
@@ -940,7 +1150,7 @@ mod tests {
 
         // Place a breakpoint at the subroutine entry (current PC) and call step_return.
         cpu.add_breakpoint(0x0300);
-        let result = step_return(&mut cpu, &no_stop(), None, &no_mem()).unwrap();
+        let result = step_return(&mut cpu, &no_stop(), &mut no_cmd(), None, &no_mem()).unwrap();
         // Should execute the RTS and return to $0203, not re-fire the breakpoint.
         assert!(matches!(result, StepResult::Executed(_)));
         assert_eq!(cpu.registers().pc, 0x0203);
