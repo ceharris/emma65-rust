@@ -55,6 +55,7 @@ export default function WatchpointPanel({ execState }: Props) {
   const [addDialog, setAddDialog] = useState<AddDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
   const [variablesExpanded, setVariablesExpanded] = useState(true);
+  const variablesExpandedInitialized = useRef(false);
   const [varRadix, cycleVarRadix] = useDataRadix("hex");
 
   const canEdit = execState === "stopped" && snapshot?.compile_error == null;
@@ -63,6 +64,13 @@ export default function WatchpointPanel({ execState }: Props) {
     try {
       const result = await invoke<WatchpointsSnapshot>("get_watchpoints");
       setSnapshot(result);
+      // Collapse the variables section by default only if it starts out
+      // empty; once initialized, later fetches never override the user's
+      // manual expand/collapse choice.
+      if (!variablesExpandedInitialized.current) {
+        variablesExpandedInitialized.current = true;
+        setVariablesExpanded(result.variables.length > 0);
+      }
     } catch (e) {
       console.error("get_watchpoints failed:", e);
     }
