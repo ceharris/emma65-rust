@@ -11,6 +11,8 @@ mod compiler;
 mod variables;
 mod context;
 
+use std::collections::HashSet;
+
 use crate::watch::compiler::OpCode;
 use crate::watch::evaluator::eval;
 use crate::watch::parser::Parser;
@@ -155,8 +157,33 @@ impl WatchEvaluator {
 
     /// Returns the current variables as `(name, value)` pairs, in the order
     /// each variable was first introduced by a walrus assignment.
+    ///
+    /// A variable no longer referenced (read or assigned) by any loaded
+    /// watchpoint's compiled code is omitted, even though its slot remains
+    /// in internal storage so other variables' IDs stay stable.
     pub fn named_variables(&self) -> Vec<(&str, Operand)> {
-        self.vars.names().iter().map(|s| s.as_str()).zip(self.var_storage.iter().copied()).collect()
+        let referenced = self.referenced_variable_ids();
+        self.vars.names().iter().map(|s| s.as_str()).zip(self.var_storage.iter().copied()).enumerate()
+            .filter(|(id, _)| referenced.contains(&(*id as Operand)))
+            .map(|(_, pair)| pair)
+            .collect()
+    }
+
+    /// Returns the IDs of all variables read or assigned by any watchpoint's
+    /// compiled code.
+    fn referenced_variable_ids(&self) -> HashSet<Operand> {
+        let mut ids = HashSet::new();
+        for wp in &self.watchpoints {
+            for op in &wp.code {
+                match op {
+                    OpCode::PushVariable(id) | OpCode::AssignAndPushVariable(id) => {
+                        ids.insert(*id);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        ids
     }
 
     /// Sets the value of a variable by ID.
@@ -473,6 +500,44 @@ mod tests {
     fn named_variables_is_empty_when_no_variables() {
         let ev = WatchEvaluator::new();
         assert!(ev.named_variables().is_empty());
+    }
+
+    #[test]
+    fn named_variables_omits_variable_after_only_assigning_watchpoint_removed() {
+        let mut c = compiler();
+        let mut ev = WatchEvaluator::new();
+        let wp = c.compile("x := A", &mut ev).unwrap();
+        ev.add(wp);
+        let _ = ev.evaluate_all(&MockMachine::with_register(42));
+        assert_eq!(ev.named_variables(), vec![("x", 42)]);
+        ev.remove(0);
+        assert!(ev.named_variables().is_empty());
+    }
+
+    #[test]
+    fn named_variables_retains_variable_still_read_by_remaining_watchpoint() {
+        let mut c = compiler();
+        let mut ev = WatchEvaluator::new();
+        let wp_assign = c.compile("x := A", &mut ev).unwrap();
+        let wp_read = c.compile("x == 0", &mut ev).unwrap();
+        ev.add(wp_assign);
+        ev.add(wp_read);
+        let _ = ev.evaluate_all(&MockMachine::with_register(42));
+        ev.remove(0); // removes the assigning watchpoint; wp_read still references x
+        assert_eq!(ev.named_variables(), vec![("x", 42)]);
+    }
+
+    #[test]
+    fn named_variables_unaffected_by_removal_of_unrelated_unreferenced_variable() {
+        let mut c = compiler();
+        let mut ev = WatchEvaluator::new();
+        let wp_x = c.compile("x := 11", &mut ev).unwrap();
+        let wp_y = c.compile("y := 22", &mut ev).unwrap();
+        ev.add(wp_x);
+        ev.add(wp_y);
+        let _ = ev.evaluate_all(&MockMachine::new());
+        ev.remove(1); // removes the only watchpoint referencing y
+        assert_eq!(ev.named_variables(), vec![("x", 11)]);
     }
 
     #[test]
