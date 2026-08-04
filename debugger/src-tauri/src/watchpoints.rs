@@ -106,6 +106,30 @@ fn build_snapshot(cpu: Option<&Cpu>, watch: &mut WatchData) -> WatchpointsSnapsh
     WatchpointsSnapshot { compile_error: None, rows }
 }
 
+/// Rebuilds `cpu`'s own watch evaluator — the one `Cpu::step()` consults to
+/// halt execution — from `evaluator`'s current watchpoint list, so panel
+/// watchpoints actually stop the running CPU instead of only being reflected
+/// in the display snapshot.
+///
+/// Recompiles each source string into `cpu`'s evaluator rather than sharing
+/// `Watchpoint` values, since the two evaluators keep independent variable
+/// storage (`evaluator`'s display re-evaluation must never perturb the state
+/// `step()` relies on for real halting).
+pub fn sync_cpu_evaluator(cpu: &mut Cpu, evaluator: &WatchEvaluator) -> Result<(), String> {
+    let table = cpu.bus().symbol_table().clone();
+    let mut compiler = WatchCompiler::new(map_register_name, map_flag_name, move |name| {
+        table.address_for(name).map(|a| a as u32)
+    });
+    let sources: Vec<&str> = evaluator.watchpoints().iter().map(|wp| wp.source()).collect();
+    let exec_evaluator = cpu.evaluator_mut();
+    exec_evaluator.clear();
+    for source in sources {
+        let wp = compiler.compile(source, exec_evaluator).map_err(|e| e.to_string())?;
+        exec_evaluator.add(wp);
+    }
+    Ok(())
+}
+
 /// Serializes `evaluator`'s watchpoints back to `~/.emma/debugger/default/watchpoints.emw`,
 /// one semicolon-terminated expression per line, in display order.
 fn save_watchpoints(evaluator: &WatchEvaluator) -> Result<(), String> {
@@ -145,14 +169,15 @@ pub fn add_watchpoint(
     if watch.compile_error.is_some() {
         return Err("watchpoints.emw has a compile error; fix it before adding watchpoints".to_string());
     }
-    let cpu_guard = cpu_state.0.lock().unwrap();
-    let cpu = cpu_guard.as_ref().ok_or("CPU not ready")?;
+    let mut cpu_guard = cpu_state.0.lock().unwrap();
+    let cpu = cpu_guard.as_mut().ok_or("CPU not ready")?;
     let table = cpu.bus().symbol_table().clone();
     let mut compiler = WatchCompiler::new(map_register_name, map_flag_name, move |name| {
         table.address_for(name).map(|a| a as u32)
     });
     let watchpoint = compiler.compile(&source, &mut watch.evaluator).map_err(|e| e.to_string())?;
     watch.evaluator.add(watchpoint);
+    sync_cpu_evaluator(cpu, &watch.evaluator)?;
     save_watchpoints(&watch.evaluator)?;
     Ok(build_snapshot(Some(cpu), &mut watch))
 }
@@ -173,14 +198,68 @@ pub fn remove_watchpoint(
         return Err("Invalid watchpoint index".to_string());
     }
     watch.evaluator.remove(index);
+    let mut cpu_guard = cpu_state.0.lock().unwrap();
+    if let Some(cpu) = cpu_guard.as_mut() {
+        sync_cpu_evaluator(cpu, &watch.evaluator)?;
+    }
     save_watchpoints(&watch.evaluator)?;
-    let cpu_guard = cpu_state.0.lock().unwrap();
     Ok(build_snapshot(cpu_guard.as_ref(), &mut watch))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use emma65::emulator::{AddressRange, Bus, CpuVariant, StepResult};
+
+    /// Builds a CPU with 64KB RAM and a reset vector pointing to `start`.
+    fn make_cpu(start: u16) -> Cpu {
+        let mut bus = Bus::config().ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0).unwrap().build();
+        bus.write(0xFFFC, (start & 0xFF) as u8).unwrap();
+        bus.write(0xFFFD, (start >> 8) as u8).unwrap();
+        let mut cpu = Cpu::builder(CpuVariant::Wdc65C02).bus(bus).build().unwrap();
+        cpu.reset().unwrap();
+        cpu
+    }
+
+    #[test]
+    fn sync_cpu_evaluator_installs_watchpoints_that_halt_execution() {
+        // Regression test for issue #246: a watchpoint added via the panel
+        // (only ever landing in the display-only `WatchState` evaluator) must
+        // also reach `cpu.evaluator()`, since that's the one `Cpu::step()`
+        // consults to decide whether to halt.
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus_mut().write(0x0200, 0xEA).unwrap(); // NOP
+        cpu.bus_mut().write(0x0201, 0xA2).unwrap(); // LDX #$FF
+        cpu.bus_mut().write(0x0202, 0xFF).unwrap();
+        cpu.bus_mut().write(0x0203, 0xEA).unwrap(); // NOP
+
+        let display_evaluator = evaluator_with(&["X == $FF"]);
+        sync_cpu_evaluator(&mut cpu, &display_evaluator).unwrap();
+
+        assert!(!cpu.evaluator().is_empty());
+
+        let mut result = StepResult::Waiting;
+        for _ in 0..3 {
+            result = cpu.step(None, true);
+            if matches!(result, StepResult::WatchTriggered { .. }) {
+                break;
+            }
+        }
+        assert!(
+            matches!(result, StepResult::WatchTriggered { pc: 0x0203, .. }),
+            "expected watchpoint to halt execution at 0x0203"
+        );
+    }
+
+    #[test]
+    fn sync_cpu_evaluator_clears_stale_watchpoints() {
+        let mut cpu = make_cpu(0x0200);
+        sync_cpu_evaluator(&mut cpu, &evaluator_with(&["A == 0"])).unwrap();
+        assert!(!cpu.evaluator().is_empty());
+
+        sync_cpu_evaluator(&mut cpu, &WatchEvaluator::new()).unwrap();
+        assert!(cpu.evaluator().is_empty());
+    }
 
     /// Returns a fresh, uniquely-named temp directory for one test's config files.
     fn temp_dir(name: &str) -> std::path::PathBuf {

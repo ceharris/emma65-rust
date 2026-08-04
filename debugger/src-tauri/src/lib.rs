@@ -260,6 +260,12 @@ pub fn run() {
                                 }
                             }
                         };
+                        // Install the loaded watchpoints into the CPU's own evaluator too,
+                        // so they actually halt execution in step()/run() — not just show
+                        // up in the panel's display snapshot.
+                        if let Err(e) = watchpoints::sync_cpu_evaluator(&mut cpu, &watch_data.evaluator) {
+                            eprintln!("Failed to install watchpoints for execution: {e}");
+                        }
                         *handle.state::<watchpoints::WatchState>().0.lock().unwrap() = watch_data;
 
                         *handle.state::<cpu_bus::CpuBusCache>().0.lock().unwrap() = cpu_bus::snapshot_cpu_bus(&cpu);
