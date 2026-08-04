@@ -34,7 +34,8 @@ fn step_to_stop(cpu: &mut emma65::emulator::Cpu) {
             StepResult::Stopped => return,
             StepResult::Executed(_) | StepResult::Waiting => {}
             StepResult::Error(e) => panic!("CPU error: {e}"),
-            StepResult::Breakpoint(_)
+            StepResult::Reset
+            | StepResult::Breakpoint(_)
             | StepResult::WatchTriggered { .. }
             | StepResult::WatchError { .. } => unreachable!(),
         }
@@ -54,7 +55,8 @@ fn step_to_stop_deadline(cpu: &mut emma65::emulator::Cpu, deadline: std::time::I
             StepResult::Stopped => return,
             StepResult::Executed(_) | StepResult::Waiting => {}
             StepResult::Error(e) => panic!("CPU error: {e}"),
-            StepResult::Breakpoint(_)
+            StepResult::Reset 
+            | StepResult::Breakpoint(_)
             | StepResult::WatchTriggered { .. }
             | StepResult::WatchError { .. } => unreachable!(),
         }

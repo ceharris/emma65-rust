@@ -70,6 +70,8 @@ pub enum StepResult {
     Waiting,
     /// CPU is in STP state; only reset() clears it.
     Stopped,
+    /// CPU was reset via the interrupt controller
+    Reset,
     /// A fatal execution error occurred.
     Error(ExecError),
 }
@@ -278,6 +280,14 @@ impl Cpu {
             }
         }
 
+        // RESET takes priority over NMI and IRQ
+        if self.interrupts.take_reset() {
+            return if let Err(e) = self.reset() {
+                StepResult::Error(e)
+            } else {
+                StepResult::Reset
+            }
+        }
         // NMI takes priority over IRQ.
         if self.interrupts.take_nmi() {
             let interrupt_result =
@@ -1807,6 +1817,20 @@ mod tests {
         assert!(cpu.interrupts().irq_active());
         cpu.interrupts_mut().release_irq(IrqSource(2));
         assert!(!cpu.interrupts().irq_active());
+    }
+
+    // --- RESET (via interrupt controller) ---
+
+    #[test]
+    fn reset_returns_expected_step_result() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(RESET_VECTOR, 0x00).unwrap();
+        cpu.bus.write(RESET_VECTOR + 1, 0x03).unwrap();
+        cpu.interrupts_mut().signal_reset();
+        let result = cpu.step(None, true);
+        assert_eq!(cpu.regs.pc, 0x0300);
+        assert!(cpu.regs.p.contains(StatusRegister::I));
+        assert!(matches!(result, StepResult::Reset));
     }
 
     // --- NMI ---

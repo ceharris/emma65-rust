@@ -1,5 +1,8 @@
-//! IRQ and NMI interrupt controller.
+//! Interrupt controller.
 //!
+//! The interrupt controller handles signaling and recognition of the three interrupt
+//! sources defined for the 6502: RESET, NMI, and IRQ.
+//! 
 //! Tne interrupt controller plays a crucial role in identifying interrupt sources
 //! during CPU step execution. As such the [`poll_devices`](InterruptController::poll_devices)
 //! method, which is called for each instruction executed, must be especially
@@ -32,6 +35,7 @@ pub const MAX_IRQ_SOURCES: u32 = 64;
 pub struct InterruptController {
     irq_sources: u64,
     nmi_pending: bool,
+    reset_pending: bool,
 }
 
 impl InterruptController {
@@ -40,6 +44,7 @@ impl InterruptController {
         Self {
             irq_sources: 0,
             nmi_pending: false,
+            reset_pending: false,
         }
     }
 
@@ -73,6 +78,23 @@ impl InterruptController {
     /// Returns `true` if an NMI is pending and has not yet been serviced.
     pub fn nmi_pending(&self) -> bool {
         self.nmi_pending
+    }
+
+    /// Latches a pending RESET. Called on the falling edge of the RESET line.
+    pub fn signal_reset(&mut self) {
+        self.reset_pending = true;
+    }
+
+    /// Consumes and clears the pending RESET flag. Returns `true` if RESET was pending.
+    pub fn take_reset(&mut self) -> bool {
+        let pending = self.reset_pending;
+        self.reset_pending = false;
+        pending
+    }
+
+    /// Returns `true` if RESET is pending and has not yet been serviced.
+    pub fn reset_pending(&self) -> bool {
+        self.reset_pending
     }
 
     /// Syncs device IRQ states into the source bitmask. Called by the CPU after each instruction.
@@ -165,6 +187,32 @@ mod tests {
     fn take_nmi_returns_false_when_not_pending() {
         let mut ctrl = InterruptController::new();
         assert!(!ctrl.take_nmi());
+    }
+
+    #[test]
+    fn reset_inactive_by_default() {
+        assert!(!InterruptController::new().reset_pending());
+    }
+
+    #[test]
+    fn signal_reset_latches_pending() {
+        let mut ctrl = InterruptController::new();
+        ctrl.signal_reset();
+        assert!(ctrl.reset_pending());
+    }
+
+    #[test]
+    fn take_reset_returns_true_and_clears() {
+        let mut ctrl = InterruptController::new();
+        ctrl.signal_reset();
+        assert!(ctrl.take_reset());
+        assert!(!ctrl.reset_pending());
+    }
+
+    #[test]
+    fn take_reset_returns_false_when_not_pending() {
+        let mut ctrl = InterruptController::new();
+        assert!(!ctrl.take_reset());
     }
 
     #[test]

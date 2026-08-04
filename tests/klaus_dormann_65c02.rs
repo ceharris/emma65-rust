@@ -48,6 +48,9 @@ fn run_functional_test(rom_path: &str, start: u16, success_pc: u16) {
             StepResult::Breakpoint(_) | StepResult::WatchTriggered { .. } | StepResult::WatchError { .. } => {
                 unreachable!("no breakpoints or watches configured")
             }
+            StepResult::Reset => {
+                panic!("CPU reset at PC=${pc:04X} before reaching success address ${success_pc:04X}")
+            }
             StepResult::Stopped => {
                 panic!("CPU halted (STP) at PC=${pc:04X} before reaching success address ${success_pc:04X}")
             }
@@ -166,6 +169,9 @@ fn run_interrupt_test(rom_path: &str, start: u16, success_pc: u16) {
             StepResult::Breakpoint(_) | StepResult::WatchTriggered { .. } | StepResult::WatchError { .. } => {
                 unreachable!("no breakpoints or watches configured")
             }
+            StepResult::Reset => {
+                panic!("CPU reset at PC=${pc:04X} before reaching success address ${success_pc:04X}")
+            }
             StepResult::Stopped => {
                 panic!("CPU halted (STP) at PC=${pc:04X} before reaching success address ${success_pc:04X}")
             }
@@ -214,6 +220,10 @@ fn run_decimal_test(rom_path: &str, start: u16) {
             StepResult::Executed(_) | StepResult::Waiting => {}
             StepResult::Breakpoint(_) | StepResult::WatchTriggered { .. } | StepResult::WatchError { .. } => {
                 unreachable!("no breakpoints or watches configured")
+            }
+            StepResult::Reset => {
+                let pc = cpu.registers().pc;
+                panic!("CPU reset at PC=${pc:04X}");
             }
             StepResult::Stopped => {
                 let error = cpu.bus().peek(0x000B).expect("ERROR byte readable");
