@@ -220,7 +220,7 @@
 
 .wp-vars-name {
   color: var(--color-accent);
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -230,6 +230,13 @@
 .wp-vars-value {
   color: var(--color-number);
   font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+// Absorbs the space left over after the name and value columns, so those two
+// stay close together instead of spreading across the full row width.
+.wp-vars-spacer {
+  flex: 1 1 auto;
 }
 
 .wp-vars-value-editable {

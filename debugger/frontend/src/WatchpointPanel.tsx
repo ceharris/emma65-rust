@@ -340,6 +340,7 @@ export default function WatchpointPanel({ execState }: Props) {
                         {formatDataRadix(v.value, varRadix)}
                       </span>
                     )}
+                    <span className="wp-vars-spacer" />
                   </div>
                 ))}
               </div>
