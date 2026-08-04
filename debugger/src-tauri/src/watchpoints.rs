@@ -26,14 +26,14 @@ pub struct WatchData {
     pub compile_error: Option<String>,
 }
 
-/// One row of the watchpoint panel: an expression's source, its current
-/// value, and any per-expression evaluation error.
+/// One row of the watchpoint panel: an expression's source, its
+/// triggered/not-triggered status, and any per-expression evaluation error.
 #[derive(Clone, serde::Serialize)]
 pub struct WatchpointRow {
     /// The watchpoint expression's original source text.
     pub source: String,
-    /// The evaluated value, or `None` when `error` is `Some`.
-    pub value: Option<u32>,
+    /// True if the expression evaluated to a non-zero value. Meaningless when `error` is `Some`.
+    pub triggered: bool,
     /// The evaluation error, if this expression failed (e.g. an out-of-range memory fetch).
     pub error: Option<String>,
 }
@@ -63,8 +63,9 @@ pub fn load_watchpoints(symbol_table: &SymbolTable) -> Result<WatchEvaluator, St
     let mut evaluator = WatchEvaluator::new();
     let (watchpoints, errors) = compiler.compile_all(&source, &mut evaluator);
     if !errors.is_empty() {
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("watchpoints.emw");
         let message = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
-        return Err(message);
+        return Err(format!("{filename}: {message}"));
     }
     for wp in watchpoints {
         evaluator.add(wp);
@@ -91,8 +92,8 @@ pub fn get_watchpoints(cpu_state: State<CpuState>, watch_state: State<WatchState
         .iter()
         .zip(results)
         .map(|(wp, result)| match result {
-            Ok(value) => WatchpointRow { source: wp.source().to_string(), value: Some(value), error: None },
-            Err(e) => WatchpointRow { source: wp.source().to_string(), value: None, error: Some(e.to_string()) },
+            Ok(value) => WatchpointRow { source: wp.source().to_string(), triggered: value != 0, error: None },
+            Err(e) => WatchpointRow { source: wp.source().to_string(), triggered: false, error: Some(e.to_string()) },
         })
         .collect();
     WatchpointsSnapshot { compile_error: None, rows }

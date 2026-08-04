@@ -8,7 +8,6 @@
 .watchpoint-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 4px 10px;
   background-color: var(--color-bg-alt);
   border-bottom: 1px solid var(--color-border);
@@ -67,30 +66,6 @@
   &.expanded {
     white-space: normal;
     word-break: break-word;
-  }
-}
-
-.watchpoint-value {
-  flex: 0 0 auto;
-  color: var(--color-number);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.radix-btn {
-  background: none;
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-muted);
-  font-family: var(--font-ui);
-  font-size: 0.7rem;
-  padding: 1px 5px;
-  cursor: pointer;
-  border-radius: 3px;
-  line-height: 1.4;
-
-  &:hover {
-    border-color: var(--color-accent);
-    color: var(--color-accent);
   }
 }
 
