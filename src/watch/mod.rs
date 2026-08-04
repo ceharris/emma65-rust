@@ -181,6 +181,21 @@ impl WatchEvaluator {
         Ok(None)
     }
 
+    /// Evaluates every watchpoint independently against `context`, in
+    /// `watchpoints()` order, without stopping at the first non-zero result
+    /// (unlike `evaluate_all`, which is designed for breakpoint-style
+    /// halting). Returns one result per watchpoint — for displaying a
+    /// per-row value/status rather than triggering on the first truthy one.
+    /// Variable assignments in earlier watchpoints update internal storage
+    /// and are visible to subsequent watchpoints in the same call.
+    pub fn evaluate_each(&mut self, context: &dyn WatchContext) -> Vec<Result<Operand, WatchError>> {
+        let mut results = Vec::with_capacity(self.watchpoints.len());
+        for wp in &self.watchpoints {
+            results.push(eval(&wp.code, context, &mut self.var_storage));
+        }
+        results
+    }
+
     fn grow_storage(&mut self) {
         let needed = self.vars.len();
         if self.var_storage.len() < needed {
@@ -362,6 +377,44 @@ mod tests {
         ev.add(wp_assign);
         ev.add(wp_check);
         assert_eq!(ev.evaluate_all(&MockMachine::with_register(0)), Ok(Some(1)));
+    }
+
+    // --- WatchEvaluator::evaluate_each tests ---
+
+    #[test]
+    fn evaluate_each_returns_one_result_per_watchpoint_without_short_circuiting() {
+        let mut c = compiler();
+        let mut ev = WatchEvaluator::new();
+        let wp_truthy = c.compile("A == 42", &mut ev).unwrap();
+        let wp_falsy = c.compile("A == 99", &mut ev).unwrap();
+        let wp_error = c.compile("A / 0", &mut ev).unwrap();
+        ev.add(wp_truthy);
+        ev.add(wp_falsy);
+        ev.add(wp_error);
+        let results = ev.evaluate_each(&MockMachine::with_register(42));
+        assert_eq!(results, vec![
+            Ok(1),
+            Ok(0),
+            Err(WatchError::DivisionByZero),
+        ]);
+    }
+
+    #[test]
+    fn evaluate_each_returns_empty_when_no_watchpoints() {
+        let mut ev = WatchEvaluator::new();
+        assert_eq!(ev.evaluate_each(&MockMachine::new()), Vec::new());
+    }
+
+    #[test]
+    fn evaluate_each_variable_assignments_visible_to_subsequent_watchpoints() {
+        let mut c = compiler();
+        let mut ev = WatchEvaluator::new();
+        let wp_assign = c.compile("x := A", &mut ev).unwrap();
+        let wp_check = c.compile("x == 0", &mut ev).unwrap();
+        ev.add(wp_assign);
+        ev.add(wp_check);
+        let results = ev.evaluate_each(&MockMachine::with_register(0));
+        assert_eq!(results, vec![Ok(0), Ok(1)]);
     }
 
     #[test]
