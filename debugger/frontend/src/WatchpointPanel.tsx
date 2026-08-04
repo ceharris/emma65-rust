@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./DisassemblyPanel";
-import { formatDataRadix, RadixButton, useDataRadix } from "./RadixControl";
+import { DataRadix, formatDataRadix, parseIntegerInput, RadixButton, toUnsignedInRange, useDataRadix } from "./RadixControl";
 import "./styles/watchpoints.scss";
 
 interface WatchpointRow {
@@ -57,6 +57,9 @@ export default function WatchpointPanel({ execState }: Props) {
   const [variablesExpanded, setVariablesExpanded] = useState(true);
   const variablesExpandedInitialized = useRef(false);
   const [varRadix, cycleVarRadix] = useDataRadix("hex");
+  const [editingVarName, setEditingVarName] = useState<string | null>(null);
+  const [varEditValue, setVarEditValue] = useState("");
+  const [varEditInvalid, setVarEditInvalid] = useState(false);
 
   const canEdit = execState === "stopped" && snapshot?.compile_error == null;
 
@@ -178,6 +181,41 @@ export default function WatchpointPanel({ execState }: Props) {
     return () => document.removeEventListener("keydown", handler);
   }, [editDialog]);
 
+  /** Double-click on a variable's value opens an inline edit input, seeded with its current display text. */
+  const beginVarEdit = useCallback(
+    (name: string, currentText: string) => {
+      if (!canEdit) return;
+      setEditingVarName(name);
+      setVarEditValue(currentText);
+      setVarEditInvalid(false);
+    },
+    [canEdit],
+  );
+
+  const cancelVarEdit = useCallback(() => {
+    setEditingVarName(null);
+    setVarEditInvalid(false);
+  }, []);
+
+  /** Parses the input using the same radix/prefix rules as register editing, invokes set_watch_variable, and closes the input on success. */
+  const commitVarEdit = useCallback(async (name: string, radix: DataRadix) => {
+    const parsed = parseIntegerInput(varEditValue, radix);
+    const value = parsed === null ? null : toUnsignedInRange(parsed, 32, true);
+    if (value === null) {
+      setVarEditInvalid(true);
+      return;
+    }
+    try {
+      const result = await invoke<WatchpointsSnapshot>("set_watch_variable", { name, value });
+      setSnapshot(result);
+      setEditingVarName(null);
+      setVarEditInvalid(false);
+    } catch (e) {
+      console.error("set_watch_variable failed:", e);
+      setVarEditInvalid(true);
+    }
+  }, [varEditValue]);
+
   /** Validates the input, invokes add_watchpoint, and closes the popover on success. */
   const commitAddWatchpoint = useCallback(async () => {
     if (!addDialog) return;
@@ -280,7 +318,28 @@ export default function WatchpointPanel({ execState }: Props) {
                 {snapshot.variables.map((v) => (
                   <div key={v.name} className="wp-vars-row">
                     <span className="wp-vars-name">{v.name}</span>
-                    <span className="wp-vars-value">{formatDataRadix(v.value, varRadix)}</span>
+                    {editingVarName === v.name ? (
+                      <input
+                        className={`wp-vars-edit-input${varEditInvalid ? " invalid" : ""}`}
+                        autoFocus
+                        value={varEditValue}
+                        onChange={(e) => { setVarEditValue(e.target.value); setVarEditInvalid(false); }}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") { e.preventDefault(); commitVarEdit(v.name, varRadix); }
+                          else if (e.key === "Escape") { e.preventDefault(); cancelVarEdit(); }
+                        }}
+                        onBlur={cancelVarEdit}
+                      />
+                    ) : (
+                      <span
+                        className={`wp-vars-value${canEdit ? " wp-vars-value-editable" : ""}`}
+                        onDoubleClick={() => beginVarEdit(v.name, formatDataRadix(v.value, varRadix))}
+                        title={canEdit ? "Double-click to edit" : undefined}
+                      >
+                        {formatDataRadix(v.value, varRadix)}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

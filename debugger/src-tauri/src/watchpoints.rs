@@ -362,6 +362,32 @@ pub fn toggle_watchpoint(
     Ok(build_snapshot(cpu_guard.as_ref(), &mut watch))
 }
 
+/// Sets watch variable `name` to `value`, taking effect on the next
+/// evaluation cycle, and returns a fresh snapshot.
+///
+/// Fails without modifying state if `name` doesn't match any variable
+/// introduced by a `:=` expression, or if the loaded file carries an
+/// unresolved whole-file compile error. Unlike watchpoint add/remove/edit,
+/// this has nothing to persist to disk: variable values are runtime-only and
+/// are reset to their walrus-assigned values whenever the evaluator reruns.
+#[tauri::command]
+pub fn set_watch_variable(
+    name: String,
+    value: u32,
+    cpu_state: State<CpuState>,
+    watch_state: State<WatchState>,
+) -> Result<WatchpointsSnapshot, String> {
+    let mut watch = watch_state.0.lock().unwrap();
+    if watch.compile_error.is_some() {
+        return Err("watchpoints.emw has a compile error; fix it before editing variables".to_string());
+    }
+    if !watch.evaluator.set_variable_by_name(&name, value) {
+        return Err(format!("Unknown watch variable: {name}"));
+    }
+    let cpu_guard = cpu_state.0.lock().unwrap();
+    Ok(build_snapshot(cpu_guard.as_ref(), &mut watch))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,6 +504,27 @@ mod tests {
         assert!(snapshot.rows.is_empty());
         assert_eq!(snapshot.variables.len(), 1);
         assert_eq!(snapshot.variables[0].name, "x");
+    }
+
+    #[test]
+    fn set_watch_variable_updates_value_and_snapshot() {
+        let cpu = make_cpu(0x0200);
+        let mut watch = WatchData { evaluator: evaluator_with(&["x := A"]), compile_error: None, enabled: vec![true] };
+        let _ = build_snapshot(Some(&cpu), &mut watch); // creates variable x, currently 0
+        // Remove the assigning watchpoint so nothing reassigns x on the next
+        // evaluation, isolating the manual edit's effect from a `:=` overwrite.
+        watch.evaluator.remove(0);
+        watch.enabled.remove(0);
+        assert!(watch.evaluator.set_variable_by_name("x", 0x2A));
+        let snapshot = build_snapshot(Some(&cpu), &mut watch);
+        assert_eq!(snapshot.variables[0].name, "x");
+        assert_eq!(snapshot.variables[0].value, 0x2A);
+    }
+
+    #[test]
+    fn set_watch_variable_rejects_unknown_name() {
+        let mut watch = WatchData { evaluator: evaluator_with(&["x := A"]), compile_error: None, enabled: vec![true] };
+        assert!(!watch.evaluator.set_variable_by_name("nope", 1));
     }
 
     #[test]

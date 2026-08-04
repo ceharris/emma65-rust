@@ -167,6 +167,20 @@ impl WatchEvaluator {
         self.var_storage[id] = value;
     }
 
+    /// Sets the value of the variable named `name`, if it exists.
+    ///
+    /// Returns `true` on success, `false` if no variable named `name` has
+    /// ever been introduced by a walrus assignment.
+    pub fn set_variable_by_name(&mut self, name: &str, value: Operand) -> bool {
+        match self.vars.get(name) {
+            Some(id) => {
+                self.var_storage[id as usize] = value;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Evaluates all watchpoints in order against `context`.
     ///
     /// Returns `Ok(None)` if no watchpoint triggered, `Ok(Some(index))` if the watchpoint
@@ -455,6 +469,23 @@ mod tests {
         assert_eq!(ev.variables()[0], 42);
         ev.set_variable(0, 99);
         assert_eq!(ev.variables()[0], 99);
+    }
+
+    #[test]
+    fn set_variable_by_name_updates_storage_and_returns_true() {
+        let mut c = compiler();
+        let mut ev = WatchEvaluator::new();
+        let wp = c.compile("x := A", &mut ev).unwrap();
+        ev.add(wp);
+        let _ = ev.evaluate_all(&MockMachine::with_register(42));
+        assert!(ev.set_variable_by_name("x", 99));
+        assert_eq!(ev.variables()[0], 99);
+    }
+
+    #[test]
+    fn set_variable_by_name_returns_false_for_unknown_name() {
+        let mut ev = WatchEvaluator::new();
+        assert!(!ev.set_variable_by_name("nope", 1));
     }
 
     #[test]

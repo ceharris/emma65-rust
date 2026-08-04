@@ -35,6 +35,75 @@ export function formatDataRadix(value: number, radix: DataRadix, widthBits?: num
   }
 }
 
+// --- editable-value parsing ---
+
+/** Parses `rest` as an integer in `base` if it matches `charset` exactly, else null. */
+function parseDigits(rest: string, charset: RegExp, base: number): number | null {
+  return rest.length > 0 && charset.test(rest) ? parseInt(rest, base) : null;
+}
+
+const HEX_DIGITS = /^[0-9a-fA-F]+$/;
+const OCT_DIGITS = /^[0-7]+$/;
+const BIN_DIGITS = /^[01]+$/;
+const DEC_DIGITS = /^-?[0-9]+$/;
+const SIGNED_DEC = /^[+-][0-9]+$/;
+
+/**
+ * Parses an editable field's raw text into an integer.
+ *
+ * An explicit prefix always overrides `defaultRadix`: `$`/`0x` (hex),
+ * `0o`/`0q` (octal), `0b` (binary), `0d`/`.` (decimal), or a bare leading
+ * `+`/`-` (also decimal — no radix's unprefixed literal ever starts with a
+ * sign, so this is unambiguous). With no prefix or sign, the text is parsed
+ * in `defaultRadix`. Returns null if the text doesn't parse cleanly as an
+ * integer.
+ */
+export function parseIntegerInput(raw: string, defaultRadix: DataRadix): number | null {
+  const s = raw.trim();
+  if (s === "") return null;
+
+  if (s.startsWith("$")) return parseDigits(s.slice(1), HEX_DIGITS, 16);
+  const lower = s.toLowerCase();
+  if (lower.startsWith("0x")) return parseDigits(s.slice(2), HEX_DIGITS, 16);
+  if (lower.startsWith("0o") || lower.startsWith("0q")) return parseDigits(s.slice(2), OCT_DIGITS, 8);
+  if (lower.startsWith("0b")) return parseDigits(s.slice(2), BIN_DIGITS, 2);
+  if (lower.startsWith("0d")) return parseDigits(s.slice(2), DEC_DIGITS, 10);
+  if (s.startsWith(".")) return parseDigits(s.slice(1), DEC_DIGITS, 10);
+  if (s.startsWith("-") || s.startsWith("+")) return parseDigits(s, SIGNED_DEC, 10);
+
+  switch (defaultRadix) {
+    case "hex":  return parseDigits(s, HEX_DIGITS, 16);
+    case "udec": return parseDigits(s, DEC_DIGITS, 10);
+    case "sdec": return parseDigits(s, DEC_DIGITS, 10);
+    case "oct":  return parseDigits(s, OCT_DIGITS, 8);
+    case "bin":  return parseDigits(s, BIN_DIGITS, 2);
+  }
+}
+
+/**
+ * Validates a parsed integer against a field's bit width and returns its
+ * unsigned representation, or null if out of range.
+ *
+ * When `allowSigned` is set, accepts the union of the unsigned range
+ * (0..2^width-1) and the signed two's-complement range (-2^(width-1)..-1),
+ * so e.g. typing `-1` for an 8-bit field means 0xFF. Fields with no signed
+ * display mode (e.g. PC) should pass `allowSigned: false` so only the
+ * unsigned range is accepted.
+ */
+export function toUnsignedInRange(value: number, widthBits: number, allowSigned: boolean): number | null {
+  if (!Number.isInteger(value)) return null;
+  const max = 2 ** widthBits - 1;
+  if (!allowSigned) {
+    return value >= 0 && value <= max ? value : null;
+  }
+  const min = -(2 ** (widthBits - 1));
+  if (value < min || value > max) return null;
+  // Pure arithmetic two's complement (not `value & max`): for widthBits ==
+  // 32, JS's bitwise operators coerce through signed Int32 and would flip
+  // the sign of the top bit instead of masking it.
+  return value >= 0 ? value : value + 2 ** widthBits;
+}
+
 /** Owns a `DataRadix` value and a handler that cycles it through `DATA_RADIX_CYCLE`. */
 export function useDataRadix(initial: DataRadix = "hex"): [DataRadix, () => void] {
   const [radix, setRadix] = useState<DataRadix>(initial);

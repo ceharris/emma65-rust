@@ -194,6 +194,7 @@ pub fn run() {
             watchpoints::remove_watchpoint,
             watchpoints::edit_watchpoint,
             watchpoints::toggle_watchpoint,
+            watchpoints::set_watch_variable,
         ])
         .setup(|app| {
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
