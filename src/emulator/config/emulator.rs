@@ -155,8 +155,9 @@ impl Config {
             .bus(bus)
             .build()
             .map_err(BuildError::Cpu)?;
+        let id_allocator = *id_allocator.lock().unwrap();
         Ok(EmulatorSession {
-            cpu, error_receiver
+            cpu, error_receiver, id_allocator
         })
     }
 

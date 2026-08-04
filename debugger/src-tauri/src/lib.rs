@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_log::{Target, TargetKind};
 use tokio::sync::oneshot;
 
-use emma65::emulator::{Config, Cpu, Disassembler, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, Transport, TransportReporter, TransportSlot};
+use emma65::emulator::{Config, Cpu, Disassembler, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
 
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
@@ -50,8 +50,9 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 
 /// Loads emulator config from `~/.emma/debugger/default/emulator.toml`,
 /// builds the session with an injected pipe transport for the console,
-/// and returns the session along with the remote end of the pipe.
-async fn load_session() -> Result<(EmulatorSession, InternalPipeTransport), String> {
+/// and returns the session, the remote end of the pipe, and an `IrqSource`
+/// reserved for the debugger UI's own IRQ toggle control.
+async fn load_session() -> Result<(EmulatorSession, InternalPipeTransport, IrqSource), String> {
     let config_path = theme::debugger_config_dir()?.join("emulator.toml");
 
     let config: Config = Figment::new()
@@ -75,10 +76,15 @@ async fn load_session() -> Result<(EmulatorSession, InternalPipeTransport), Stri
     };
 
     let registry = DeviceRegistry::with_builtins();
-    let session = config.build_with_context(&registry, context).await
+    let mut session = config.build_with_context(&registry, context).await
         .map_err(|e| format!("Failed to build emulator session: {e}"))?;
 
-    Ok((session, remote))
+    // Reserve an IRQ-capable device ID for the debugger UI's own IRQ toggle
+    // control. Allocated after all configured devices, so it never collides
+    // with a device's `IrqSource`.
+    let ui_irq_source = IrqSource::from(session.id_allocator.next(true));
+
+    Ok((session, remote, ui_irq_source))
 }
 
 /// Exits the application cleanly.
@@ -127,6 +133,7 @@ pub fn run() {
         // TerminalTx is registered after setup; commands are only called after the
         // terminal window is open, so it will always be present by then.
         .manage(CpuState(Mutex::new(None)))
+        .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
         .manage(disassembly::DisassemblerState(Mutex::new(None)))
         .manage(registers::ChangedFlagsState(Mutex::new(0)))
         .manage(disassembly::RunStopperState(Mutex::new(None)))
@@ -218,7 +225,7 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 match load_session().await {
-                    Ok((session, remote)) => {
+                    Ok((session, remote, ui_irq_source)) => {
                         let (remote_rx, remote_tx) = remote.into_split();
 
                         // Register the tx side so write_terminal can use it.
@@ -256,6 +263,7 @@ pub fn run() {
                         *handle.state::<watchpoints::WatchState>().0.lock().unwrap() = watch_data;
 
                         *handle.state::<cpu_bus::CpuBusCache>().0.lock().unwrap() = cpu_bus::snapshot_cpu_bus(&cpu);
+                        *handle.state::<cpu_bus::UiIrqSourceState>().0.lock().unwrap() = Some(ui_irq_source);
                         *handle.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
                         emit_status(&handle, SessionStatus {
