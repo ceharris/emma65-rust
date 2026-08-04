@@ -11,7 +11,7 @@ pub mod trace;
 
 use crate::emulator::bus::{Bus, BusOp, InterruptController};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
-use crate::emulator::exec::{ClockSpeed, StepResult};
+use crate::emulator::exec::ClockSpeed;
 use crate::emulator::{TraceCallback, TraceRecord};
 use crate::watch::{Operand, WatchContext, WatchError, WatchEvaluator};
 use log::debug;
@@ -56,6 +56,23 @@ impl Registers {
     }
 }
 
+/// Result returned by [`Cpu::step()`].
+pub enum StepResult {
+    /// Instruction executed normally.
+    Executed(DecodedOp),
+    /// PC matched a breakpoint; instruction was NOT executed.
+    Breakpoint(u16),
+    /// A watch expression triggered; instruction was NOT executed.
+    WatchTriggered { watch_index: usize, pc: u16 },
+    /// A watch expression evaluation failed; instruction was NOT executed.
+    WatchError { watch_index: usize, pc: u16, error: WatchError },
+    /// CPU is in WAI state, waiting for an interrupt.
+    Waiting,
+    /// CPU is in STP state; only reset() clears it.
+    Stopped,
+    /// A fatal execution error occurred.
+    Error(ExecError),
+}
 /// The 65C02 CPU: registers, bus, decode table, and execution state.
 pub struct Cpu {
     /// General-purpose and special-purpose registers (A, X, Y, S, PC, P).

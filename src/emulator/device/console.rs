@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn integration_cpu_program_writes_appear_on_transport() {
-        use crate::emulator::exec::StepResult;
+        use crate::emulator::cpu::StepResult;
         use crate::emulator::{
             AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn integration_transport_input_readable_by_cpu() {
-        use crate::emulator::exec::StepResult;
+        use crate::emulator::cpu::StepResult;
         use crate::emulator::{
             AddressRange, BusConfig, CpuVariant, DeviceId, InternalPipeTransport,
         };

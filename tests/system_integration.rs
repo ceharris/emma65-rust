@@ -1,5 +1,6 @@
+use emma65::emulator::cpu::StepResult;
 use emma65::emulator::device::{Console, Mc6850, R6551, Via6522};
-use emma65::emulator::{AddressRange, Bus, ChannelRelay, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, Mnemonic, StepResult, TransportRelay};
+use emma65::emulator::{AddressRange, Bus, ChannelRelay, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, Mnemonic, TransportRelay};
 
 const MAX_STEPS: u32 = 10_000;
 

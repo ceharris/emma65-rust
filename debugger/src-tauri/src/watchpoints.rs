@@ -6,12 +6,12 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use emma65::emulator::{map_flag_name, map_register_name, Cpu, SymbolTable};
+use emma65::emulator::{Cpu, SymbolTable, map_flag_name, map_register_name};
 use emma65::watch::{WatchCompiler, WatchEvaluator};
 use tauri::State;
 
-use crate::theme;
 use crate::CpuState;
+use crate::theme;
 
 /// Tauri-managed state wrapping the debugger's own watchpoint evaluator.
 ///
@@ -365,7 +365,8 @@ pub fn toggle_watchpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emma65::emulator::{AddressRange, Bus, CpuVariant, StepResult};
+    use emma65::emulator::cpu::StepResult;
+    use emma65::emulator::{AddressRange, Bus, CpuVariant};
 
     /// Builds a CPU with 64KB RAM and a reset vector pointing to `start`.
     fn make_cpu(start: u16) -> Cpu {

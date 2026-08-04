@@ -5,7 +5,8 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use crate::config::{AppConfig, apply_default_if_unconfigured};
-use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, StepResult, Transport, TransportReporter};
+use emma65::emulator::cpu::StepResult;
+use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, Transport, TransportReporter};
 
 const DEFAULT_ROM: &[u8] = include_bytes!("default.bin");
 

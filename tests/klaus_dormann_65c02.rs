@@ -1,6 +1,7 @@
+use emma65::emulator::cpu::StepResult;
 use emma65::emulator::{
     AddressRange, Bus, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InvalidOpcodePolicy,
-    IoDevice, StepResult,
+    IoDevice,
 };
 
 /// Maximum steps before declaring a test hung (well above any reasonable run count).

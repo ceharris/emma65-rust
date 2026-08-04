@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex};
 
+use emma65::emulator::cpu::StepResult;
+use emma65::emulator::device::{Console, Mc6850, R6551};
 use emma65::emulator::{
     AddressRange, Bus, BusOp, ChannelRelay, ClockSpeed, CpuBuilder,
-    CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, StepResult, TraceCallback, TraceRecord,
+    CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, TraceCallback, TraceRecord,
     TransportRelay, run,
 };
-
-use emma65::emulator::device::{Console, Mc6850, R6551};
 
 /// Collects bus trace records into a shared vec so tests can inspect them after execution.
 struct CapturingCallback {

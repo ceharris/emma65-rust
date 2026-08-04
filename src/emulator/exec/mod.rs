@@ -1,9 +1,7 @@
 //! Execution control; provides the main entry points for execution on the emulated CPU.
 
 use crate::emulator::cpu::opcodes::DecodedOp;
-use crate::emulator::cpu::{Cpu, Registers};
-use crate::emulator::error::ExecError;
-use crate::watch::WatchError;
+use crate::emulator::cpu::{Cpu, Registers, StepResult};
 use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
 use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, watch};
@@ -100,24 +98,6 @@ impl ClockSpeed {
     pub fn hz_value(&self) -> Option<u64> {
         if self.is_unlimited() { None } else { Some(self.hz) }
     }
-}
-
-/// Result returned by `Cpu::step()`.
-pub enum StepResult {
-    /// Instruction executed normally.
-    Executed(DecodedOp),
-    /// PC matched a breakpoint; instruction was NOT executed.
-    Breakpoint(u16),
-    /// A watch expression triggered; instruction was NOT executed.
-    WatchTriggered { watch_index: usize, pc: u16 },
-    /// A watch expression evaluation failed; instruction was NOT executed.
-    WatchError { watch_index: usize, pc: u16, error: WatchError },
-    /// CPU is in WAI state, waiting for an interrupt.
-    Waiting,
-    /// CPU is in STP state; only reset() clears it.
-    Stopped,
-    /// A fatal execution error occurred.
-    Error(ExecError),
 }
 
 /// Clonable handle for signaling a free-running CPU thread to stop.
