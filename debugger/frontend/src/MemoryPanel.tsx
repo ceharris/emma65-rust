@@ -248,10 +248,10 @@ export default function MemoryPanel({ execState }: Props) {
       if (execState !== "stopped" || editDialog) return;
       if (e.altKey && e.shiftKey && e.code === "KeyH") {
         e.preventDefault();
-        setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
+        setEditDialog({ addr: null, addrInput: "0000", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
       } else if (e.altKey && e.shiftKey && e.code === "KeyA") {
         e.preventDefault();
-        setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
+        setEditDialog({ addr: null, addrInput: "0000", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
       }
     };
     window.addEventListener("keydown", handler);
@@ -600,7 +600,7 @@ export default function MemoryPanel({ execState }: Props) {
           </button>
           <button
             className="mem-edit-btn"
-            onClick={() => setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false })}
+            onClick={() => setEditDialog({ addr: null, addrInput: "0000", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false })}
             disabled={execState !== "stopped"}
             title="Edit memory (Alt+Shift+H)"
           >
