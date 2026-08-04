@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./DisassemblyPanel";
+import { DataRadix, formatDataRadix, RadixButton, useDataRadix } from "./RadixControl";
 import "./styles/registers.scss";
 
 export interface RegisterSnapshot {
@@ -23,35 +24,15 @@ export interface RegisterSnapshot {
 
 // --- radix cycling ---
 
-type DataRadix = "hex" | "udec" | "sdec" | "oct" | "bin" ;
 type AddrRadix = "hex" | "udec" | "oct";
 
-const DATA_RADIX_CYCLE: DataRadix[] = ["hex", "udec", "sdec", "oct", "bin"];
 const ADDR_RADIX_CYCLE: AddrRadix[] = ["hex", "udec", "oct"];
-
-const DATA_RADIX_LABEL: Record<DataRadix, string> = {
-  hex:  "HEX",
-  udec: "DEC",
-  sdec: "±DEC",
-  oct:  "OCT",
-  bin:  "BIN",
-};
 
 const ADDR_RADIX_LABEL: Record<AddrRadix, string> = {
   hex:  "HEX",
   udec: "DEC",
   oct:  "OCT",
 };
-
-function formatData(value: number, radix: DataRadix): string {
-  switch (radix) {
-    case "hex":  return value.toString(16).toUpperCase().padStart(2, "0");
-    case "udec": return value.toString(10);
-    case "sdec": return ((value << 24) >> 24).toString(10);
-    case "oct":  return value.toString(8).padStart(3, "0");
-    case "bin":  return value.toString(2).padStart(8, "0");
-  }
-}
 
 /** Returns the character in single quotes if `value` is a printable ASCII byte (0x20–0x7E), otherwise null. */
 function printableAscii(value: number): string | null {
@@ -189,7 +170,7 @@ interface Props {
 
 export default function RegisterPanel({ snapshot: snapFromParent, execState, onEdit }: Props) {
   const [snap, setSnap] = useState<RegisterSnapshot | null>(null);
-  const [dataRadix, setDataRadix] = useState<DataRadix>("hex");
+  const [dataRadix, cycleDataRadix] = useDataRadix("hex");
   const [addrRadix, setAddrRadix] = useState<AddrRadix>("hex");
   const [editingTarget, setEditingTarget] = useState<RegisterField | "flags" | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -219,13 +200,6 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
   useEffect(() => {
     fetchRegisters();
   }, [fetchRegisters]);
-
-  const cycleDataRadix = useCallback(() => {
-    setDataRadix((r) => {
-      const i = DATA_RADIX_CYCLE.indexOf(r);
-      return DATA_RADIX_CYCLE[(i + 1) % DATA_RADIX_CYCLE.length];
-    });
-  }, []);
 
   const cycleAddrRadix = useCallback(() => {
     setAddrRadix((r) => {
@@ -402,15 +376,13 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
             <tr className="reg-group-header">
               <td />
               <td>
-                <button className="radix-btn" onClick={cycleDataRadix} title="Cycle radix">
-                  {DATA_RADIX_LABEL[dataRadix]}
-                </button>
+                <RadixButton radix={dataRadix} onCycle={cycleDataRadix} />
               </td>
             </tr>
             <tr>
               <td className="reg-name">A</td>
               <td className="reg-value">
-                {renderRegisterValue("a", formatData(snap.a, dataRadix), dataRadix, 8, true)}
+                {renderRegisterValue("a", formatDataRadix(snap.a, dataRadix, 8), dataRadix, 8, true)}
                 {editingTarget !== "a" && printableAscii(snap.a) !== null && (
                   <span className="reg-ascii">{printableAscii(snap.a)}</span>
                 )}
@@ -418,11 +390,11 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
             </tr>
             <tr>
               <td className="reg-name">X</td>
-              <td className="reg-value">{renderRegisterValue("x", formatData(snap.x, dataRadix), dataRadix, 8, true)}</td>
+              <td className="reg-value">{renderRegisterValue("x", formatDataRadix(snap.x, dataRadix, 8), dataRadix, 8, true)}</td>
             </tr>
             <tr>
               <td className="reg-name">Y</td>
-              <td className="reg-value">{renderRegisterValue("y", formatData(snap.y, dataRadix), dataRadix, 8, true)}</td>
+              <td className="reg-value">{renderRegisterValue("y", formatDataRadix(snap.y, dataRadix, 8), dataRadix, 8, true)}</td>
             </tr>
             <tr className="reg-separator" />
             <tr className="reg-group-header">

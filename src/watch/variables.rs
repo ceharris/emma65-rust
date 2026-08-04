@@ -4,13 +4,16 @@ use std::collections::HashMap;
 /// A collection of name-to-operand mappings for Watchpoint variables.
 pub struct Variables {
     map: HashMap<String, Operand>,
+    /// Variable names in ID order, so a variable's name can be recovered from
+    /// its [`Operand`] ID (e.g. for display purposes).
+    names: Vec<String>,
 }
 
 impl Variables {
 
     /// Creates a new variables collection.
     pub fn new() -> Self {
-        Self { map: HashMap::new() }
+        Self { map: HashMap::new(), names: Vec::new() }
     }
 
     /// Gets the mapping for `name` to the corresponding [`Operand`], if any.
@@ -21,18 +24,29 @@ impl Variables {
     /// Gets the mapping for `name` to the corresponding [`Operand`], creating the mapping if
     /// it does not exist.
     pub fn get_or_create(&mut self, name: &str) -> Operand {
-        let next_id = self.map.len() as Operand;
-        *self.map.entry(name.to_string()).or_insert(next_id)
+        if let Some(&id) = self.map.get(name) {
+            return id;
+        }
+        let id = self.names.len() as Operand;
+        self.names.push(name.to_string());
+        self.map.insert(name.to_string(), id);
+        id
     }
 
     /// Gets the length (size) of the mapping table.
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.names.len()
     }
 
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Returns all variable names, in ID order (so a name's index in the
+    /// returned slice is its [`Operand`] ID).
+    pub fn names(&self) -> &[String] {
+        &self.names
     }
 
 }
@@ -76,5 +90,22 @@ mod tests {
         let mut vars = Variables::new();
         let id = vars.get_or_create("x");
         assert_eq!(vars.get("x"), Some(id));
+    }
+
+    #[test]
+    fn names_are_returned_in_id_order() {
+        let mut vars = Variables::new();
+        vars.get_or_create("x");
+        vars.get_or_create("y");
+        assert_eq!(vars.names(), &["x".to_string(), "y".to_string()]);
+    }
+
+    #[test]
+    fn names_are_unaffected_by_repeated_get_or_create() {
+        let mut vars = Variables::new();
+        vars.get_or_create("x");
+        vars.get_or_create("y");
+        vars.get_or_create("x");
+        assert_eq!(vars.names(), &["x".to_string(), "y".to_string()]);
     }
 }

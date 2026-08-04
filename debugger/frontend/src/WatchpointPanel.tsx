@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./DisassemblyPanel";
+import { formatDataRadix, RadixButton, useDataRadix } from "./RadixControl";
 import "./styles/watchpoints.scss";
 
 interface WatchpointRow {
@@ -11,9 +12,16 @@ interface WatchpointRow {
   enabled: boolean;
 }
 
+/** One watch variable's name and current value, as last assigned by `:=`. */
+interface VariableRow {
+  name: string;
+  value: number;
+}
+
 interface WatchpointsSnapshot {
   compile_error: string | null;
   rows: WatchpointRow[];
+  variables: VariableRow[];
 }
 
 /** State for the add-watchpoint popover; null means closed. */
@@ -46,6 +54,9 @@ export default function WatchpointPanel({ execState }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [addDialog, setAddDialog] = useState<AddDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
+  const [variablesExpanded, setVariablesExpanded] = useState(true);
+  const variablesExpandedInitialized = useRef(false);
+  const [varRadix, cycleVarRadix] = useDataRadix("hex");
 
   const canEdit = execState === "stopped" && snapshot?.compile_error == null;
 
@@ -53,6 +64,13 @@ export default function WatchpointPanel({ execState }: Props) {
     try {
       const result = await invoke<WatchpointsSnapshot>("get_watchpoints");
       setSnapshot(result);
+      // Collapse the variables section by default only if it starts out
+      // empty; once initialized, later fetches never override the user's
+      // manual expand/collapse choice.
+      if (!variablesExpandedInitialized.current) {
+        variablesExpandedInitialized.current = true;
+        setVariablesExpanded(result.variables.length > 0);
+      }
     } catch (e) {
       console.error("get_watchpoints failed:", e);
     }
@@ -241,6 +259,33 @@ export default function WatchpointPanel({ execState }: Props) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {snapshot !== null && snapshot.compile_error === null && (
+        <div className="wp-vars-section">
+          <div
+            className="wp-vars-header"
+            onClick={() => setVariablesExpanded((e) => !e)}
+          >
+            <i className={`codicon codicon-chevron-${variablesExpanded ? "down" : "right"}`} />
+            <span className="wp-vars-title">Variables</span>
+            <RadixButton radix={varRadix} onCycle={cycleVarRadix} stopPropagation />
+          </div>
+          {variablesExpanded && (
+            snapshot.variables.length === 0 ? (
+              <span className="wp-vars-empty">No variables</span>
+            ) : (
+              <div className="wp-vars-body">
+                {snapshot.variables.map((v) => (
+                  <div key={v.name} className="wp-vars-row">
+                    <span className="wp-vars-name">{v.name}</span>
+                    <span className="wp-vars-value">{formatDataRadix(v.value, varRadix)}</span>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
         </div>
       )}
 

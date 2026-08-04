@@ -49,14 +49,23 @@
   }
 }
 
+// flex: 1 1 auto + min-height: 0 on these two (matching .watchpoint-body)
+// ensures they claim all leftover vertical space in .watchpoint-panel even
+// when their own content is short, so .wp-vars-section is always pushed
+// flush to the bottom of the panel rather than floating right below a
+// short watchpoint list.
 .watchpoint-empty {
   display: block;
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 16px;
   color: var(--color-muted-2);
   font-size: var(--font-size-mono);
 }
 
 .watchpoint-error {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 10px;
   color: var(--color-error);
   font-size: var(--font-size-mono);
@@ -151,6 +160,77 @@
 .wp-false    { color: var(--color-idle); }
 .wp-error    { color: var(--color-error); }
 .wp-disabled { color: var(--color-muted); }
+
+.wp-vars-section {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--color-border);
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wp-vars-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background-color: var(--color-bg-alt);
+  cursor: pointer;
+  flex-shrink: 0;
+
+  .codicon {
+    font-size: 14px;
+    color: var(--color-muted);
+  }
+}
+
+.wp-vars-title {
+  flex: 1 1 auto;
+  font-size: var(--font-size-btn);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+}
+
+.wp-vars-empty {
+  display: block;
+  padding: 8px 10px;
+  color: var(--color-muted-2);
+  font-size: var(--font-size-mono);
+}
+
+.wp-vars-body {
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.wp-vars-row {
+  display: flex;
+  align-items: baseline;
+  padding: 2px 10px;
+  gap: 8px;
+  font-size: var(--font-size-mono);
+  line-height: 1.7;
+
+  &:hover {
+    background-color: var(--color-bg-hover);
+  }
+}
+
+.wp-vars-name {
+  color: var(--color-accent);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wp-vars-value {
+  color: var(--color-number);
+  font-variant-numeric: tabular-nums;
+}
 
 .wp-add-backdrop {
   position: fixed;

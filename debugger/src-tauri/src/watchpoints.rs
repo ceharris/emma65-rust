@@ -45,6 +45,16 @@ pub struct WatchpointRow {
     pub enabled: bool,
 }
 
+/// One row of the watchpoint panel's variables section: a variable's name
+/// and its current value, as last assigned by a `:=` expression.
+#[derive(Clone, serde::Serialize)]
+pub struct VariableRow {
+    /// The variable's name, as it appears on the left-hand side of `:=`.
+    pub name: String,
+    /// The variable's current value.
+    pub value: u32,
+}
+
 /// A full snapshot of the watchpoint panel's contents for one render.
 #[derive(Clone, serde::Serialize)]
 pub struct WatchpointsSnapshot {
@@ -52,6 +62,9 @@ pub struct WatchpointsSnapshot {
     pub compile_error: Option<String>,
     /// One row per loaded watchpoint, in source order.
     pub rows: Vec<WatchpointRow>,
+    /// One row per watch variable currently known to the evaluator, in the
+    /// order each was first introduced by a walrus assignment.
+    pub variables: Vec<VariableRow>,
 }
 
 /// Loads and compiles `~/.emma/debugger/default/watchpoints.emw` against
@@ -104,19 +117,23 @@ fn load_enabled_from(dir: &Path, count: usize) -> Vec<bool> {
     }
 }
 
-/// Builds a snapshot of `watch`'s current watchpoints evaluated against `cpu`.
+/// Builds a snapshot of `watch`'s current watchpoints evaluated against `cpu`,
+/// along with its current watch variables.
 ///
-/// Returns an empty row list if `watch` carries a whole-file compile error or
-/// `cpu` is `None` (session not yet ready). Disabled watchpoints are still
-/// evaluated (so walrus assignments they make stay visible to later
-/// watchpoints), but their row always reports `triggered: false` and no
-/// error, since a disabled watchpoint's status is meaningless to the user.
+/// Returns an empty row list (and no variables) if `watch` carries a
+/// whole-file compile error. When `cpu` is `None` (session not yet ready),
+/// rows are empty but variables still reflect whatever was last assigned.
+/// Disabled watchpoints are still evaluated (so walrus assignments they make
+/// stay visible to later watchpoints), but their row always reports
+/// `triggered: false` and no error, since a disabled watchpoint's status is
+/// meaningless to the user.
 fn build_snapshot(cpu: Option<&Cpu>, watch: &mut WatchData) -> WatchpointsSnapshot {
     if let Some(err) = &watch.compile_error {
-        return WatchpointsSnapshot { compile_error: Some(err.clone()), rows: Vec::new() };
+        return WatchpointsSnapshot { compile_error: Some(err.clone()), rows: Vec::new(), variables: Vec::new() };
     }
     let Some(cpu) = cpu else {
-        return WatchpointsSnapshot { compile_error: None, rows: Vec::new() };
+        let variables = collect_variables(&watch.evaluator);
+        return WatchpointsSnapshot { compile_error: None, rows: Vec::new(), variables };
     };
     let results = cpu.evaluate_watchpoints(&mut watch.evaluator);
     let rows = watch
@@ -142,7 +159,14 @@ fn build_snapshot(cpu: Option<&Cpu>, watch: &mut WatchData) -> WatchpointsSnapsh
             }
         })
         .collect();
-    WatchpointsSnapshot { compile_error: None, rows }
+    let variables = collect_variables(&watch.evaluator);
+    WatchpointsSnapshot { compile_error: None, rows, variables }
+}
+
+/// Snapshots `evaluator`'s current watch variables as owned `VariableRow`s,
+/// in the order each was first introduced by a walrus assignment.
+fn collect_variables(evaluator: &WatchEvaluator) -> Vec<VariableRow> {
+    evaluator.named_variables().into_iter().map(|(name, value)| VariableRow { name: name.to_string(), value }).collect()
 }
 
 /// Rebuilds `cpu`'s own watch evaluator — the one `Cpu::step()` consults to
@@ -424,6 +448,36 @@ mod tests {
             }
         }
         assert!(!halted, "a disabled watchpoint must not halt execution even though its expression is true");
+    }
+
+    #[test]
+    fn build_snapshot_includes_variable_values_from_this_evaluation_cycle() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus_mut().write(0x0200, 0xA2).unwrap(); // LDX #$2A
+        cpu.bus_mut().write(0x0201, 0x2A).unwrap();
+        cpu.step(None, true);
+
+        let mut watch = WatchData { evaluator: evaluator_with(&["x := X"]), compile_error: None, enabled: vec![true] };
+        let snapshot = build_snapshot(Some(&cpu), &mut watch);
+        assert_eq!(snapshot.variables.len(), 1);
+        assert_eq!(snapshot.variables[0].name, "x");
+        assert_eq!(snapshot.variables[0].value, 0x2A);
+    }
+
+    #[test]
+    fn build_snapshot_omits_variables_on_compile_error() {
+        let mut watch = WatchData { evaluator: WatchEvaluator::new(), compile_error: Some("bad".to_string()), enabled: Vec::new() };
+        let snapshot = build_snapshot(None, &mut watch);
+        assert!(snapshot.variables.is_empty());
+    }
+
+    #[test]
+    fn build_snapshot_reports_variables_even_when_cpu_is_not_ready() {
+        let mut watch = WatchData { evaluator: evaluator_with(&["x := A"]), compile_error: None, enabled: vec![true] };
+        let snapshot = build_snapshot(None, &mut watch);
+        assert!(snapshot.rows.is_empty());
+        assert_eq!(snapshot.variables.len(), 1);
+        assert_eq!(snapshot.variables[0].name, "x");
     }
 
     #[test]
