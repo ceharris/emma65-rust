@@ -156,15 +156,13 @@ export default function WatchpointPanel({ execState }: Props) {
                 key={index}
                 className={`watchpoint-row${selectedIndex === index ? " selected" : ""}${row.enabled ? "" : " disabled"}`}
               >
-                <input
-                  type="checkbox"
-                  className="watchpoint-enabled"
-                  checked={row.enabled}
-                  onChange={() => toggleWatchpointAt(index)}
-                  disabled={!canEdit}
+                <span
+                  className={`indicator ${statusClass}${canEdit ? "" : " readonly"}`}
+                  onClick={() => canEdit && toggleWatchpointAt(index)}
                   title={canEdit ? (row.enabled ? "Disable watchpoint" : "Enable watchpoint") : "Stop the CPU to edit watchpoints"}
-                />
-                <span className={`indicator ${statusClass}`}>{row.enabled ? "●" : "–"}</span>
+                >
+                  {row.enabled ? "●" : "⊘"}
+                </span>
                 <span
                   className={`watchpoint-source${expandedIndex === index ? " expanded" : ""}`}
                   onClick={() => handleRowClick(index)}
