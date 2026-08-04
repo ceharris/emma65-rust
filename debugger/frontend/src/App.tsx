@@ -7,6 +7,7 @@ import MemoryPanel from "./MemoryPanel";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
 import StackPanel from "./StackPanel";
 import ThemeSelector from "./ThemeSelector";
+import WatchpointPanel from "./WatchpointPanel";
 import { useAppKeyBindings } from "./useAppKeyBindings";
 
 interface SessionStatus {
@@ -83,7 +84,7 @@ export default function App() {
       <div className="app-layout">
         <div className="col col-left">
           <MemoryPanel execState={execState} />
-          {/* Watchpoints — story 12 */}
+          <WatchpointPanel />
         </div>
         <div className="col col-center">
           <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
