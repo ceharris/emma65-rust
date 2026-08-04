@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./DisassemblyPanel";
-import { DataRadix, formatDataRadix, RadixButton, useDataRadix } from "./RadixControl";
+import { ADDR_RADIX_CYCLE, DataRadix, formatDataRadix, RadixButton, useDataRadix, useRadixCycle } from "./RadixControl";
 import "./styles/registers.scss";
 
 export interface RegisterSnapshot {
@@ -22,29 +22,9 @@ export interface RegisterSnapshot {
   breakpoint_hit: boolean;
 }
 
-// --- radix cycling ---
-
-type AddrRadix = "hex" | "udec" | "oct";
-
-const ADDR_RADIX_CYCLE: AddrRadix[] = ["hex", "udec", "oct"];
-
-const ADDR_RADIX_LABEL: Record<AddrRadix, string> = {
-  hex:  "HEX",
-  udec: "DEC",
-  oct:  "OCT",
-};
-
 /** Returns the character in single quotes if `value` is a printable ASCII byte (0x20–0x7E), otherwise null. */
 function printableAscii(value: number): string | null {
   return value >= 0x20 && value <= 0x7e ? `'${String.fromCharCode(value)}'` : null;
-}
-
-function formatAddr(value: number, radix: AddrRadix, byteWidth: number): string {
-  switch (radix) {
-    case "hex":  return value.toString(16).toUpperCase().padStart(byteWidth * 2, "0");
-    case "udec": return value.toString(10);
-    case "oct":  return value.toString(8).padStart(byteWidth === 2 ? 6 : 3, "0");
-  }
 }
 
 // --- register editing ---
@@ -171,7 +151,7 @@ interface Props {
 export default function RegisterPanel({ snapshot: snapFromParent, execState, onEdit }: Props) {
   const [snap, setSnap] = useState<RegisterSnapshot | null>(null);
   const [dataRadix, cycleDataRadix] = useDataRadix("hex");
-  const [addrRadix, setAddrRadix] = useState<AddrRadix>("hex");
+  const [addrRadix, cycleAddrRadix] = useRadixCycle(ADDR_RADIX_CYCLE, "hex");
   const [editingTarget, setEditingTarget] = useState<RegisterField | "flags" | null>(null);
   const [editValue, setEditValue] = useState("");
   const [editInvalid, setEditInvalid] = useState(false);
@@ -200,13 +180,6 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
   useEffect(() => {
     fetchRegisters();
   }, [fetchRegisters]);
-
-  const cycleAddrRadix = useCallback(() => {
-    setAddrRadix((r) => {
-      const i = ADDR_RADIX_CYCLE.indexOf(r);
-      return ADDR_RADIX_CYCLE[(i + 1) % ADDR_RADIX_CYCLE.length];
-    });
-  }, []);
 
   const beginEdit = useCallback((field: RegisterField, currentText: string) => {
     if (!isEditable) return;
@@ -400,22 +373,20 @@ export default function RegisterPanel({ snapshot: snapFromParent, execState, onE
             <tr className="reg-group-header">
               <td />
               <td>
-                <button className="radix-btn" onClick={cycleAddrRadix} title="Cycle radix">
-                  {ADDR_RADIX_LABEL[addrRadix]}
-                </button>
+                <RadixButton radix={addrRadix} onCycle={cycleAddrRadix} />
               </td>
             </tr>
             <tr>
               <td className="reg-name">PC</td>
-              <td className="reg-value">{renderRegisterValue("pc", formatAddr(snap.pc, addrRadix, 2), addrRadix, 16, false)}</td>
+              <td className="reg-value">{renderRegisterValue("pc", formatDataRadix(snap.pc, addrRadix, 16), addrRadix, 16, false)}</td>
             </tr>
             <tr>
               <td className="reg-name">S</td>
-              <td className="reg-value">{renderRegisterValue("s", formatAddr(snap.s, addrRadix, 1), addrRadix, 8, true)}</td>
+              <td className="reg-value">{renderRegisterValue("s", formatDataRadix(snap.s, addrRadix, 8), addrRadix, 8, true)}</td>
             </tr>
             <tr>
               <td className="reg-name">P</td>
-              <td className="reg-value">{renderRegisterValue("p", formatAddr(snap.p, addrRadix, 1), addrRadix, 8, true)}</td>
+              <td className="reg-value">{renderRegisterValue("p", formatDataRadix(snap.p, addrRadix, 8), addrRadix, 8, true)}</td>
             </tr>
             <tr>
               <td className="reg-name" />
