@@ -96,20 +96,24 @@ $light-palette: (
   --font-size-btn: 0.70rem;
   --font-size-ui-panel: 0.80rem;
   --font-size-mono: 0.85rem;
+  --placeholder-opacity: 0.75;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     @include theme-vars($light-palette);
+    --placeholder-opacity: 1;
   }
 }
 
 html[data-theme="dark"] {
   @include theme-vars($dark-palette);
+  --placeholder-opacity: 0.75;
 }
 
 html[data-theme="light"] {
   @include theme-vars($light-palette);
+  --placeholder-opacity: 1;
 }
 
 html,
@@ -131,7 +135,7 @@ body {
 ::placeholder {
   color: var(--color-muted);
   font-style: italic;
-  opacity: 1;
+  opacity: var(--placeholder-opacity);
 }
 
 // --- splash screen (init / error) ---
