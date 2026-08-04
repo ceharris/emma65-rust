@@ -149,13 +149,23 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
 
   const handleToggleIrq = useCallback(async () => {
     try {
+      // While free-running (or step-over/step-return in progress), the backend
+      // treats assert_irq as a one-shot pulse that auto-releases once the CPU
+      // services it (see #261) — so there's no sticky "asserted" state to track
+      // here, and the button behaves like the momentary NMI trigger instead of
+      // a toggle.
+      if (cpuBus?.is_running) {
+        const result = await invoke<CpuBusState>("assert_irq");
+        setCpuBus(result);
+        return;
+      }
       const result = await invoke<CpuBusState>(irqAsserted ? "release_irq" : "assert_irq");
       setCpuBus(result);
       setIrqAsserted((prev) => !prev);
     } catch (e) {
       console.error("assert_irq/release_irq failed:", e);
     }
-  }, [irqAsserted]);
+  }, [irqAsserted, cpuBus?.is_running]);
 
   // Determine Run/Stop/Step/STP/WAI indicator label and color class.
   // STP and WAI override the normal "Stop" state when the CPU has halted
@@ -214,7 +224,7 @@ export default function CpuBusPanel({ execState, onReset }: Props) {
           <button
             className={`exec-btn irq-btn${irqAsserted ? " active" : ""}`}
             onClick={handleToggleIrq}
-            title="Assert/Release IRQ"
+            title={cpuBus?.is_running ? "Trigger IRQ (one-shot while running)" : "Assert/Release IRQ"}
           >
             IRQ
           </button>

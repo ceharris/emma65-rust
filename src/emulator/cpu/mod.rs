@@ -297,6 +297,7 @@ impl Cpu {
         if self.interrupts.irq_active() && !self.regs.p.contains(StatusRegister::I) {
             let interrupt_result =
                 self.service_interrupt(IRQ_VECTOR, false);
+            self.interrupts.consume_irq_pulses();
             return self.map_interrupt_result(interrupt_result);
         }
 
@@ -1805,6 +1806,31 @@ mod tests {
         // Pushed P should not have B set
         let pushed_p = cpu.bus.read(STACK_BASE | s_before.wrapping_sub(2) as u16).unwrap();
         assert_eq!(pushed_p & StatusRegister::B.bits(), 0);
+    }
+
+    #[test]
+    fn irq_pulse_auto_releases_after_service() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(IRQ_VECTOR, 0x00).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
+        cpu.regs.p.remove(StatusRegister::I);
+        cpu.interrupts_mut().assert_irq_pulse(crate::emulator::bus::IrqSource(1));
+        cpu.step(None, true);
+        assert_eq!(cpu.regs.pc, 0x0400);
+        assert!(!cpu.interrupts().irq_active(), "pulsed IRQ source should auto-release once serviced");
+    }
+
+    #[test]
+    fn irq_pulse_does_not_release_other_manually_asserted_sources() {
+        let mut cpu = make_cpu(0x0200);
+        use crate::emulator::bus::IrqSource;
+        cpu.bus.write(IRQ_VECTOR, 0x00).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
+        cpu.regs.p.remove(StatusRegister::I);
+        cpu.interrupts_mut().assert_irq(IrqSource(1));
+        cpu.interrupts_mut().assert_irq_pulse(IrqSource(2));
+        cpu.step(None, true);
+        assert!(cpu.interrupts().irq_active(), "manually-asserted source should remain active");
     }
 
     #[test]

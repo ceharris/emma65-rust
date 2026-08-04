@@ -81,6 +81,9 @@ const BATCH_SIZE: u32 = 1000;
 pub enum InterruptCommand {
     /// Asserts the IRQ line from the given source.
     AssertIrq(IrqSource),
+    /// Asserts the IRQ line from the given source in one-shot ("pulse") mode; the
+    /// source is automatically released once the CPU services an IRQ.
+    AssertIrqPulse(IrqSource),
     /// Releases the IRQ line from the given source.
     ReleaseIrq(IrqSource),
     /// Latches a pending NMI.
@@ -93,6 +96,7 @@ pub enum InterruptCommand {
 fn apply_interrupt_command(cpu: &mut Cpu, cmd: InterruptCommand) {
     match cmd {
         InterruptCommand::AssertIrq(source) => cpu.interrupts_mut().assert_irq(source),
+        InterruptCommand::AssertIrqPulse(source) => cpu.interrupts_mut().assert_irq_pulse(source),
         InterruptCommand::ReleaseIrq(source) => cpu.interrupts_mut().release_irq(source),
         InterruptCommand::TriggerNmi => cpu.interrupts_mut().signal_nmi(),
         InterruptCommand::TriggerReset => cpu.interrupts_mut().signal_reset(),
@@ -174,6 +178,16 @@ impl RunStopper {
     /// device-sourced IRQ.
     pub fn assert_irq(&self, source: IrqSource) {
         let _ = self.cmd_tx.send(InterruptCommand::AssertIrq(source));
+    }
+
+    /// Asserts the IRQ line from `source` on the running CPU in one-shot ("pulse")
+    /// mode: `source` is automatically released once the CPU services an IRQ, rather
+    /// than requiring a separate `release_irq` call.
+    ///
+    /// Non-blocking; applied between instructions. Does not stop the run — the CPU
+    /// services the interrupt transparently, then releases `source` itself.
+    pub fn assert_irq_pulse(&self, source: IrqSource) {
+        let _ = self.cmd_tx.send(InterruptCommand::AssertIrqPulse(source));
     }
 
     /// Releases the IRQ line from `source` on the running CPU.
@@ -765,6 +779,18 @@ mod tests {
         buf[0]
     }
 
+    /// Builds a CPU with an infinite `CLI; NOP; BRA` loop at $0200 (so IRQ is
+    /// unmasked) and an IRQ ISR at $0300 that increments the counter at $0000
+    /// then returns, so re-entry can be detected across a sustained free run.
+    fn make_cpu_with_irq_counting_loop() -> Cpu {
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x58, 0xEA, 0x80, 0xFD]); // CLI, NOP, BRA -3
+        write(&mut cpu, 0x0300, &[0xEE, 0x00, 0x00, 0x40]); // INC $0000, RTI
+        cpu.bus_mut().write(0xFFFE, 0x00).unwrap(); // IRQ vector lo -> $0300
+        cpu.bus_mut().write(0xFFFF, 0x03).unwrap(); // IRQ vector hi
+        cpu
+    }
+
     #[tokio::test]
     async fn run_stopper_assert_irq_services_without_halting_run() {
         // Asserting IRQ via a RunStopper on a running CPU thread must be applied
@@ -778,6 +804,24 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let cpu = handle.take_cpu().await;
         assert_eq!(read_marker(&cpu), 0x42, "IRQ ISR should have run while free-running");
+    }
+
+    #[tokio::test]
+    async fn run_stopper_assert_irq_pulse_services_exactly_once() {
+        // A pulsed IRQ must auto-release once serviced, so a sustained free run
+        // afterward does not repeatedly re-enter the ISR (issue #261) the way a
+        // manually-asserted (level-triggered) IRQ would.
+        let cpu = make_cpu_with_irq_counting_loop();
+        let handle = run(cpu);
+        let stopper = handle.stopper();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        stopper.assert_irq_pulse(IrqSource(0));
+        // Let the free run continue well past when a level-triggered assert
+        // would have re-entered the ISR many times.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let cpu = handle.take_cpu().await;
+        assert_eq!(read_marker(&cpu), 1, "pulsed IRQ should service exactly once");
+        assert!(!cpu.interrupts().irq_active(), "pulsed IRQ source should have auto-released");
     }
 
     #[tokio::test]
