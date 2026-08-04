@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./DisassemblyPanel";
+import { formatDataRadix, RadixButton, useDataRadix } from "./RadixControl";
 import "./styles/watchpoints.scss";
 
 interface WatchpointRow {
@@ -21,33 +22,6 @@ interface WatchpointsSnapshot {
   compile_error: string | null;
   rows: WatchpointRow[];
   variables: VariableRow[];
-}
-
-// --- variable radix cycling ---
-
-type VarRadix = "hex" | "udec" | "sdec" | "oct" | "bin";
-
-const VAR_RADIX_CYCLE: VarRadix[] = ["hex", "udec", "sdec", "oct", "bin"];
-
-const VAR_RADIX_LABEL: Record<VarRadix, string> = {
-  hex:  "HEX",
-  udec: "DEC",
-  sdec: "±DEC",
-  oct:  "OCT",
-  bin:  "BIN",
-};
-
-/** Formats a watch variable's 32-bit value in `radix`, unpadded (variables
- *  hold values of varying width — register, address, or memory fetch). */
-function formatVariable(value: number, radix: VarRadix): string {
-  const u = value >>> 0;
-  switch (radix) {
-    case "hex":  return u.toString(16).toUpperCase();
-    case "udec": return u.toString(10);
-    case "sdec": return (u | 0).toString(10);
-    case "oct":  return u.toString(8);
-    case "bin":  return u.toString(2);
-  }
 }
 
 /** State for the add-watchpoint popover; null means closed. */
@@ -81,7 +55,7 @@ export default function WatchpointPanel({ execState }: Props) {
   const [addDialog, setAddDialog] = useState<AddDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
   const [variablesExpanded, setVariablesExpanded] = useState(true);
-  const [varRadix, setVarRadix] = useState<VarRadix>("hex");
+  const [varRadix, cycleVarRadix] = useDataRadix("hex");
 
   const canEdit = execState === "stopped" && snapshot?.compile_error == null;
 
@@ -134,14 +108,6 @@ export default function WatchpointPanel({ execState }: Props) {
     } catch (e) {
       console.error("remove_watchpoint failed:", e);
     }
-  }, []);
-
-  /** Cycles the variables section's display radix through the same options as the Registers panel. */
-  const cycleVarRadix = useCallback(() => {
-    setVarRadix((r) => {
-      const i = VAR_RADIX_CYCLE.indexOf(r);
-      return VAR_RADIX_CYCLE[(i + 1) % VAR_RADIX_CYCLE.length];
-    });
   }, []);
 
   /** Toggles the enabled state of the watchpoint at `index`. */
@@ -296,13 +262,7 @@ export default function WatchpointPanel({ execState }: Props) {
           >
             <i className={`codicon codicon-chevron-${variablesExpanded ? "down" : "right"}`} />
             <span className="wp-vars-title">Variables</span>
-            <button
-              className="radix-btn"
-              onClick={(e) => { e.stopPropagation(); cycleVarRadix(); }}
-              title="Cycle radix"
-            >
-              {VAR_RADIX_LABEL[varRadix]}
-            </button>
+            <RadixButton radix={varRadix} onCycle={cycleVarRadix} stopPropagation />
           </div>
           {variablesExpanded && (
             snapshot.variables.length === 0 ? (
@@ -312,7 +272,7 @@ export default function WatchpointPanel({ execState }: Props) {
                 {snapshot.variables.map((v) => (
                   <div key={v.name} className="wp-vars-row">
                     <span className="wp-vars-name">{v.name}</span>
-                    <span className="wp-vars-value">{formatVariable(v.value, varRadix)}</span>
+                    <span className="wp-vars-value">{formatDataRadix(v.value, varRadix)}</span>
                   </div>
                 ))}
               </div>
