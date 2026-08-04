@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./DisassemblyPanel";
@@ -40,6 +40,7 @@ interface Props {
 }
 
 export default function WatchpointPanel({ execState }: Props) {
+  const panelRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<WatchpointsSnapshot | null>(null);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -74,6 +75,17 @@ export default function WatchpointPanel({ execState }: Props) {
   const handleRowClick = useCallback((index: number) => {
     setSelectedIndex(index);
     setExpandedIndex((prev) => (prev === index ? null : index));
+  }, []);
+
+  /** Clears the row-selection highlight once the user's focus moves outside the panel. */
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        setSelectedIndex(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
   }, []);
 
   /** Removes the watchpoint at `index` and clears selection/expansion. */
@@ -176,7 +188,7 @@ export default function WatchpointPanel({ execState }: Props) {
   }, [addDialog]);
 
   return (
-    <div className="watchpoint-panel">
+    <div className="watchpoint-panel" ref={panelRef}>
       <div className="watchpoint-header">
         <span className="panel-title">Watchpoints</span>
         <button
