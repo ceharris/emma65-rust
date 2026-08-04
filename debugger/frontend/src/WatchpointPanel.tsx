@@ -197,7 +197,18 @@ export default function WatchpointPanel({ execState }: Props) {
     setVarEditInvalid(false);
   }, []);
 
-  /** Parses the input using the same radix/prefix rules as register editing, invokes set_watch_variable, and closes the input on success. */
+  /**
+   * Parses the input using the same radix/prefix rules as register editing,
+   * invokes set_watch_variable, and closes the input on success.
+   *
+   * Updates the displayed value optimistically from the parsed input rather
+   * than re-fetching a snapshot: `get_watchpoints`/`set_watch_variable`
+   * always re-evaluate every watchpoint, so if `name` is itself the target of
+   * an active `:=` expression, a fresh snapshot would immediately reassign it
+   * back and the edit would appear to silently fail. The real evaluator
+   * state is authoritative again on the next actual evaluation cycle (a halt
+   * or run-stop event).
+   */
   const commitVarEdit = useCallback(async (name: string, radix: DataRadix) => {
     const parsed = parseIntegerInput(varEditValue, radix);
     const value = parsed === null ? null : toUnsignedInRange(parsed, 32, true);
@@ -206,8 +217,8 @@ export default function WatchpointPanel({ execState }: Props) {
       return;
     }
     try {
-      const result = await invoke<WatchpointsSnapshot>("set_watch_variable", { name, value });
-      setSnapshot(result);
+      await invoke<void>("set_watch_variable", { name, value });
+      setSnapshot((prev) => prev && { ...prev, variables: prev.variables.map((v) => (v.name === name ? { ...v, value } : v)) });
       setEditingVarName(null);
       setVarEditInvalid(false);
     } catch (e) {

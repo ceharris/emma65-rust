@@ -363,29 +363,36 @@ pub fn toggle_watchpoint(
 }
 
 /// Sets watch variable `name` to `value`, taking effect on the next
-/// evaluation cycle, and returns a fresh snapshot.
+/// evaluation cycle.
 ///
 /// Fails without modifying state if `name` doesn't match any variable
 /// introduced by a `:=` expression, or if the loaded file carries an
 /// unresolved whole-file compile error. Unlike watchpoint add/remove/edit,
 /// this has nothing to persist to disk: variable values are runtime-only and
 /// are reset to their walrus-assigned values whenever the evaluator reruns.
+///
+/// Deliberately does *not* return a fresh snapshot the way add/remove/edit
+/// do: building one would call `build_snapshot`, which re-evaluates every
+/// watchpoint — including whichever `:=` expression introduced this very
+/// variable — and would immediately overwrite the value just set, before
+/// the caller ever sees it. The panel updates its own display optimistically
+/// instead, and picks up the real evaluator state on the next actual
+/// evaluation cycle (a halt or run-stop event).
 #[tauri::command]
 pub fn set_watch_variable(
     name: String,
     value: u32,
-    cpu_state: State<CpuState>,
     watch_state: State<WatchState>,
-) -> Result<WatchpointsSnapshot, String> {
+) -> Result<(), String> {
     let mut watch = watch_state.0.lock().unwrap();
     if watch.compile_error.is_some() {
         return Err("watchpoints.emw has a compile error; fix it before editing variables".to_string());
     }
-    if !watch.evaluator.set_variable_by_name(&name, value) {
-        return Err(format!("Unknown watch variable: {name}"));
+    if watch.evaluator.set_variable_by_name(&name, value) {
+        Ok(())
+    } else {
+        Err(format!("Unknown watch variable: {name}"))
     }
-    let cpu_guard = cpu_state.0.lock().unwrap();
-    Ok(build_snapshot(cpu_guard.as_ref(), &mut watch))
 }
 
 #[cfg(test)]
