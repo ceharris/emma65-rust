@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./DisassemblyPanel";
@@ -24,16 +24,28 @@ interface AddDialogState {
   error: string;
 }
 
+/** State for the edit-watchpoint popover; null means closed. */
+interface EditDialogState {
+  /** Index of the watchpoint being edited. */
+  index: number;
+  /** Controlled value of the expression input. */
+  value: string;
+  /** Compilation or validation error; empty string means no error. */
+  error: string;
+}
+
 interface Props {
   /** Current CPU execution state; add/remove are only allowed while stopped. */
   execState: ExecState;
 }
 
 export default function WatchpointPanel({ execState }: Props) {
+  const panelRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<WatchpointsSnapshot | null>(null);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [addDialog, setAddDialog] = useState<AddDialogState | null>(null);
+  const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
 
   const canEdit = execState === "stopped" && snapshot?.compile_error == null;
 
@@ -65,6 +77,17 @@ export default function WatchpointPanel({ execState }: Props) {
     setExpandedIndex((prev) => (prev === index ? null : index));
   }, []);
 
+  /** Clears the row-selection highlight once the user's focus moves outside the panel. */
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        setSelectedIndex(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
   /** Removes the watchpoint at `index` and clears selection/expansion. */
   const removeWatchpointAt = useCallback(async (index: number) => {
     try {
@@ -91,7 +114,7 @@ export default function WatchpointPanel({ execState }: Props) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (document.activeElement instanceof HTMLInputElement) return;
-      if (!canEdit || addDialog || selectedIndex === null) return;
+      if (!canEdit || addDialog || editDialog || selectedIndex === null) return;
       if (e.key === "Delete") {
         e.preventDefault();
         removeWatchpointAt(selectedIndex);
@@ -99,7 +122,43 @@ export default function WatchpointPanel({ execState }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [canEdit, addDialog, selectedIndex, removeWatchpointAt]);
+  }, [canEdit, addDialog, editDialog, selectedIndex, removeWatchpointAt]);
+
+  /** Double-click on a row's source text opens the edit popover, seeded with its current expression. */
+  const openEditDialog = useCallback(
+    (index: number, source: string) => {
+      if (!canEdit) return;
+      setEditDialog({ index, value: source, error: "" });
+    },
+    [canEdit],
+  );
+
+  /** Validates the input, invokes edit_watchpoint, and closes the popover on success. */
+  const commitEditWatchpoint = useCallback(async () => {
+    if (!editDialog) return;
+    const source = editDialog.value.trim();
+    if (!source) {
+      setEditDialog((d) => d && { ...d, error: "Enter a watchpoint expression" });
+      return;
+    }
+    try {
+      const result = await invoke<WatchpointsSnapshot>("edit_watchpoint", { index: editDialog.index, source });
+      setSnapshot(result);
+      setEditDialog(null);
+    } catch (e) {
+      setEditDialog((d) => d && { ...d, error: String(e) });
+    }
+  }, [editDialog]);
+
+  /** Dismiss the edit popover on Escape while it is open. */
+  useEffect(() => {
+    if (!editDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setEditDialog(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [editDialog]);
 
   /** Validates the input, invokes add_watchpoint, and closes the popover on success. */
   const commitAddWatchpoint = useCallback(async () => {
@@ -129,7 +188,7 @@ export default function WatchpointPanel({ execState }: Props) {
   }, [addDialog]);
 
   return (
-    <div className="watchpoint-panel">
+    <div className="watchpoint-panel" ref={panelRef}>
       <div className="watchpoint-header">
         <span className="panel-title">Watchpoints</span>
         <button
@@ -166,6 +225,7 @@ export default function WatchpointPanel({ execState }: Props) {
                 <span
                   className={`watchpoint-source${expandedIndex === index ? " expanded" : ""}`}
                   onClick={() => handleRowClick(index)}
+                  onDoubleClick={() => openEditDialog(index, row.source)}
                   title={row.source}
                 >
                   {row.source}
@@ -226,6 +286,55 @@ export default function WatchpointPanel({ execState }: Props) {
                 onClick={commitAddWatchpoint}
               >
                 OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editDialog && (
+        <div
+          className="wp-add-backdrop"
+          onClick={() => setEditDialog(null)}
+        >
+          <div className="wp-add-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="wp-add-title">Edit Watchpoint</div>
+
+            <div className="wp-add-field">
+              <input
+                className={`wp-add-input${editDialog.error ? " invalid" : ""}`}
+                autoFocus
+                spellCheck={false}
+                value={editDialog.value}
+                onChange={(e) =>
+                  setEditDialog((d) => d && { ...d, value: e.target.value, error: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitEditWatchpoint(); }
+                  if (e.key === "Escape") { e.preventDefault(); setEditDialog(null); }
+                }}
+              />
+            </div>
+
+            {editDialog.error && (
+              <div className="wp-add-error">{editDialog.error}</div>
+            )}
+
+            <div className="wp-add-buttons">
+              <button
+                className="wp-add-btn-action wp-add-btn-cancel"
+                onClick={() => setEditDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="wp-add-btn-action wp-add-btn-ok"
+                onClick={commitEditWatchpoint}
+                disabled={!!editDialog.error}
+                title={editDialog.error ? "Fix the error before saving" : "Save changes"}
+              >
+                Save
               </button>
             </div>
           </div>

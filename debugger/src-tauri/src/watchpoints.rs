@@ -259,6 +259,57 @@ pub fn remove_watchpoint(
     Ok(build_snapshot(cpu_guard.as_ref(), &mut watch))
 }
 
+/// Recompiles `sources` in order against `symbol_table`, in a fresh
+/// evaluator, used to validate an edited watchpoint and, on success, replace
+/// the evaluator that backs the panel.
+///
+/// Rebuilding from source strings (rather than replacing one `Watchpoint` in
+/// place) keeps variable IDs consistent: the compiler assigns them by source
+/// order, and a walrus assignment in one watchpoint must resolve to the same
+/// ID when read by a later one.
+fn recompile_sources(sources: &[String], symbol_table: &SymbolTable) -> Result<WatchEvaluator, String> {
+    let table = symbol_table.clone();
+    let mut compiler = WatchCompiler::new(map_register_name, map_flag_name, move |name| {
+        table.address_for(name).map(|a| a as u32)
+    });
+    let mut evaluator = WatchEvaluator::new();
+    for source in sources {
+        let wp = compiler.compile(source, &mut evaluator).map_err(|e| e.to_string())?;
+        evaluator.add(wp);
+    }
+    Ok(evaluator)
+}
+
+/// Replaces the expression at `index` with `source`, persists the updated
+/// watchpoint file, and returns a fresh snapshot.
+///
+/// Fails without modifying state if the edited source fails to compile, or
+/// if the loaded file already carries an unresolved whole-file compile
+/// error. The watchpoint's enabled state is left unchanged.
+#[tauri::command]
+pub fn edit_watchpoint(
+    index: usize,
+    source: String,
+    cpu_state: State<CpuState>,
+    watch_state: State<WatchState>,
+) -> Result<WatchpointsSnapshot, String> {
+    let mut watch = watch_state.0.lock().unwrap();
+    if watch.compile_error.is_some() {
+        return Err("watchpoints.emw has a compile error; fix it before editing watchpoints".to_string());
+    }
+    if index >= watch.evaluator.watchpoints().len() {
+        return Err("Invalid watchpoint index".to_string());
+    }
+    let mut cpu_guard = cpu_state.0.lock().unwrap();
+    let cpu = cpu_guard.as_mut().ok_or("CPU not ready")?;
+    let mut sources: Vec<String> = watch.evaluator.watchpoints().iter().map(|wp| wp.source().to_string()).collect();
+    sources[index] = source;
+    watch.evaluator = recompile_sources(&sources, cpu.bus().symbol_table())?;
+    sync_cpu_evaluator(cpu, &watch.evaluator, &watch.enabled)?;
+    save_watchpoints(&watch.evaluator, &watch.enabled)?;
+    Ok(build_snapshot(Some(cpu), &mut watch))
+}
+
 /// Toggles the enabled state of the watchpoint at `index`, persists the
 /// updated state, and returns a fresh snapshot.
 ///
@@ -373,6 +424,20 @@ mod tests {
             }
         }
         assert!(!halted, "a disabled watchpoint must not halt execution even though its expression is true");
+    }
+
+    #[test]
+    fn recompile_sources_replaces_one_source_and_preserves_order() {
+        let sources = vec!["A == 0".to_string(), "X == 1".to_string(), "Y == 2".to_string()];
+        let evaluator = recompile_sources(&sources, &SymbolTable::new()).unwrap();
+        let got: Vec<&str> = evaluator.watchpoints().iter().map(|wp| wp.source()).collect();
+        assert_eq!(got, sources);
+    }
+
+    #[test]
+    fn recompile_sources_fails_on_invalid_expression() {
+        let sources = vec!["A == 0".to_string(), "@@@".to_string()];
+        assert!(recompile_sources(&sources, &SymbolTable::new()).is_err());
     }
 
     /// Returns a fresh, uniquely-named temp directory for one test's config files.
