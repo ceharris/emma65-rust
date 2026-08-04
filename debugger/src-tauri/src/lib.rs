@@ -153,6 +153,7 @@ pub fn run() {
         .manage(watchpoints::WatchState(Mutex::new(watchpoints::WatchData {
             evaluator: emma65::watch::WatchEvaluator::new(),
             compile_error: None,
+            enabled: Vec::new(),
         })))
         .invoke_handler(tauri::generate_handler![
             quit,
@@ -191,6 +192,7 @@ pub fn run() {
             watchpoints::get_watchpoints,
             watchpoints::add_watchpoint,
             watchpoints::remove_watchpoint,
+            watchpoints::toggle_watchpoint,
         ])
         .setup(|app| {
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
@@ -251,19 +253,20 @@ pub fn run() {
                         // so it never blocks or fails the rest of the debugger.
                         let symbol_table = cpu.bus().symbol_table().clone();
                         let watch_data = match watchpoints::load_watchpoints(&symbol_table) {
-                            Ok(evaluator) => watchpoints::WatchData { evaluator, compile_error: None },
+                            Ok((evaluator, enabled)) => watchpoints::WatchData { evaluator, compile_error: None, enabled },
                             Err(message) => {
                                 eprintln!("watchpoints.emw: {message}");
                                 watchpoints::WatchData {
                                     evaluator: emma65::watch::WatchEvaluator::new(),
                                     compile_error: Some(message),
+                                    enabled: Vec::new(),
                                 }
                             }
                         };
-                        // Install the loaded watchpoints into the CPU's own evaluator too,
-                        // so they actually halt execution in step()/run() — not just show
-                        // up in the panel's display snapshot.
-                        if let Err(e) = watchpoints::sync_cpu_evaluator(&mut cpu, &watch_data.evaluator) {
+                        // Install the loaded, enabled watchpoints into the CPU's own
+                        // evaluator too, so they actually halt execution in step()/run() —
+                        // not just show up in the panel's display snapshot.
+                        if let Err(e) = watchpoints::sync_cpu_evaluator(&mut cpu, &watch_data.evaluator, &watch_data.enabled) {
                             eprintln!("Failed to install watchpoints for execution: {e}");
                         }
                         *handle.state::<watchpoints::WatchState>().0.lock().unwrap() = watch_data;

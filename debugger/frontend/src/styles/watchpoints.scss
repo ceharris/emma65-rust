@@ -90,6 +90,20 @@
       background-color: var(--color-bg-selected-hover);
     }
   }
+
+  &.disabled .watchpoint-source {
+    color: var(--color-muted);
+  }
+}
+
+.watchpoint-enabled {
+  flex: 0 0 auto;
+  margin: 0;
+  cursor: pointer;
+
+  &:disabled {
+    cursor: default;
+  }
 }
 
 .watchpoint-remove-btn {
@@ -138,9 +152,10 @@
   flex: 0 0 auto;
 }
 
-.wp-true  { color: var(--color-indicator-stop); }
-.wp-false { color: var(--color-idle); }
-.wp-error { color: var(--color-error); }
+.wp-true     { color: var(--color-indicator-stop); }
+.wp-false    { color: var(--color-idle); }
+.wp-error    { color: var(--color-error); }
+.wp-disabled { color: var(--color-muted); }
 
 .wp-add-backdrop {
   position: fixed;
