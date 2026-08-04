@@ -15,6 +15,12 @@
 //! set or clear a bit in the bit set representing active IRQ sources. The CPU's IRQ signal
 //! reads as asserted whenever the bit set is non-empty (i.e. the underlying `u64` is not zero).
 //!
+//! A source that wants "trigger exactly one IRQ" semantics (rather than a sustained
+//! level requiring an explicit release) can use
+//! [`assert_irq_pulse`](InterruptController::assert_irq_pulse) instead of `assert_irq`.
+//! The CPU calls [`consume_irq_pulses`](InterruptController::consume_irq_pulses) once an
+//! IRQ has been serviced, which releases any sources currently asserted in pulse mode.
+//!
 use crate::emulator::device::DeviceId;
 
 /// Identifies a source of IRQ, mapped from the `DeviceId` of the asserting device.
@@ -34,6 +40,9 @@ pub const MAX_IRQ_SOURCES: u32 = 64;
 /// Tracks the state of the IRQ line (level-triggered, multi-source) and NMI (edge-triggered).
 pub struct InterruptController {
     irq_sources: u64,
+    /// Subset of `irq_sources` asserted via [`assert_irq_pulse`](InterruptController::assert_irq_pulse);
+    /// cleared from `irq_sources` the next time an IRQ is serviced.
+    irq_pulse_sources: u64,
     nmi_pending: bool,
     reset_pending: bool,
 }
@@ -43,6 +52,7 @@ impl InterruptController {
     pub fn new() -> Self {
         Self {
             irq_sources: 0,
+            irq_pulse_sources: 0,
             nmi_pending: false,
             reset_pending: false,
         }
@@ -53,14 +63,40 @@ impl InterruptController {
         self.irq_sources |= 1u64 << source.0;
     }
 
+    /// Asserts the IRQ line from `source` in one-shot ("pulse") mode: `source` is
+    /// automatically released the next time an IRQ is serviced, rather than requiring
+    /// an explicit [`release_irq`](InterruptController::release_irq) call.
+    ///
+    /// Used to give a level-triggered source "trigger exactly one IRQ" semantics —
+    /// e.g. a UI control asserting IRQ while the CPU is free-running, where a sustained
+    /// level would otherwise re-service the same interrupt on every instruction after
+    /// `RTI` until manually released.
+    pub fn assert_irq_pulse(&mut self, source: IrqSource) {
+        let bit = 1u64 << source.0;
+        self.irq_sources |= bit;
+        self.irq_pulse_sources |= bit;
+    }
+
     /// Releases `source` from the IRQ line. If no other sources are asserting, the line goes low.
+    /// Also clears any pending one-shot state for `source`.
     pub fn release_irq(&mut self, source: IrqSource) {
-        self.irq_sources &= !(1u64 << source.0);
+        let mask = !(1u64 << source.0);
+        self.irq_sources &= mask;
+        self.irq_pulse_sources &= mask;
     }
 
     /// Returns `true` if any source is currently asserting the IRQ line.
     pub fn irq_active(&self) -> bool {
         self.irq_sources != 0
+    }
+
+    /// Releases all sources currently asserted in pulse mode. Called once an IRQ has
+    /// been serviced (i.e. the CPU has entered the ISR), so each pulsed source produces
+    /// exactly one interrupt regardless of how long the line would otherwise remain
+    /// asserted.
+    pub fn consume_irq_pulses(&mut self) {
+        self.irq_sources &= !self.irq_pulse_sources;
+        self.irq_pulse_sources = 0;
     }
 
     /// Latches a pending NMI. Called on the falling edge of the NMI line.
@@ -237,6 +273,52 @@ mod tests {
         assert!(ctrl.irq_active());
         ctrl.poll_devices([(DeviceId(1), false), (DeviceId(2), false)].into_iter());
         assert!(!ctrl.irq_active());
+    }
+
+    #[test]
+    fn assert_irq_pulse_makes_irq_active() {
+        let mut ctrl = InterruptController::new();
+        ctrl.assert_irq_pulse(IrqSource(1));
+        assert!(ctrl.irq_active());
+    }
+
+    #[test]
+    fn consume_irq_pulses_releases_pulsed_source() {
+        let mut ctrl = InterruptController::new();
+        ctrl.assert_irq_pulse(IrqSource(1));
+        ctrl.consume_irq_pulses();
+        assert!(!ctrl.irq_active());
+    }
+
+    #[test]
+    fn consume_irq_pulses_does_not_release_manually_asserted_source() {
+        let mut ctrl = InterruptController::new();
+        ctrl.assert_irq(IrqSource(1));
+        ctrl.consume_irq_pulses();
+        assert!(ctrl.irq_active());
+    }
+
+    #[test]
+    fn consume_irq_pulses_leaves_other_manual_sources_asserted() {
+        let mut ctrl = InterruptController::new();
+        ctrl.assert_irq(IrqSource(1));
+        ctrl.assert_irq_pulse(IrqSource(2));
+        ctrl.consume_irq_pulses();
+        assert!(ctrl.irq_active());
+        ctrl.release_irq(IrqSource(1));
+        assert!(!ctrl.irq_active());
+    }
+
+    #[test]
+    fn release_irq_clears_pulse_state() {
+        let mut ctrl = InterruptController::new();
+        ctrl.assert_irq_pulse(IrqSource(1));
+        ctrl.release_irq(IrqSource(1));
+        // If pulse state were left dangling, a later manual assert of a
+        // different source would be wrongly consumed as a pulse.
+        ctrl.assert_irq(IrqSource(1));
+        ctrl.consume_irq_pulses();
+        assert!(ctrl.irq_active());
     }
 
     #[test]

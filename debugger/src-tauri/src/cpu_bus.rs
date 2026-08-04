@@ -155,8 +155,15 @@ pub fn trigger_nmi(
 
 /// Asserts the IRQ line from the debugger UI's own IRQ source.
 ///
-/// While free-running, signals the running CPU via `RunStopper::assert_irq`
-/// instead of locking `CpuState`, and returns the best-known current state.
+/// While stopped or single/auto-stepping, this is a manual, level-triggered assert:
+/// the line stays up until `release_irq` is called, matching the sustained-signal
+/// semantics a real device would produce.
+///
+/// While free-running (Run, Step Over, or Step Return in progress), asserting IRQ
+/// instead uses `RunStopper::assert_irq_pulse`: the line is a one-shot pulse that
+/// auto-releases as soon as the CPU services the interrupt. Without this, a level
+/// left asserted during a free run would re-enter the ISR on every instruction after
+/// `RTI` (once `I` clears again) until the user managed to click release — see #261.
 #[tauri::command]
 pub fn assert_irq(
     cpu_state: State<CpuState>,
@@ -172,7 +179,7 @@ pub fn assert_irq(
     let is_running = {
         let guard = run_stopper_state.0.lock().unwrap();
         if let Some(stopper) = guard.as_ref() {
-            stopper.assert_irq(ui_irq_source);
+            stopper.assert_irq_pulse(ui_irq_source);
             true
         } else {
             false
@@ -190,7 +197,10 @@ pub fn assert_irq(
 /// Releases the IRQ line from the debugger UI's own IRQ source.
 ///
 /// While free-running, signals the running CPU via `RunStopper::release_irq`
-/// instead of locking `CpuState`, and returns the best-known current state.
+/// instead of locking `CpuState`, and returns the best-known current state. Not
+/// normally needed while free-running, since `assert_irq` pulses in that mode and
+/// auto-releases on its own — but harmless to call, e.g. to cancel a pulse that
+/// hasn't yet been serviced because `I` is still set.
 #[tauri::command]
 pub fn release_irq(
     cpu_state: State<CpuState>,
