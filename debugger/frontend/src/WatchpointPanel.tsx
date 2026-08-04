@@ -315,34 +315,40 @@ export default function WatchpointPanel({ execState }: Props) {
               <span className="wp-vars-empty">No variables</span>
             ) : (
               <div className="wp-vars-body">
-                {snapshot.variables.map((v) => (
-                  <div key={v.name} className="wp-vars-row">
-                    <span className="wp-vars-name">{v.name}</span>
-                    {editingVarName === v.name ? (
-                      <input
-                        className={`wp-vars-edit-input${varEditInvalid ? " invalid" : ""}`}
-                        autoFocus
-                        value={varEditValue}
-                        onChange={(e) => { setVarEditValue(e.target.value); setVarEditInvalid(false); }}
-                        onKeyDown={(e) => {
-                          e.stopPropagation();
-                          if (e.key === "Enter") { e.preventDefault(); commitVarEdit(v.name, varRadix); }
-                          else if (e.key === "Escape") { e.preventDefault(); cancelVarEdit(); }
-                        }}
-                        onBlur={cancelVarEdit}
-                      />
-                    ) : (
-                      <span
-                        className={`wp-vars-value${canEdit ? " wp-vars-value-editable" : ""}`}
-                        onDoubleClick={() => beginVarEdit(v.name, formatDataRadix(v.value, varRadix))}
-                        title={canEdit ? "Double-click to edit" : undefined}
-                      >
-                        {formatDataRadix(v.value, varRadix)}
-                      </span>
-                    )}
-                    <span className="wp-vars-spacer" />
-                  </div>
-                ))}
+                <table className="wp-vars-table">
+                  <tbody>
+                    {snapshot.variables.map((v) => (
+                      <tr key={v.name} className="wp-vars-row">
+                        <td className="wp-vars-name">{v.name}</td>
+                        <td className="wp-vars-value-cell">
+                          {editingVarName === v.name ? (
+                            <input
+                              className={`wp-vars-edit-input${varEditInvalid ? " invalid" : ""}`}
+                              autoFocus
+                              value={varEditValue}
+                              onChange={(e) => { setVarEditValue(e.target.value); setVarEditInvalid(false); }}
+                              onKeyDown={(e) => {
+                                e.stopPropagation();
+                                if (e.key === "Enter") { e.preventDefault(); commitVarEdit(v.name, varRadix); }
+                                else if (e.key === "Escape") { e.preventDefault(); cancelVarEdit(); }
+                              }}
+                              onBlur={cancelVarEdit}
+                            />
+                          ) : (
+                            <span
+                              className={`wp-vars-value${canEdit ? " wp-vars-value-editable" : ""}`}
+                              onDoubleClick={() => beginVarEdit(v.name, formatDataRadix(v.value, varRadix))}
+                              title={canEdit ? "Double-click to edit" : undefined}
+                            >
+                              {formatDataRadix(v.value, varRadix)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="wp-vars-filler" />
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )
           )}

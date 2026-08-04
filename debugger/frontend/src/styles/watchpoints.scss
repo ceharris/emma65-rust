@@ -205,12 +205,17 @@
   padding: 2px 0;
 }
 
-.wp-vars-row {
-  display: flex;
-  align-items: baseline;
-  padding: 2px 10px;
-  gap: 8px;
+// table-layout: auto (the default) sizes .wp-vars-name and .wp-vars-value-cell
+// to their widest content across all rows — a true table column, unlike a
+// per-row flex layout — while .wp-vars-filler's 100% width claims whatever
+// space is left over, keeping the name/value pair clustered on the left.
+.wp-vars-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: var(--font-size-mono);
+}
+
+.wp-vars-row {
   line-height: 1.7;
 
   &:hover {
@@ -220,24 +225,25 @@
 
 .wp-vars-name {
   color: var(--color-accent);
-  flex: 0 1 auto;
-  min-width: 0;
+  padding: 2px 12px 2px 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-right: 2ch;
+}
+
+.wp-vars-value-cell {
+  padding: 2px 10px 2px 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.wp-vars-filler {
+  width: 100%;
 }
 
 .wp-vars-value {
   color: var(--color-number);
   font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
-}
-
-// Absorbs the space left over after the name and value columns, so those two
-// stay close together instead of spreading across the full row width.
-.wp-vars-spacer {
-  flex: 1 1 auto;
 }
 
 .wp-vars-value-editable {
