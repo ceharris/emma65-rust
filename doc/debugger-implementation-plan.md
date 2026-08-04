@@ -462,7 +462,9 @@ The user can inspect watch variables (those assigned via `:=`).
 - A collapsible section in the watchpoint panel listing all current
   variable names and their values.
 - Values update after each evaluation cycle.
-- Value radix follows the watchpoint panel's radix setting.
+- A radix control appears in the section header with the same options
+  as that used in the Registers panel; it controls the radix used for
+  displayed values.
 
 **Acceptance criteria:**
 - After stepping through code where a watchpoint assigns `x := PC`,
@@ -470,6 +472,8 @@ The user can inspect watch variables (those assigned via `:=`).
   value.
 - The variable list updates as new variables are created by walrus
   expressions.
+- The radix control cycles through the radix options and updates
+  displayed values accordingly.
 
 ---
 
