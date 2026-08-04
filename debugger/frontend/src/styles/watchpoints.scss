@@ -239,4 +239,14 @@
   &.wp-add-btn-ok {
     color: var(--color-accent);
   }
+
+  &:disabled {
+    color: var(--color-muted-2);
+    cursor: default;
+
+    &:hover {
+      background: var(--color-btn-bg);
+      border-color: var(--color-border-strong);
+    }
+  }
 }

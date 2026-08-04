@@ -192,6 +192,7 @@ pub fn run() {
             watchpoints::get_watchpoints,
             watchpoints::add_watchpoint,
             watchpoints::remove_watchpoint,
+            watchpoints::edit_watchpoint,
             watchpoints::toggle_watchpoint,
         ])
         .setup(|app| {
