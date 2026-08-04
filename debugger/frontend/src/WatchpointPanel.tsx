@@ -277,12 +277,17 @@ export default function WatchpointPanel({ execState }: Props) {
               <span className="wp-vars-empty">No variables</span>
             ) : (
               <div className="wp-vars-body">
-                {snapshot.variables.map((v) => (
-                  <div key={v.name} className="wp-vars-row">
-                    <span className="wp-vars-name">{v.name}</span>
-                    <span className="wp-vars-value">{formatDataRadix(v.value, varRadix)}</span>
-                  </div>
-                ))}
+                <table className="wp-vars-table">
+                  <tbody>
+                    {snapshot.variables.map((v) => (
+                      <tr key={v.name} className="wp-vars-row">
+                        <td className="wp-vars-name">{v.name}</td>
+                        <td className="wp-vars-value">{formatDataRadix(v.value, varRadix)}</td>
+                        <td className="wp-vars-filler" />
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )
           )}
