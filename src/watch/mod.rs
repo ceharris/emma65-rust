@@ -153,6 +153,12 @@ impl WatchEvaluator {
         &self.var_storage
     }
 
+    /// Returns the current variables as `(name, value)` pairs, in the order
+    /// each variable was first introduced by a walrus assignment.
+    pub fn named_variables(&self) -> Vec<(&str, Operand)> {
+        self.vars.names().iter().map(|s| s.as_str()).zip(self.var_storage.iter().copied()).collect()
+    }
+
     /// Sets the value of a variable by ID.
     ///
     /// # Panics
@@ -449,6 +455,24 @@ mod tests {
         assert_eq!(ev.variables()[0], 42);
         ev.set_variable(0, 99);
         assert_eq!(ev.variables()[0], 99);
+    }
+
+    #[test]
+    fn named_variables_returns_names_paired_with_current_values() {
+        let mut c = compiler();
+        let mut ev = WatchEvaluator::new();
+        let wp_x = c.compile("x := A", &mut ev).unwrap();
+        let wp_y = c.compile("y := A", &mut ev).unwrap();
+        ev.add(wp_x);
+        ev.add(wp_y);
+        let _ = ev.evaluate_each(&MockMachine::with_register(42));
+        assert_eq!(ev.named_variables(), vec![("x", 42), ("y", 42)]);
+    }
+
+    #[test]
+    fn named_variables_is_empty_when_no_variables() {
+        let ev = WatchEvaluator::new();
+        assert!(ev.named_variables().is_empty());
     }
 
     #[test]
