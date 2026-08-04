@@ -142,7 +142,8 @@ fn bus_trace_captures_reads_and_writes() {
             StepResult::Stopped => break,
             StepResult::Error(e) => panic!("CPU error: {e}"),
             StepResult::Executed(_) | StepResult::Waiting => {}
-            StepResult::Breakpoint(_)
+            StepResult::Reset
+            | StepResult::Breakpoint(_)
             | StepResult::WatchTriggered { .. }
             | StepResult::WatchError { .. } => unreachable!(),
         }
