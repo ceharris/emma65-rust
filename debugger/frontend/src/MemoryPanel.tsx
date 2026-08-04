@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { ExecState } from "./DisassemblyPanel";
+import {useCallback, useEffect, useRef, useState} from "react";
+import {listen} from "@tauri-apps/api/event";
+import {invoke} from "@tauri-apps/api/core";
+import {open as openFileDialog} from "@tauri-apps/plugin-dialog";
+import {ExecState} from "./DisassemblyPanel";
 import "./styles/memory.scss";
 
 /** Number of bytes per display row. */
@@ -949,7 +949,7 @@ export default function MemoryPanel({ execState }: Props) {
                     setEditDialog((d) => d && { ...d, mode: "utf8", inputValue: "", errorMsg: "" })
                   }
                 />
-                Unicode Character
+                ASCII/Unicode Text
               </label>
             </div>
 
@@ -972,7 +972,7 @@ export default function MemoryPanel({ execState }: Props) {
                 className={`mem-edit-data-input${editDialog.errorMsg ? " invalid" : ""}`}
                 autoFocus={editDialog.addr !== null}
                 spellCheck={editDialog.mode === "utf8"}
-                placeholder={editDialog.mode === "hex" ? "e.g. 4C 00 06" : "Enter Unicode text"}
+                placeholder={editDialog.mode === "hex" ? "e.g. 4C 00 06" : "ASCII or Unicode text"}
                 value={editDialog.inputValue}
                 onChange={(e) =>
                   setEditDialog((d) => d && { ...d, inputValue: e.target.value, errorMsg: "" })
