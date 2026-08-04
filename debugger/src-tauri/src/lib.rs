@@ -15,6 +15,9 @@ use emma65::emulator::{Config, Cpu, CpuLiveSnapshot, DeviceRegistry, Disassemble
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
 
+/// Read-only watchpoint panel: loads/compiles `watchpoints.emw` and evaluates it on demand.
+mod watchpoints;
+
 const TERMINAL_WINDOW_LABEL: &str = "terminal";
 
 /// IRQ source identifying the debugger UI's own IRQ toggle control.
@@ -1193,6 +1196,10 @@ pub fn run() {
             cpu_waiting: false,
         })))
         .manage(theme::UiConfigState(Mutex::new(theme::load_ui_config())))
+        .manage(watchpoints::WatchState(Mutex::new(watchpoints::WatchData {
+            evaluator: emma65::watch::WatchEvaluator::new(),
+            compile_error: None,
+        })))
         .invoke_handler(tauri::generate_handler![
             quit,
             toggle_terminal_visibility,
@@ -1227,6 +1234,7 @@ pub fn run() {
             get_symbols_for_range,
             theme::get_theme,
             theme::set_theme,
+            watchpoints::get_watchpoints,
         ])
         .setup(|app| {
             if let Some(terminal_window) = app.get_webview_window(TERMINAL_WINDOW_LABEL) {
@@ -1281,6 +1289,23 @@ pub fn run() {
                         let initial_pc = cpu.registers().pc;
                         let disasm = Disassembler::new(variant);
                         *handle.state::<DisassemblerState>().0.lock().unwrap() = Some(disasm);
+
+                        // Independent of session readiness: a bad watchpoints.emw is
+                        // reported inside the watchpoint panel, not via emit_status,
+                        // so it never blocks or fails the rest of the debugger.
+                        let symbol_table = cpu.bus().symbol_table().clone();
+                        let watch_data = match watchpoints::load_watchpoints(&symbol_table) {
+                            Ok(evaluator) => watchpoints::WatchData { evaluator, compile_error: None },
+                            Err(message) => {
+                                eprintln!("watchpoints.emw: {message}");
+                                watchpoints::WatchData {
+                                    evaluator: emma65::watch::WatchEvaluator::new(),
+                                    compile_error: Some(message),
+                                }
+                            }
+                        };
+                        *handle.state::<watchpoints::WatchState>().0.lock().unwrap() = watch_data;
+
                         *handle.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
                         *handle.state::<CpuState>().0.lock().unwrap() = Some(cpu);
 
