@@ -713,24 +713,33 @@ fn get_memory(
 /// Writes are performed via `Bus::write` so device side effects apply, unless `patch` is true
 /// in which case `Bus::patch` is used to bypass ROM write protection.
 /// Only callable while the CPU is halted; returns an error if the CPU is running.
+/// Emits `"debugger-halted"` and `"memory-modified"` on success to refresh all panels
+/// (e.g. disassembly, stack, and watchpoint views, any of which may depend on the
+/// written addresses).
 #[tauri::command]
 fn write_memory(
     addr: u16,
     data: Vec<u8>,
     patch: bool,
     cpu_state: State<CpuState>,
+    app: AppHandle,
 ) -> Result<(), String> {
-    let mut guard = cpu_state.0.lock().unwrap();
-    let cpu = guard.as_mut().ok_or("CPU not ready")?;
-    let bus = cpu.bus_mut();
-    for (i, &byte) in data.iter().enumerate() {
-        let a = addr.wrapping_add(i as u16);
-        if patch {
-            bus.patch(a, byte);
-        } else {
-            bus.write(a, byte).map_err(|e| e.to_string())?;
+    let pc = {
+        let mut guard = cpu_state.0.lock().unwrap();
+        let cpu = guard.as_mut().ok_or("CPU not ready")?;
+        let bus = cpu.bus_mut();
+        for (i, &byte) in data.iter().enumerate() {
+            let a = addr.wrapping_add(i as u16);
+            if patch {
+                bus.patch(a, byte);
+            } else {
+                bus.write(a, byte).map_err(|e| e.to_string())?;
+            }
         }
-    }
+        cpu.registers().pc
+    };
+    app.emit("debugger-halted", pc).ok();
+    app.emit("memory-modified", ()).ok();
     Ok(())
 }
 
