@@ -361,7 +361,7 @@
   }
 }
 
-.mem-write-backdrop {
+.mem-edit-backdrop {
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -371,7 +371,7 @@
   justify-content: center;
 }
 
-.mem-write-dialog {
+.mem-edit-dialog {
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: 4px;
@@ -384,7 +384,7 @@
   font-family: var(--font-ui);
 }
 
-.mem-write-title {
+.mem-edit-title {
   font-size: var(--font-size-btn);
   font-weight: bold;
   text-transform: uppercase;
@@ -392,19 +392,19 @@
   color: var(--color-accent);
 }
 
-.mem-write-field {
+.mem-edit-field {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.mem-write-label {
+.mem-edit-label {
   flex: 0 0 6ch;
   color: var(--color-muted);
   font-size: var(--font-size-btn);
 }
 
-.mem-write-addr-input {
+.mem-edit-addr-input {
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
@@ -424,7 +424,7 @@
   }
 }
 
-.mem-write-addr-display {
+.mem-edit-addr-display {
   background: var(--color-bg-alt);
   border: 1px solid var(--color-border);
   color: var(--color-muted);
@@ -436,7 +436,45 @@
   outline: none;
 }
 
-.mem-write-data-input {
+.mem-edit-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 2px;
+}
+
+.mem-edit-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-btn);
+  color: var(--color-fg);
+  cursor: pointer;
+  user-select: none;
+
+  input[type="radio"] {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-bg);
+    box-shadow: 0 0 0 1px var(--color-border-strong);
+    cursor: pointer;
+    flex-shrink: 0;
+
+    &:checked {
+      background: var(--color-accent);
+      box-shadow: 0 0 0 1px var(--color-accent), inset 0 0 0 3px var(--color-bg);
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 1px var(--color-accent);
+    }
+  }
+}
+
+.mem-edit-data-input {
   flex: 1;
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
@@ -456,7 +494,7 @@
   }
 }
 
-.mem-write-rom-overwrite {
+.mem-edit-rom-overwrite {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -496,18 +534,18 @@
   }
 }
 
-.mem-write-error {
+.mem-edit-error {
   font-size: var(--font-size-btn);
   color: var(--color-danger-strong);
 }
 
-.mem-write-buttons {
+.mem-edit-buttons {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.mem-write-btn {
+.mem-edit-btn-action {
   background: var(--color-btn-bg);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
@@ -522,12 +560,33 @@
     border-color: var(--color-accent);
   }
 
-  &.mem-write-btn-ok {
+  &.mem-edit-btn-ok {
     color: var(--color-accent);
   }
 }
 
 .mem-fill-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover:not(:disabled) {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &:disabled {
+    color: var(--color-muted-2);
+    cursor: default;
+  }
+}
+
+.mem-edit-btn {
   background: var(--color-btn-bg);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);

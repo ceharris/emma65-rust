@@ -96,20 +96,24 @@ $light-palette: (
   --font-size-btn: 0.70rem;
   --font-size-ui-panel: 0.80rem;
   --font-size-mono: 0.85rem;
+  --placeholder-opacity: 0.75;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     @include theme-vars($light-palette);
+    --placeholder-opacity: 1;
   }
 }
 
 html[data-theme="dark"] {
   @include theme-vars($dark-palette);
+  --placeholder-opacity: 0.75;
 }
 
 html[data-theme="light"] {
   @include theme-vars($light-palette);
+  --placeholder-opacity: 1;
 }
 
 html,
@@ -124,6 +128,14 @@ body {
   color: var(--color-fg);
   font-family: var(--font-mono);
   overflow: hidden;
+}
+
+// Placeholder text defaults to a color close to real input text in most
+// browsers; dim and italicize it everywhere so it reads as a hint, not a value.
+::placeholder {
+  color: var(--color-muted);
+  font-style: italic;
+  opacity: var(--placeholder-opacity);
 }
 
 // --- splash screen (init / error) ---

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { ExecState } from "./DisassemblyPanel";
+import {useCallback, useEffect, useRef, useState} from "react";
+import {listen} from "@tauri-apps/api/event";
+import {invoke} from "@tauri-apps/api/core";
+import {open as openFileDialog} from "@tauri-apps/plugin-dialog";
+import {ExecState} from "./DisassemblyPanel";
 import "./styles/memory.scss";
 
 /** Number of bytes per display row. */
@@ -59,11 +59,11 @@ function parseHexBytes(raw: string): number[] | null {
   return bytes.length > 0 ? bytes : null;
 }
 
-/** State for the write-memory dialog; null means closed. */
-interface WriteDialogState {
+/** State for the edit-memory dialog; null means closed. */
+interface EditDialogState {
   /**
    * Target address for the first byte of the write.
-   * Non-null when opened by double-click (pre-set); null when opened by keyboard shortcut.
+   * Non-null when opened by double-click (pre-set); null when opened by keyboard shortcut or the Edit button.
    */
   addr: number | null;
   /** Controlled value of the editable address input (used only when addr is null). */
@@ -74,7 +74,7 @@ interface WriteDialogState {
   inputValue: string;
   /** Validation or backend error message; empty string means no error. */
   errorMsg: string;
-  /** "hex" when opened from the hex column or Alt+Shift+H; "utf8" from ASCII column or Alt+Shift+A. */
+  /** "hex" for hexadecimal byte input, "utf8" for Unicode character input; switchable via the dialog's radio group. */
   mode: "hex" | "utf8";
   /** When true, the write uses Bus::patch to bypass ROM write protection. */
   allowRomOverwrite: boolean;
@@ -147,8 +147,8 @@ export default function MemoryPanel({ execState }: Props) {
   /** Controlled value of the address input field. */
   const [inputValue, setInputValue] = useState<string>("0000");
   const [ready, setReady] = useState(false);
-  /** Write-memory dialog state; null when closed. */
-  const [writeDialog, setWriteDialog] = useState<WriteDialogState | null>(null);
+  /** Edit-memory dialog state; null when closed. */
+  const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
   /** Load-file dialog state; null when closed. */
   const [loadDialog, setLoadDialog] = useState<LoadDialogState | null>(null);
   /** Error message from a failed load operation; null when no error dialog is open. */
@@ -241,28 +241,28 @@ export default function MemoryPanel({ execState }: Props) {
     return () => window.removeEventListener("keydown", handler);
   }, [fetchPage]);
 
-  /** Alt+Shift+H / Alt+Shift+A: open write dialog at an arbitrary address. */
+  /** Alt+Shift+H / Alt+Shift+A: open edit dialog at an arbitrary address. */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (document.activeElement instanceof HTMLInputElement) return;
-      if (execState !== "stopped" || writeDialog) return;
+      if (execState !== "stopped" || editDialog) return;
       if (e.altKey && e.shiftKey && e.code === "KeyH") {
         e.preventDefault();
-        setWriteDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
+        setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
       } else if (e.altKey && e.shiftKey && e.code === "KeyA") {
         e.preventDefault();
-        setWriteDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
+        setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [execState, writeDialog]);
+  }, [execState, editDialog]);
 
   /** Alt+F: open load-file dialog. */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (document.activeElement instanceof HTMLInputElement) return;
-      if (execState !== "stopped" || loadDialog || writeDialog) return;
+      if (execState !== "stopped" || loadDialog || editDialog) return;
       if (e.altKey && !e.shiftKey && e.code === "KeyF") {
         e.preventDefault();
         setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "", symbolPath: "" });
@@ -270,13 +270,13 @@ export default function MemoryPanel({ execState }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [execState, loadDialog, writeDialog]);
+  }, [execState, loadDialog, editDialog]);
 
   /** Alt+Shift+F: open fill-memory dialog. */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (document.activeElement instanceof HTMLInputElement) return;
-      if (execState !== "stopped" || fillDialog || loadDialog || writeDialog) return;
+      if (execState !== "stopped" || fillDialog || loadDialog || editDialog) return;
       if (e.altKey && e.shiftKey && e.code === "KeyF") {
         e.preventDefault();
         const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
@@ -285,7 +285,7 @@ export default function MemoryPanel({ execState }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [execState, fillDialog, loadDialog, writeDialog]);
+  }, [execState, fillDialog, loadDialog, editDialog]);
 
   /** Wheel scrolling: one row per tick. */
   const handleWheel = useCallback(
@@ -298,28 +298,28 @@ export default function MemoryPanel({ execState }: Props) {
     [fetchPage],
   );
 
-  /** Opens the hex write dialog for the byte at `addr`. */
+  /** Opens the edit dialog in hex mode for the byte at `addr`. */
   const handleByteDoubleClick = useCallback((addr: number) => {
-    setWriteDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
+    setEditDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
   }, []);
 
-  /** Opens the UTF-8 text write dialog for the byte at `addr`. */
+  /** Opens the edit dialog in Unicode mode for the byte at `addr`. */
   const handleAsciiCharDoubleClick = useCallback((addr: number) => {
-    setWriteDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
+    setEditDialog({ addr, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
   }, []);
 
   /** Validates address and data, invokes write_memory, refreshes on success, shows errors on failure. */
-  const commitWriteMemory = useCallback(async () => {
-    if (!writeDialog) return;
+  const commitEditMemory = useCallback(async () => {
+    if (!editDialog) return;
 
     // Resolve address: pre-set from double-click, or parse from the editable input.
     let resolvedAddr: number;
-    if (writeDialog.addr !== null) {
-      resolvedAddr = writeDialog.addr;
+    if (editDialog.addr !== null) {
+      resolvedAddr = editDialog.addr;
     } else {
-      const parsed = parseAddress(writeDialog.addrInput);
+      const parsed = parseAddress(editDialog.addrInput);
       if (isNaN(parsed) || parsed < 0 || parsed > 0xffff) {
-        setWriteDialog((d) => d && { ...d, addrError: "Enter a valid hex address (0–FFFF)" });
+        setEditDialog((d) => d && { ...d, addrError: "Enter a valid hex address (0–FFFF)" });
         return;
       }
       resolvedAddr = parsed;
@@ -327,10 +327,10 @@ export default function MemoryPanel({ execState }: Props) {
 
     // Validate data.
     let data: number[];
-    if (writeDialog.mode === "hex") {
-      const parsed = parseHexBytes(writeDialog.inputValue);
+    if (editDialog.mode === "hex") {
+      const parsed = parseHexBytes(editDialog.inputValue);
       if (parsed === null) {
-        setWriteDialog((d) => d && {
+        setEditDialog((d) => d && {
           ...d,
           errorMsg: "Enter one or more hex bytes (1–2 digits each), separated by spaces or commas",
         });
@@ -338,32 +338,32 @@ export default function MemoryPanel({ execState }: Props) {
       }
       data = parsed;
     } else {
-      if (!writeDialog.inputValue) {
-        setWriteDialog((d) => d && { ...d, errorMsg: "Enter at least one character" });
+      if (!editDialog.inputValue) {
+        setEditDialog((d) => d && { ...d, errorMsg: "Enter at least one character" });
         return;
       }
       // No trimming — spaces and all characters are written verbatim.
-      data = Array.from(new TextEncoder().encode(writeDialog.inputValue));
+      data = Array.from(new TextEncoder().encode(editDialog.inputValue));
     }
 
     try {
-      await invoke("write_memory", { addr: resolvedAddr, data, patch: writeDialog.allowRomOverwrite });
-      setWriteDialog(null);
+      await invoke("write_memory", { addr: resolvedAddr, data, patch: editDialog.allowRomOverwrite });
+      setEditDialog(null);
       fetchPage(pageAddrRef.current);
     } catch (e) {
-      setWriteDialog((d) => d && { ...d, errorMsg: String(e) });
+      setEditDialog((d) => d && { ...d, errorMsg: String(e) });
     }
-  }, [writeDialog, fetchPage]);
+  }, [editDialog, fetchPage]);
 
-  /** Dismiss the write dialog on Escape while it is open. */
+  /** Dismiss the edit dialog on Escape while it is open. */
   useEffect(() => {
-    if (!writeDialog) return;
+    if (!editDialog) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setWriteDialog(null);
+      if (e.key === "Escape") setEditDialog(null);
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [writeDialog]);
+  }, [editDialog]);
 
   /** Opens the native file chooser and fills the path + auto-selects format. */
   const handleChooseFile = useCallback(async () => {
@@ -597,6 +597,14 @@ export default function MemoryPanel({ execState }: Props) {
             title="Fill memory range (Alt+Shift+F)"
           >
             Fill
+          </button>
+          <button
+            className="mem-edit-btn"
+            onClick={() => setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false })}
+            disabled={execState !== "stopped"}
+            title="Edit memory (Alt+Shift+H)"
+          >
+            Edit
           </button>
         </div>
         <input
@@ -878,94 +886,119 @@ export default function MemoryPanel({ execState }: Props) {
         </div>
       )}
 
-      {writeDialog && (
+      {editDialog && (
         <div
-          className="mem-write-backdrop"
-          onClick={() => setWriteDialog(null)}
+          className="mem-edit-backdrop"
+          onClick={() => setEditDialog(null)}
           onWheel={(e) => e.stopPropagation()}
         >
-          <div className="mem-write-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="mem-write-title">Write Memory</div>
+          <div className="mem-edit-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="mem-edit-title">Edit Memory</div>
 
-            <div className="mem-write-field">
-              <label className="mem-write-label">Address</label>
-              {writeDialog.addr !== null ? (
+            <div className="mem-edit-field">
+              <label className="mem-edit-label">Address</label>
+              {editDialog.addr !== null ? (
                 <input
-                  className="mem-write-addr-display"
-                  value={fmtAddr(writeDialog.addr)}
+                  className="mem-edit-addr-display"
+                  value={fmtAddr(editDialog.addr)}
                   readOnly
                   disabled
                   tabIndex={-1}
                 />
               ) : (
                 <input
-                  className={`mem-write-addr-input${writeDialog.addrError ? " invalid" : ""}`}
+                  className={`mem-edit-addr-input${editDialog.addrError ? " invalid" : ""}`}
                   autoFocus
                   spellCheck={false}
                   placeholder="0000"
-                  value={writeDialog.addrInput}
+                  value={editDialog.addrInput}
                   onChange={(e) =>
-                    setWriteDialog((d) => d && { ...d, addrInput: e.target.value, addrError: "" })
+                    setEditDialog((d) => d && { ...d, addrInput: e.target.value, addrError: "" })
                   }
                   onKeyDown={(e) => {
                     e.stopPropagation();
-                    if (e.key === "Enter") { e.preventDefault(); commitWriteMemory(); }
-                    if (e.key === "Escape") { e.preventDefault(); setWriteDialog(null); }
+                    if (e.key === "Enter") { e.preventDefault(); commitEditMemory(); }
+                    if (e.key === "Escape") { e.preventDefault(); setEditDialog(null); }
                   }}
                 />
               )}
             </div>
 
-            {writeDialog.addrError && (
-              <div className="mem-write-error">{writeDialog.addrError}</div>
+            {editDialog.addrError && (
+              <div className="mem-edit-error">{editDialog.addrError}</div>
             )}
 
-            <label className="mem-write-rom-overwrite">
+            <div className="mem-edit-mode-group">
+              <label className="mem-edit-mode-option">
+                <input
+                  type="radio"
+                  name="edit-mode"
+                  checked={editDialog.mode === "hex"}
+                  onChange={() =>
+                    setEditDialog((d) => d && { ...d, mode: "hex", inputValue: "", errorMsg: "" })
+                  }
+                />
+                Hexadecimal
+              </label>
+              <label className="mem-edit-mode-option">
+                <input
+                  type="radio"
+                  name="edit-mode"
+                  checked={editDialog.mode === "utf8"}
+                  onChange={() =>
+                    setEditDialog((d) => d && { ...d, mode: "utf8", inputValue: "", errorMsg: "" })
+                  }
+                />
+                ASCII/Unicode Text
+              </label>
+            </div>
+
+            <label className="mem-edit-rom-overwrite">
               <input
                 type="checkbox"
-                checked={writeDialog.allowRomOverwrite}
+                checked={editDialog.allowRomOverwrite}
                 onChange={(e) =>
-                  setWriteDialog((d) => d && { ...d, allowRomOverwrite: e.target.checked })
+                  setEditDialog((d) => d && { ...d, allowRomOverwrite: e.target.checked })
                 }
               />
               Allow ROM Overwrite
             </label>
 
-            <div className="mem-write-field">
-              <label className="mem-write-label">
-                {writeDialog.mode === "hex" ? "Bytes" : "Text"}
+            <div className="mem-edit-field">
+              <label className="mem-edit-label">
+                {editDialog.mode === "hex" ? "Bytes" : "Text"}
               </label>
               <input
-                className={`mem-write-data-input${writeDialog.errorMsg ? " invalid" : ""}`}
-                autoFocus={writeDialog.addr !== null}
-                spellCheck={writeDialog.mode === "utf8"}
-                placeholder={writeDialog.mode === "hex" ? "e.g. 4C 00 06" : "Enter Unicode text"}
-                value={writeDialog.inputValue}
+                className={`mem-edit-data-input${editDialog.errorMsg ? " invalid" : ""}`}
+                autoFocus={editDialog.addr !== null}
+                spellCheck={editDialog.mode === "utf8"}
+                placeholder={editDialog.mode === "hex" ? "e.g. 4C 00 06" : "ASCII or Unicode text"}
+                value={editDialog.inputValue}
                 onChange={(e) =>
-                  setWriteDialog((d) => d && { ...d, inputValue: e.target.value, errorMsg: "" })
+                  setEditDialog((d) => d && { ...d, inputValue: e.target.value, errorMsg: "" })
                 }
                 onKeyDown={(e) => {
                   e.stopPropagation();
-                  if (e.key === "Enter") { e.preventDefault(); commitWriteMemory(); }
-                  if (e.key === "Escape") { e.preventDefault(); setWriteDialog(null); }
+                  if (e.key === "Enter") { e.preventDefault(); commitEditMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setEditDialog(null); }
                 }}
               />
             </div>
 
-            {writeDialog.errorMsg && (
-              <div className="mem-write-error">{writeDialog.errorMsg}</div>
+            {editDialog.errorMsg && (
+              <div className="mem-edit-error">{editDialog.errorMsg}</div>
             )}
 
-            <div className="mem-write-buttons">
+            <div className="mem-edit-buttons">
               <button
-                className="mem-write-btn mem-write-btn-cancel"
-                onClick={() => setWriteDialog(null)}
+                className="mem-edit-btn-action mem-edit-btn-cancel"
+                onClick={() => setEditDialog(null)}
               >
                 Cancel
               </button>
               <button
-                className="mem-write-btn mem-write-btn-ok"
-                onClick={commitWriteMemory}
+                className="mem-edit-btn-action mem-edit-btn-ok"
+                onClick={commitEditMemory}
               >
                 OK
               </button>
