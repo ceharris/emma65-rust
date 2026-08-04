@@ -8,6 +8,7 @@ interface WatchpointRow {
   source: string;
   triggered: boolean;
   error: string | null;
+  enabled: boolean;
 }
 
 interface WatchpointsSnapshot {
@@ -76,6 +77,16 @@ export default function WatchpointPanel({ execState }: Props) {
     }
   }, []);
 
+  /** Toggles the enabled state of the watchpoint at `index`. */
+  const toggleWatchpointAt = useCallback(async (index: number) => {
+    try {
+      const result = await invoke<WatchpointsSnapshot>("toggle_watchpoint", { index });
+      setSnapshot(result);
+    } catch (e) {
+      console.error("toggle_watchpoint failed:", e);
+    }
+  }, []);
+
   /** Delete key removes the selected watchpoint while the CPU is stopped. */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -139,10 +150,19 @@ export default function WatchpointPanel({ execState }: Props) {
       ) : (
         <div className="watchpoint-body">
           {snapshot.rows.map((row, index) => {
-            const statusClass = row.error !== null ? "wp-error" : row.triggered ? "wp-true" : "wp-false";
+            const statusClass = !row.enabled ? "wp-disabled" : row.error !== null ? "wp-error" : row.triggered ? "wp-true" : "wp-false";
             return (
-              <div key={index} className={`watchpoint-row${selectedIndex === index ? " selected" : ""}`}>
-                <span className={`indicator ${statusClass}`}>●</span>
+              <div
+                key={index}
+                className={`watchpoint-row${selectedIndex === index ? " selected" : ""}${row.enabled ? "" : " disabled"}`}
+              >
+                <span
+                  className={`indicator ${statusClass}${canEdit ? "" : " readonly"}`}
+                  onClick={() => canEdit && toggleWatchpointAt(index)}
+                  title={canEdit ? (row.enabled ? "Disable watchpoint" : "Enable watchpoint") : "Stop the CPU to edit watchpoints"}
+                >
+                  {row.enabled ? "●" : "⊘"}
+                </span>
                 <span
                   className={`watchpoint-source${expandedIndex === index ? " expanded" : ""}`}
                   onClick={() => handleRowClick(index)}
