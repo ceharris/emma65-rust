@@ -71,6 +71,24 @@ async fn build_with_wdc65c02_variant() {
     config.build(&registry).await.unwrap();
 }
 
+// Regression test for issue #244: `EmulatorSession::id_allocator` must be left
+// in its post-configuration state so a caller (e.g. the debugger UI) can
+// allocate an `IrqSource` that doesn't collide with a configured device's,
+// and that `IrqSource` must be usable with `assert_irq`/`release_irq`
+// without panicking.
+#[tokio::test]
+async fn session_id_allocator_yields_usable_irq_source_after_devices() {
+    let registry = DeviceRegistry::with_builtins();
+    let config = config_with_devices(Some(vec!["console@0xfff8"]));
+    let mut session = config.build(&registry).await.unwrap();
+
+    let extra_source = session.id_allocator.next(true).into();
+    session.cpu.interrupts_mut().assert_irq(extra_source);
+    assert!(session.cpu.interrupts().irq_active());
+    session.cpu.interrupts_mut().release_irq(extra_source);
+    assert!(!session.cpu.interrupts().irq_active());
+}
+
 #[tokio::test]
 async fn build_with_unknown_device_type() {
     let registry = DeviceRegistry::with_builtins();

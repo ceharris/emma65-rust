@@ -11,10 +11,10 @@ use crate::CpuState;
 
 /// IRQ source identifying the debugger UI's own IRQ toggle control.
 ///
-/// Chosen outside the address range any real device's `IrqSource` can take
-/// (`DeviceId`-derived sources are always `<= 0xFFFF`), so it never collides
-/// with — or gets silently cleared by — `InterruptController::poll_devices`.
-const UI_IRQ_SOURCE: IrqSource = IrqSource(u32::MAX);
+/// Allocated from the session's `DeviceIdAllocator` after all configured
+/// devices, so it never collides with a real device's `IrqSource`. `None`
+/// until the emulator session finishes loading.
+pub struct UiIrqSourceState(pub Mutex<Option<IrqSource>>);
 
 /// Placeholder `effective_speed` shown while the CPU isn't free-running (no
 /// live snapshot to compute a rate from).
@@ -73,14 +73,16 @@ pub fn reset_cpu(
     changed_flags_state: State<ChangedFlagsState>,
     cpu_bus_cache: State<CpuBusCache>,
     skip_breakpoint_pc: State<SkipBreakpointPc>,
+    ui_irq_source: State<UiIrqSourceState>,
 ) -> Result<RegisterSnapshot, String> {
+    let ui_irq_source = ui_irq_source.0.lock().unwrap().ok_or("CPU not ready")?;
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
 
     cpu.reset().map_err(|e| e.to_string())?;
     // Clear any NMI/IRQ state the debugger UI itself introduced, so the
     // NMI/IRQ trigger controls stay in sync with a freshly reset CPU.
-    cpu.interrupts_mut().release_irq(UI_IRQ_SOURCE);
+    cpu.interrupts_mut().release_irq(ui_irq_source);
     cpu.interrupts_mut().take_nmi();
     let regs = *cpu.registers();
 
@@ -124,10 +126,12 @@ pub fn trigger_nmi(
 pub fn assert_irq(
     cpu_state: State<CpuState>,
     cpu_bus_cache: State<CpuBusCache>,
+    ui_irq_source: State<UiIrqSourceState>,
 ) -> Result<CpuBusState, String> {
+    let ui_irq_source = ui_irq_source.0.lock().unwrap().ok_or("CPU not ready")?;
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
-    cpu.interrupts_mut().assert_irq(UI_IRQ_SOURCE);
+    cpu.interrupts_mut().assert_irq(ui_irq_source);
     Ok(refresh_cpu_bus_cache(cpu, &cpu_bus_cache))
 }
 
@@ -137,10 +141,12 @@ pub fn assert_irq(
 pub fn release_irq(
     cpu_state: State<CpuState>,
     cpu_bus_cache: State<CpuBusCache>,
+    ui_irq_source: State<UiIrqSourceState>,
 ) -> Result<CpuBusState, String> {
+    let ui_irq_source = ui_irq_source.0.lock().unwrap().ok_or("CPU not ready")?;
     let mut guard = cpu_state.0.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
-    cpu.interrupts_mut().release_irq(UI_IRQ_SOURCE);
+    cpu.interrupts_mut().release_irq(ui_irq_source);
     Ok(refresh_cpu_bus_cache(cpu, &cpu_bus_cache))
 }
 
