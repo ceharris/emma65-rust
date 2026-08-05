@@ -1,13 +1,14 @@
 //! CPU bus access tracing: callback trait, record type, and binary trace writer/reader.
 use super::Registers;
 use super::status::StatusRegister;
+use super::variant::CpuVariant;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 
 /// 4-byte magic identifying a binary trace file, followed by a 1-byte format version.
 const MAGIC: [u8; 4] = *b"E65T";
 /// Current binary trace file format version.
-const FORMAT_VERSION: u8 = 1;
-/// Size in bytes of the file header (magic + version + reserved padding).
+const FORMAT_VERSION: u8 = 2;
+/// Size in bytes of the file header (magic + version + variant + reserved padding).
 const HEADER_LEN: usize = 8;
 /// Size in bytes of each fixed-width trace record.
 const RECORD_LEN: usize = 16;
@@ -16,6 +17,24 @@ const TAG_REGISTERS: u8 = 0;
 const TAG_READ: u8 = 1;
 const TAG_WRITE: u8 = 2;
 const TAG_CYCLES: u8 = 3;
+
+const VARIANT_CMOS_65C02: u8 = 0;
+const VARIANT_WDC_65C02: u8 = 1;
+
+fn variant_to_byte(variant: CpuVariant) -> u8 {
+    match variant {
+        CpuVariant::Cmos65C02 => VARIANT_CMOS_65C02,
+        CpuVariant::Wdc65C02 => VARIANT_WDC_65C02,
+    }
+}
+
+fn variant_from_byte(byte: u8) -> io::Result<CpuVariant> {
+    match byte {
+        VARIANT_CMOS_65C02 => Ok(CpuVariant::Cmos65C02),
+        VARIANT_WDC_65C02 => Ok(CpuVariant::Wdc65C02),
+        tag => Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown CPU variant tag: {tag}"))),
+    }
+}
 
 /// The kind of event a [`TraceRecord`] carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,8 +137,8 @@ pub trait TraceCallback: Send {
 /// Writes trace records to a binary trace file.
 ///
 /// File layout: an 8-byte header (4-byte magic `b"E65T"`, 1-byte format
-/// version, 3 reserved zero bytes) written once at construction, followed by
-/// fixed-width 16-byte records, little-endian:
+/// version, 1-byte CPU variant tag, 2 reserved zero bytes) written once at
+/// construction, followed by fixed-width 16-byte records, little-endian:
 /// - Bytes 0–7: `instr_id` (u64)
 /// - Byte 8:    tag (0 = `Registers`, 1 = `Read`, 2 = `Write`, 3 = `Cycles`)
 /// - Bytes 9–15: tag-dependent payload, zero-padded to 7 bytes
@@ -131,12 +150,15 @@ pub struct BinaryTraceWriter<W: Write> {
 }
 
 impl<W: Write> BinaryTraceWriter<W> {
-    /// Creates a new writer wrapping `inner`, writing the file header immediately.
-    pub fn new(inner: W) -> Self {
+    /// Creates a new writer wrapping `inner`, writing the file header
+    /// (including `variant`, the CPU variant that produced this trace)
+    /// immediately.
+    pub fn new(inner: W, variant: CpuVariant) -> Self {
         let mut writer = BufWriter::new(inner);
         let mut header = [0u8; HEADER_LEN];
         header[0..4].copy_from_slice(&MAGIC);
         header[4] = FORMAT_VERSION;
+        header[5] = variant_to_byte(variant);
         // Best-effort write; errors are silently swallowed to avoid disrupting emulation.
         let _ = writer.write_all(&header);
         Self { writer }
@@ -158,11 +180,13 @@ impl<W: Write + Send> TraceCallback for BinaryTraceWriter<W> {
 /// Reads a binary trace file written by [`BinaryTraceWriter`].
 pub struct BinaryTraceReader<R: Read> {
     reader: BufReader<R>,
+    variant: CpuVariant,
 }
 
 impl<R: Read> BinaryTraceReader<R> {
     /// Creates a new reader over `inner`, validating the file header eagerly.
-    /// Returns an error if the magic or format version doesn't match.
+    /// Returns an error if the magic, format version, or CPU variant tag
+    /// doesn't match a known value.
     pub fn new(inner: R) -> io::Result<Self> {
         let mut reader = BufReader::new(inner);
         let mut header = [0u8; HEADER_LEN];
@@ -176,7 +200,13 @@ impl<R: Read> BinaryTraceReader<R> {
                 format!("unsupported trace file format version: {}", header[4]),
             ));
         }
-        Ok(Self { reader })
+        let variant = variant_from_byte(header[5])?;
+        Ok(Self { reader, variant })
+    }
+
+    /// The CPU variant that produced this trace, as recorded in the file header.
+    pub fn variant(&self) -> CpuVariant {
+        self.variant
     }
 }
 
@@ -332,7 +362,7 @@ mod tests {
     fn binary_writer_record_layout() {
         let buf = {
             let mut buf = Vec::new();
-            let mut writer = BinaryTraceWriter::new(&mut buf);
+            let mut writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
             writer.record(TraceRecord { instr_id: 7, kind: TraceKind::Registers(sample_registers()) });
             writer.record(TraceRecord { instr_id: 7, kind: TraceKind::Read { addr: 0x1234, value: 0xAB } });
             writer.record(TraceRecord { instr_id: 8, kind: TraceKind::Write { addr: 0x5678, value: 0xCD } });
@@ -344,7 +374,8 @@ mod tests {
         assert_eq!(buf.len(), HEADER_LEN + 3 * RECORD_LEN);
         assert_eq!(&buf[0..4], &MAGIC);
         assert_eq!(buf[4], FORMAT_VERSION);
-        assert_eq!(&buf[5..8], &[0, 0, 0]);
+        assert_eq!(buf[5], VARIANT_WDC_65C02);
+        assert_eq!(&buf[6..8], &[0, 0]);
 
         let rec0 = &buf[HEADER_LEN..HEADER_LEN + RECORD_LEN];
         assert_eq!(&rec0[0..8], &7u64.to_le_bytes());
@@ -375,7 +406,7 @@ mod tests {
     fn binary_writer_cycles_record_layout() {
         let buf = {
             let mut buf = Vec::new();
-            let mut writer = BinaryTraceWriter::new(&mut buf);
+            let mut writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
             writer.record(TraceRecord { instr_id: 9, kind: TraceKind::Cycles(4) });
             writer.flush().unwrap();
             drop(writer);
@@ -393,7 +424,7 @@ mod tests {
     fn cycles_record_roundtrips_through_reader() {
         let buf = {
             let mut buf = Vec::new();
-            let mut writer = BinaryTraceWriter::new(&mut buf);
+            let mut writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
             writer.record(TraceRecord { instr_id: 5, kind: TraceKind::Cycles(7) });
             writer.flush().unwrap();
             drop(writer);
@@ -442,7 +473,7 @@ mod tests {
     fn binary_writer_registers_record_roundtrips_through_reader() {
         let buf = {
             let mut buf = Vec::new();
-            let mut writer = BinaryTraceWriter::new(&mut buf);
+            let mut writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
             writer.record(TraceRecord { instr_id: 3, kind: TraceKind::Registers(sample_registers()) });
             writer.record(TraceRecord { instr_id: 3, kind: TraceKind::Read { addr: 0x0300, value: 0x99 } });
             writer.record(TraceRecord { instr_id: 4, kind: TraceKind::Write { addr: 0x0301, value: 0x77 } });
@@ -473,5 +504,24 @@ mod tests {
         buf[0..4].copy_from_slice(&MAGIC);
         buf[4] = FORMAT_VERSION + 1;
         assert!(BinaryTraceReader::new(buf.as_slice()).is_err());
+    }
+
+    #[test]
+    fn reader_rejects_unknown_variant_tag() {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..4].copy_from_slice(&MAGIC);
+        buf[4] = FORMAT_VERSION;
+        buf[5] = 0xFF;
+        assert!(BinaryTraceReader::new(buf.as_slice()).is_err());
+    }
+
+    #[test]
+    fn reader_reports_variant_from_header() {
+        let mut buf = Vec::new();
+        let writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
+        drop(writer);
+
+        let reader = BinaryTraceReader::new(buf.as_slice()).unwrap();
+        assert_eq!(reader.variant(), CpuVariant::Wdc65C02);
     }
 }
