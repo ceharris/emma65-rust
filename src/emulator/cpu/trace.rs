@@ -283,10 +283,19 @@ impl TraceCallback for ChannelTraceCallback {
 /// writes them via `writer`. Returns a callback for the CPU thread, a join
 /// handle to await flush-on-exit, and a shared counter of dropped records
 /// (only incremented under [`OverflowPolicy::DropOnFull`]).
+///
+/// `flush_after_each_record` controls how promptly writes become visible to
+/// an independent reader of the same file (e.g. a live viewer that reopens
+/// the file on each poll): the underlying `BinaryTraceWriter` buffers writes
+/// and otherwise only flushes when the channel closes, so without this a
+/// concurrent reader sees nothing new until the buffer happens to fill.
+/// Callers that only read the file after recording stops (e.g. the CLI
+/// capture path) should pass `false` to avoid a flush (a syscall) per record.
 pub fn spawn_trace_writer<W: Write + Send + 'static>(
     writer: BinaryTraceWriter<W>,
     capacity: usize,
     policy: OverflowPolicy,
+    flush_after_each_record: bool,
 ) -> (ChannelTraceCallback, std::thread::JoinHandle<()>, std::sync::Arc<std::sync::atomic::AtomicU64>) {
     let (tx, rx) = crossbeam_channel::bounded::<TraceRecord>(capacity);
     let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -297,6 +306,9 @@ pub fn spawn_trace_writer<W: Write + Send + 'static>(
         // once the sender drops and the channel is drained — no polling loop needed.
         while let Ok(rec) = rx.recv() {
             writer.record(rec);
+            if flush_after_each_record {
+                let _ = writer.flush();
+            }
         }
         let _ = writer.flush();
     });

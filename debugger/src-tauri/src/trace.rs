@@ -147,9 +147,12 @@ pub fn record_trace(path: String, cpu_state: State<CpuState>, trace_state: State
     let file = File::create(&path).map_err(|e| e.to_string())?;
     let writer = BinaryTraceWriter::new(file, cpu.variant());
     // BlockOnFull, unlike the CLI capture use case's DropOnFull: a debugger
-    // trace that silently drops instructions would be misleading.
+    // trace that silently drops instructions would be misleading. Flush after
+    // every record so get_trace_window's independent file handle (opened
+    // fresh on each call) can see rows as they're written, not just once the
+    // writer's internal buffer happens to fill.
     let (callback, writer_handle, _dropped) =
-        spawn_trace_writer(writer, TRACE_CHANNEL_CAPACITY, OverflowPolicy::BlockOnFull);
+        spawn_trace_writer(writer, TRACE_CHANNEL_CAPACITY, OverflowPolicy::BlockOnFull, true);
 
     let row_index = Arc::new(Mutex::new(Vec::new()));
     let indexing_callback =
