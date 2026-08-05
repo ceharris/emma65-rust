@@ -244,8 +244,57 @@ export default function TracePanel() {
     return () => window.removeEventListener("keydown", handler);
   }, [scrollBy]);
 
+  // Custom scrollbar: the log is a fixed-size window fetched from the
+  // backend (not a real scrollable DOM list, since total_rows can be huge),
+  // so a native scrollbar has nothing to attach to. This track+thumb gives
+  // the same "see how much history there is, and jump anywhere in it" UX.
+  const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
+
+  /** Maps a track-relative Y coordinate to a row and, if it differs, fetches that window. */
+  const jumpToClientY = useCallback(
+    (clientY: number) => {
+      const track = scrollbarTrackRef.current;
+      const total = totalRowsRef.current;
+      const maxStart = Math.max(0, total - VIEWPORT_ROWS);
+      if (!track || maxStart <= 0) return;
+      const rect = track.getBoundingClientRect();
+      const thumbFrac = Math.max(0.04, Math.min(1, VIEWPORT_ROWS / total));
+      const usable = rect.height * (1 - thumbFrac);
+      const thumbHalf = (rect.height * thumbFrac) / 2;
+      const frac = usable > 0 ? Math.max(0, Math.min(1, (clientY - rect.top - thumbHalf) / usable)) : 0;
+      const next = Math.round(frac * maxStart);
+      if (next !== startRowRef.current) fetchWindow(next);
+    },
+    [fetchWindow],
+  );
+
+  const handleThumbMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const onMove = (ev: MouseEvent) => jumpToClientY(ev.clientY);
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [jumpToClientY],
+  );
+
+  const handleTrackMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      jumpToClientY(e.clientY);
+    },
+    [jumpToClientY],
+  );
+
   const selectedRow = rows.find((r) => r.seq === selectedSeq) ?? null;
   const controlsDisabled = cpuRunning;
+  const maxStart = Math.max(0, totalRows - VIEWPORT_ROWS);
+  const thumbHeightPct = totalRows > 0 ? Math.max(4, Math.min(100, (VIEWPORT_ROWS / totalRows) * 100)) : 100;
+  const thumbTopPct = maxStart > 0 ? (startRow / maxStart) * (100 - thumbHeightPct) : 0;
 
   return (
     <div className="trace-panel">
@@ -277,39 +326,50 @@ export default function TracePanel() {
         <span className="trace-path">{tracePath ? basename(tracePath) : "No trace recorded"}</span>
         <span className="trace-row-count">{totalRows} rows</span>
       </div>
-      <div className="trace-log" onWheel={handleWheel}>
-        {rows.length === 0 ? (
-          <span className="trace-empty">{recording ? "Waiting for instructions…" : "Not recording"}</span>
-        ) : (
-          rows.flatMap((row) => {
-            const labelRows = row.labels.map((label, i) => (
-              <div key={`${row.seq}-label-${i}`} className="trace-row trace-label-row">
-                <span className="trace-label">{label}:</span>
-              </div>
-            ));
-            const instrRow = (
-              <div
-                key={row.seq}
-                className={`trace-row${row.seq === selectedSeq ? " selected" : ""}${row.is_valid ? "" : " invalid-op"}`}
-                onClick={() => setSelectedSeq(row.seq)}
-              >
-                <span className="trace-seq">{row.seq}</span>
-                <span className="trace-cyc">{row.cycles ?? ""}</span>
-                <span className="trace-reg">{formatByte(row.a)}</span>
-                <span className="trace-reg">{formatByte(row.x)}</span>
-                <span className="trace-reg">{formatByte(row.y)}</span>
-                <span className="trace-reg">{formatByte(row.s)}</span>
-                <span className="trace-reg">{formatByte(row.p)}</span>
-                <span className="trace-flags">{formatFlags(row.p)}</span>
-                <span className="trace-addr">{formatAddr(row.addr)}</span>
-                <span className="trace-bytes">{formatBytes(row.bytes)}</span>
-                <span className="trace-mnemonic">{row.mnemonic}</span>
-                {row.operand && <span className="trace-operand">{row.operand}</span>}
-                {row.comment && <span className="trace-comment">{row.comment}</span>}
-              </div>
-            );
-            return [...labelRows, instrRow];
-          })
+      <div className="trace-log-area">
+        <div className="trace-log" onWheel={handleWheel}>
+          {rows.length === 0 ? (
+            <span className="trace-empty">{recording ? "Waiting for instructions…" : "Not recording"}</span>
+          ) : (
+            rows.flatMap((row) => {
+              const labelRows = row.labels.map((label, i) => (
+                <div key={`${row.seq}-label-${i}`} className="trace-row trace-label-row">
+                  <span className="trace-label">{label}:</span>
+                </div>
+              ));
+              const instrRow = (
+                <div
+                  key={row.seq}
+                  className={`trace-row${row.seq === selectedSeq ? " selected" : ""}${row.is_valid ? "" : " invalid-op"}`}
+                  onClick={() => setSelectedSeq(row.seq)}
+                >
+                  <span className="trace-seq">{row.seq}</span>
+                  <span className="trace-cyc">{row.cycles ?? ""}</span>
+                  <span className="trace-reg">{formatByte(row.a)}</span>
+                  <span className="trace-reg">{formatByte(row.x)}</span>
+                  <span className="trace-reg">{formatByte(row.y)}</span>
+                  <span className="trace-reg">{formatByte(row.s)}</span>
+                  <span className="trace-reg">{formatByte(row.p)}</span>
+                  <span className="trace-flags">{formatFlags(row.p)}</span>
+                  <span className="trace-addr">{formatAddr(row.addr)}</span>
+                  <span className="trace-bytes">{formatBytes(row.bytes)}</span>
+                  <span className="trace-mnemonic">{row.mnemonic}</span>
+                  {row.operand && <span className="trace-operand">{row.operand}</span>}
+                  {row.comment && <span className="trace-comment">{row.comment}</span>}
+                </div>
+              );
+              return [...labelRows, instrRow];
+            })
+          )}
+        </div>
+        {totalRows > VIEWPORT_ROWS && (
+          <div className="trace-scrollbar" ref={scrollbarTrackRef} onMouseDown={handleTrackMouseDown}>
+            <div
+              className="trace-scrollbar-thumb"
+              style={{ height: `${thumbHeightPct}%`, top: `${thumbTopPct}%` }}
+              onMouseDown={handleThumbMouseDown}
+            />
+          </div>
         )}
       </div>
       <div className="trace-detail">
