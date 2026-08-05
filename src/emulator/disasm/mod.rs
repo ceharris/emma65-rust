@@ -1,5 +1,7 @@
 //! Disassembler: decodes bus memory into human-readable instruction listings.
 
+pub mod trace;
+
 use crate::emulator::bus::{Bus, SymbolTable};
 use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use crate::emulator::cpu::variant::CpuVariant;
@@ -55,6 +57,11 @@ impl Disassembler {
     /// Creates a disassembler for the given CPU variant.
     pub fn new(variant: CpuVariant) -> Self {
         Self { table: decode_table(variant) }
+    }
+
+    /// Returns the decode table entry for `opcode`.
+    pub(crate) fn decoded(&self, opcode: u8) -> DecodedOp {
+        self.table[opcode as usize]
     }
 
     /// Peeks the opcode and operand bytes for the instruction at `addr` off `bus`.
