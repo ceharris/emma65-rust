@@ -4,7 +4,7 @@
 use super::{DisassembledLine, Disassembler};
 use crate::emulator::bus::SymbolTable;
 use crate::emulator::cpu::variant::CpuVariant;
-use crate::emulator::{TraceKind, TraceRecord};
+use crate::emulator::{TraceCallback, TraceKind, TraceRecord};
 
 /// The in-progress instruction being reconstructed from trace records.
 struct Pending {
@@ -78,6 +78,38 @@ impl TraceDisassembler {
         }
         let pending = self.pending.take().unwrap();
         Some(self.disassembler.build_line(pending.addr, pending.raw_bytes, &self.symbols))
+    }
+}
+
+/// Receives disassembled lines produced by a [`DisassemblingTraceCallback`].
+pub trait DisassemblyListener: Send {
+    /// Called once for each instruction fully reconstructed from the trace stream.
+    fn on_line(&mut self, line: DisassembledLine);
+}
+
+/// Wraps a [`TraceCallback`] with a [`TraceDisassembler`]: every record is
+/// forwarded to `inner` unchanged, and each completed [`DisassembledLine`] is
+/// also delivered to `listener` as a separate output stream, without
+/// changing `TraceRecord`'s wire format.
+pub struct DisassemblingTraceCallback<C: TraceCallback, L: DisassemblyListener> {
+    inner: C,
+    disassembler: TraceDisassembler,
+    listener: L,
+}
+
+impl<C: TraceCallback, L: DisassemblyListener> DisassemblingTraceCallback<C, L> {
+    /// Creates a new adapter wrapping `inner`, feeding reconstructed lines to `listener`.
+    pub fn new(inner: C, disassembler: TraceDisassembler, listener: L) -> Self {
+        Self { inner, disassembler, listener }
+    }
+}
+
+impl<C: TraceCallback, L: DisassemblyListener> TraceCallback for DisassemblingTraceCallback<C, L> {
+    fn record(&mut self, rec: TraceRecord) {
+        if let Some(line) = self.disassembler.feed(&rec) {
+            self.listener.on_line(line);
+        }
+        self.inner.record(rec);
     }
 }
 
@@ -192,6 +224,42 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].raw_bytes, vec![0x8D, 0x00, 0x03]);
         assert!(lines[0].mnemonic == Mnemonic::Sta);
+    }
+
+    struct RecordingCallback(Vec<TraceRecord>);
+
+    impl TraceCallback for RecordingCallback {
+        fn record(&mut self, rec: TraceRecord) {
+            self.0.push(rec);
+        }
+    }
+
+    struct RecordingListener(Vec<DisassembledLine>);
+
+    impl DisassemblyListener for RecordingListener {
+        fn on_line(&mut self, line: DisassembledLine) {
+            self.0.push(line);
+        }
+    }
+
+    #[test]
+    fn disassembling_trace_callback_forwards_records_and_emits_lines() {
+        let prog: &[u8] = &[0xA9, 0x55, 0x8D, 0x00, 0x03, 0xE8]; // LDA #$55 ; STA $0300 ; INX
+        let records = traced_records(CpuVariant::Wdc65C02, 0x0200, prog, 3);
+
+        let td = TraceDisassembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
+        let mut adapter =
+            DisassemblingTraceCallback::new(RecordingCallback(Vec::new()), td, RecordingListener(Vec::new()));
+
+        for &rec in &records {
+            adapter.record(rec);
+        }
+
+        assert_eq!(adapter.inner.0, records, "every record should be forwarded to the inner callback, in order");
+        assert_eq!(adapter.listener.0.len(), 3, "one line per instruction");
+        assert!(adapter.listener.0[0].mnemonic == Mnemonic::Lda);
+        assert!(adapter.listener.0[1].mnemonic == Mnemonic::Sta);
+        assert!(adapter.listener.0[2].mnemonic == Mnemonic::Inx);
     }
 
     #[test]
