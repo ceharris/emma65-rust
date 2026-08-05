@@ -73,6 +73,32 @@ function basename(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
 }
 
+/**
+ * Shared column widths for the header table and the body table — they're
+ * separate `<table>` elements (so the header can stay put while the body's
+ * content is bottom-anchored) but need identical `<col>` widths to stay
+ * visually aligned as columns.
+ */
+function TraceColGroup() {
+  return (
+    <colgroup>
+      <col className="col-seq" />
+      <col className="col-cyc" />
+      <col className="col-reg" />
+      <col className="col-reg" />
+      <col className="col-reg" />
+      <col className="col-reg" />
+      <col className="col-reg" />
+      <col className="col-flags" />
+      <col className="col-addr" />
+      <col className="col-bytes" />
+      <col className="col-mnemonic" />
+      <col className="col-operand" />
+      <col />
+    </colgroup>
+  );
+}
+
 export default function TracePanel() {
   const [mode, setMode] = useState<ThemeMode>("auto");
   const [prefersDark, setPrefersDark] = useState(
@@ -300,7 +326,7 @@ export default function TracePanel() {
     <div className="trace-panel">
       <div className="trace-toolbar">
         <button
-          className="trace-btn trace-record-btn"
+          className={`trace-btn trace-record-btn${recording ? " recording" : ""}`}
           onClick={handleRecord}
           disabled={recording || controlsDisabled}
           title="Record trace to a new file"
@@ -327,23 +353,9 @@ export default function TracePanel() {
         <span className="trace-row-count">{totalRows} rows</span>
       </div>
       <div className="trace-log-area">
-        <div className="trace-log" onWheel={handleWheel}>
+        <div className="trace-log-header">
           <table className="trace-table">
-            <colgroup>
-              <col className="col-seq" />
-              <col className="col-cyc" />
-              <col className="col-reg" />
-              <col className="col-reg" />
-              <col className="col-reg" />
-              <col className="col-reg" />
-              <col className="col-reg" />
-              <col className="col-flags" />
-              <col className="col-addr" />
-              <col className="col-bytes" />
-              <col className="col-mnemonic" />
-              <col className="col-operand" />
-              <col />
-            </colgroup>
+            <TraceColGroup />
             <thead>
               <tr>
                 <th>Seq#</th>
@@ -361,59 +373,66 @@ export default function TracePanel() {
                 <th>Comment</th>
               </tr>
             </thead>
-            <tbody>
-              {rows.length === 0 ? (
-                <tr className="trace-empty-row">
-                  <td colSpan={13} className="trace-empty">
-                    {recording ? "Waiting for instructions…" : "Not recording"}
-                  </td>
-                </tr>
-              ) : (
-                rows.flatMap((row) => {
-                  const labelRows = row.labels.map((label, i) => (
-                    <tr key={`${row.seq}-label-${i}`} className="trace-row trace-label-row">
-                      <td colSpan={8} />
-                      <td colSpan={5} className="trace-label">
-                        {label}:
-                      </td>
-                    </tr>
-                  ));
-                  const instrRow = (
-                    <tr
-                      key={row.seq}
-                      className={`trace-row${row.seq === selectedSeq ? " selected" : ""}${row.is_valid ? "" : " invalid-op"}`}
-                      onClick={() => setSelectedSeq(row.seq)}
-                    >
-                      <td className="trace-seq">{row.seq}</td>
-                      <td className="trace-cyc">{row.cycles ?? ""}</td>
-                      <td className="trace-reg">{formatByte(row.a)}</td>
-                      <td className="trace-reg">{formatByte(row.x)}</td>
-                      <td className="trace-reg">{formatByte(row.y)}</td>
-                      <td className="trace-reg">{formatByte(row.s)}</td>
-                      <td className="trace-reg">{formatByte(row.p)}</td>
-                      <td className="trace-flags">{formatFlags(row.p)}</td>
-                      <td className="trace-addr">{formatAddr(row.addr)}</td>
-                      <td className="trace-bytes">{formatBytes(row.bytes)}</td>
-                      <td className="trace-mnemonic">{row.mnemonic}</td>
-                      <td className="trace-operand">{row.operand}</td>
-                      <td className="trace-comment">{row.comment}</td>
-                    </tr>
-                  );
-                  return [...labelRows, instrRow];
-                })
-              )}
-            </tbody>
           </table>
         </div>
-        {totalRows > VIEWPORT_ROWS && (
-          <div className="trace-scrollbar" ref={scrollbarTrackRef} onMouseDown={handleTrackMouseDown}>
-            <div
-              className="trace-scrollbar-thumb"
-              style={{ height: `${thumbHeightPct}%`, top: `${thumbTopPct}%` }}
-              onMouseDown={handleThumbMouseDown}
-            />
+        <div className="trace-log-scroller">
+          <div className="trace-log-body" onWheel={handleWheel}>
+            <table className="trace-table">
+              <TraceColGroup />
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr className="trace-empty-row">
+                    <td colSpan={13} className="trace-empty">
+                      {recording ? "Waiting for instructions…" : "Not recording"}
+                    </td>
+                  </tr>
+                ) : (
+                  rows.flatMap((row) => {
+                    const labelRows = row.labels.map((label, i) => (
+                      <tr key={`${row.seq}-label-${i}`} className="trace-row trace-label-row">
+                        <td colSpan={8} />
+                        <td colSpan={5} className="trace-label">
+                          {label}:
+                        </td>
+                      </tr>
+                    ));
+                    const instrRow = (
+                      <tr
+                        key={row.seq}
+                        className={`trace-row${row.seq === selectedSeq ? " selected" : ""}${row.is_valid ? "" : " invalid-op"}`}
+                        onClick={() => setSelectedSeq(row.seq)}
+                      >
+                        <td className="trace-seq">{row.seq}</td>
+                        <td className="trace-cyc">{row.cycles ?? ""}</td>
+                        <td className="trace-reg">{formatByte(row.a)}</td>
+                        <td className="trace-reg">{formatByte(row.x)}</td>
+                        <td className="trace-reg">{formatByte(row.y)}</td>
+                        <td className="trace-reg">{formatByte(row.s)}</td>
+                        <td className="trace-reg">{formatByte(row.p)}</td>
+                        <td className="trace-flags">{formatFlags(row.p)}</td>
+                        <td className="trace-addr">{formatAddr(row.addr)}</td>
+                        <td className="trace-bytes">{formatBytes(row.bytes)}</td>
+                        <td className="trace-mnemonic">{row.mnemonic}</td>
+                        <td className="trace-operand">{row.operand}</td>
+                        <td className="trace-comment">{row.comment}</td>
+                      </tr>
+                    );
+                    return [...labelRows, instrRow];
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
-        )}
+          {totalRows > VIEWPORT_ROWS && (
+            <div className="trace-scrollbar" ref={scrollbarTrackRef} onMouseDown={handleTrackMouseDown}>
+              <div
+                className="trace-scrollbar-thumb"
+                style={{ height: `${thumbHeightPct}%`, top: `${thumbTopPct}%` }}
+                onMouseDown={handleThumbMouseDown}
+              />
+            </div>
+          )}
+        </div>
       </div>
       <div className="trace-detail">
         {selectedRow ? (

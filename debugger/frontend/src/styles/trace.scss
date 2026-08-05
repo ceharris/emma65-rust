@@ -43,7 +43,18 @@
   }
 }
 
-.trace-record-btn,
+// Resting state is neutral rather than danger-red: red on an idle button
+// reads as "already recording", not "click to start". It only turns red
+// (matching a hardware REC light) once a recording is actually in progress
+// — by then the button is also disabled, since Stop is the only way out.
+.trace-record-btn {
+  color: var(--color-fg);
+
+  &.recording {
+    color: var(--color-danger);
+  }
+}
+
 .trace-stop-btn {
   color: var(--color-danger);
 }
@@ -78,14 +89,39 @@
 .trace-log-area {
   flex: 1 1 auto;
   display: flex;
-  overflow: hidden;
-}
-
-.trace-log {
-  flex: 1 1 auto;
+  flex-direction: column;
   overflow: hidden;
   font-size: var(--font-size-mono);
   line-height: 1.5;
+}
+
+// Its own element (not part of the scrolling/clipped body below) so it never
+// moves: with the fetched window potentially taller than the visible area
+// (see .trace-log-body), a header inside that area would get pushed out of
+// view along with old rows. Uses its own <table> with an identical <colgroup>
+// to trace-log-body's, so the two tables' columns still line up.
+.trace-log-header {
+  flex: 0 0 auto;
+}
+
+.trace-log-scroller {
+  flex: 1 1 auto;
+  display: flex;
+  overflow: hidden;
+}
+
+// The fetched window (VIEWPORT_ROWS) is sized for a generously tall window;
+// on a shorter one, or once label rows add extra height, its table can be
+// taller than this box. `justify-content: flex-end` anchors it to the
+// bottom so the newest rows (added at the end of the table) stay visible,
+// clipping older rows at the top instead — the trace equivalent of a log
+// view auto-scrolled to the bottom.
+.trace-log-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 // Custom scrollbar: the log window is fetched from the backend rather than
@@ -121,9 +157,6 @@
   white-space: nowrap;
 
   th {
-    position: sticky;
-    top: 0;
-    z-index: 1;
     text-align: left;
     font-family: var(--font-ui);
     font-size: var(--font-size-btn);
