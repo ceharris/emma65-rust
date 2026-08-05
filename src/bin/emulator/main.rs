@@ -59,7 +59,7 @@ async fn main() -> ExitCode {
                 eprintln!("error: failed to open trace file {}: {e}", path.display());
                 std::process::exit(1);
             });
-            let writer = emma65::emulator::BinaryTraceWriter::new(file);
+            let writer = emma65::emulator::BinaryTraceWriter::new(file, cpu.variant());
             let (callback, handle, _dropped) =
                 emma65::emulator::spawn_trace_writer(writer, 4096, emma65::emulator::OverflowPolicy::DropOnFull);
             cpu.set_trace_callback(Some(Box::new(callback)));

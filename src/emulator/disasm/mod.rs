@@ -39,7 +39,11 @@ impl Disassembler {
         &Self::ASCII_CTRL_MNEMONICS[i..i + 3]
     }
 
-    fn immediate_mode_comment(operand: u8) -> String {
+    /// Formats a byte as the alternate representations shown alongside
+    /// immediate-mode operands in a disassembly comment: decimal value, plus
+    /// an ASCII rendering (control-code mnemonic, quoted printable character,
+    /// `SPC`, or `DEL`) or, for non-ASCII bytes, the signed interpretation.
+    pub fn immediate_mode_comment(operand: u8) -> String {
         if operand < 0x20 {
             format!("; {} ^{} ({})", operand, (operand + b'@') as char,
                     Self::ascii_ctrl_mnemonic(operand).trim())
