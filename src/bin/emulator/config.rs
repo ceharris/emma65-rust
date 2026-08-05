@@ -25,6 +25,10 @@ pub struct AppConfig {
     #[clap(flatten)]
     #[serde(flatten)]
     pub emulator: emma65::emulator::Config,
+
+    /// Path to write a binary CPU execution trace to.
+    #[clap(long = "trace-file")]
+    pub trace_file: Option<emma65::emulator::ExpandedPathBuf>,
 }
 
 impl AppConfig {
