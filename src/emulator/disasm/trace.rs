@@ -337,6 +337,26 @@ mod tests {
     }
 
     #[test]
+    fn not_taken_branch_instruction_is_still_reconstructed() {
+        // LDA #$01 (clears Z) ; BEQ +2 (not taken) ; INX
+        //
+        // Regression test: `Cpu::branch()` used to skip reading the offset
+        // byte entirely when the branch wasn't taken, so no `Read` record was
+        // ever emitted for it and this `Pending` row never completed — the
+        // not-taken branch silently vanished from the reconstructed trace.
+        let prog: &[u8] = &[0xA9, 0x01, 0xF0, 0x02, 0xE8];
+        let records = traced_records(CpuVariant::Wdc65C02, 0x0200, prog, 3);
+        let mut td = TraceDisassembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
+        let lines = feed_all(&mut td, &records);
+
+        assert_eq!(lines.len(), 3, "the not-taken BEQ must still appear in the reconstructed trace");
+        assert!(lines[0].mnemonic == Mnemonic::Lda);
+        assert!(lines[1].mnemonic == Mnemonic::Beq);
+        assert_eq!(lines[1].raw_bytes, vec![0xF0, 0x02]);
+        assert!(lines[2].mnemonic == Mnemonic::Inx);
+    }
+
+    #[test]
     fn instruction_with_data_write_ignores_the_write() {
         let records = traced_records(CpuVariant::Wdc65C02, 0x0200, &[0x8D, 0x00, 0x03], 1); // STA $0300
         let mut td = TraceDisassembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
