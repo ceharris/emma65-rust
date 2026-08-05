@@ -56,19 +56,21 @@ impl Row {
 }
 
 /// Renders the `NV-BDIZC` flags field: each header character if its bit is
-/// set, otherwise a space.
+/// set, otherwise a space. The `-` position (the UNUSED bit, always set on
+/// real hardware) is never printed — it carries no information.
 fn flags_field(p: StatusRegister) -> String {
-    const FLAGS: [(char, StatusRegister); 8] = [
+    const FLAGS: [(char, StatusRegister); 7] = [
         ('N', StatusRegister::N),
         ('V', StatusRegister::V),
-        ('-', StatusRegister::UNUSED),
         ('B', StatusRegister::B),
         ('D', StatusRegister::D),
         ('I', StatusRegister::I),
         ('Z', StatusRegister::Z),
         ('C', StatusRegister::C),
     ];
-    FLAGS.iter().map(|&(c, bit)| if p.contains(bit) { c } else { ' ' }).collect()
+    let mut s: String = FLAGS.iter().map(|&(c, bit)| if p.contains(bit) { c } else { ' ' }).collect();
+    s.insert(2, ' ');
+    s
 }
 
 /// Formats a label line: the label left-aligned at the address column, followed by `:`.
