@@ -2,7 +2,7 @@
 use super::Registers;
 use super::status::StatusRegister;
 use super::variant::CpuVariant;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 /// 4-byte magic identifying a binary trace file, followed by a 1-byte format version.
 const MAGIC: [u8; 4] = *b"E65T";
@@ -207,6 +207,17 @@ impl<R: Read> BinaryTraceReader<R> {
     /// The CPU variant that produced this trace, as recorded in the file header.
     pub fn variant(&self) -> CpuVariant {
         self.variant
+    }
+}
+
+impl<R: Read + Seek> BinaryTraceReader<R> {
+    /// Seeks so that the next `next()` call yields the record at `record_index`
+    /// (0-based, counting from the first record after the header), without
+    /// scanning the file from the start.
+    pub fn seek_to_record(&mut self, record_index: u64) -> io::Result<()> {
+        let offset = HEADER_LEN as u64 + record_index * RECORD_LEN as u64;
+        self.reader.seek(SeekFrom::Start(offset))?;
+        Ok(())
     }
 }
 
@@ -513,6 +524,45 @@ mod tests {
         buf[4] = FORMAT_VERSION;
         buf[5] = 0xFF;
         assert!(BinaryTraceReader::new(buf.as_slice()).is_err());
+    }
+
+    #[test]
+    fn seek_to_record_jumps_to_arbitrary_record() {
+        let buf = {
+            let mut buf = Vec::new();
+            let mut writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
+            for i in 0..5u8 {
+                writer.record(TraceRecord { instr_id: i as u64, kind: TraceKind::Cycles(i) });
+            }
+            writer.flush().unwrap();
+            drop(writer);
+            buf
+        };
+
+        let mut reader = BinaryTraceReader::new(io::Cursor::new(buf)).unwrap();
+        reader.seek_to_record(3).unwrap();
+        let records: Vec<TraceRecord> = reader.collect::<io::Result<Vec<_>>>().unwrap();
+        assert_eq!(records, vec![
+            TraceRecord { instr_id: 3, kind: TraceKind::Cycles(3) },
+            TraceRecord { instr_id: 4, kind: TraceKind::Cycles(4) },
+        ]);
+    }
+
+    #[test]
+    fn seek_to_record_zero_is_equivalent_to_no_seek() {
+        let buf = {
+            let mut buf = Vec::new();
+            let mut writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
+            writer.record(TraceRecord { instr_id: 0, kind: TraceKind::Cycles(1) });
+            writer.flush().unwrap();
+            drop(writer);
+            buf
+        };
+
+        let mut reader = BinaryTraceReader::new(io::Cursor::new(buf)).unwrap();
+        reader.seek_to_record(0).unwrap();
+        let records: Vec<TraceRecord> = reader.collect::<io::Result<Vec<_>>>().unwrap();
+        assert_eq!(records, vec![TraceRecord { instr_id: 0, kind: TraceKind::Cycles(1) }]);
     }
 
     #[test]
