@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use emma65::emulator::cpu::StepResult;
 use emma65::emulator::device::{Console, Mc6850, R6551};
 use emma65::emulator::{
-    AddressRange, Bus, BusOp, ChannelRelay, ClockSpeed, CpuBuilder,
-    CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, TraceCallback, TraceRecord,
+    AddressRange, Bus, ChannelRelay, ClockSpeed, CpuBuilder,
+    CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, TraceCallback, TraceKind, TraceRecord,
     TransportRelay, run,
 };
 
@@ -90,13 +90,15 @@ async fn free_run_console_output() {
 }
 
 /// Verifies that bus trace records captured during CPU execution carry the correct
-/// addresses, values, operations, and monotonically non-decreasing timestamps.
+/// addresses, values, kinds, and monotonically non-decreasing instruction ids.
 ///
 /// The program executes `LDA #$55`, `STA $0300`, `LDA $0300`, `STP`. The test asserts:
 /// - exactly one write to $0300 (value $55)
 /// - at least one read from $0300 (value $55)
 /// - at least one fetch of the LDA-immediate opcode byte ($A9) from $0200
-/// - all timestamps are non-decreasing
+/// - all instruction ids are non-decreasing
+/// - the `Registers` snapshot preceding the STA $0300 write already shows A = $55,
+///   confirming the snapshot is captured before the instruction executes
 #[test]
 fn bus_trace_captures_reads_and_writes() {
     use emma65::emulator::Bus;
@@ -153,33 +155,52 @@ fn bus_trace_captures_reads_and_writes() {
 
     // Exactly one write to $0300 with value $55.
     let writes_to_0300: Vec<_> = recs.iter()
-        .filter(|r| r.addr == 0x0300 && r.op == BusOp::Write)
+        .filter(|r| matches!(r.kind, TraceKind::Write { addr: 0x0300, .. }))
         .collect();
     assert_eq!(writes_to_0300.len(), 1, "expected exactly one write to $0300");
-    assert_eq!(writes_to_0300[0].value, 0x55);
+    match writes_to_0300[0].kind {
+        TraceKind::Write { value, .. } => assert_eq!(value, 0x55),
+        _ => unreachable!(),
+    }
 
     // At least one read from $0300 with value $55.
     let reads_from_0300: Vec<_> = recs.iter()
-        .filter(|r| r.addr == 0x0300 && r.op == BusOp::Read)
+        .filter(|r| matches!(r.kind, TraceKind::Read { addr: 0x0300, .. }))
         .collect();
     assert!(!reads_from_0300.is_empty(), "expected at least one read from $0300");
-    assert!(reads_from_0300.iter().any(|r| r.value == 0x55), "read from $0300 should yield $55");
+    assert!(
+        reads_from_0300.iter().any(|r| matches!(r.kind, TraceKind::Read { value: 0x55, .. })),
+        "read from $0300 should yield $55",
+    );
 
     // At least one fetch of the LDA-immediate opcode ($A9) from $0200.
     let fetches_0200: Vec<_> = recs.iter()
-        .filter(|r| r.addr == 0x0200 && r.op == BusOp::Read && r.value == 0xA9)
+        .filter(|r| matches!(r.kind, TraceKind::Read { addr: 0x0200, value: 0xA9 }))
         .collect();
     assert!(!fetches_0200.is_empty(), "expected opcode fetch from $0200 (LDA #imm = $A9)");
 
-    // Timestamps are monotonically non-decreasing.
+    // Instruction ids are monotonically non-decreasing across the whole trace.
     for window in recs.windows(2) {
         assert!(
-            window[1].timestamp_ns >= window[0].timestamp_ns,
-            "timestamps must be non-decreasing: {} then {}",
-            window[0].timestamp_ns,
-            window[1].timestamp_ns,
+            window[1].instr_id >= window[0].instr_id,
+            "instr_id must be non-decreasing: {} then {}",
+            window[0].instr_id,
+            window[1].instr_id,
         );
     }
+
+    // The Registers snapshot immediately preceding the STA $0300 write already
+    // shows A = $55, confirming pre-instruction timing on a real program.
+    let write_pos = recs.iter()
+        .position(|r| matches!(r.kind, TraceKind::Write { addr: 0x0300, .. }))
+        .unwrap();
+    let preceding_registers = recs[..write_pos].iter().rev()
+        .find_map(|r| match r.kind {
+            TraceKind::Registers(regs) => Some(regs),
+            _ => None,
+        })
+        .expect("a Registers record should precede the STA $0300 write");
+    assert_eq!(preceding_registers.a, 0x55, "A should already hold $55 before STA executes");
 }
 
 // ---------------------------------------------------------------------------
