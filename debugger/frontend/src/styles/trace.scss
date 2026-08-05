@@ -131,44 +131,47 @@
     color: var(--color-muted);
     background-color: var(--color-bg-alt);
     border-bottom: 1px solid var(--color-border);
-    padding: 2px 4px;
+    padding: 2px 7px;
   }
 
+  // Column widths (below) are sized for content plus this padding — cells
+  // use box-sizing: border-box, so padding eats into the fixed column width
+  // rather than adding to it.
   td {
-    padding: 0 4px;
+    padding: 0 7px;
   }
 }
 
 .col-seq {
-  width: 7ch;
-}
-
-.col-cyc {
-  width: 3ch;
-}
-
-.col-reg {
-  width: 2.5ch;
-}
-
-.col-flags {
   width: 8ch;
 }
 
-.col-addr {
+.col-cyc {
   width: 4ch;
 }
 
+.col-reg {
+  width: 4ch;
+}
+
+.col-flags {
+  width: 10ch;
+}
+
+.col-addr {
+  width: 6ch;
+}
+
 .col-bytes {
-  width: 9ch;
+  width: 11ch;
 }
 
 .col-mnemonic {
-  width: 5ch;
+  width: 7ch;
 }
 
 .col-operand {
-  width: 10ch;
+  width: 12ch;
 }
 
 .trace-empty {
