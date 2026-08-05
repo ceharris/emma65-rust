@@ -245,6 +245,17 @@ pub fn run() {
             let (app_menu, window_menu_state) = menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
+            // GTK's default `gtk-menu-bar-accel` binds F10 to focus/open the menu
+            // bar, intercepting it before it ever reaches the webview — stealing
+            // it from the disassembly panel's Step Over shortcut (also F10). This
+            // is a global GtkSettings property (not per-window/per-menu), so
+            // disabling it here covers every window's menu bar at once.
+            #[cfg(target_os = "linux")]
+            if let Some(settings) = gtk::Settings::default() {
+                use gtk::glib::object::ObjectExt;
+                settings.set_property("gtk-menu-bar-accel", None::<&str>);
+            }
+
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
                 install_toggleable_window_lifecycle(&terminal_window, window_menu_state.terminal_item.clone());
             }

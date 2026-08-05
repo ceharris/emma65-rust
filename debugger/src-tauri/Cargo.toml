@@ -22,5 +22,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-log = "2.8.0"
 log = "0.4.33"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
