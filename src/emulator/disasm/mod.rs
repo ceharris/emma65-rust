@@ -1,5 +1,7 @@
 //! Disassembler: decodes bus memory into human-readable instruction listings.
 
+pub mod trace;
+
 use crate::emulator::bus::{Bus, SymbolTable};
 use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use crate::emulator::cpu::variant::CpuVariant;
@@ -57,17 +59,29 @@ impl Disassembler {
         Self { table: decode_table(variant) }
     }
 
-    /// Disassembles a single instruction at `addr`.
-    pub fn disassemble_one(&self, bus: &Bus, addr: u16) -> DisassembledLine {
+    /// Returns the decode table entry for `opcode`.
+    pub(crate) fn decoded(&self, opcode: u8) -> DecodedOp {
+        self.table[opcode as usize]
+    }
+
+    /// Peeks the opcode and operand bytes for the instruction at `addr` off `bus`.
+    fn collect_bytes(&self, bus: &Bus, addr: u16) -> Vec<u8> {
         let opcode = bus.peek(addr).unwrap_or(0xFF);
         let decoded = self.table[opcode as usize];
         let mut raw_bytes = vec![opcode];
         for i in 1..decoded.byte_len {
             raw_bytes.push(bus.peek(addr.wrapping_add(i as u16)).unwrap_or(0xFF));
         }
-        let names: Vec<&str> = bus.symbol_table().names_for(addr).collect();
+        raw_bytes
+    }
+
+    /// Builds a `DisassembledLine` from already-collected instruction bytes.
+    /// Pure: no bus access, only the opcode table and `symbol_table`.
+    pub(crate) fn build_line(&self, addr: u16, raw_bytes: Vec<u8>, symbol_table: &SymbolTable) -> DisassembledLine {
+        let decoded = self.table[raw_bytes[0] as usize];
+        let names: Vec<&str> = symbol_table.names_for(addr).collect();
         let labels: Vec<String> = names.iter().map(|&s| s.to_string()).collect();
-        let operand_text = format_operand(&decoded, &raw_bytes, addr, bus.symbol_table());
+        let operand_text = format_operand(&decoded, &raw_bytes, addr, symbol_table);
         let comment_text = if decoded.mode == AddressingMode::Immediate {
             Some(Self::immediate_mode_comment(raw_bytes[1]))
         } else {
@@ -82,6 +96,12 @@ impl Disassembler {
             comment_text,
             is_valid: decoded.is_valid,
         }
+    }
+
+    /// Disassembles a single instruction at `addr`.
+    pub fn disassemble_one(&self, bus: &Bus, addr: u16) -> DisassembledLine {
+        let raw_bytes = self.collect_bytes(bus, addr);
+        self.build_line(addr, raw_bytes, bus.symbol_table())
     }
 
     /// Disassembles up to `max` instructions starting at `start`, stopping before `end`.
@@ -226,6 +246,25 @@ mod tests {
         assert_eq!(Disassembler::immediate_mode_comment(1), "; 1 ^A (SOH)");
         assert_eq!(Disassembler::immediate_mode_comment(0x1A), "; 26 ^Z (SUB)");
         assert_eq!(Disassembler::immediate_mode_comment(0x1B), "; 27 ^[ (ESC)");
+    }
+
+    #[test]
+    fn collect_bytes_and_build_line_match_disassemble_one() {
+        let bus = make_bus(0x0200, &[0xA9, 0x55]); // LDA #$55
+        let d = disasm(CpuVariant::Wdc65C02);
+
+        let combined = d.disassemble_one(&bus, 0x0200);
+
+        let raw_bytes = d.collect_bytes(&bus, 0x0200);
+        let split = d.build_line(0x0200, raw_bytes, bus.symbol_table());
+
+        assert_eq!(split.addr, combined.addr);
+        assert_eq!(split.raw_bytes, combined.raw_bytes);
+        assert_eq!(split.labels, combined.labels);
+        assert!(split.mnemonic == combined.mnemonic);
+        assert_eq!(split.operand_text, combined.operand_text);
+        assert_eq!(split.comment_text, combined.comment_text);
+        assert_eq!(split.is_valid, combined.is_valid);
     }
 
     #[test]

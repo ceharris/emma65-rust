@@ -53,6 +53,21 @@ async fn main() -> ExitCode {
         std::process::exit(1);
     }
 
+    let trace_writer_handle = match &config.trace_file {
+        Some(path) => {
+            let file = std::fs::File::create(path).unwrap_or_else(|e| {
+                eprintln!("error: failed to open trace file {}: {e}", path.display());
+                std::process::exit(1);
+            });
+            let writer = emma65::emulator::BinaryTraceWriter::new(file);
+            let (callback, handle, _dropped) =
+                emma65::emulator::spawn_trace_writer(writer, 4096, emma65::emulator::OverflowPolicy::DropOnFull);
+            cpu.set_trace_callback(Some(Box::new(callback)));
+            Some(handle)
+        }
+        None => None,
+    };
+
     // Enter raw mode only if the console took the stdio transport — and only after startup has
     // fully succeeded, so no error exit above ever needs to restore the terminal first.
     let stdio_in_use = console_transport_slot.lock().is_ok_and(|slot| slot.is_none());
@@ -105,6 +120,10 @@ async fn main() -> ExitCode {
             },
             _ = tokio::signal::ctrl_c() => break,
         }
+    }
+
+    if let Some(handle) = trace_writer_handle {
+        let _ = handle.join();
     }
 
     print!("\r\n");     // canonical newline to delineate emulator output from user's shell prompt

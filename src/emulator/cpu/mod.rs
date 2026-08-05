@@ -12,7 +12,7 @@ pub mod trace;
 use crate::emulator::bus::{Bus, BusOp, InterruptController};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::ClockSpeed;
-use crate::emulator::{TraceCallback, TraceRecord};
+use crate::emulator::{TraceCallback, TraceKind, TraceRecord};
 use crate::watch::{Operand, WatchContext, WatchError, WatchEvaluator};
 use log::debug;
 use opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
@@ -254,7 +254,7 @@ impl Cpu {
         }
 
         if self.tracing {
-            self.trace_state.tick();
+            self.trace_state.begin_instruction(self.regs);
         }
 
         let pc = self.regs.pc;
@@ -313,6 +313,7 @@ impl Cpu {
                 InvalidOpcodePolicy::Nop => {
                     self.regs.pc = self.regs.pc.wrapping_add(decoded.byte_len as u16);
                     self.finish_cycle(decoded.base_cycles);
+                    self.emit_cycles_trace(decoded.base_cycles);
                     return StepResult::Executed(decoded);
                 }
                 InvalidOpcodePolicy::Error => {
@@ -324,6 +325,7 @@ impl Cpu {
         match self.execute(decoded) {
             Ok((result, cycles)) => {
                 self.finish_cycle(cycles);
+                self.emit_cycles_trace(cycles);
                 result
             }
             Err(e) => StepResult::Error(e),
@@ -879,6 +881,7 @@ impl Cpu {
         match interrupt_result {
             Ok(cycles) => {
                 self.finish_cycle(cycles);
+                self.emit_cycles_trace(cycles);
                 StepResult::Executed(self.table[0x00])
             }
             Err(e) => StepResult::Error(e),
@@ -959,13 +962,32 @@ impl Cpu {
     }
 
     fn emit_trace(&mut self, addr: u16, value: u8, op: BusOp) {
+        if self.trace_callback.is_none() {
+            return;
+        }
+        let instr_id = self.trace_state.current_instr_id();
+        if let Some(regs) = self.trace_state.take_pending_registers(instr_id)
+            && let Some(cb) = &mut self.trace_callback
+        {
+            cb.record(TraceRecord { instr_id, kind: TraceKind::Registers(regs) });
+        }
+        let kind = match op {
+            BusOp::Read => TraceKind::Read { addr, value },
+            BusOp::Write => TraceKind::Write { addr, value },
+        };
         if let Some(cb) = &mut self.trace_callback {
-            cb.record(TraceRecord {
-                timestamp_ns: self.trace_state.current_ns(),
-                addr,
-                value,
-                op,
-            });
+            cb.record(TraceRecord { instr_id, kind });
+        }
+    }
+
+    /// Emits a `Cycles` trace record for the instruction that just finished
+    /// executing, once its total cycle count (base plus any addressing-mode
+    /// or branch-taken extra cycles) is known. A no-op when no trace callback
+    /// is installed.
+    fn emit_cycles_trace(&mut self, cycles: u8) {
+        if let Some(cb) = &mut self.trace_callback {
+            let instr_id = self.trace_state.current_instr_id();
+            cb.record(TraceRecord { instr_id, kind: TraceKind::Cycles(cycles) });
         }
     }
 
@@ -2227,9 +2249,7 @@ mod tests {
         cpu.bus_read(0x0100).unwrap();
         let records = unsafe { &(*cb_ptr).0 };
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].addr, 0x0100);
-        assert_eq!(records[0].value, 0x42);
-        assert_eq!(records[0].op, BusOp::Read);
+        assert_eq!(records[0].kind, TraceKind::Read { addr: 0x0100, value: 0x42 });
     }
 
     #[test]
@@ -2238,9 +2258,7 @@ mod tests {
         cpu.bus_write(0x0200, 0xAB).unwrap();
         let records = unsafe { &(*cb_ptr).0 };
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].addr, 0x0200);
-        assert_eq!(records[0].value, 0xAB);
-        assert_eq!(records[0].op, BusOp::Write);
+        assert_eq!(records[0].kind, TraceKind::Write { addr: 0x0200, value: 0xAB });
     }
 
     #[test]
@@ -2252,26 +2270,30 @@ mod tests {
     }
 
     #[test]
-    fn trace_timestamps_group_by_instruction() {
+    fn trace_records_group_by_instr_id() {
         let (mut cpu, cb_ptr) = traced_cpu();
 
         // Simulate two instructions, each with two bus accesses.
-        cpu.trace_state.tick();
+        let regs1 = cpu.regs;
+        cpu.trace_state.begin_instruction(regs1);
         cpu.bus_write(0x0100, 0x01).unwrap();
         cpu.bus_write(0x0101, 0x02).unwrap();
 
-        cpu.trace_state.tick();
+        let regs2 = cpu.regs;
+        cpu.trace_state.begin_instruction(regs2);
         cpu.bus_write(0x0102, 0x03).unwrap();
         cpu.bus_write(0x0103, 0x04).unwrap();
 
         let records = unsafe { &(*cb_ptr).0 };
-        assert_eq!(records.len(), 4);
-        // Both accesses within the first instruction share the same timestamp.
-        assert_eq!(records[0].timestamp_ns, records[1].timestamp_ns);
-        // Both accesses within the second instruction share the same timestamp.
-        assert_eq!(records[2].timestamp_ns, records[3].timestamp_ns);
-        // The second instruction's timestamp is >= the first's.
-        assert!(records[2].timestamp_ns >= records[0].timestamp_ns);
+        // Registers, Write, Write, Registers, Write, Write.
+        assert_eq!(records.len(), 6);
+        assert!(matches!(records[0].kind, TraceKind::Registers(_)));
+        assert_eq!(records[0].instr_id, records[1].instr_id);
+        assert_eq!(records[1].instr_id, records[2].instr_id);
+        assert!(matches!(records[3].kind, TraceKind::Registers(_)));
+        assert_eq!(records[3].instr_id, records[4].instr_id);
+        assert_eq!(records[4].instr_id, records[5].instr_id);
+        assert!(records[3].instr_id > records[0].instr_id);
     }
 
     #[test]
@@ -2284,4 +2306,77 @@ mod tests {
         assert!(records.is_empty());
     }
 
+    #[test]
+    fn step_emits_registers_record_with_correct_starting_pc() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xA9, 0x55, 0x8D, 0x00, 0x03]); // LDA #$55 ; STA $0300
+
+        let cb = Box::new(CapturingCallback(Vec::new()));
+        let cb_ptr = &*cb as *const CapturingCallback as *mut CapturingCallback;
+        cpu.set_trace_callback(Some(cb));
+
+        assert!(matches!(cpu.step(None, true), StepResult::Executed(_))); // LDA
+        assert!(matches!(cpu.step(None, true), StepResult::Executed(_))); // STA
+
+        let records = unsafe { &(*cb_ptr).0 };
+        let registers_records: Vec<Registers> = records
+            .iter()
+            .filter_map(|r| match r.kind {
+                TraceKind::Registers(regs) => Some(regs),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(registers_records.len(), 2);
+        assert_eq!(registers_records[0].pc, 0x0200);
+        assert_eq!(registers_records[1].pc, 0x0202);
+    }
+
+    #[test]
+    fn step_emits_cycles_record_matching_total_cycle_count() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.regs.x = 0xFF;
+        cpu.bus.write(0x0300, 0x42).unwrap();
+        // NOP = 2 cycles; LDA $0201,X crosses a page (base 4 + 1 extra = 5 cycles).
+        write_program(&mut cpu, 0x0200, &[0xEA, 0xBD, 0x01, 0x02]);
+
+        let cb = Box::new(CapturingCallback(Vec::new()));
+        let cb_ptr = &*cb as *const CapturingCallback as *mut CapturingCallback;
+        cpu.set_trace_callback(Some(cb));
+
+        assert!(matches!(cpu.step(None, true), StepResult::Executed(_))); // NOP
+        assert!(matches!(cpu.step(None, true), StepResult::Executed(_))); // LDA $0201,X
+
+        let records = unsafe { &(*cb_ptr).0 };
+        let cycles_records: Vec<(u64, u8)> = records
+            .iter()
+            .filter_map(|r| match r.kind {
+                TraceKind::Cycles(cycles) => Some((r.instr_id, cycles)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(cycles_records, vec![(0, 2), (1, 5)]);
+
+        // The Cycles record is the last record emitted for its instruction.
+        let last_kind_per_instr: Vec<_> = records.iter().map(|r| (r.instr_id, &r.kind)).collect();
+        for &(instr_id, _) in &cycles_records {
+            let last_for_instr = last_kind_per_instr.iter().rev().find(|(id, _)| *id == instr_id).unwrap();
+            assert!(matches!(last_for_instr.1, TraceKind::Cycles(_)));
+        }
+    }
+
+    #[test]
+    fn breakpoint_halted_instruction_emits_no_trace_records() {
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xA9, 0x55]);
+        cpu.add_breakpoint(0x0200);
+
+        let cb = Box::new(CapturingCallback(Vec::new()));
+        let cb_ptr = &*cb as *const CapturingCallback as *mut CapturingCallback;
+        cpu.set_trace_callback(Some(cb));
+
+        assert!(matches!(cpu.step(None, true), StepResult::Breakpoint(0x0200)));
+
+        let records = unsafe { &(*cb_ptr).0 };
+        assert!(records.is_empty());
+    }
 }
