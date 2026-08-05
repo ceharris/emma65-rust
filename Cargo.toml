@@ -15,6 +15,10 @@ license = "MIT"
 name = "emma65"
 path = "src/bin/emulator/main.rs"
 
+[[bin]]
+name = "emma65-tracer"
+path = "src/bin/tracer/main.rs"
+
 [lib]
 name = "emma65"
 path = "src/lib.rs"
