@@ -33,6 +33,9 @@ mod stack;
 /// Terminal window: console byte-stream bridge and window visibility.
 mod terminal;
 
+/// Trace window: live-recorded execution trace, windowed reads, and window visibility.
+mod trace;
+
 /// Holds the CPU once the session is ready.
 pub struct CpuState(pub Mutex<Option<Cpu>>);
 
