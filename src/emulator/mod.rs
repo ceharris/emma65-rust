@@ -10,7 +10,7 @@ pub mod transport;
 pub mod config;
 mod session;
 
-pub use cpu::trace::{BinaryTraceWriter, TraceCallback, TraceRecord};
+pub use cpu::trace::{BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, OverflowPolicy, TraceCallback, TraceKind, TraceRecord, spawn_trace_writer};
 pub use bus::{AddressRange, Bus, BusConfig, BusOp, InterruptController, IrqSource, RomWritePolicy, SymbolTable, UnmappedPolicy};
 pub use config::{BuildError, Config, CpuVariantSpec, DeviceModule, DeviceModuleError, DeviceRegistry, DeviceSpec, InstantiationContext, RamModule, RomModule, TransportSlot, TransportSpec, TransportSpecFormat};
 pub use cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
