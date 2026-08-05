@@ -21,6 +21,7 @@ export interface AppKeyBinding {
 export const APP_KEY_BINDINGS: AppKeyBinding[] = [
   { matches: (e) => e.key === "q" && (e.ctrlKey || e.metaKey), command: "quit" },
   { matches: (e) => e.ctrlKey && e.shiftKey && e.code === "Backquote", command: "toggle_terminal_visibility" },
+  { matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyT", command: "toggle_trace_visibility" },
 ];
 
 /** Installs the app-wide key bindings above in the current window. */
