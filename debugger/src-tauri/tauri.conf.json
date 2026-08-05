@@ -26,6 +26,16 @@
         "resizable": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "label": "trace",
+        "title": "Emma65 Trace",
+        "url": "trace.html",
+        "width": 1100,
+        "height": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {

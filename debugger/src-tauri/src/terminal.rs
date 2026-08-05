@@ -59,13 +59,12 @@ pub fn write_terminal(bytes: Vec<u8>, state: State<TerminalTx>) -> Result<(), St
 
 /// Toggles the terminal window's visibility. Bound to Ctrl+Shift+` in both the
 /// main and terminal windows (see `useAppKeyBindings.ts`), so the frontend
-/// doesn't need to track visibility state itself.
+/// doesn't need to track visibility state itself. Delegates to the shared
+/// helper in `menu.rs` so the Window-menu checkbox stays in sync regardless
+/// of which path (menu click, shortcut, or this command) toggled the window.
 #[tauri::command]
-pub fn toggle_terminal_visibility(app: AppHandle) -> Result<(), String> {
-    let window = app.get_webview_window(TERMINAL_WINDOW_LABEL)
-        .ok_or_else(|| "terminal window not found".to_string())?;
-    let visible = window.is_visible().map_err(|e| e.to_string())?;
-    if visible { window.hide() } else { window.show() }.map_err(|e| e.to_string())
+pub fn toggle_terminal_visibility(app: AppHandle, window_menu: State<crate::menu::WindowMenuState>) -> Result<(), String> {
+    crate::menu::toggle_window_visibility(&app, TERMINAL_WINDOW_LABEL, &window_menu.terminal_item)
 }
 
 /// Shows the terminal window (created hidden at startup, per `tauri.conf.json`).

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use emma65::emulator::{
     BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, OverflowPolicy, TraceBusOp, TraceCallback, TraceKind,
@@ -260,10 +260,9 @@ pub fn get_trace_status(trace_state: State<TraceState>) -> TraceStatus {
 
 /// Toggles the trace window's visibility. Bound to Ctrl+Shift+T (see
 /// `useAppKeyBindings.ts`), mirroring `terminal::toggle_terminal_visibility`.
+/// Delegates to the shared helper in `menu.rs` so the Window-menu checkbox
+/// stays in sync regardless of which path toggled the window.
 #[tauri::command]
-pub fn toggle_trace_visibility(app: AppHandle) -> Result<(), String> {
-    let window =
-        app.get_webview_window(TRACE_WINDOW_LABEL).ok_or_else(|| "trace window not found".to_string())?;
-    let visible = window.is_visible().map_err(|e| e.to_string())?;
-    if visible { window.hide() } else { window.show() }.map_err(|e| e.to_string())
+pub fn toggle_trace_visibility(app: AppHandle, window_menu: State<crate::menu::WindowMenuState>) -> Result<(), String> {
+    crate::menu::toggle_window_visibility(&app, TRACE_WINDOW_LABEL, &window_menu.trace_item)
 }

@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicU16;
 use std::sync::{Arc, Mutex};
 
 use figment::{Figment, providers::{Env, Format, Toml}};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_log::{Target, TargetKind};
 use tokio::sync::oneshot;
 
@@ -35,6 +35,9 @@ mod terminal;
 
 /// Trace window: live-recorded execution trace, windowed reads, and window visibility.
 mod trace;
+
+/// Native app menu bar (File/Edit/Window/Help) and Window-menu checkbox sync.
+mod menu;
 
 /// Holds the CPU once the session is ready.
 pub struct CpuState(pub Mutex<Option<Cpu>>);
@@ -111,6 +114,30 @@ fn resolve_symbol(name: String, cpu_state: State<CpuState>) -> Option<u16> {
     cpu_state.0.lock().unwrap().as_ref()?.bus().symbol_table().address_for(&name)
 }
 
+/// Installs the shared "hide instead of close" lifecycle for a toggleable
+/// auxiliary window (Terminal, Trace): closing it via native window chrome
+/// hides it instead of destroying it, so the corresponding toggle command can
+/// still find it afterward, and `check_item`'s Window-menu checkbox is kept
+/// in sync. Also applies the Wayland/GTK decoration-hit-test workaround
+/// (tauri-apps/tauri#11856, tauri-apps/tao#1046) on every focus, since these
+/// windows can be hidden/shown repeatedly.
+fn install_toggleable_window_lifecycle(window: &WebviewWindow, check_item: tauri::menu::CheckMenuItem<tauri::Wry>) {
+    let window_for_events = window.clone();
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = window_for_events.hide();
+            menu::sync_checkbox(&check_item, false);
+        }
+        #[cfg(target_os = "linux")]
+        tauri::WindowEvent::Focused(true) => {
+            let _ = window_for_events.set_resizable(false);
+            let _ = window_for_events.set_resizable(true);
+        }
+        _ => {}
+    });
+}
+
 fn emit_status(app: &AppHandle, status: SessionStatus) {
     app.state::<SessionStatusState>().0.lock().unwrap().replace(status.clone());
     let _ = app.emit("session-status", status);
@@ -158,12 +185,28 @@ pub fn run() {
             compile_error: None,
             enabled: Vec::new(),
         })))
+        .manage(trace::TraceState(Mutex::new(trace::TraceData::new())))
+        .on_menu_event(|app, event| {
+            let state = app.state::<menu::WindowMenuState>();
+            if event.id() == state.quit_item.id() {
+                app.exit(0);
+            } else if event.id() == menu::TOGGLE_TERMINAL_ID {
+                let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);
+            } else if event.id() == menu::TOGGLE_TRACE_ID {
+                let _ = menu::toggle_window_visibility(app, trace::TRACE_WINDOW_LABEL, &state.trace_item);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             quit,
             terminal::toggle_terminal_visibility,
             get_session_status,
             terminal::write_terminal,
             terminal::terminal_ready,
+            trace::record_trace,
+            trace::stop_trace,
+            trace::get_trace_window,
+            trace::get_trace_status,
+            trace::toggle_trace_visibility,
             disassembly::run_cpu,
             disassembly::stop_cpu,
             disassembly::step_into,
@@ -199,34 +242,16 @@ pub fn run() {
             watchpoints::toggle_watchpoint,
         ])
         .setup(|app| {
+            let (app_menu, window_menu_state) = menu::build_menu(app)?;
+            app.set_menu(app_menu)?;
+
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
-                let window_for_events = terminal_window.clone();
-                terminal_window.on_window_event(move |event| match event {
-                    // The terminal window is a persistent, toggle-able auxiliary
-                    // window (see `toggle_terminal_visibility`), not a closable
-                    // one — closing it via native window chrome would otherwise
-                    // destroy it, after which the toggle command can never find
-                    // it again. Hide it instead so it can still be brought back.
-                    tauri::WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        let _ = window_for_events.hide();
-                    }
-                    // Workaround for a Wayland/GTK bug (tauri-apps/tauri#11856,
-                    // tauri-apps/tao#1046): a window's title bar buttons stop
-                    // responding to clicks every time it transitions from hidden
-                    // to shown. Toggling `resizable` off and back on forces GTK
-                    // to recompute the decoration hit-test region. Since the
-                    // terminal window can be hidden/shown repeatedly (via the
-                    // toggle above, or this same close-to-hide behavior), apply
-                    // this on every focus, not just once at startup.
-                    #[cfg(target_os = "linux")]
-                    tauri::WindowEvent::Focused(true) => {
-                        let _ = window_for_events.set_resizable(false);
-                        let _ = window_for_events.set_resizable(true);
-                    }
-                    _ => {}
-                });
+                install_toggleable_window_lifecycle(&terminal_window, window_menu_state.terminal_item.clone());
             }
+            if let Some(trace_window) = app.get_webview_window(trace::TRACE_WINDOW_LABEL) {
+                install_toggleable_window_lifecycle(&trace_window, window_menu_state.trace_item.clone());
+            }
+            app.manage(window_menu_state);
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
