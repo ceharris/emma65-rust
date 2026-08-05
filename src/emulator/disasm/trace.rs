@@ -24,7 +24,8 @@ struct Pending {
 /// address is the next sequential byte after the opcode; this naturally
 /// excludes effective-address/pointer-table reads and instruction data reads,
 /// since those don't land on consecutive addresses starting at the opcode.
-/// Writes are never part of an opcode/operand fetch and are always ignored.
+/// Writes and `Cycles` records are never part of an opcode/operand fetch and
+/// are always ignored.
 pub struct TraceDisassembler {
     disassembler: Disassembler,
     symbols: SymbolTable,
@@ -56,7 +57,7 @@ impl TraceDisassembler {
                 None
             }
             TraceKind::Read { addr, value } => self.feed_read(rec.instr_id, addr, value),
-            TraceKind::Write { .. } => None,
+            TraceKind::Write { .. } | TraceKind::Cycles(_) => None,
         }
     }
 

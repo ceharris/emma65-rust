@@ -313,6 +313,7 @@ impl Cpu {
                 InvalidOpcodePolicy::Nop => {
                     self.regs.pc = self.regs.pc.wrapping_add(decoded.byte_len as u16);
                     self.finish_cycle(decoded.base_cycles);
+                    self.emit_cycles_trace(decoded.base_cycles);
                     return StepResult::Executed(decoded);
                 }
                 InvalidOpcodePolicy::Error => {
@@ -324,6 +325,7 @@ impl Cpu {
         match self.execute(decoded) {
             Ok((result, cycles)) => {
                 self.finish_cycle(cycles);
+                self.emit_cycles_trace(cycles);
                 result
             }
             Err(e) => StepResult::Error(e),
@@ -879,6 +881,7 @@ impl Cpu {
         match interrupt_result {
             Ok(cycles) => {
                 self.finish_cycle(cycles);
+                self.emit_cycles_trace(cycles);
                 StepResult::Executed(self.table[0x00])
             }
             Err(e) => StepResult::Error(e),
@@ -974,6 +977,17 @@ impl Cpu {
         };
         if let Some(cb) = &mut self.trace_callback {
             cb.record(TraceRecord { instr_id, kind });
+        }
+    }
+
+    /// Emits a `Cycles` trace record for the instruction that just finished
+    /// executing, once its total cycle count (base plus any addressing-mode
+    /// or branch-taken extra cycles) is known. A no-op when no trace callback
+    /// is installed.
+    fn emit_cycles_trace(&mut self, cycles: u8) {
+        if let Some(cb) = &mut self.trace_callback {
+            let instr_id = self.trace_state.current_instr_id();
+            cb.record(TraceRecord { instr_id, kind: TraceKind::Cycles(cycles) });
         }
     }
 
@@ -2315,6 +2329,39 @@ mod tests {
         assert_eq!(registers_records.len(), 2);
         assert_eq!(registers_records[0].pc, 0x0200);
         assert_eq!(registers_records[1].pc, 0x0202);
+    }
+
+    #[test]
+    fn step_emits_cycles_record_matching_total_cycle_count() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.regs.x = 0xFF;
+        cpu.bus.write(0x0300, 0x42).unwrap();
+        // NOP = 2 cycles; LDA $0201,X crosses a page (base 4 + 1 extra = 5 cycles).
+        write_program(&mut cpu, 0x0200, &[0xEA, 0xBD, 0x01, 0x02]);
+
+        let cb = Box::new(CapturingCallback(Vec::new()));
+        let cb_ptr = &*cb as *const CapturingCallback as *mut CapturingCallback;
+        cpu.set_trace_callback(Some(cb));
+
+        assert!(matches!(cpu.step(None, true), StepResult::Executed(_))); // NOP
+        assert!(matches!(cpu.step(None, true), StepResult::Executed(_))); // LDA $0201,X
+
+        let records = unsafe { &(*cb_ptr).0 };
+        let cycles_records: Vec<(u64, u8)> = records
+            .iter()
+            .filter_map(|r| match r.kind {
+                TraceKind::Cycles(cycles) => Some((r.instr_id, cycles)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(cycles_records, vec![(0, 2), (1, 5)]);
+
+        // The Cycles record is the last record emitted for its instruction.
+        let last_kind_per_instr: Vec<_> = records.iter().map(|r| (r.instr_id, &r.kind)).collect();
+        for &(instr_id, _) in &cycles_records {
+            let last_for_instr = last_kind_per_instr.iter().rev().find(|(id, _)| *id == instr_id).unwrap();
+            assert!(matches!(last_for_instr.1, TraceKind::Cycles(_)));
+        }
     }
 
     #[test]

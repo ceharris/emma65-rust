@@ -15,6 +15,7 @@ const RECORD_LEN: usize = 16;
 const TAG_REGISTERS: u8 = 0;
 const TAG_READ: u8 = 1;
 const TAG_WRITE: u8 = 2;
+const TAG_CYCLES: u8 = 3;
 
 /// The kind of event a [`TraceRecord`] carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,11 @@ pub enum TraceKind {
         /// The byte value written.
         value: u8,
     },
+    /// The total clock cycle count for the instruction, known only once it
+    /// has finished executing (base cycles plus any addressing-mode or
+    /// branch-taken extra cycles). Emitted once per instruction, after its
+    /// last `Read`/`Write` record.
+    Cycles(u8),
 }
 
 /// A single recorded trace event: either a pre-instruction register snapshot
@@ -72,6 +78,10 @@ impl TraceRecord {
                 buf[9..11].copy_from_slice(&addr.to_le_bytes());
                 buf[11] = value;
             }
+            TraceKind::Cycles(cycles) => {
+                buf[8] = TAG_CYCLES;
+                buf[9] = cycles;
+            }
         }
         buf
     }
@@ -89,6 +99,7 @@ impl TraceRecord {
             }),
             TAG_READ => TraceKind::Read { addr: u16::from_le_bytes([buf[9], buf[10]]), value: buf[11] },
             TAG_WRITE => TraceKind::Write { addr: u16::from_le_bytes([buf[9], buf[10]]), value: buf[11] },
+            TAG_CYCLES => TraceKind::Cycles(buf[9]),
             tag => {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown trace record tag: {tag}")));
             }
@@ -110,10 +121,11 @@ pub trait TraceCallback: Send {
 /// version, 3 reserved zero bytes) written once at construction, followed by
 /// fixed-width 16-byte records, little-endian:
 /// - Bytes 0–7: `instr_id` (u64)
-/// - Byte 8:    tag (0 = `Registers`, 1 = `Read`, 2 = `Write`)
+/// - Byte 8:    tag (0 = `Registers`, 1 = `Read`, 2 = `Write`, 3 = `Cycles`)
 /// - Bytes 9–15: tag-dependent payload, zero-padded to 7 bytes
 ///   - `Registers`: `a`, `x`, `y`, `s` (one byte each), `pc` (u16), `p` (u8)
 ///   - `Read`/`Write`: `addr` (u16), `value` (u8), then 4 padding bytes
+///   - `Cycles`: cycle count (u8), then 6 padding bytes
 pub struct BinaryTraceWriter<W: Write> {
     writer: BufWriter<W>,
 }
@@ -357,6 +369,40 @@ mod tests {
         assert_eq!(rec2[8], TAG_WRITE);
         assert_eq!(&rec2[9..11], &0x5678u16.to_le_bytes());
         assert_eq!(rec2[11], 0xCD);
+    }
+
+    #[test]
+    fn binary_writer_cycles_record_layout() {
+        let buf = {
+            let mut buf = Vec::new();
+            let mut writer = BinaryTraceWriter::new(&mut buf);
+            writer.record(TraceRecord { instr_id: 9, kind: TraceKind::Cycles(4) });
+            writer.flush().unwrap();
+            drop(writer);
+            buf
+        };
+
+        let rec = &buf[HEADER_LEN..HEADER_LEN + RECORD_LEN];
+        assert_eq!(&rec[0..8], &9u64.to_le_bytes());
+        assert_eq!(rec[8], TAG_CYCLES);
+        assert_eq!(rec[9], 4);
+        assert_eq!(&rec[10..16], &[0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn cycles_record_roundtrips_through_reader() {
+        let buf = {
+            let mut buf = Vec::new();
+            let mut writer = BinaryTraceWriter::new(&mut buf);
+            writer.record(TraceRecord { instr_id: 5, kind: TraceKind::Cycles(7) });
+            writer.flush().unwrap();
+            drop(writer);
+            buf
+        };
+
+        let reader = BinaryTraceReader::new(buf.as_slice()).unwrap();
+        let records: Vec<TraceRecord> = reader.collect::<io::Result<Vec<_>>>().unwrap();
+        assert_eq!(records, vec![TraceRecord { instr_id: 5, kind: TraceKind::Cycles(7) }]);
     }
 
     #[test]
