@@ -52,6 +52,28 @@ Project Structure
   runtime handles DAP I/O and event emission, exactly as `debugger/src-tauri`
   already separates CPU execution from Tauri's IPC.
 
+### Development & UAT Workflow
+
+`cargo tauri dev` today gives one-command UAT with hot-reloading frontend
+and fast Rust rebuild-and-relaunch. There is no single equivalent for the
+VS Code split — the loop differs by which of the three areas changed, and
+one of them (the adapter) has no hot reload at all:
+
+| Area | UAT loop |
+|------|----------|
+| `vscode/extension` chrome (commands, menus, activation) | Open `vscode/extension` as its own VS Code window and press `F5`. This launches a second, separate window — the *Extension Development Host* — with the extension loaded as a real user would see it, plus a debugger attached from the first window (breakpoints in the extension's TS code hit there). Contributed commands show up in that second window's Command Palette; interact with them like a user would. With `tsc --watch` running, `Ctrl+R` in the second window ("Developer: Reload Window") picks up new compiled output without a full F5 restart. |
+| `vscode/extension` webviews (trace, watchpoints) | Same pattern `debugger/frontend` already uses: point the webview's HTML at a local Vite dev server when a dev flag is set, so edits hot-reload inside the webview panel with no window reload needed. |
+| `vscode/adapter` (Rust DAP server) | No hot reload. `cargo build -p emma65-vscode-adapter`, then stop/restart the debug *session* (not the whole Extension Development Host) — VS Code respawns the adapter process fresh each time. |
+| Core `src/emulator` changes | Same rebuild-and-restart as adapter changes, since `vscode/adapter` depends on it as a path dep — no separate step. |
+| Terminal (`Pseudoterminal`) | Exercised directly in the Extension Development Host's own integrated terminal tab — simpler than today, since there's no separate terminal window to show/hide. |
+
+The real gap vs. today: DAP-facing changes (stepping, breakpoints,
+registers, memory — most of stories 2–9) require a `cargo build` plus a
+debug-session restart every time, where `cargo tauri dev` gave near-instant
+Rust iteration. Set up `vscode/extension/.vscode/launch.json` with a
+`cargo build` pre-launch task as part of story 1, so the loop is at least
+"save → F5 → done" from day one.
+
 ---
 
 Stories
