@@ -116,6 +116,24 @@ pub struct TraceRow {
     pub bus_ops: Vec<TraceBusOp>,
 }
 
+impl TraceRow {
+    /// Returns `bus_ops` with the opcode/operand fetch reads excluded.
+    ///
+    /// Fetch reads are always the first N reads in `bus_ops` (N = `line.raw_bytes.len()`,
+    /// the instruction's decoded byte length); everything after that is a genuine bus
+    /// operation worth showing.
+    pub fn non_fetch_bus_ops(&self) -> impl Iterator<Item = &TraceBusOp> {
+        let mut fetch_remaining = self.line.raw_bytes.len();
+        self.bus_ops.iter().filter(move |op| match op {
+            TraceBusOp::Read { .. } if fetch_remaining > 0 => {
+                fetch_remaining -= 1;
+                false
+            }
+            _ => true,
+        })
+    }
+}
+
 /// The trace records collected so far for one in-progress row.
 struct PendingRow {
     instr_id: u64,

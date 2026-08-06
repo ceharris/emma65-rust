@@ -10,6 +10,7 @@ interface TraceBusOpDto {
   addr: number;
   op: string;
   value: number;
+  comment: string;
 }
 
 interface TraceRowDto {
@@ -448,13 +449,26 @@ export default function TracePanel() {
           selectedRow.bus_ops.length === 0 ? (
             <span className="trace-detail-empty">No bus operations recorded for this instruction.</span>
           ) : (
-            selectedRow.bus_ops.map((op, i) => (
-              <div key={i} className="trace-detail-row">
-                <span className="trace-detail-addr">{formatAddr(op.addr)}</span>
-                <span className="trace-detail-op">{op.op}</span>
-                <span className="trace-detail-value">{formatByte(op.value)}</span>
-              </div>
-            ))
+            <table className="trace-detail-table">
+              <thead>
+                <tr>
+                  <th className="trace-detail-addr">Address</th>
+                  <th className="trace-detail-op">Operation</th>
+                  <th className="trace-detail-value">Data</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedRow.bus_ops.map((op, i) => (
+                  <tr key={i} className="trace-detail-row">
+                    <td className="trace-detail-addr">{formatAddr(op.addr)}</td>
+                    <td className="trace-detail-op">{op.op}</td>
+                    <td className="trace-detail-value">
+                      {formatByte(op.value)} <span className="trace-detail-comment">{op.comment}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )
         ) : (
           <span className="trace-detail-empty">Select a row to see its bus operations.</span>

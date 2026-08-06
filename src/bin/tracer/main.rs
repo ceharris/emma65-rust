@@ -118,15 +118,8 @@ fn emit(row: TraceRow, verbose: bool, out: &mut dyn Write) -> io::Result<()> {
     writeln!(out, "{}", format::instruction_row(row.instr_id + 1, row.cycles, &row.regs, &row.line))?;
 
     if verbose {
-        // Opcode/operand fetch reads are always the first N reads for an
-        // instruction (N = the number of bytes the instruction decoded to);
-        // everything else is a genuine bus op worth showing.
-        let mut fetch_remaining = row.line.raw_bytes.len();
-        for op in &row.bus_ops {
+        for op in row.non_fetch_bus_ops() {
             match *op {
-                TraceBusOp::Read { .. } if fetch_remaining > 0 => {
-                    fetch_remaining -= 1;
-                }
                 TraceBusOp::Read { addr, value } => {
                     writeln!(out, "{}", format::bus_op_row(addr, "RD", value))?;
                 }

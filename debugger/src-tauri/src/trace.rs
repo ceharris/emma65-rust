@@ -8,8 +8,8 @@ use std::thread::JoinHandle;
 use tauri::{AppHandle, State};
 
 use emma65::emulator::{
-    BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, OverflowPolicy, TraceBusOp, TraceCallback, TraceKind,
-    TraceRecord, TraceRowAssembler, spawn_trace_writer,
+    BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, Disassembler, OverflowPolicy, TraceBusOp,
+    TraceCallback, TraceKind, TraceRecord, TraceRowAssembler, spawn_trace_writer,
 };
 
 use crate::CpuState;
@@ -79,10 +79,13 @@ impl TraceCallback for RowIndexingTraceCallback {
 pub struct TraceBusOpDto {
     /// The bus address accessed.
     pub addr: u16,
-    /// `"RD"` or `"WR"`.
+    /// `"Read"` or `"Write"`.
     pub op: String,
     /// The byte value read or written.
     pub value: u8,
+    /// Alternate representations of `value` (decimal, ASCII/signed), the same
+    /// text `emma65-tracer` shows alongside a bus op's hex value.
+    pub comment: String,
 }
 
 /// One reconstructed trace row returned to the frontend.
@@ -234,6 +237,25 @@ pub fn get_trace_window(
         }
         let rec = item.map_err(|e| e.to_string())?;
         if let Some(row) = assembler.feed(&rec) {
+            // Computed up front: it borrows `row` as a whole via `non_fetch_bus_ops(&self)`,
+            // which the field-by-field moves out of `row.line` below would otherwise block.
+            let bus_ops = row
+                .non_fetch_bus_ops()
+                .map(|op| match *op {
+                    TraceBusOp::Read { addr, value } => TraceBusOpDto {
+                        addr,
+                        op: "Read".to_string(),
+                        value,
+                        comment: Disassembler::immediate_mode_comment(value),
+                    },
+                    TraceBusOp::Write { addr, value } => TraceBusOpDto {
+                        addr,
+                        op: "Write".to_string(),
+                        value,
+                        comment: Disassembler::immediate_mode_comment(value),
+                    },
+                })
+                .collect();
             rows.push(TraceRowDto {
                 seq: row.instr_id + 1,
                 addr: row.line.addr,
@@ -250,14 +272,7 @@ pub fn get_trace_window(
                 s: row.regs.s,
                 p: row.regs.p.to_byte(),
                 pc: row.regs.pc,
-                bus_ops: row
-                    .bus_ops
-                    .into_iter()
-                    .map(|op| match op {
-                        TraceBusOp::Read { addr, value } => TraceBusOpDto { addr, op: "RD".to_string(), value },
-                        TraceBusOp::Write { addr, value } => TraceBusOpDto { addr, op: "WR".to_string(), value },
-                    })
-                    .collect(),
+                bus_ops,
             });
         }
     }

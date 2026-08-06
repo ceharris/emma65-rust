@@ -291,7 +291,7 @@
   flex: 0 0 140px;
   overflow-y: auto;
   border-top: 1px solid var(--color-border);
-  background-color: var(--color-bg-alt);
+  background-color: var(--color-bg);
   font-size: var(--font-size-mono);
   line-height: 1.5;
   padding: 4px 0;
@@ -305,24 +305,44 @@
   font-size: var(--font-size-btn);
 }
 
-.trace-detail-row {
-  display: flex;
-  gap: 8px;
-  padding: 0 10px;
+.trace-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+
+  th {
+    text-align: left;
+    padding: 0 10px 2px;
+    color: var(--color-muted);
+    background-color: var(--color-bg-alt);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-btn);
+    font-weight: bold;
+  }
+}
+
+.trace-detail-row:hover {
+  background-color: var(--color-bg-hover);
 }
 
 .trace-detail-addr {
-  flex: 0 0 4ch;
+  width: 4ch;
+  padding: 0 8px 0 10px;
   color: var(--color-muted);
 }
 
 .trace-detail-op {
-  flex: 0 0 3ch;
+  width: 6ch;
+  padding: 0 8px;
   color: var(--color-directive);
 }
 
 .trace-detail-value {
+  padding: 0 10px;
   color: var(--color-string);
+}
+
+.trace-detail-comment {
+  color: var(--color-muted);
 }
 
 // --- error dialog ---
