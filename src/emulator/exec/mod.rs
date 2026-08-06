@@ -293,7 +293,9 @@ impl RunHandle {
 /// Use [`step_over_breakpoint`] to advance past the breakpoint at the current PC without 
 /// disabling it.
 pub fn step_into(cpu: &mut Cpu) -> StepResult {
-    cpu.step(None, true)
+    let result = cpu.step(None, true);
+    cpu.flush_trace();
+    result
 }
 
 /// Like [`step_into`], but skips the breakpoint and watch check at `skip_pc`.
@@ -302,7 +304,9 @@ pub fn step_into(cpu: &mut Cpu) -> StepResult {
 /// watch trigger) and needs to advance past it without requiring the breakpoint to be
 /// disabled first. All other addresses are checked normally.
 pub fn step_over_breakpoint(cpu: &mut Cpu, skip_pc: u16) -> StepResult {
-    cpu.step(Some(skip_pc), true)
+    let result = cpu.step(Some(skip_pc), true);
+    cpu.flush_trace();
+    result
 }
 
 /// Executes one logical step, treating JSR as atomic.
@@ -353,17 +357,22 @@ pub fn step_over_subroutine(
     let mut steps = 0u32;
     let start_cycles = cpu.cycles();
     let start_timestamp = Instant::now();
+    // Steps directly via `cpu.step()` rather than `step_into`/`step_over_breakpoint`
+    // (which each flush the trace stream on their own): this loop may execute many
+    // instructions, and the trace stream only needs to be flushed once, when this
+    // function itself returns.
     let result = loop {
         if *stop_rx.borrow() {
             if !already_set { cpu.remove_breakpoint(target); }
+            cpu.flush_trace();
             return None;
         }
         drain_interrupt_commands(cpu, cmd_rx);
         let res = if first {
             first = false;
-            step_over_breakpoint(cpu, pc)
+            cpu.step(Some(pc), true)
         } else {
-            step_into(cpu)
+            cpu.step(None, true)
         };
         steps += 1;
         if let Some(tx) = live_tx.filter(|_| steps.is_multiple_of(BATCH_SIZE)) {
@@ -387,7 +396,7 @@ pub fn step_over_subroutine(
                     break StepResult::Breakpoint(target);
                 }
                 cpu.remove_breakpoint(target);
-                match step_into(cpu) {
+                match cpu.step(None, true) {
                     StepResult::Executed(op) => break StepResult::Executed(op),
                     other => break other,
                 }
@@ -399,6 +408,7 @@ pub fn step_over_subroutine(
     if !already_set {
         cpu.remove_breakpoint(target);
     }
+    cpu.flush_trace();
     Some(result)
 }
 
@@ -435,17 +445,22 @@ pub fn step_return(
     let mut steps = 0u32;
     let start_cycles = cpu.cycles();
     let start_timestamp = Instant::now();
+    // Steps directly via `cpu.step()` rather than `step_into`/`step_over_breakpoint`
+    // (which each flush the trace stream on their own): this loop may execute many
+    // instructions, and the trace stream only needs to be flushed once, when this
+    // function itself returns.
     loop {
         if *stop_rx.borrow() {
+            cpu.flush_trace();
             return None;
         }
         drain_interrupt_commands(cpu, cmd_rx);
         let pc = cpu.registers().pc;
         let res = if first {
             first = false;
-            step_over_breakpoint(cpu, pc)
+            cpu.step(Some(pc), true)
         } else {
-            step_into(cpu)
+            cpu.step(None, true)
         };
         steps += 1;
         if let Some(tx) = live_tx.filter(|_| steps.is_multiple_of(BATCH_SIZE)) {
@@ -455,10 +470,14 @@ pub fn step_return(
             StepResult::Executed(op)
                 if (cpu.registers().s.wrapping_sub(initial_s) as i8) > 0 =>
             {
+                cpu.flush_trace();
                 return Some(StepResult::Executed(op));
             }
             StepResult::Executed(_) => {}
-            other => return Some(other),
+            other => {
+                cpu.flush_trace();
+                return Some(other);
+            }
         }
     }
 }
@@ -573,6 +592,11 @@ fn run_loop(
             is_valid: true,
         })
     });
+
+    // Flush once here, rather than after every instruction in the loop above:
+    // this is the point at which the caller awaiting `RunHandle` resumes, and the
+    // trace stream only needs to reflect this run's instructions by then.
+    cpu.flush_trace();
 
     let _ = result_tx.send(step_result);
     let _ = cpu_tx.send(cpu);
