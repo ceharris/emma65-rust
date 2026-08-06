@@ -234,6 +234,15 @@ pub fn get_trace_window(
         }
         let rec = item.map_err(|e| e.to_string())?;
         if let Some(row) = assembler.feed(&rec) {
+            // Computed up front: it borrows `row` as a whole via `non_fetch_bus_ops(&self)`,
+            // which the field-by-field moves out of `row.line` below would otherwise block.
+            let bus_ops = row
+                .non_fetch_bus_ops()
+                .map(|op| match *op {
+                    TraceBusOp::Read { addr, value } => TraceBusOpDto { addr, op: "Read".to_string(), value },
+                    TraceBusOp::Write { addr, value } => TraceBusOpDto { addr, op: "Write".to_string(), value },
+                })
+                .collect();
             rows.push(TraceRowDto {
                 seq: row.instr_id + 1,
                 addr: row.line.addr,
@@ -250,14 +259,7 @@ pub fn get_trace_window(
                 s: row.regs.s,
                 p: row.regs.p.to_byte(),
                 pc: row.regs.pc,
-                bus_ops: row
-                    .bus_ops
-                    .into_iter()
-                    .map(|op| match op {
-                        TraceBusOp::Read { addr, value } => TraceBusOpDto { addr, op: "Read".to_string(), value },
-                        TraceBusOp::Write { addr, value } => TraceBusOpDto { addr, op: "Write".to_string(), value },
-                    })
-                    .collect(),
+                bus_ops,
             });
         }
     }
