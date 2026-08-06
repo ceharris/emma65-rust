@@ -43,12 +43,8 @@
   }
 }
 
-// Resting state is neutral rather than danger-red: red on an idle button
-// reads as "already recording", not "click to start". It only turns red
-// (matching a hardware REC light) once a recording is actually in progress
-// — by then the button is also disabled, since Stop is the only way out.
 .trace-record-btn {
-  color: var(--color-fg);
+  color: var(--color-danger-bg);
 
   &.recording {
     color: var(--color-danger);
@@ -112,16 +108,24 @@
 
 // The fetched window (VIEWPORT_ROWS) is sized for a generously tall window;
 // on a shorter one, or once label rows add extra height, its table can be
-// taller than this box. `justify-content: flex-end` anchors it to the
-// bottom so the newest rows (added at the end of the table) stay visible,
-// clipping older rows at the top instead — the trace equivalent of a log
-// view auto-scrolled to the bottom.
+// taller than this box. Rows lay out top-down as usual (so a near-empty
+// table fills from the top, not the bottom); TracePanel keeps the newest
+// row in view by setting `scrollTop` on this element whenever rows change.
+// Needs a real `auto` scroll container for that: `overflow: hidden` doesn't
+// reliably honor programmatic scrollTop in the WebKitGTK webview this app
+// runs in on Linux, so a burst of rows (e.g. Step Over across a loop) would
+// leave the view stuck at the top instead of scrolled to the newest row.
+// The native scrollbar this introduces is hidden — the panel's own custom
+// track+thumb (below) and onWheel handler already cover that affordance.
 .trace-log-body {
   flex: 1 1 auto;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 // Custom scrollbar: the log window is fetched from the backend rather than
