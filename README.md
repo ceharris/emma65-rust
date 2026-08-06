@@ -219,141 +219,6 @@ let bus = Bus::config()
 Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
 `StepResult::Error` so the host application can decide how to respond.
 
-#### Virtual I/O Devices
-
-Ten built-in devices implement the `IoDevice` trait. Seven — Console, R6551,
-Mc6850, Via6522, Mc6840, LedMatrix, and Lfsr16 — are register-window devices
-that can be mapped into any address range on the bus; each integrates with
-the interrupt controller via `irq_active()` and `take_nmi()`, and, where it
-exchanges data with the outside world, with the transport system for
-byte-stream I/O. The other three — Finch, Phoebe, and Vireo — are complete
-bank-switched memory subsystems that occupy the entire 64 KB address space in
-place of separate RAM/ROM regions; see
-[Bank-Switched Memory Modules](#bank-switched-memory-modules) below.
-
-##### Console (`Console`)
-
-A simple polling console device for byte-stream I/O:
-
-- Input buffering via a 64 kilobyte ring buffer
-- Two addressable registers: data input/output (offset 0) and data
-  latch (offset 1)
-- The data latch register latches an incoming byte in a single read, providing
-  a non-blocking one-byte look-ahead and making it easy to write polling loops
-  without separate status and data registers
-- Support for configuring a break key code (e.g. ASCII Ctrl+C) which, when
-  recognized in input from the transport, drains the input buffer, latches
-  the break key code, and asserts the CPU's IRQ signal
-- Reading the data or latch register clears interrupt status. Writing the
-  break key code simulates break key input under program control. Writing any
-  other value to the latch clears interrupt status, drains the input
-  buffer, and stores the value in the latch register for subsequent read
-  (useful for simulating input under program control).
-- Designed as the backend for the debugger's built-in terminal emulator
-
-##### 6522 Versatile Interface Adapter (`Via6522`)
-
-A comprehensive implementation of the WDC 65C22 Versatile Interface 
-Adapter (VIA):
-
-- All 16 addressable registers (offsets `$0`–`$F`)
-- Two independent 8-bit I/O ports (A and B), each with a data direction
-  register
-- All handshaking and latching modes fully supported
-- CA1, CA2, CB1, CB2 control lines with configurable edge and level triggering
-  via PCR
-- Timer 1 (one-shot or free-run, with optional PB7 square-wave output) and
-  Timer 2
-  (one-shot or pulse counting)
-- Shift register with seven configurable modes (input or output; T2, PHI2, or
-  external clock)
-- Full IFR/IER interrupt flag and enable registers with independent masking
-  per source
-
-The VIA uses a GPIO communication protocol over any attached `Transport` to
-exchange port state and control signal transitions with real or emulated
-peripherals. On connection the VIA sends a full state dump so the 
-peripheral starts with an accurate picture of all pins and control lines.
-
-##### MC6840 Programmable Timer Module (`Mc6840`)
-
-A comprehensive implementation of the Motorola MC6840 Programmable Timer 
-Module (PTM).
-
-- Three independent timers supporting continuous or single-shot 
-  generation modes as well as frequency/period or pulse width measurement 
-  modes
-- Flexible transport options allowing virtual peripheral connection via
-  common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket.
-- Support for external gate and clock inputs and timer output
-
-The PTM uses a communication protocol over any attached `Transport` to
-exchange port state and control signal transitions with real or emulated
-peripherals. On connection, the PTM sends a full state dump so the
-peripheral starts with an accurate picture of all pins and control lines.
-
-##### MC6850 Asynchronous Communications Adapter (`Mc6850`)
-
-An comprehensive implementation of the Motorola MC6850 Asynchronous 
-Communications Interface Adapter (ACIA):
-
-- Two addressable registers: status/control and RX/TX data
-- RDRF and TDRE status with IRQ support for both receive and transmit
-- Master reset via control register bits
-- TX is immediate: bytes are forwarded to the transport on write; TDRE is
-  restored on the next CPU tick 
-
-Flexible transport options allowing virtual peripheral connection via
-common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
-
-##### R6551 Asynchronous Communication Adapter (`R6551`)
-
-An implementation of the Rockwell 6551 Asynchronous Communications Interface
-Adapter (ACIA):
-
-- Four addressable registers: RX data, TX data, status, and command/control
-- RDRF (Receive Data Register Full) and TDRE (Transmit Data Register Empty)
-  status bits
-- Interrupt-driven I/O with separate RX and TX interrupt enables
-- Baud rate selection from the control register; external-clock mode polls the
-  transport on every CPU tick for maximum responsiveness
-- Hardware bug–compatible mode (`R6551::with_tdre_bug()`) keeps TDRE
-  permanently set, matching the behavior of the WDC 65C51 variant for software
-  that uses timed delays rather than TDRE polling
-
-Flexible transport options allowing virtual peripheral connection via
-common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
-
-##### RGB LED Matrix Display Adapter (`LedMatrix`)
-
-A parallel-bus adapter for an RGB LED matrix display managed by its own
-microcontroller:
-
-- 8 addressable registers: pixel X/Y, fill width/height, a 256-entry color
-  palette index, interrupt flag/enable registers, and a command/data register
-- Double-buffered: all drawing commands (set pixel, fill rectangle, blit
-  image, palette load, buffer swap) target an off-screen buffer that is
-  atomically exchanged with the visible one
-- 256-color palette using 16-bit RGB565 entries, organized like the Xterm
-  256-color palette (16 named colors, a 6×6×6 color cube, and a 24-level
-  grayscale ramp) by default
-- IFR/IER interrupt flag and enable registers signal display status (e.g.
-  command-ready) back to the CPU
-
-The display uses a transport to exchange commands and status with a real or
-emulated display peripheral.
-
-##### 16-bit Galois LFSR (`Lfsr16`)
-
-A memory-mapped pseudo-random number generator based on a 16-bit Galois
-linear-feedback shift register (default tap mask `0xB400`, a maximal-length
-65535-state sequence):
-
-- 2 addressable registers exposing the current LFSR state
-- **Continuous** mode advances the register automatically as part of normal
-  execution; **step** mode advances only when explicitly clocked, for
-  reproducible pseudo-random sequences under program control
-
 #### Bank-Switched Memory Modules
 
 Finch, Phoebe, and Vireo are complete memory subsystems — RAM, ROM, and a
@@ -447,6 +312,142 @@ does not slow down execution. Two tools consume these traces:
 - The standalone `emma65-tracer` binary decodes a previously recorded trace
   file into a disassembly listing, optionally annotated with symbols from a
   VICE label file and per-instruction bus operation detail
+
+## I/O Devices
+
+Ten built-in devices implement the `IoDevice` trait. Seven — Console, R6551,
+Mc6850, Via6522, Mc6840, LedMatrix, and Lfsr16 — are register-window devices
+that can be mapped into any address range on the bus; each integrates with
+the interrupt controller via `irq_active()` and `take_nmi()`, and, where it
+exchanges data with the outside world, with the transport system for
+byte-stream I/O. The other three — Finch, Phoebe, and Vireo — are complete
+bank-switched memory subsystems that occupy the entire 64 KB address space in
+place of separate RAM/ROM regions; see
+[Bank-Switched Memory Modules](#bank-switched-memory-modules), described
+earlier under [The Emulator Core](#the-emulator-core).
+
+### Console (`Console`)
+
+A simple polling console device for byte-stream I/O:
+
+- Input buffering via a 64 kilobyte ring buffer
+- Two addressable registers: data input/output (offset 0) and data
+  latch (offset 1)
+- The data latch register latches an incoming byte in a single read, providing
+  a non-blocking one-byte look-ahead and making it easy to write polling loops
+  without separate status and data registers
+- Support for configuring a break key code (e.g. ASCII Ctrl+C) which, when
+  recognized in input from the transport, drains the input buffer, latches
+  the break key code, and asserts the CPU's IRQ signal
+- Reading the data or latch register clears interrupt status. Writing the
+  break key code simulates break key input under program control. Writing any
+  other value to the latch clears interrupt status, drains the input
+  buffer, and stores the value in the latch register for subsequent read
+  (useful for simulating input under program control).
+- Designed as the backend for the debugger's built-in terminal emulator
+
+### 6522 Versatile Interface Adapter (`Via6522`)
+
+A comprehensive implementation of the WDC 65C22 Versatile Interface 
+Adapter (VIA):
+
+- All 16 addressable registers (offsets `$0`–`$F`)
+- Two independent 8-bit I/O ports (A and B), each with a data direction
+  register
+- All handshaking and latching modes fully supported
+- CA1, CA2, CB1, CB2 control lines with configurable edge and level triggering
+  via PCR
+- Timer 1 (one-shot or free-run, with optional PB7 square-wave output) and
+  Timer 2
+  (one-shot or pulse counting)
+- Shift register with seven configurable modes (input or output; T2, PHI2, or
+  external clock)
+- Full IFR/IER interrupt flag and enable registers with independent masking
+  per source
+
+The VIA uses a GPIO communication protocol over any attached `Transport` to
+exchange port state and control signal transitions with real or emulated
+peripherals. On connection the VIA sends a full state dump so the 
+peripheral starts with an accurate picture of all pins and control lines.
+
+### MC6840 Programmable Timer Module (`Mc6840`)
+
+A comprehensive implementation of the Motorola MC6840 Programmable Timer 
+Module (PTM).
+
+- Three independent timers supporting continuous or single-shot 
+  generation modes as well as frequency/period or pulse width measurement 
+  modes
+- Flexible transport options allowing virtual peripheral connection via
+  common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket.
+- Support for external gate and clock inputs and timer output
+
+The PTM uses a communication protocol over any attached `Transport` to
+exchange port state and control signal transitions with real or emulated
+peripherals. On connection, the PTM sends a full state dump so the
+peripheral starts with an accurate picture of all pins and control lines.
+
+### MC6850 Asynchronous Communications Adapter (`Mc6850`)
+
+An comprehensive implementation of the Motorola MC6850 Asynchronous 
+Communications Interface Adapter (ACIA):
+
+- Two addressable registers: status/control and RX/TX data
+- RDRF and TDRE status with IRQ support for both receive and transmit
+- Master reset via control register bits
+- TX is immediate: bytes are forwarded to the transport on write; TDRE is
+  restored on the next CPU tick 
+
+Flexible transport options allowing virtual peripheral connection via
+common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
+
+### R6551 Asynchronous Communication Adapter (`R6551`)
+
+An implementation of the Rockwell 6551 Asynchronous Communications Interface
+Adapter (ACIA):
+
+- Four addressable registers: RX data, TX data, status, and command/control
+- RDRF (Receive Data Register Full) and TDRE (Transmit Data Register Empty)
+  status bits
+- Interrupt-driven I/O with separate RX and TX interrupt enables
+- Baud rate selection from the control register; external-clock mode polls the
+  transport on every CPU tick for maximum responsiveness
+- Hardware bug–compatible mode (`R6551::with_tdre_bug()`) keeps TDRE
+  permanently set, matching the behavior of the WDC 65C51 variant for software
+  that uses timed delays rather than TDRE polling
+
+Flexible transport options allowing virtual peripheral connection via
+common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
+
+### RGB LED Matrix Display Adapter (`LedMatrix`)
+
+A parallel-bus adapter for an RGB LED matrix display managed by its own
+microcontroller:
+
+- 8 addressable registers: pixel X/Y, fill width/height, a 256-entry color
+  palette index, interrupt flag/enable registers, and a command/data register
+- Double-buffered: all drawing commands (set pixel, fill rectangle, blit
+  image, palette load, buffer swap) target an off-screen buffer that is
+  atomically exchanged with the visible one
+- 256-color palette using 16-bit RGB565 entries, organized like the Xterm
+  256-color palette (16 named colors, a 6×6×6 color cube, and a 24-level
+  grayscale ramp) by default
+- IFR/IER interrupt flag and enable registers signal display status (e.g.
+  command-ready) back to the CPU
+
+The display uses a transport to exchange commands and status with a real or
+emulated display peripheral.
+
+### 16-bit Galois LFSR (`Lfsr16`)
+
+A memory-mapped pseudo-random number generator based on a 16-bit Galois
+linear-feedback shift register (default tap mask `0xB400`, a maximal-length
+65535-state sequence):
+
+- 2 addressable registers exposing the current LFSR state
+- **Continuous** mode advances the register automatically as part of normal
+  execution; **step** mode advances only when explicitly clocked, for
+  reproducible pseudo-random sequences under program control
 
 ## Running the Emulator
 
