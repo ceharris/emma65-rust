@@ -107,8 +107,11 @@ builds the `BusConfig`, constructs `Cpu`, and returns `EmulatorSession`.
 - Size: bytes or `K`/`k` suffix
 - Transport: `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`, `pty:SYMLINK`
 
-The binary applies a built-in default (TaliForth ROM + RAM + console PTY at
-`~/.emma/dev/ttyS0`, WDC65C02, 1.8432 MHz) when no devices are configured.
+The binary applies a built-in default when no devices are configured: 32K RAM at
+`0x0000`, the embedded TaliForth ROM at `0x8000`, a VIA and a PTM on Unix-socket
+transports, an ACIA on `~/.emma/dev/ttyS0`, a second ACIA on `~/.emma/dev/ttyS1`,
+an LFSR, and a console wired to the process's own stdin/stdout — WDC65C02 at
+1.8432 MHz. See `apply_default_if_unconfigured` in `src/bin/emulator/config.rs`.
 
 ---
 
