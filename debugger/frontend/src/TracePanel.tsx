@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import { useAppKeyBindings } from "./useAppKeyBindings";
-import { resolveTheme, ThemeMode } from "./ThemeContext";
+import {useCallback, useEffect, useRef, useState} from "react";
+import {listen} from "@tauri-apps/api/event";
+import {invoke} from "@tauri-apps/api/core";
+import {save} from "@tauri-apps/plugin-dialog";
+import {useAppKeyBindings} from "./useAppKeyBindings";
+import {resolveTheme, ThemeMode} from "./ThemeContext";
 import "./styles/trace.scss";
 
 interface TraceBusOpDto {
@@ -316,6 +316,15 @@ export default function TracePanel() {
     [jumpToClientY],
   );
 
+  // Rows lay out top-down; once the fetched window's rendered height exceeds
+  // the viewport (label rows can push it past VIEWPORT_ROWS' worth), scroll
+  // to the bottom so the newest row stays visible, matching live-follow.
+  const logBodyRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = logBodyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [rows]);
+
   const selectedRow = rows.find((r) => r.seq === selectedSeq) ?? null;
   const controlsDisabled = cpuRunning;
   const maxStart = Math.max(0, totalRows - VIEWPORT_ROWS);
@@ -376,7 +385,7 @@ export default function TracePanel() {
           </table>
         </div>
         <div className="trace-log-scroller">
-          <div className="trace-log-body" onWheel={handleWheel}>
+          <div className="trace-log-body" ref={logBodyRef} onWheel={handleWheel}>
             <table className="trace-table">
               <TraceColGroup />
               <tbody>
