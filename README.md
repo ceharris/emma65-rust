@@ -57,7 +57,63 @@ preferences — including light/dark theme — from
 `~/.emma/debugger/default/ui.toml`; watchpoints are stored alongside them as
 `watchpoints.emw`.
 
-Build and run it from `debugger/src-tauri` with the
+### Watchpoint Expressions
+
+Watchpoints are boolean expressions evaluated against live machine state
+before each instruction; each line of `watchpoints.emw` is one watchpoint,
+and the Watchpoint panel shows whether it's currently triggered. The
+expression language covers:
+
+- **Registers** — `A`, `X`, `Y`, `P`, `S`, `PC`
+  ```
+  X > 10
+  PC == $8010
+  ```
+- **CPU status flags**, prefixed with a backtick — `` `N ``, `` `V ``,
+  `` `B ``, `` `D ``, `` `I ``, `` `Z ``, `` `C ``
+  ```
+  `C
+  `N && `Z
+  ```
+- **Literals** — decimal, or hex with a `$` or `0x` prefix (`0o`/`0q` octal
+  and `0b` binary are also recognized)
+  ```
+  A == 42
+  A == $2A
+  ```
+- **Memory operands** — `B[addr]`, `W[addr]`, `D[addr]` read a byte, word, or
+  doubleword from memory; a leading `+` or `-` interprets the value as signed
+  (`-` also negates it)
+  ```
+  B[$0200] == $FF
+  +B[$D010] < 0    // true when bit 7 (the sign bit) of the byte at $D010 is set
+  W[$FE] != 0
+  ```
+- **Symbols** — a bare identifier resolves to the address of a label loaded
+  from a VICE-format label file (the `labels` device attribute), so a
+  watchpoint can reference a source-level name instead of a hardcoded address
+  ```
+  PC == reset_vector
+  B[cursor_x] > 79
+  ```
+- **Arithmetic, bitwise, and comparison operators** — `+ - * / %`,
+  `& | ^ ~`, `<< >>`, `== != < <= > >=`, `&& || !`
+  ```
+  (B[$D010] & $80) != 0
+  ```
+- **The walrus operator (`:=`)** snapshots a value into a named variable that
+  persists across steps, so one watchpoint can be compared against a value
+  captured on an earlier step
+  ```
+  A != x    // triggers once A differs from the value snapshotted below
+  x := A    // snapshot this step's A for comparison on the next step
+  ```
+
+Expressions are compiled to bytecode once, at load time, and evaluated
+efficiently on every step, making it practical to run many watchpoints
+simultaneously.
+
+Build and run the debugger from `debugger/src-tauri` with the
 [Tauri CLI](https://tauri.app/develop/) (`cargo tauri dev` for development,
 `cargo tauri build` for a packaged release); this drives an `npm run build`
 of the `debugger/frontend` React/TypeScript UI automatically.
@@ -364,17 +420,6 @@ fn write(&mut self, address: u16, value: u8);
 /// inhibiting side effects; used by the debugger.
 fn peek(&self, address: u16) -> u8;
 ```
-
-### Watchpoint Expressions
-
-Watchpoints are expressions evaluated against live machine state before each
-instruction. The expression language supports registers (`A`, `X`, `Y`, `P`,
-`S`, `PC`), named CPU status flags (`` `N ``, `` `Z ``, `` `C ``, etc.),
-memory reads at byte, word, and doubleword widths (`B[addr]`, `W[addr]`,
-`D[addr]`), hex literals (`$FF`), arithmetic and bitwise operators,
-comparisons, and a walrus operator (`:=`) for snapshotting values across
-steps. Expressions are compiled to bytecode once and evaluated efficiently on
-every step, making it practical to run many watchpoints simultaneously.
 
 ### Execution Tracing
 
