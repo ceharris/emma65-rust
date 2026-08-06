@@ -219,40 +219,6 @@ let bus = Bus::config()
 Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
 `StepResult::Error` so the host application can decide how to respond.
 
-#### Bank-Switched Memory Modules
-
-Finch, Phoebe, and Vireo are complete memory subsystems — RAM, ROM, and a
-bank-switching MMU — rather than register-window devices. Each claims the
-entire 64 KB address space when configured, so no separate `ram`/`rom`
-entries are needed alongside them, and their `address` device-spec field is
-unused. All three support an optional ROM `write-policy` (`ignore` or
-`error`), an `image` loaded at an optional `offset`, and an optional VICE
-`labels` file for symbol resolution.
-
-##### Finch bank-switched MMU (`Finch`)
-
-512 KB RAM and 512 KB ROM behind a simple MMU: the top four bits of the 6502
-address bus (`A12..A15`) index into 16 one-byte bank registers, each
-selecting which 4 KB segment of the module's 1024 KB memory space is mapped
-into that 4 KB window of the 6502's address space. Two memory-mapped
-registers (configurable addresses) control the bank registers and other MMU
-functions.
-
-##### Phoebe bank-switched memory (`Phoebe`)
-
-56 KB RAM and 32 KB ROM. The ROM is split into four 8 KB banks; bank 3 is
-permanently mapped into the upper half of a 16 KB switchable region at
-`0xC000` (and must contain the 6502 machine vectors), while a single
-memory-mapped control register selects which of banks 0–2 (or none, exposing
-the underlying RAM instead) occupies the lower half.
-
-##### Vireo bank-switched memory (`Vireo`)
-
-128 KB RAM and 32 KB ROM behind an elegant bank-switching scheme supporting
-four configurations — from a plain 32 KB RAM / 32 KB ROM split up to modes
-that expose additional RAM banks beyond the 64 KB address space — selected
-via a single memory-mapped control register.
-
 #### Transport Options
 
 Devices that exchange byte streams attach a `Transport`. Configurable via TOML/CLI:
@@ -323,8 +289,7 @@ exchanges data with the outside world, with the transport system for
 byte-stream I/O. The other three — Finch, Phoebe, and Vireo — are complete
 bank-switched memory subsystems that occupy the entire 64 KB address space in
 place of separate RAM/ROM regions; see
-[Bank-Switched Memory Modules](#bank-switched-memory-modules), described
-earlier under [The Emulator Core](#the-emulator-core).
+[Bank-Switched Memory Modules](#bank-switched-memory-modules) below.
 
 ### Console (`Console`)
 
@@ -448,6 +413,40 @@ linear-feedback shift register (default tap mask `0xB400`, a maximal-length
 - **Continuous** mode advances the register automatically as part of normal
   execution; **step** mode advances only when explicitly clocked, for
   reproducible pseudo-random sequences under program control
+
+### Bank-Switched Memory Modules
+
+Finch, Phoebe, and Vireo are complete memory subsystems — RAM, ROM, and a
+bank-switching MMU — rather than register-window devices. Each claims the
+entire 64 KB address space when configured, so no separate `ram`/`rom`
+entries are needed alongside them, and their `address` device-spec field is
+unused. All three support an optional ROM `write-policy` (`ignore` or
+`error`), an `image` loaded at an optional `offset`, and an optional VICE
+`labels` file for symbol resolution.
+
+#### Finch bank-switched MMU (`Finch`)
+
+512 KB RAM and 512 KB ROM behind a simple MMU: the top four bits of the 6502
+address bus (`A12..A15`) index into 16 one-byte bank registers, each
+selecting which 4 KB segment of the module's 1024 KB memory space is mapped
+into that 4 KB window of the 6502's address space. Two memory-mapped
+registers (configurable addresses) control the bank registers and other MMU
+functions.
+
+#### Phoebe bank-switched memory (`Phoebe`)
+
+56 KB RAM and 32 KB ROM. The ROM is split into four 8 KB banks; bank 3 is
+permanently mapped into the upper half of a 16 KB switchable region at
+`0xC000` (and must contain the 6502 machine vectors), while a single
+memory-mapped control register selects which of banks 0–2 (or none, exposing
+the underlying RAM instead) occupies the lower half.
+
+#### Vireo bank-switched memory (`Vireo`)
+
+128 KB RAM and 32 KB ROM behind an elegant bank-switching scheme supporting
+four configurations — from a plain 32 KB RAM / 32 KB ROM split up to modes
+that expose additional RAM banks beyond the 64 KB address space — selected
+via a single memory-mapped control register.
 
 ## Running the Emulator
 
