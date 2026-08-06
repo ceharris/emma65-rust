@@ -293,9 +293,14 @@ TOML/CLI — the `emma65` binary and the debugger UI use it internally to wire
 a console device directly to the host process's own stdin/stdout (CLI) or
 terminal window (debugger) when no `transport` attribute is given.
 
-All transports are non-blocking: `try_recv()` returns `None` immediately when
-no data is available, so device `tick()` implementations never stall the CPU
-thread.
+Every transport's actual I/O runs on its own thread or async task, decoupled
+from device `tick()` by a lock-free `rtrb` ring buffer (`ChannelRelay`): the
+transport side pushes into the ring as bytes arrive, and `tick()` drains
+whatever is currently available and returns immediately, whether that's
+nothing, one byte, or a burst. Neither side ever blocks the other. Because
+the CPU thread is practically unburdened by communication with external
+peripherals, it can easily sustain common effective clock speeds — and much
+higher ones with clock throttling disabled (`ClockSpeed::unlimited()`).
 
 The VIA and MC6840 additionally support framing their transport traffic with
 a structured peer-communication protocol (`protocol = "ascii"` or `"binary"`)
