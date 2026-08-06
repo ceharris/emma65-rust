@@ -219,37 +219,6 @@ let bus = Bus::config()
 Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
 `StepResult::Error` so the host application can decide how to respond.
 
-#### Transport Options
-
-Devices that exchange byte streams attach a `Transport`. Configurable via TOML/CLI:
-
-| Transport             | Shorthand                       | Best for                                                              |
-|------------------------|---------------------------------|-------------------------------------------------------------------------|
-| `PipeTransport`        | `pipe:/path/to/exe,arg1,arg2`   | Spawning a child process and bridging its stdin/stdout to the device    |
-| `TcpSocketTransport`   | `tcp:PORT` or `tcp:IP:PORT`     | Connecting a terminal emulator or remote process over the network       |
-| `UnixSocketTransport`  | `unix:PATH`                     | Low-latency local IPC (lower overhead than TCP)                         |
-| `PtyTransport`         | `pty` or `pty:SYMLINK_PATH`     | Any program that expects a real TTY — `screen`, `minicom`, `cu`, etc.   |
-
-A fifth implementation, `InternalPipeTransport`, isn't configured via
-TOML/CLI — the `emma65` binary and the debugger UI use it internally to wire
-a console device directly to the host process's own stdin/stdout (CLI) or
-terminal window (debugger) when no `transport` attribute is given.
-
-Every transport's actual I/O runs on its own thread or async task, decoupled
-from device `tick()` by a lock-free `rtrb` ring buffer (`ChannelRelay`): the
-transport side pushes into the ring as bytes arrive, and `tick()` drains
-whatever is currently available and returns immediately, whether that's
-nothing, one byte, or a burst. Neither side ever blocks the other. Because
-the CPU thread is practically unburdened by communication with external
-peripherals, it can easily sustain common effective clock speeds — and much
-higher ones with clock throttling disabled (`ClockSpeed::unlimited()`).
-
-The VIA and MC6840 additionally support framing their transport traffic with
-a structured peer-communication protocol (`protocol = "ascii"` or `"binary"`)
-that exchanges full port/pin state on connection and incremental updates
-thereafter, so a real or emulated peripheral always has an accurate picture
-of the device's signals.
-
 #### Extensibility
 
 Custom devices implement the `IoDevice` trait. Only three methods are
@@ -284,16 +253,48 @@ does not slow down execution. Two tools consume these traces:
 Ten built-in devices implement the `IoDevice` trait. Seven — Console, R6551,
 Mc6850, Via6522, Mc6840, LedMatrix, and Lfsr16 — are register-window devices
 that can be mapped into any address range on the bus; each integrates with
-the interrupt controller via `irq_active()` and `take_nmi()`, and, where it
-exchanges data with the outside world, with the transport system for
-byte-stream I/O. The other three — Finch, Phoebe, and Vireo — are complete
-bank-switched memory subsystems that occupy the entire 64 KB address space in
-place of separate RAM/ROM regions; see
+the interrupt controller via `irq_active()` and `take_nmi()`, and most of
+them exchange data with the outside world over a configurable
+[Transport](#transport-options). The other three — Finch, Phoebe, and Vireo —
+are complete bank-switched memory subsystems that occupy the entire 64 KB
+address space in place of separate RAM/ROM regions; see
 [Bank-Switched Memory Modules](#bank-switched-memory-modules) below.
+
+### Transport Options
+
+Devices that exchange byte streams attach a `Transport`. Configurable via TOML/CLI:
+
+| Transport             | Shorthand                       | Best for                                                              |
+|------------------------|---------------------------------|-------------------------------------------------------------------------|
+| `PipeTransport`        | `pipe:/path/to/exe,arg1,arg2`   | Spawning a child process and bridging its stdin/stdout to the device    |
+| `TcpSocketTransport`   | `tcp:PORT` or `tcp:IP:PORT`     | Connecting a terminal emulator or remote process over the network       |
+| `UnixSocketTransport`  | `unix:PATH`                     | Low-latency local IPC (lower overhead than TCP)                         |
+| `PtyTransport`         | `pty` or `pty:SYMLINK_PATH`     | Any program that expects a real TTY — `screen`, `minicom`, `cu`, etc.   |
+
+A fifth implementation, `InternalPipeTransport`, isn't configured via
+TOML/CLI — the `emma65` binary and the debugger UI use it internally to wire
+a console device directly to the host process's own stdin/stdout (CLI) or
+terminal window (debugger) when no `transport` attribute is given.
+
+Every transport's actual I/O runs on its own thread or async task, decoupled
+from device `tick()` by a lock-free `rtrb` ring buffer (`ChannelRelay`): the
+transport side pushes into the ring as bytes arrive, and `tick()` drains
+whatever is currently available and returns immediately, whether that's
+nothing, one byte, or a burst. Neither side ever blocks the other. Because
+the CPU thread is practically unburdened by communication with external
+peripherals, it can easily sustain common effective clock speeds — and much
+higher ones with clock throttling disabled (`ClockSpeed::unlimited()`).
+
+The VIA and MC6840 additionally support framing their transport traffic with
+a structured peer-communication protocol (`protocol = "ascii"` or `"binary"`)
+that exchanges full port/pin state on connection and incremental updates
+thereafter, so a real or emulated peripheral always has an accurate picture
+of the device's signals.
 
 ### Console (`Console`)
 
-A simple polling console device for byte-stream I/O:
+A simple polling console device for byte-stream I/O over a configurable
+[Transport](#transport-options):
 
 - Input buffering via a 64 kilobyte ring buffer
 - Two addressable registers: data input/output (offset 0) and data
@@ -330,10 +331,11 @@ Adapter (VIA):
 - Full IFR/IER interrupt flag and enable registers with independent masking
   per source
 
-The VIA uses a GPIO communication protocol over any attached `Transport` to
-exchange port state and control signal transitions with real or emulated
-peripherals. On connection the VIA sends a full state dump so the 
-peripheral starts with an accurate picture of all pins and control lines.
+The VIA uses a GPIO communication protocol over any attached
+[`Transport`](#transport-options) to exchange port state and control signal
+transitions with real or emulated peripherals. On connection the VIA sends a
+full state dump so the peripheral starts with an accurate picture of all
+pins and control lines.
 
 ### MC6840 Programmable Timer Module (`Mc6840`)
 
@@ -343,14 +345,14 @@ Module (PTM).
 - Three independent timers supporting continuous or single-shot 
   generation modes as well as frequency/period or pulse width measurement 
   modes
-- Flexible transport options allowing virtual peripheral connection via
-  common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket.
+- Connects to a virtual peripheral over any [Transport](#transport-options)
 - Support for external gate and clock inputs and timer output
 
-The PTM uses a communication protocol over any attached `Transport` to
-exchange port state and control signal transitions with real or emulated
-peripherals. On connection, the PTM sends a full state dump so the
-peripheral starts with an accurate picture of all pins and control lines.
+The PTM uses a communication protocol over any attached
+[`Transport`](#transport-options) to exchange port state and control signal
+transitions with real or emulated peripherals. On connection, the PTM sends
+a full state dump so the peripheral starts with an accurate picture of all
+pins and control lines.
 
 ### MC6850 Asynchronous Communications Adapter (`Mc6850`)
 
@@ -363,8 +365,7 @@ Communications Interface Adapter (ACIA):
 - TX is immediate: bytes are forwarded to the transport on write; TDRE is
   restored on the next CPU tick 
 
-Flexible transport options allowing virtual peripheral connection via
-common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
+Connects to a virtual peripheral over any [Transport](#transport-options).
 
 ### R6551 Asynchronous Communication Adapter (`R6551`)
 
@@ -381,8 +382,7 @@ Adapter (ACIA):
   permanently set, matching the behavior of the WDC 65C51 variant for software
   that uses timed delays rather than TDRE polling
 
-Flexible transport options allowing virtual peripheral connection via
-common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
+Connects to a virtual peripheral over any [Transport](#transport-options).
 
 ### RGB LED Matrix Display Adapter (`LedMatrix`)
 
@@ -400,8 +400,8 @@ microcontroller:
 - IFR/IER interrupt flag and enable registers signal display status (e.g.
   command-ready) back to the CPU
 
-The display uses a transport to exchange commands and status with a real or
-emulated display peripheral.
+The display uses a [Transport](#transport-options) to exchange commands and
+status with a real or emulated display peripheral.
 
 ### 16-bit Galois LFSR (`Lfsr16`)
 
