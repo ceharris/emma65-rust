@@ -303,7 +303,7 @@ are complete bank-switched memory subsystems that occupy the entire 64 KB
 address space in place of separate RAM/ROM regions; see
 [Bank-Switched Memory Modules](#bank-switched-memory-modules) below.
 
-### Console (`Console`)
+### Console (`console`)
 
 A simple polling console device for byte-stream I/O over a configurable
 [Transport](#transport-options):
@@ -324,7 +324,7 @@ A simple polling console device for byte-stream I/O over a configurable
   (useful for simulating input under program control).
 - Designed as the backend for the debugger's built-in terminal emulator
 
-### 6522 Versatile Interface Adapter (`Via6522`)
+### 6522 Versatile Interface Adapter (`via/6522`)
 
 A comprehensive implementation of the WDC 65C22 Versatile Interface 
 Adapter (VIA):
@@ -349,7 +349,7 @@ transitions with real or emulated peripherals. On connection the VIA sends a
 full state dump so the peripheral starts with an accurate picture of all
 pins and control lines.
 
-### MC6840 Programmable Timer Module (`Mc6840`)
+### MC6840 Programmable Timer Module (`ptm/6840`)
 
 A comprehensive implementation of the Motorola MC6840 Programmable Timer 
 Module (PTM).
@@ -366,7 +366,7 @@ transitions with real or emulated peripherals. On connection, the PTM sends
 a full state dump so the peripheral starts with an accurate picture of all
 pins and control lines.
 
-### MC6850 Asynchronous Communications Adapter (`Mc6850`)
+### MC6850 Asynchronous Communications Adapter (`acia/6850`)
 
 An comprehensive implementation of the Motorola MC6850 Asynchronous 
 Communications Interface Adapter (ACIA):
@@ -379,7 +379,7 @@ Communications Interface Adapter (ACIA):
 
 Connects to a virtual peripheral over any [Transport](#transport-options).
 
-### R6551 Asynchronous Communication Adapter (`R6551`)
+### R6551 Asynchronous Communication Adapter (`acia/6551`)
 
 An implementation of the Rockwell 6551 Asynchronous Communications Interface
 Adapter (ACIA):
@@ -396,7 +396,7 @@ Adapter (ACIA):
 
 Connects to a virtual peripheral over any [Transport](#transport-options).
 
-### RGB LED Matrix Display Adapter (`LedMatrix`)
+### RGB LED Matrix Display Adapter (`display/matrix`)
 
 A parallel-bus adapter for an RGB LED matrix display managed by its own
 microcontroller:
@@ -415,7 +415,7 @@ microcontroller:
 The display uses a [Transport](#transport-options) to exchange commands and
 status with a real or emulated display peripheral.
 
-### 16-bit Galois LFSR (`Lfsr16`)
+### 16-bit Galois LFSR (`lfsr`)
 
 A memory-mapped pseudo-random number generator based on a 16-bit Galois
 linear-feedback shift register (default tap mask `0xB400`, a maximal-length
@@ -436,7 +436,7 @@ unused. All three support an optional ROM `write-policy` (`ignore` or
 `error`), an `image` loaded at an optional `offset`, and an optional VICE
 `labels` file for symbol resolution.
 
-#### Finch bank-switched MMU (`Finch`)
+#### Finch bank-switched MMU (`mem/finch`)
 
 512 KB RAM and 512 KB ROM behind a simple MMU: the top four bits of the 6502
 address bus (`A12..A15`) index into 16 one-byte bank registers, each
@@ -445,7 +445,7 @@ into that 4 KB window of the 6502's address space. Two memory-mapped
 registers (configurable addresses) control the bank registers and other MMU
 functions.
 
-#### Phoebe bank-switched memory (`Phoebe`)
+#### Phoebe bank-switched memory (`mem/phoebe`)
 
 56 KB RAM and 32 KB ROM. The ROM is split into four 8 KB banks; bank 3 is
 permanently mapped into the upper half of a 16 KB switchable region at
@@ -453,7 +453,7 @@ permanently mapped into the upper half of a 16 KB switchable region at
 memory-mapped control register selects which of banks 0–2 (or none, exposing
 the underlying RAM instead) occupies the lower half.
 
-#### Vireo bank-switched memory (`Vireo`)
+#### Vireo bank-switched memory (`mem/vireo`)
 
 128 KB RAM and 32 KB ROM behind an elegant bank-switching scheme supporting
 four configurations — from a plain 32 KB RAM / 32 KB ROM split up to modes
