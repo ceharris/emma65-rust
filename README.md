@@ -20,6 +20,48 @@ emulator core:
 Together they form a foundation for building retro-computing tools,
 educational simulators, and hardware-in-the-loop test rigs.
 
+## The Debugger
+
+`emma65-debugger` is a native desktop application (built with
+[Tauri](https://tauri.app)) that turns the emulator into a full interactive
+development environment for 65C02 programs:
+
+- **Load and run code in multiple execution modes** — free-run, single-step
+  (step into), step over a subroutine call, and step out (step return) — all
+  driven from a live, symbol-annotated Disassembly panel that tracks the
+  program counter as it executes
+- **Full breakpoint support** — set, enable, disable, and remove breakpoints
+  directly against the disassembly listing
+- **Full watchpoint support** — write expression-based watchpoints (see
+  [Watchpoint Expressions](#watchpoint-expressions) below) in the Watchpoint
+  panel; add, edit, remove, and toggle them with a click, and see at a
+  glance which are currently triggered
+- **View and modify memory and registers live** — browse and edit memory a
+  page at a time, fill ranges, and load a program image from a file in the
+  Memory panel; view and edit every CPU register in the Register panel
+- **Trigger interrupts on demand** — manually assert or release IRQ and
+  trigger NMI from the CPU/Bus panel, alongside a full CPU reset, to exercise
+  interrupt handlers without needing real hardware events
+- **Live execution trace** — a dedicated Trace window shows a scrolling,
+  real-time view of recently executed instructions, recorded via the same
+  facility described in [Execution Tracing](#execution-tracing)
+- **Built-in terminal** — an Xterm/VT220-compatible terminal window wired
+  directly to the configured, memory-mapped console device, so you can
+  interact with a running program without any external terminal emulator or
+  PTY setup
+
+The debugger reads its emulator configuration from
+`~/.emma/debugger/default/emulator.toml` (the same TOML format described
+under [Running the Emulator](#running-the-emulator)) and its own UI
+preferences — including light/dark theme — from
+`~/.emma/debugger/default/ui.toml`; watchpoints are stored alongside them as
+`watchpoints.emw`.
+
+Build and run it from `debugger/src-tauri` with the
+[Tauri CLI](https://tauri.app/develop/) (`cargo tauri dev` for development,
+`cargo tauri build` for a packaged release); this drives an `npm run build`
+of the `debugger/frontend` React/TypeScript UI automatically.
+
 ## Correctness
 
 Emma65 passes
@@ -449,37 +491,6 @@ configurable addresses shown, not a contiguous block.
 Transport shorthand values for CLI and TOML string form:
 `pipe:/path/to/exe,arg1,arg2`, `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`,
 `pty:SYMLINK_PATH`
-
-## Running the Debugger
-
-`emma65-debugger` is a native desktop application (built with
-[Tauri](https://tauri.app)) for interactively running and troubleshooting
-programs on the emulator. It reads its emulator configuration from
-`~/.emma/debugger/default/emulator.toml` — the same TOML format described
-above — and its own UI preferences from `~/.emma/debugger/default/ui.toml`.
-
-The main window shows live Register, CPU/Bus, Disassembly, Memory, Stack, and
-Watchpoint panels, all updated as the program runs or steps. From the
-Disassembly panel you can run, stop, step into, step over, and step out of
-subroutines, and set, enable, disable, or remove breakpoints. The CPU/Bus
-panel provides manual reset, IRQ assert/release, and NMI trigger controls. A
-Window menu toggles two additional windows:
-
-- **Terminal** — an interactive terminal emulator wired directly to the
-  configured console device
-- **Trace** — a live, scrolling view of recently executed instructions,
-  recorded using the same trace facility described in
-  [Execution Tracing](#execution-tracing)
-
-Watchpoints are edited as `watchpoints.emw` in the same config directory and
-can be added, removed, edited, and toggled from the Watchpoint panel; each
-shows only whether it is currently triggered. Light and dark themes are
-supported and persisted across sessions.
-
-Build and run it from `debugger/src-tauri` with the
-[Tauri CLI](https://tauri.app/develop/) (`cargo tauri dev` for development,
-`cargo tauri build` for a packaged release); this drives an `npm run build`
-of the `debugger/frontend` React/TypeScript UI automatically.
 
 ## Running the Tracer
 
