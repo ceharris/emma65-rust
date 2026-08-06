@@ -906,6 +906,7 @@ version = "0.1.0"
 dependencies = [
  "emma65",
  "figment",
+ "gtk",
  "log",
  "serde",
  "tauri",

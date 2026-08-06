@@ -2,7 +2,7 @@
 use super::Registers;
 use super::status::StatusRegister;
 use super::variant::CpuVariant;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 /// 4-byte magic identifying a binary trace file, followed by a 1-byte format version.
 const MAGIC: [u8; 4] = *b"E65T";
@@ -210,6 +210,17 @@ impl<R: Read> BinaryTraceReader<R> {
     }
 }
 
+impl<R: Read + Seek> BinaryTraceReader<R> {
+    /// Seeks so that the next `next()` call yields the record at `record_index`
+    /// (0-based, counting from the first record after the header), without
+    /// scanning the file from the start.
+    pub fn seek_to_record(&mut self, record_index: u64) -> io::Result<()> {
+        let offset = HEADER_LEN as u64 + record_index * RECORD_LEN as u64;
+        self.reader.seek(SeekFrom::Start(offset))?;
+        Ok(())
+    }
+}
+
 impl<R: Read> Iterator for BinaryTraceReader<R> {
     type Item = io::Result<TraceRecord>;
 
@@ -272,10 +283,19 @@ impl TraceCallback for ChannelTraceCallback {
 /// writes them via `writer`. Returns a callback for the CPU thread, a join
 /// handle to await flush-on-exit, and a shared counter of dropped records
 /// (only incremented under [`OverflowPolicy::DropOnFull`]).
+///
+/// `flush_after_each_record` controls how promptly writes become visible to
+/// an independent reader of the same file (e.g. a live viewer that reopens
+/// the file on each poll): the underlying `BinaryTraceWriter` buffers writes
+/// and otherwise only flushes when the channel closes, so without this a
+/// concurrent reader sees nothing new until the buffer happens to fill.
+/// Callers that only read the file after recording stops (e.g. the CLI
+/// capture path) should pass `false` to avoid a flush (a syscall) per record.
 pub fn spawn_trace_writer<W: Write + Send + 'static>(
     writer: BinaryTraceWriter<W>,
     capacity: usize,
     policy: OverflowPolicy,
+    flush_after_each_record: bool,
 ) -> (ChannelTraceCallback, std::thread::JoinHandle<()>, std::sync::Arc<std::sync::atomic::AtomicU64>) {
     let (tx, rx) = crossbeam_channel::bounded::<TraceRecord>(capacity);
     let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -286,6 +306,9 @@ pub fn spawn_trace_writer<W: Write + Send + 'static>(
         // once the sender drops and the channel is drained — no polling loop needed.
         while let Ok(rec) = rx.recv() {
             writer.record(rec);
+            if flush_after_each_record {
+                let _ = writer.flush();
+            }
         }
         let _ = writer.flush();
     });
@@ -513,6 +536,45 @@ mod tests {
         buf[4] = FORMAT_VERSION;
         buf[5] = 0xFF;
         assert!(BinaryTraceReader::new(buf.as_slice()).is_err());
+    }
+
+    #[test]
+    fn seek_to_record_jumps_to_arbitrary_record() {
+        let buf = {
+            let mut buf = Vec::new();
+            let mut writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
+            for i in 0..5u8 {
+                writer.record(TraceRecord { instr_id: i as u64, kind: TraceKind::Cycles(i) });
+            }
+            writer.flush().unwrap();
+            drop(writer);
+            buf
+        };
+
+        let mut reader = BinaryTraceReader::new(io::Cursor::new(buf)).unwrap();
+        reader.seek_to_record(3).unwrap();
+        let records: Vec<TraceRecord> = reader.collect::<io::Result<Vec<_>>>().unwrap();
+        assert_eq!(records, vec![
+            TraceRecord { instr_id: 3, kind: TraceKind::Cycles(3) },
+            TraceRecord { instr_id: 4, kind: TraceKind::Cycles(4) },
+        ]);
+    }
+
+    #[test]
+    fn seek_to_record_zero_is_equivalent_to_no_seek() {
+        let buf = {
+            let mut buf = Vec::new();
+            let mut writer = BinaryTraceWriter::new(&mut buf, CpuVariant::Wdc65C02);
+            writer.record(TraceRecord { instr_id: 0, kind: TraceKind::Cycles(1) });
+            writer.flush().unwrap();
+            drop(writer);
+            buf
+        };
+
+        let mut reader = BinaryTraceReader::new(io::Cursor::new(buf)).unwrap();
+        reader.seek_to_record(0).unwrap();
+        let records: Vec<TraceRecord> = reader.collect::<io::Result<Vec<_>>>().unwrap();
+        assert_eq!(records, vec![TraceRecord { instr_id: 0, kind: TraceKind::Cycles(1) }]);
     }
 
     #[test]

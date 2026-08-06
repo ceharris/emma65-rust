@@ -4,7 +4,7 @@
 use super::{DisassembledLine, Disassembler};
 use crate::emulator::bus::SymbolTable;
 use crate::emulator::cpu::variant::CpuVariant;
-use crate::emulator::{TraceCallback, TraceKind, TraceRecord};
+use crate::emulator::{Registers, TraceCallback, TraceKind, TraceRecord};
 
 /// The in-progress instruction being reconstructed from trace records.
 struct Pending {
@@ -79,6 +79,126 @@ impl TraceDisassembler {
         }
         let pending = self.pending.take().unwrap();
         Some(self.disassembler.build_line(pending.addr, pending.raw_bytes, &self.symbols))
+    }
+}
+
+/// A bus operation observed while an instruction was executing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceBusOp {
+    /// A bus read of `value` from `addr`.
+    Read {
+        /// The bus address read.
+        addr: u16,
+        /// The byte value read.
+        value: u8,
+    },
+    /// A bus write of `value` to `addr`.
+    Write {
+        /// The bus address written.
+        addr: u16,
+        /// The byte value written.
+        value: u8,
+    },
+}
+
+/// One fully reconstructed instruction: its register snapshot, disassembly,
+/// cycle count, and the bus operations observed while it executed.
+pub struct TraceRow {
+    /// The instruction id shared by every trace record this row was built from.
+    pub instr_id: u64,
+    /// The register snapshot taken immediately before this instruction executed.
+    pub regs: Registers,
+    /// The instruction's total cycle count, if a `Cycles` record was observed for it.
+    pub cycles: Option<u8>,
+    /// The reconstructed disassembly.
+    pub line: DisassembledLine,
+    /// Bus reads and writes observed for this instruction, in stream order.
+    pub bus_ops: Vec<TraceBusOp>,
+}
+
+/// The trace records collected so far for one in-progress row.
+struct PendingRow {
+    instr_id: u64,
+    regs: Registers,
+    bus_ops: Vec<TraceBusOp>,
+    line: Option<DisassembledLine>,
+    cycles: Option<u8>,
+}
+
+/// Groups a stream of [`TraceRecord`]s into complete [`TraceRow`]s, one per
+/// instruction: correlates each instruction's `Registers`/`Read`/`Write`/
+/// `Cycles` records (which arrive contiguously, tagged with a shared
+/// `instr_id`) and reconstructs its disassembly via an internal
+/// [`TraceDisassembler`].
+pub struct TraceRowAssembler {
+    disassembler: TraceDisassembler,
+    pending: Option<PendingRow>,
+}
+
+impl TraceRowAssembler {
+    /// Creates a new assembler for `variant`, resolving labels against a
+    /// one-time clone of `symbols` taken at construction.
+    pub fn new(variant: CpuVariant, symbols: SymbolTable) -> Self {
+        Self { disassembler: TraceDisassembler::new(variant, symbols), pending: None }
+    }
+
+    /// Feeds one trace record. Returns a completed row once its `Cycles`
+    /// record — always the last record emitted for an instruction — arrives.
+    pub fn feed(&mut self, rec: &TraceRecord) -> Option<TraceRow> {
+        match rec.kind {
+            TraceKind::Registers(regs) => {
+                // A new instruction has begun; drop any unfinished prior
+                // `PendingRow` (mirrors `TraceDisassembler`'s own behavior).
+                self.pending =
+                    Some(PendingRow { instr_id: rec.instr_id, regs, bus_ops: Vec::new(), line: None, cycles: None });
+            }
+            TraceKind::Read { addr, value } => {
+                if let Some(p) = self.pending.as_mut()
+                    && p.instr_id == rec.instr_id
+                {
+                    p.bus_ops.push(TraceBusOp::Read { addr, value });
+                }
+            }
+            TraceKind::Write { addr, value } => {
+                if let Some(p) = self.pending.as_mut()
+                    && p.instr_id == rec.instr_id
+                {
+                    p.bus_ops.push(TraceBusOp::Write { addr, value });
+                }
+            }
+            TraceKind::Cycles(cycles) => {
+                if let Some(p) = self.pending.as_mut()
+                    && p.instr_id == rec.instr_id
+                {
+                    p.cycles = Some(cycles);
+                }
+            }
+        }
+
+        if let Some(line) = self.disassembler.feed(rec)
+            && let Some(p) = self.pending.as_mut()
+            && p.instr_id == rec.instr_id
+        {
+            p.line = Some(line);
+        }
+
+        if matches!(rec.kind, TraceKind::Cycles(_)) && self.pending.as_ref().is_some_and(|p| p.instr_id == rec.instr_id)
+        {
+            return Self::complete(self.pending.take().unwrap());
+        }
+
+        None
+    }
+
+    /// Returns the row for a not-yet-completed instruction, if any (e.g. a
+    /// trace stream that ended mid-instruction). Best-effort: yields `None`
+    /// if no disassembly was ever reconstructed for it.
+    pub fn flush(&mut self) -> Option<TraceRow> {
+        self.pending.take().and_then(Self::complete)
+    }
+
+    fn complete(p: PendingRow) -> Option<TraceRow> {
+        Some(TraceRow { instr_id: p.instr_id, regs: p.regs, cycles: p.cycles, line: p.line?, bus_ops: p.bus_ops })
     }
 }
 
@@ -217,6 +337,26 @@ mod tests {
     }
 
     #[test]
+    fn not_taken_branch_instruction_is_still_reconstructed() {
+        // LDA #$01 (clears Z) ; BEQ +2 (not taken) ; INX
+        //
+        // Regression test: `Cpu::branch()` used to skip reading the offset
+        // byte entirely when the branch wasn't taken, so no `Read` record was
+        // ever emitted for it and this `Pending` row never completed — the
+        // not-taken branch silently vanished from the reconstructed trace.
+        let prog: &[u8] = &[0xA9, 0x01, 0xF0, 0x02, 0xE8];
+        let records = traced_records(CpuVariant::Wdc65C02, 0x0200, prog, 3);
+        let mut td = TraceDisassembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
+        let lines = feed_all(&mut td, &records);
+
+        assert_eq!(lines.len(), 3, "the not-taken BEQ must still appear in the reconstructed trace");
+        assert!(lines[0].mnemonic == Mnemonic::Lda);
+        assert!(lines[1].mnemonic == Mnemonic::Beq);
+        assert_eq!(lines[1].raw_bytes, vec![0xF0, 0x02]);
+        assert!(lines[2].mnemonic == Mnemonic::Inx);
+    }
+
+    #[test]
     fn instruction_with_data_write_ignores_the_write() {
         let records = traced_records(CpuVariant::Wdc65C02, 0x0200, &[0x8D, 0x00, 0x03], 1); // STA $0300
         let mut td = TraceDisassembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
@@ -261,6 +401,63 @@ mod tests {
         assert!(adapter.listener.0[0].mnemonic == Mnemonic::Lda);
         assert!(adapter.listener.0[1].mnemonic == Mnemonic::Sta);
         assert!(adapter.listener.0[2].mnemonic == Mnemonic::Inx);
+    }
+
+    fn feed_all_rows(assembler: &mut TraceRowAssembler, records: &[TraceRecord]) -> Vec<TraceRow> {
+        records.iter().filter_map(|rec| assembler.feed(rec)).collect()
+    }
+
+    #[test]
+    fn row_assembler_groups_registers_reads_and_cycles_into_one_row() {
+        let prog: &[u8] = &[0xA9, 0x55, 0x8D, 0x00, 0x03, 0xE8]; // LDA #$55 ; STA $0300 ; INX
+        let records = traced_records(CpuVariant::Wdc65C02, 0x0200, prog, 3);
+
+        let mut assembler = TraceRowAssembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
+        let rows = feed_all_rows(&mut assembler, &records);
+
+        assert_eq!(rows.len(), 3, "one row per instruction");
+        assert!(rows[0].line.mnemonic == Mnemonic::Lda);
+        assert!(rows[0].cycles.is_some(), "cycles should be captured from the trailing Cycles record");
+        assert!(rows[1].line.mnemonic == Mnemonic::Sta);
+        assert!(rows[2].line.mnemonic == Mnemonic::Inx);
+    }
+
+    #[test]
+    fn row_assembler_captures_non_fetch_bus_ops() {
+        let records = traced_records(CpuVariant::Wdc65C02, 0x0200, &[0x8D, 0x00, 0x03], 1); // STA $0300
+
+        let mut assembler = TraceRowAssembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
+        let rows = feed_all_rows(&mut assembler, &records);
+
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.line.raw_bytes, vec![0x8D, 0x00, 0x03]);
+        // The 3 opcode/operand fetch reads are recorded as `Read` bus ops too;
+        // the write to $0300 should also appear.
+        assert!(row.bus_ops.iter().any(|op| matches!(op, TraceBusOp::Write { addr: 0x0300, .. })));
+    }
+
+    #[test]
+    fn row_assembler_flush_returns_none_with_no_pending_instruction() {
+        let mut assembler = TraceRowAssembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
+        assert!(assembler.flush().is_none());
+    }
+
+    #[test]
+    fn row_assembler_flush_drops_incomplete_pending_instruction() {
+        let records = traced_records(CpuVariant::Wdc65C02, 0x0200, &[0xA9, 0x55], 1); // LDA #$55
+        let mut assembler = TraceRowAssembler::new(CpuVariant::Wdc65C02, SymbolTable::new());
+
+        // Feed everything except the trailing `Cycles` record, simulating a
+        // trace stream truncated mid-instruction.
+        let without_cycles: Vec<_> =
+            records.iter().filter(|r| !matches!(r.kind, TraceKind::Cycles(_))).copied().collect();
+        let rows = feed_all_rows(&mut assembler, &without_cycles);
+        assert!(rows.is_empty(), "no row should complete without a Cycles record");
+
+        let flushed = assembler.flush().expect("disassembly was already complete, so flush should recover it");
+        assert!(flushed.line.mnemonic == Mnemonic::Lda);
+        assert_eq!(flushed.cycles, None);
     }
 
     #[test]

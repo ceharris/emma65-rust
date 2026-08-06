@@ -1,0 +1,377 @@
+.trace-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.trace-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background-color: var(--color-bg-alt);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.trace-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 4px 7px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+
+  .codicon {
+    font-size: 1rem;
+    display: block;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+}
+
+// Resting state is neutral rather than danger-red: red on an idle button
+// reads as "already recording", not "click to start". It only turns red
+// (matching a hardware REC light) once a recording is actually in progress
+// — by then the button is also disabled, since Stop is the only way out.
+.trace-record-btn {
+  color: var(--color-fg);
+
+  &.recording {
+    color: var(--color-danger);
+  }
+}
+
+.trace-stop-btn {
+  color: var(--color-danger);
+}
+
+.trace-pause-btn {
+  color: var(--color-accent);
+
+  &.active {
+    background: var(--color-bg-active);
+    border-color: var(--color-accent);
+    color: var(--color-fg-strong);
+  }
+}
+
+.trace-path {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
+.trace-row-count {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  color: var(--color-muted);
+  flex-shrink: 0;
+}
+
+.trace-log-area {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: var(--font-size-mono);
+  line-height: 1.5;
+}
+
+// Its own element (not part of the scrolling/clipped body below) so it never
+// moves: with the fetched window potentially taller than the visible area
+// (see .trace-log-body), a header inside that area would get pushed out of
+// view along with old rows. Uses its own <table> with an identical <colgroup>
+// to trace-log-body's, so the two tables' columns still line up.
+.trace-log-header {
+  flex: 0 0 auto;
+}
+
+.trace-log-scroller {
+  flex: 1 1 auto;
+  display: flex;
+  overflow: hidden;
+}
+
+// The fetched window (VIEWPORT_ROWS) is sized for a generously tall window;
+// on a shorter one, or once label rows add extra height, its table can be
+// taller than this box. `justify-content: flex-end` anchors it to the
+// bottom so the newest rows (added at the end of the table) stay visible,
+// clipping older rows at the top instead — the trace equivalent of a log
+// view auto-scrolled to the bottom.
+.trace-log-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+// Custom scrollbar: the log window is fetched from the backend rather than
+// held in the DOM (total_rows can be huge), so there's no native scrollable
+// content for the browser to attach a real scrollbar to. This track+thumb
+// gives the same "see how much history there is, drag to jump anywhere" UX.
+.trace-scrollbar {
+  flex: 0 0 12px;
+  position: relative;
+  background: var(--color-bg-alt);
+  border-left: 1px solid var(--color-border);
+  cursor: pointer;
+}
+
+.trace-scrollbar-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  min-height: 16px;
+  background: var(--color-border-strong);
+  border-radius: 3px;
+  cursor: grab;
+
+  &:hover {
+    background: var(--color-accent);
+  }
+}
+
+.trace-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  white-space: nowrap;
+
+  th {
+    text-align: left;
+    font-family: var(--font-ui);
+    font-size: var(--font-size-btn);
+    font-weight: bold;
+    color: var(--color-muted);
+    background-color: var(--color-bg-alt);
+    border-bottom: 1px solid var(--color-border);
+    padding: 2px 7px;
+  }
+
+  // Column widths (below) are sized for content plus this padding — cells
+  // use box-sizing: border-box, so padding eats into the fixed column width
+  // rather than adding to it.
+  td {
+    padding: 0 7px;
+  }
+}
+
+.col-seq {
+  width: 8ch;
+}
+
+.col-cyc {
+  width: 4ch;
+}
+
+.col-reg {
+  width: 4ch;
+}
+
+.col-flags {
+  width: 10ch;
+}
+
+.col-addr {
+  width: 6ch;
+}
+
+.col-bytes {
+  width: 11ch;
+}
+
+.col-mnemonic {
+  width: 7ch;
+}
+
+.col-operand {
+  width: 12ch;
+}
+
+.trace-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--color-muted-2);
+}
+
+.trace-row {
+  cursor: pointer;
+
+  &:hover {
+    background-color: var(--color-bg-hover);
+  }
+
+  &.selected {
+    background-color: var(--color-bg-selected);
+
+    &:hover {
+      background-color: var(--color-bg-selected-hover);
+    }
+  }
+
+  &.invalid-op {
+    opacity: 0.45;
+  }
+}
+
+.trace-label-row {
+  cursor: default;
+}
+
+.trace-label {
+  color: var(--color-fg);
+}
+
+.trace-seq {
+  text-align: right;
+  color: var(--color-muted);
+}
+
+.trace-cyc {
+  text-align: right;
+  color: var(--color-number);
+}
+
+.trace-reg {
+  color: var(--color-accent);
+}
+
+.trace-flags {
+  color: var(--color-keyword);
+  white-space: pre;
+}
+
+.trace-addr {
+  color: var(--color-muted);
+}
+
+.trace-bytes {
+  color: var(--color-keyword);
+  letter-spacing: 0.02em;
+  white-space: pre;
+}
+
+.trace-mnemonic {
+  color: var(--color-directive);
+  font-weight: bold;
+}
+
+.trace-operand {
+  color: var(--color-string);
+}
+
+.trace-comment {
+  color: var(--color-muted);
+}
+
+.trace-detail {
+  flex: 0 0 140px;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border);
+  background-color: var(--color-bg-alt);
+  font-size: var(--font-size-mono);
+  line-height: 1.5;
+  padding: 4px 0;
+}
+
+.trace-detail-empty {
+  display: block;
+  padding: 8px 10px;
+  color: var(--color-muted-2);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+}
+
+.trace-detail-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.trace-detail-addr {
+  flex: 0 0 4ch;
+  color: var(--color-muted);
+}
+
+.trace-detail-op {
+  flex: 0 0 3ch;
+  color: var(--color-directive);
+}
+
+.trace-detail-value {
+  color: var(--color-string);
+}
+
+// --- error dialog ---
+
+.trace-error-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.trace-error-dialog {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  padding: 16px;
+  min-width: 280px;
+  font-family: var(--font-ui);
+}
+
+.trace-error-title {
+  font-size: var(--font-size-ui-panel);
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.trace-error-message {
+  font-size: var(--font-size-btn);
+  color: var(--color-danger);
+  margin-bottom: 12px;
+  white-space: pre-wrap;
+}
+
+.trace-error-buttons {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.trace-error-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+}

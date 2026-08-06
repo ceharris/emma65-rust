@@ -822,11 +822,16 @@ impl Cpu {
     // --- branch helper ---
 
     /// Executes a relative branch if `cond` is true. Returns extra cycles consumed.
+    ///
+    /// The offset byte is always read via the bus, even when `cond` is false:
+    /// real hardware always fetches both instruction bytes regardless of
+    /// whether the branch is taken, and bus tracing/disassembly reconstruction
+    /// depends on that read happening for every instruction.
     fn branch(&mut self, cond: bool, pc: u16) -> Result<u8, ExecError> {
+        let offset = self.bus_read(pc + 1)? as i8;
         if !cond {
             return Ok(0);
         }
-        let offset = self.bus_read(pc + 1)? as i8;
         // PC is already at pc+2 (after the 2-byte branch instruction)
         let target = self.regs.pc.wrapping_add(offset as u16);
         let page_extra = if page_crossed(self.regs.pc, target) { 1u8 } else { 0 };
@@ -848,11 +853,13 @@ impl Cpu {
         self.bus_write(zp, val | (1 << bit))
     }
 
+    // The offset byte (pc + 2) is always read via the bus, even when the bit
+    // test doesn't trigger the branch — see `branch()`'s doc comment.
     fn bbr(&mut self, pc: u16, bit: u8) -> Result<u8, ExecError> {
         let zp = self.bus_read(pc + 1)? as u16;
         let val = self.bus_read(zp)?;
+        let offset = self.bus_read(pc + 2)? as i8;
         if val & (1 << bit) == 0 {
-            let offset = self.bus_read(pc + 2)? as i8;
             let target = self.regs.pc.wrapping_add(offset as u16);
             self.regs.pc = target;
             Ok(1)
@@ -864,8 +871,8 @@ impl Cpu {
     fn bbs(&mut self, pc: u16, bit: u8) -> Result<u8, ExecError> {
         let zp = self.bus_read(pc + 1)? as u16;
         let val = self.bus_read(zp)?;
+        let offset = self.bus_read(pc + 2)? as i8;
         if val & (1 << bit) != 0 {
-            let offset = self.bus_read(pc + 2)? as i8;
             let target = self.regs.pc.wrapping_add(offset as u16);
             self.regs.pc = target;
             Ok(1)
@@ -1485,6 +1492,28 @@ mod tests {
     }
 
     #[test]
+    fn not_taken_branch_still_reads_offset_byte() {
+        // Real hardware always fetches both bytes of a branch instruction,
+        // whether taken or not; bus tracing / trace-reconstruction (see
+        // TraceDisassembler) depends on that read happening every time.
+        let mut cpu = make_cpu(0x0200);
+        cpu.regs.p.insert(StatusRegister::Z);
+        write_program(&mut cpu, 0x0200, &[0xD0, 0x10]); // BNE +16, not taken (Z set)
+
+        let cb = Box::new(CapturingCallback(Vec::new()));
+        let cb_ptr = &*cb as *const CapturingCallback as *mut CapturingCallback;
+        cpu.set_trace_callback(Some(cb));
+
+        cpu.step(None, true);
+
+        let records = unsafe { &(*cb_ptr).0 };
+        assert!(
+            records.iter().any(|r| r.kind == TraceKind::Read { addr: 0x0201, value: 0x10 }),
+            "offset byte at pc+1 must be read even when the branch is not taken"
+        );
+    }
+
+    #[test]
     fn beq_taken_when_zero() {
         let mut cpu = make_cpu(0x0200);
         cpu.regs.p.insert(StatusRegister::Z);
@@ -1751,6 +1780,27 @@ mod tests {
         write_program(&mut cpu, 0x0200, &[0x0F, 0x50, 0x04]);
         cpu.step(None, true);
         assert_eq!(cpu.regs.pc, 0x0203); // not taken
+    }
+
+    #[test]
+    fn bbr_not_taken_still_reads_offset_byte() {
+        // See `not_taken_branch_still_reads_offset_byte`: BBRn/BBSn are
+        // 3-byte instructions and must always fetch all 3 bytes via the bus.
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(0x0050, 0x01).unwrap(); // bit 0 set -> not taken
+        write_program(&mut cpu, 0x0200, &[0x0F, 0x50, 0x04]); // BBR0 $50, +4
+
+        let cb = Box::new(CapturingCallback(Vec::new()));
+        let cb_ptr = &*cb as *const CapturingCallback as *mut CapturingCallback;
+        cpu.set_trace_callback(Some(cb));
+
+        cpu.step(None, true);
+
+        let records = unsafe { &(*cb_ptr).0 };
+        assert!(
+            records.iter().any(|r| r.kind == TraceKind::Read { addr: 0x0202, value: 0x04 }),
+            "offset byte at pc+2 must be read even when the branch is not taken"
+        );
     }
 
     #[test]
