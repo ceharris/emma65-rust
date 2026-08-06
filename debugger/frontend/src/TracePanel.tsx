@@ -377,7 +377,7 @@ export default function TracePanel() {
                 <th>P</th>
                 <th>Flags</th>
                 <th>Addr</th>
-                <th>Bytes</th>
+                <th>Code</th>
                 <th colSpan={3}>Instruction</th>
               </tr>
             </thead>
