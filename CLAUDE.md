@@ -5,45 +5,72 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-cargo build          # build
-cargo test           # run all tests
-cargo test <name>    # run a single test by name (partial match)
-cargo clippy         # lint
+cargo build              # build the emma65 and emma65-tracer binaries + library
+cargo build --workspace  # also build the debugger crate (emma65-debugger)
+cargo test                # run the library/binary test suite
+cargo test --workspace    # also run the debugger crate's tests
+cargo test <name>         # run a single test by name (partial match)
+cargo clippy              # lint (covers the debugger crate too — it's a workspace member)
 ```
+
+The debugger's frontend (`debugger/frontend/`) is a separate React/TypeScript/Vite project.
+Tauri invokes `npm run build` there automatically as part of `cargo tauri build` /
+`cargo tauri dev`; it is not built by plain `cargo build`.
 
 ## Architecture
 
-`emma65` is a Rust crate (2024 edition) with a library and a binary. The library exposes
-two top-level public modules:
+`emma65` is a Cargo workspace (Rust 2024 edition) with two members:
 
-- **`emulator`** — CPU, memory bus, devices, transport, config, and execution model
+- **`.`** (crate `emma65`) — the emulator library plus two binaries: `emma65` (the emulator)
+  and `emma65-tracer` (decodes binary trace files)
+- **`debugger/src-tauri`** (crate `emma65-debugger`) — a Tauri 2 desktop app that hosts the
+  emulator and exposes a full-featured debugger UI
+
+The `emma65` library exposes two top-level public modules:
+
+- **`emulator`** — CPU, memory bus, devices, transport, execution/trace model, and config
 - **`watch`** — watchpoint expression pipeline (scanner → parser → compiler → evaluator)
-
-The binary is in `src/bin/emulator/`. It uses `emulator::config` to load configuration
-from TOML, environment variables, and CLI arguments, then builds and runs an
-`EmulatorSession`.
 
 ### Crate structure
 
 ```
 src/
   lib.rs                  — exposes pub mod emulator, pub mod watch
-  bin/emulator/
-    main.rs               — binary entry point; embeds default.bin ROM
-    config.rs             — AppConfig, CliArgs, apply_default_if_unconfigured
+  bin/
+    emulator/
+      main.rs              — emma65 binary entry point; embeds default.bin ROM
+      config.rs             — AppConfig, CliArgs, apply_default_if_unconfigured
+      tty.rs                — terminal/PTY helpers for the CLI console
+    tracer/
+      main.rs               — emma65-tracer binary entry point (CLI args, trace decode loop)
+      format.rs             — text rendering of decoded trace rows
   emulator/
-    mod.rs                — re-exports public API surface
-    bus/                  — Bus, BusConfig, address regions, bus tracing, Interrupt controller, IrqSource
-    cpu/                  — Cpu, Registers, opcode decode, status register, variant
-    device/               — IoDevice trait, built-in devices (Console, R6551, Mc6850, Via6522)
-    disasm/               — Disassembler
-    error.rs              — BusConfigError, BusError, CpuBuildError, ExecError
-    exec/                 — ClockSpeed, StepResult, RunHandle, run()
-    transport/            — Transport trait, PipeTransport, TcpTransport, UnixSocketTransport, PtyTransport
-    session.rs            — EmulatorSession (owns Cpu + ErrorReceiver)
-    config/               — configuration loading and device module registry (see below)
-  watch/                  — watchpoint expression pipeline (see below)
+    mod.rs                  — re-exports public API surface
+    bus/                    — Bus, BusConfig, address regions, DeviceIdAllocator, symbol
+                               table (VICE label loading), bus loader, Interrupt controller, IrqSource
+    cpu/                    — Cpu, Registers, opcode decode, ALU, status register, variant,
+                               bus-access trace recording (binary trace format)
+    device/                 — IoDevice trait, built-in devices, device/protocol (VIA and PTM
+                               peer-communication message encoders/decoders)
+    disasm/                 — Disassembler, and disasm/trace (reconstructs disassembly lines
+                               from a recorded trace stream)
+    error.rs                — BusConfigError, BusError, CpuBuildError, ExecError
+    exec/                   — ClockSpeed, StepResult, CpuLiveSnapshot, RunHandle/RunStopper,
+                               run(), run_from(), step_into(), step_over_subroutine(),
+                               step_over_breakpoint(), step_return()
+    transport/               — Transport trait, ChannelRelay, TransportRelay, TransportReporter,
+                               InternalPipeTransport, PipeTransport, TcpSocketTransport,
+                               UnixSocketTransport, PtyTransport
+    session.rs               — EmulatorSession (owns Cpu, ErrorReceiver, DeviceIdAllocator)
+    config/                  — configuration loading and device module registry (see below)
+  watch/                    — watchpoint expression pipeline (see below)
+debugger/
+  src-tauri/                — emma65-debugger: Tauri commands/state per UI panel (see below)
+  frontend/                 — React/TypeScript/Vite UI (panels, styles, keybindings)
 ```
+
+`util/via_sr_peripheral.py` is a standalone Python script that emulates a VIA shift-register
+peripheral over a transport, useful for manually exercising `Via6522`'s shift-register modes.
 
 ---
 
@@ -61,15 +88,16 @@ DeviceSpec          // parsed device entry: type@address,key=val,...
 DeviceModule        // trait for pluggable device modules
 DeviceModuleError   // BusConfig | Transport | Config | Load | Io
 DeviceRegistry      // maps module names to InstantiateFn closures
-InstantiationContext // clock_hz, error_sender passed to DeviceModule::instantiate()
+InstantiationContext // clock_hz, error_sender, console_transport passed to DeviceModule::instantiate()
 RamModule / RomModule
 TransportSpec       // Tcp { port, address } | Unix { path } | Pty { path }
 TransportSpecFormat // serde-untagged: Shorthand(String) | Structured(TransportSpec)
 ExpandedPathBuf     // PathBuf that expands ~/ at construction; used for path attrs
 ```
 
-Built-in device modules (registered by `DeviceRegistry::with_builtins()`):
-`ram`, `rom`, `console`, `acia/6551`, `acia/6850`, `via/6522`
+Built-in device modules (registered by `DeviceRegistry::with_builtins()`), by config `type` string:
+`ram`, `rom`, `console`, `mem/finch`, `display/matrix`, `lfsr`, `acia/6551`, `ptm/6840`,
+`acia/6850`, `mem/phoebe`, `via/6522`, `mem/vireo`.
 
 `Config::build(&registry)` iterates `devices`, dispatches each to its `DeviceModule`,
 builds the `BusConfig`, constructs `Cpu`, and returns `EmulatorSession`.
@@ -90,6 +118,13 @@ The binary applies a built-in default (TaliForth ROM + RAM + console PTY at
 `.build()` produces a `Bus`. Most-specific-wins overlap: smaller regions shadow larger
 ones at the same addresses. Ambiguous same-size overlaps are caught at build time.
 
+`DeviceIdAllocator` hands out `DeviceId`s that don't collide with configured devices;
+`EmulatorSession` exposes it post-configuration so hosts (e.g. the debugger UI) can
+allocate additional IDs for UI-driven controls (like an IRQ toggle) safely.
+
+`symbol::load_vice_labels` loads a VICE-format label file into a `SymbolTable`, used by
+the disassembler, trace tooling, and the debugger to resolve addresses to names.
+
 ---
 
 ### `emulator::cpu`
@@ -97,8 +132,14 @@ ones at the same addresses. Ambiguous same-size overlaps are caught at build tim
 `Cpu::builder(variant)` → `CpuBuilder` → `Cpu`. Two variants: `Cmos65C02` and
 `Wdc65C02`. The builder accepts a `ClockSpeed` and a `Bus`.
 
-`Cpu::step()` returns `StepResult`. `exec::run()` drives a free-running loop with
-optional clock throttling.
+`Cpu::step()` returns `StepResult`. `exec::run()` and friends (below) drive execution.
+
+`cpu::trace` implements bus-access tracing: `TraceCallback`/`ChannelTraceCallback` receive
+`TraceRecord`s (`TraceKind::Registers | Read | Write | Cycles`) as the CPU executes;
+`BinaryTraceWriter`/`BinaryTraceReader` persist them to/from a versioned binary format
+(magic `E65T`, currently format version 2, header carries the CPU variant); `spawn_trace_writer`
+runs the writer on a background thread fed by a channel, with a configurable `OverflowPolicy`.
+This is the backbone for both the `emma65-tracer` binary and the debugger's live trace window.
 
 ---
 
@@ -113,8 +154,33 @@ fn peek(&self, offset: u16) -> u8;   // side-effect-free (watchpoints, disassemb
 // optional: tick(), irq_active(), take_nmi(), name()
 ```
 
-Devices that need byte-stream I/O hold an `Option<Box<dyn Transport>>`. TCP and Unix
-socket transports listen for incoming connections; PTY creates a pseudoterminal.
+Built-in devices: `Console`, `R6551`, `Mc6850`, `Via6522`, `Mc6840`, `Finch`, `Phoebe`, `Vireo`,
+`LedMatrix`, `Lfsr16`. Devices that need byte-stream I/O hold a `TransportRelay` connected to
+an `Option<Box<dyn Transport>>`; the VIA and MC6840 additionally support a structured
+peer-communication protocol (ASCII or binary framing) implemented in `device::protocol`
+(`device::protocol::via`, `device::protocol::ptm`) for exchanging port/pin state with real or
+emulated peripherals over that transport.
+
+---
+
+### `emulator::exec`
+
+`run()`/`run_from()` drive a free-running loop (optionally clock-throttled) on a background
+thread, returning a `RunHandle`/`RunStopper` pair for stopping it and reading a live
+`CpuLiveSnapshot` (registers, stack page, cycle counts, IRQ/NMI/STP/WAI status, a memory page)
+without pausing the CPU. `step_into()`, `step_over_subroutine()`, `step_over_breakpoint()`, and
+`step_return()` implement the debugger's single-step, step-over, and step-out commands.
+
+---
+
+### `emulator::transport`
+
+`Transport` is the byte-stream abstraction; implementations: `PipeTransport`,
+`InternalPipeTransport`, `TcpSocketTransport`, `UnixSocketTransport`, `PtyTransport`. TCP and
+Unix socket transports listen for incoming connections; PTY creates a pseudoterminal.
+`TransportRelay`/`ChannelRelay` decouple a device's synchronous `tick()` from the transport's
+async I/O task; `TransportReporter` surfaces connect/disconnect/error events as `DeviceEvent`s
+(consumed via `device_event_channel()`).
 
 ---
 
@@ -144,8 +210,9 @@ pub use self::session::{WatchCompiler, WatchEvaluator, Watchpoint};
 #### Submodules
 
 - **`text`** — zero-copy cursor over `&str`; `consume()` returns `[start..current]`
+- **`location`** — source position tracking used by tokens and diagnostics
 - **`scanner`** — tokenizes source; handles `0x`/`$`/`0o`/`0q`/`0b`/decimal literals
-- **`token`** — `Token<'a>` with `TokenType`, `&'a str` text slice, and `Location`
+- **`token`** — `Token<'a>` with `TokenType` and an `&'a str` text slice
 - **`expr`** — `Expr<'a>` AST: leaf nodes (Number, Register, Flag, Variable), Assign (walrus), UnaryOperator (includes Fetch), BinaryOperator; `signed: bool` field
 - **`variables`** — `Variables` maps names to stable `Operand` IDs via `get_or_create`
 - **`parser`** — recursive descent; precedence: `:=` → `||` → `&&` → `|` → `^` → `&` → `==` → relational → shift → `+/-` → `*/` → unary → primary
@@ -166,3 +233,28 @@ pub use self::session::{WatchCompiler, WatchEvaluator, Watchpoint};
 `Token<'a>` and `Expr<'a>` borrow from the source `&'a str`. After `compiler::compile`
 consumes the tree, the resulting `Vec<OpCode>` (stored in `Watchpoint`) has no lifetime
 parameters and can be stored freely.
+
+---
+
+### `debugger` crate (`debugger/src-tauri/`)
+
+A Tauri 2 desktop app (`emma65-debugger`) that loads config from
+`~/.emma/debugger/default/emulator.toml`, builds an `EmulatorSession` with an injected
+`InternalPipeTransport` wired to its terminal window, and exposes the emulator to a
+React/TypeScript frontend (`debugger/frontend/`) via `#[tauri::command]`s. One module per
+UI panel:
+
+- **`registers`** — register snapshot/edit
+- **`cpu_bus`** — reset, IRQ assert/release, NMI trigger, cached bus-signal snapshot
+- **`disassembly`** — run/stop/step-into/step-over/step-return, breakpoint CRUD, disassembly listing
+- **`memory`** — paged reads/writes/fills/file loads
+- **`stack`** — stack pointer and stack page snapshot
+- **`terminal`** — console byte-stream bridge and window visibility (toggleable window)
+- **`trace`** — live-recorded execution trace, windowed reads, window visibility (toggleable window)
+- **`watchpoints`** — loads/compiles `watchpoints.emw`, evaluates on demand, add/remove/edit/toggle with persistence
+- **`theme`** — light/dark theme preference
+- **`menu`** — native File/Edit/Window/Help menu bar and Window-menu checkbox sync
+
+Devices requiring a byte-stream peer (VIA, MC6840, ACIAs) still use their configured
+`Transport` independent of the debugger UI; only the console is special-cased to route
+through the debugger's own terminal window.
