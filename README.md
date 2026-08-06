@@ -216,6 +216,16 @@ let bus = Bus::config()
     .build();
 ```
 
+`.build()` resolves every one of the 65,536 possible addresses to its
+most-specific region exactly once, consulting `IoDevice::claims()` on each
+overlapping device candidate along the way to settle any conditional
+chip-select. That one-time resolution is cached in a flat lookup table, so
+every read or write the CPU subsequently performs is a single array index —
+no walking the configured regions and no re-consulting `claims()` at
+runtime — keeping bus access overhead effectively constant regardless of how
+many devices are configured, out of the way of maximum emulated CPU
+throughput.
+
 Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
 `StepResult::Error` so the host application can decide how to respond.
 
@@ -262,12 +272,10 @@ rest of what it needs to behave like real hardware:
   (an implementation sets an internal flag on the triggering event and
   clears it here). See [Interrupt Support](#interrupt-support) above for how
   the CPU combines these signals from every device on the bus.
-- `claims(addr)` lets a device conditionally decline an address within its
-  own mapped range, falling through to the next most-specific region;
-  `reset()` restores hardware-reset state; `patch()` writes a value while
-  bypassing a device's own read-only restrictions (used to load ROM images
-  and by the debugger's Memory panel); `shutdown()` signals an owned
-  transport to begin closing down.
+- **Lifecycle and direct writes** — `reset()` restores hardware-reset state;
+  `patch()` writes a value while bypassing a device's own read-only
+  restrictions (used to load ROM images and by the debugger's Memory panel);
+  `shutdown()` signals an owned transport to begin closing down.
 
 #### Execution Tracing
 
