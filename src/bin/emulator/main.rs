@@ -64,7 +64,6 @@ async fn main() -> ExitCode {
                 writer,
                 4096,
                 emma65::emulator::OverflowPolicy::DropOnFull,
-                false,
             );
             cpu.set_trace_callback(Some(Box::new(callback)));
             Some(handle)

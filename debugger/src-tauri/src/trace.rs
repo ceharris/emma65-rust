@@ -151,15 +151,13 @@ pub fn record_trace(path: String, cpu_state: State<CpuState>, trace_state: State
     let file = File::create(&path).map_err(|e| e.to_string())?;
     let writer = BinaryTraceWriter::new(file, cpu.variant());
     // BlockOnFull, unlike the CLI capture use case's DropOnFull: a debugger
-    // trace that silently drops instructions would be misleading. Not
-    // flush-per-record (which cratered free-run throughput, issue #273):
-    // instead, `Cpu::flush_trace` is called once per debugger step/run
-    // command (see `exec::step_into` and friends), so get_trace_window's
-    // independent file handle sees every row from a command by the time its
-    // `debugger-halted`/`debugger-run-stopped` event fires, without paying a
-    // flush syscall per instruction during a free run.
+    // trace that silently drops instructions would be misleading. `Cpu::flush_trace`
+    // is called once per debugger step/run command (see `exec::step_into` and
+    // friends), not per record (which cratered free-run throughput, issue #273),
+    // so get_trace_window's independent file handle sees every row from a command
+    // by the time its `debugger-halted`/`debugger-run-stopped` event fires.
     let (callback, writer_handle, _dropped) =
-        spawn_trace_writer(writer, TRACE_CHANNEL_CAPACITY, OverflowPolicy::BlockOnFull, false);
+        spawn_trace_writer(writer, TRACE_CHANNEL_CAPACITY, OverflowPolicy::BlockOnFull);
 
     let row_index = Arc::new(Mutex::new(Vec::new()));
     let indexing_callback =
