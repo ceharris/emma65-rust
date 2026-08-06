@@ -118,7 +118,20 @@ Build and run the debugger from `debugger/src-tauri` with the
 `cargo tauri build` for a packaged release); this drives an `npm run build`
 of the `debugger/frontend` React/TypeScript UI automatically.
 
-## Correctness
+## The Emulator Core
+
+At the heart of Emma65 is a CPU model that faithfully emulates the 65C02
+instruction set and interrupt behavior, paired with a flexibly configurable
+memory bus and a growing library of virtual I/O devices — everything the
+`emma65` command-line emulator, the debugger, and the tracer are all built
+on. Memory and devices are mapped into the 16-bit address space however a
+program needs them, devices talk to real or emulated peripherals over
+pluggable transports, and execution can be inspected and controlled through
+expression-based watchpoints and a recorded instruction trace. The following
+sections describe this core in detail, starting with how closely it matches
+real 65C02 hardware.
+
+### Correctness
 
 Emma65 passes
 the [Klaus Dormann 65C02 test suite](https://github.com/Klaus2m5/6502_65C02_functional_tests),
@@ -130,9 +143,9 @@ which independently verifies all 256×256 ADC and SBC operand combinations in
 BCD mode against predicted CMOS 65C02 results. Users can rely on Emma65's
 instruction-level behavior matching real hardware.
 
-## Features
+### Features
 
-### Instruction Set
+#### Instruction Set
 
 Emma65 emulates two variants of the 65C02 processor family:
 
@@ -151,7 +164,7 @@ All 16 addressing modes are supported, including the zero-page relative mode
 used by the WDC bit-branch instructions. Invalid opcodes can be configured to
 either silently act as NOPs or to halt execution with an error.
 
-### Interrupt Support
+#### Interrupt Support
 
 Emma65 implements the full 65C02 interrupt model:
 
@@ -168,7 +181,7 @@ Emma65 implements the full 65C02 interrupt model:
 On interrupt entry the D flag is cleared, matching CMOS 65C02 hardware
 behavior.
 
-### Clock Speed Simulation
+#### Clock Speed Simulation
 
 Free-running execution throttles to a configurable target clock frequency by
 comparing accumulated emulated cycles against elapsed wall time, sleeping as
@@ -185,7 +198,7 @@ ClockSpeed::mhz(2.0)       // 2 MHz — BBC Micro speed
 ClockSpeed::unlimited()    // Maximum throughput; no throttling
 ```
 
-### Memory and Bus Configuration
+#### Memory and Bus Configuration
 
 The memory bus is organized around named address regions mapped into the
 16-bit address space. Regions can be RAM, ROM (write-protected), or I/O device
@@ -206,7 +219,7 @@ let bus = Bus::config()
 Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
 `StepResult::Error` so the host application can decide how to respond.
 
-### Virtual I/O Devices
+#### Virtual I/O Devices
 
 Ten built-in devices implement the `IoDevice` trait. Seven — Console, R6551,
 Mc6850, Via6522, Mc6840, LedMatrix, and Lfsr16 — are register-window devices
@@ -218,7 +231,7 @@ bank-switched memory subsystems that occupy the entire 64 KB address space in
 place of separate RAM/ROM regions; see
 [Bank-Switched Memory Modules](#bank-switched-memory-modules) below.
 
-#### Console (`Console`)
+##### Console (`Console`)
 
 A simple polling console device for byte-stream I/O:
 
@@ -238,7 +251,7 @@ A simple polling console device for byte-stream I/O:
   (useful for simulating input under program control).
 - Designed as the backend for the debugger's built-in terminal emulator
 
-#### 6522 Versatile Interface Adapter (`Via6522`)
+##### 6522 Versatile Interface Adapter (`Via6522`)
 
 A comprehensive implementation of the WDC 65C22 Versatile Interface 
 Adapter (VIA):
@@ -262,7 +275,7 @@ exchange port state and control signal transitions with real or emulated
 peripherals. On connection the VIA sends a full state dump so the 
 peripheral starts with an accurate picture of all pins and control lines.
 
-#### MC6840 Programmable Timer Module (`Mc6840`)
+##### MC6840 Programmable Timer Module (`Mc6840`)
 
 A comprehensive implementation of the Motorola MC6840 Programmable Timer 
 Module (PTM).
@@ -279,7 +292,7 @@ exchange port state and control signal transitions with real or emulated
 peripherals. On connection, the PTM sends a full state dump so the
 peripheral starts with an accurate picture of all pins and control lines.
 
-#### MC6850 Asynchronous Communications Adapter (`Mc6850`)
+##### MC6850 Asynchronous Communications Adapter (`Mc6850`)
 
 An comprehensive implementation of the Motorola MC6850 Asynchronous 
 Communications Interface Adapter (ACIA):
@@ -293,7 +306,7 @@ Communications Interface Adapter (ACIA):
 Flexible transport options allowing virtual peripheral connection via
 common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
 
-#### R6551 Asynchronous Communication Adapter (`R6551`)
+##### R6551 Asynchronous Communication Adapter (`R6551`)
 
 An implementation of the Rockwell 6551 Asynchronous Communications Interface
 Adapter (ACIA):
@@ -311,7 +324,7 @@ Adapter (ACIA):
 Flexible transport options allowing virtual peripheral connection via
 common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
 
-#### RGB LED Matrix Display Adapter (`LedMatrix`)
+##### RGB LED Matrix Display Adapter (`LedMatrix`)
 
 A parallel-bus adapter for an RGB LED matrix display managed by its own
 microcontroller:
@@ -330,7 +343,7 @@ microcontroller:
 The display uses a transport to exchange commands and status with a real or
 emulated display peripheral.
 
-#### 16-bit Galois LFSR (`Lfsr16`)
+##### 16-bit Galois LFSR (`Lfsr16`)
 
 A memory-mapped pseudo-random number generator based on a 16-bit Galois
 linear-feedback shift register (default tap mask `0xB400`, a maximal-length
@@ -341,7 +354,7 @@ linear-feedback shift register (default tap mask `0xB400`, a maximal-length
   execution; **step** mode advances only when explicitly clocked, for
   reproducible pseudo-random sequences under program control
 
-### Bank-Switched Memory Modules
+#### Bank-Switched Memory Modules
 
 Finch, Phoebe, and Vireo are complete memory subsystems — RAM, ROM, and a
 bank-switching MMU — rather than register-window devices. Each claims the
@@ -351,7 +364,7 @@ unused. All three support an optional ROM `write-policy` (`ignore` or
 `error`), an `image` loaded at an optional `offset`, and an optional VICE
 `labels` file for symbol resolution.
 
-#### Finch bank-switched MMU (`Finch`)
+##### Finch bank-switched MMU (`Finch`)
 
 512 KB RAM and 512 KB ROM behind a simple MMU: the top four bits of the 6502
 address bus (`A12..A15`) index into 16 one-byte bank registers, each
@@ -360,7 +373,7 @@ into that 4 KB window of the 6502's address space. Two memory-mapped
 registers (configurable addresses) control the bank registers and other MMU
 functions.
 
-#### Phoebe bank-switched memory (`Phoebe`)
+##### Phoebe bank-switched memory (`Phoebe`)
 
 56 KB RAM and 32 KB ROM. The ROM is split into four 8 KB banks; bank 3 is
 permanently mapped into the upper half of a 16 KB switchable region at
@@ -368,14 +381,14 @@ permanently mapped into the upper half of a 16 KB switchable region at
 memory-mapped control register selects which of banks 0–2 (or none, exposing
 the underlying RAM instead) occupies the lower half.
 
-#### Vireo bank-switched memory (`Vireo`)
+##### Vireo bank-switched memory (`Vireo`)
 
 128 KB RAM and 32 KB ROM behind an elegant bank-switching scheme supporting
 four configurations — from a plain 32 KB RAM / 32 KB ROM split up to modes
 that expose additional RAM banks beyond the 64 KB address space — selected
 via a single memory-mapped control register.
 
-### Transport Options
+#### Transport Options
 
 Devices that exchange byte streams attach a `Transport`. Configurable via TOML/CLI:
 
@@ -406,7 +419,7 @@ that exchanges full port/pin state on connection and incremental updates
 thereafter, so a real or emulated peripheral always has an accurate picture
 of the device's signals.
 
-### Extensibility
+#### Extensibility
 
 Custom devices implement the `IoDevice` trait. Only three methods are
 required:
@@ -421,7 +434,7 @@ fn write(&mut self, address: u16, value: u8);
 fn peek(&self, address: u16) -> u8;
 ```
 
-### Execution Tracing
+#### Execution Tracing
 
 The CPU can record every register snapshot and bus read/write to a compact
 binary trace format (magic `E65T`) as it executes, via a pluggable
