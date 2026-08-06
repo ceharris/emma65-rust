@@ -219,7 +219,20 @@ let bus = Bus::config()
 Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
 `StepResult::Error` so the host application can decide how to respond.
 
-#### Extensibility
+#### Memory-Mapped I/O Devices
+
+Devices are mapped onto the bus with the same builder call used for RAM and
+ROM regions — `BusConfig::device(AddressRange, DeviceId, Box<dyn IoDevice>)`
+— so a device window is subject to the same build-time overlap checking. The
+built-in `ram`, `rom`, `console`, and other `type`s configurable from
+TOML/CLI (see [Running the Emulator](#running-the-emulator)) are themselves
+just `DeviceModule` implementations that make this same call: each is
+registered by name in a `DeviceRegistry`, and `Config::build()` instantiates
+one per `[[devices]]` entry (or `--device` flag) as it walks the configured
+device list at startup. A custom device plugs into this exact same
+configuration surface — see
+[Adding a Custom Device Module](#adding-a-custom-device-module) under For
+Contributors.
 
 Custom devices implement the `IoDevice` trait. Only three methods are
 required:
@@ -233,6 +246,28 @@ fn write(&mut self, address: u16, value: u8);
 /// inhibiting side effects; used by the debugger.
 fn peek(&self, address: u16) -> u8;
 ```
+
+A handful of further methods, each with a no-op default, give a device the
+rest of what it needs to behave like real hardware:
+
+- **Timing** — `tick(cycles: u32)` is called once per instruction, right
+  after it completes, with the number of clock cycles that instruction
+  actually took. A device advances its own internal timers and counters by
+  exactly that many cycles, keeping it in lock-step with CPU time without
+  being invoked on every single cycle; `Via6522`'s two timers and
+  `Mc6840`'s three are both built on this.
+- **Interrupts** — `irq_active()` is polled after every instruction to
+  report whether the device is currently asserting the shared IRQ line, and
+  `take_nmi()` is called once per instruction to consume a pending NMI edge
+  (an implementation sets an internal flag on the triggering event and
+  clears it here). See [Interrupt Support](#interrupt-support) above for how
+  the CPU combines these signals from every device on the bus.
+- `claims(addr)` lets a device conditionally decline an address within its
+  own mapped range, falling through to the next most-specific region;
+  `reset()` restores hardware-reset state; `patch()` writes a value while
+  bypassing a device's own read-only restrictions (used to load ROM images
+  and by the debugger's Memory panel); `shutdown()` signals an owned
+  transport to begin closing down.
 
 #### Execution Tracing
 
