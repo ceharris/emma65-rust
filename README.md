@@ -693,8 +693,13 @@ might. Beyond those three required methods, override whichever optional ones
 your device actually needs — `tick()` for cycle-accurate timing,
 `irq_active()`/`take_nmi()` for interrupts, `reset()`/`shutdown()` for
 lifecycle, `claims()` for conditional chip-select — all described in
-[Memory-Mapped I/O Devices](#memory-mapped-io-devices) above; everything
-else defaults to a no-op.
+[Memory-Mapped I/O Devices](#memory-mapped-io-devices) above. Note that both
+interrupt hooks are polled by the CPU, not called by the device itself:
+`irq_active()` is a live query of your own IRQ state, and `take_nmi()` is
+called once per step to report and clear a pending edge that your own code
+raised internally (e.g. via a `signal_nmi()`-style helper of your own that
+sets a pending flag on the triggering write) — not something a device calls
+on itself. Everything else defaults to a no-op.
 
 ```rust
 use emma65::emulator::IoDevice;
