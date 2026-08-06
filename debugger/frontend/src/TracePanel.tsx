@@ -152,10 +152,17 @@ export default function TracePanel() {
     document.documentElement.setAttribute("data-theme", resolvedTheme);
   }, [resolvedTheme]);
 
+  // Whether the log body should snap to the bottom of its content once the
+  // window just fetched is rendered. Only true for tail-follow fetches; scroll/
+  // jump fetches anchor to the top of the fetched window instead (see the
+  // scroll-position effect below).
+  const stickToBottomRef = useRef(false);
+
   /** Fetch `VIEWPORT_ROWS` rows starting at `start` and replace the displayed window. */
-  const fetchWindow = useCallback(async (start: number) => {
+  const fetchWindow = useCallback(async (start: number, stickToBottom = false) => {
     try {
       const page = await invoke<TraceWindowPage>("get_trace_window", { startRow: start, count: VIEWPORT_ROWS });
+      stickToBottomRef.current = stickToBottom;
       setRows(page.rows);
       setTotalRows(page.total_rows);
       setStartRow(start);
@@ -166,7 +173,7 @@ export default function TracePanel() {
 
   /** Re-fetches the tail window, following the live end of the recording. */
   const fetchTail = useCallback(() => {
-    return fetchWindow(Math.max(0, totalRowsRef.current - VIEWPORT_ROWS));
+    return fetchWindow(Math.max(0, totalRowsRef.current - VIEWPORT_ROWS), true);
   }, [fetchWindow]);
 
   // Restore toolbar state on mount (e.g. the window was hidden and reopened
@@ -318,12 +325,16 @@ export default function TracePanel() {
   );
 
   // Rows lay out top-down; once the fetched window's rendered height exceeds
-  // the viewport (label rows can push it past VIEWPORT_ROWS' worth), scroll
-  // to the bottom so the newest row stays visible, matching live-follow.
+  // the viewport (label rows can push it past VIEWPORT_ROWS' worth), the log
+  // body needs an explicit scroll position. Tail-follow fetches stick to the
+  // bottom so the newest row stays visible; scroll/jump fetches anchor to the
+  // top so the fetched window (including its first row) is reachable instead
+  // of being immediately scrolled past.
   const logBodyRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = logBodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = stickToBottomRef.current ? el.scrollHeight : 0;
   }, [rows]);
 
   const selectedRow = rows.find((r) => r.seq === selectedSeq) ?? null;
