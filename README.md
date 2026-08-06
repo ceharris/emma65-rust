@@ -7,9 +7,18 @@ Emma65 is a software emulator for the 65C02-family of 8-bit microprocessors.
 It provides a complete execution environment suitable for running and
 debugging programs written for classic 65C02-based systems, with support for
 flexible memory configuration, a rich set of virtual I/O devices, and
-expression-based watchpoints. It is designed as a foundation for building
-retro-computing tools, educational simulators, and hardware-in-the-loop test
-rigs.
+expression-based watchpoints. The project ships three tools built on the same
+emulator core:
+
+- **`emma65`** — a command-line emulator for running programs directly
+- **`emma65-debugger`** — a graphical debugger (registers, disassembly,
+  memory, stack, watchpoints, and a live execution trace, in a native desktop
+  app) for interactively developing and troubleshooting programs
+- **`emma65-tracer`** — a utility that decodes a recorded binary execution
+  trace into a human-readable, symbol-annotated disassembly listing
+
+Together they form a foundation for building retro-computing tools,
+educational simulators, and hardware-in-the-loop test rigs.
 
 ## Correctness
 
@@ -101,10 +110,15 @@ Bus errors (unmapped reads/writes, ROM write violations) are surfaced through
 
 ### Virtual I/O Devices
 
-All four built-in devices implement the `IoDevice` trait and can be mapped
-into any address range on the bus. Each integrates with the interrupt
-controller via `irq_active()`
-and `take_nmi()`, and with the transport system for byte-stream I/O.
+Ten built-in devices implement the `IoDevice` trait. Seven — Console, R6551,
+Mc6850, Via6522, Mc6840, LedMatrix, and Lfsr16 — are register-window devices
+that can be mapped into any address range on the bus; each integrates with
+the interrupt controller via `irq_active()` and `take_nmi()`, and, where it
+exchanges data with the outside world, with the transport system for
+byte-stream I/O. The other three — Finch, Phoebe, and Vireo — are complete
+bank-switched memory subsystems that occupy the entire 64 KB address space in
+place of separate RAM/ROM regions; see
+[Bank-Switched Memory Modules](#bank-switched-memory-modules) below.
 
 #### Console (`Console`)
 
@@ -199,21 +213,95 @@ Adapter (ACIA):
 Flexible transport options allowing virtual peripheral connection via
 common IPC mechanisms; pipe, pseudo-TTY, TCP socket, UNIX-domain socket
 
+#### RGB LED Matrix Display Adapter (`LedMatrix`)
+
+A parallel-bus adapter for an RGB LED matrix display managed by its own
+microcontroller:
+
+- 8 addressable registers: pixel X/Y, fill width/height, a 256-entry color
+  palette index, interrupt flag/enable registers, and a command/data register
+- Double-buffered: all drawing commands (set pixel, fill rectangle, blit
+  image, palette load, buffer swap) target an off-screen buffer that is
+  atomically exchanged with the visible one
+- 256-color palette using 16-bit RGB565 entries, organized like the Xterm
+  256-color palette (16 named colors, a 6×6×6 color cube, and a 24-level
+  grayscale ramp) by default
+- IFR/IER interrupt flag and enable registers signal display status (e.g.
+  command-ready) back to the CPU
+
+The display uses a transport to exchange commands and status with a real or
+emulated display peripheral.
+
+#### 16-bit Galois LFSR (`Lfsr16`)
+
+A memory-mapped pseudo-random number generator based on a 16-bit Galois
+linear-feedback shift register (default tap mask `0xB400`, a maximal-length
+65535-state sequence):
+
+- 2 addressable registers exposing the current LFSR state
+- **Continuous** mode advances the register automatically as part of normal
+  execution; **step** mode advances only when explicitly clocked, for
+  reproducible pseudo-random sequences under program control
+
+### Bank-Switched Memory Modules
+
+Finch, Phoebe, and Vireo are complete memory subsystems — RAM, ROM, and a
+bank-switching MMU — rather than register-window devices. Each claims the
+entire 64 KB address space when configured, so no separate `ram`/`rom`
+entries are needed alongside them, and their `address` device-spec field is
+unused. All three support an optional ROM `write-policy` (`ignore` or
+`error`), an `image` loaded at an optional `offset`, and an optional VICE
+`labels` file for symbol resolution.
+
+#### Finch bank-switched MMU (`Finch`)
+
+512 KB RAM and 512 KB ROM behind a simple MMU: the top four bits of the 6502
+address bus (`A12..A15`) index into 16 one-byte bank registers, each
+selecting which 4 KB segment of the module's 1024 KB memory space is mapped
+into that 4 KB window of the 6502's address space. Two memory-mapped
+registers (configurable addresses) control the bank registers and other MMU
+functions.
+
+#### Phoebe bank-switched memory (`Phoebe`)
+
+56 KB RAM and 32 KB ROM. The ROM is split into four 8 KB banks; bank 3 is
+permanently mapped into the upper half of a 16 KB switchable region at
+`0xC000` (and must contain the 6502 machine vectors), while a single
+memory-mapped control register selects which of banks 0–2 (or none, exposing
+the underlying RAM instead) occupies the lower half.
+
+#### Vireo bank-switched memory (`Vireo`)
+
+128 KB RAM and 32 KB ROM behind an elegant bank-switching scheme supporting
+four configurations — from a plain 32 KB RAM / 32 KB ROM split up to modes
+that expose additional RAM banks beyond the 64 KB address space — selected
+via a single memory-mapped control register.
+
 ### Transport Options
 
-Devices that exchange byte streams attach a `Transport`. Four implementations
-are provided:
+Devices that exchange byte streams attach a `Transport`. Configurable via TOML/CLI:
 
-| Transport             | Best for                                                              |
-|-----------------------|-----------------------------------------------------------------------|
-| `PipeTransport`       | In-process tests; inter-process stdin/stdout                          |
-| `TcpTransport`        | Connecting a terminal emulator or remote process over the network     |
-| `UnixSocketTransport` | Low-latency local IPC (lower overhead than TCP)                       |
-| `PtyTransport`        | Any program that expects a real TTY — `screen`, `minicom`, `cu`, etc. |
+| Transport             | Shorthand                       | Best for                                                              |
+|------------------------|---------------------------------|-------------------------------------------------------------------------|
+| `PipeTransport`        | `pipe:/path/to/exe,arg1,arg2`   | Spawning a child process and bridging its stdin/stdout to the device    |
+| `TcpSocketTransport`   | `tcp:PORT` or `tcp:IP:PORT`     | Connecting a terminal emulator or remote process over the network       |
+| `UnixSocketTransport`  | `unix:PATH`                     | Low-latency local IPC (lower overhead than TCP)                         |
+| `PtyTransport`         | `pty` or `pty:SYMLINK_PATH`     | Any program that expects a real TTY — `screen`, `minicom`, `cu`, etc.   |
+
+A fifth implementation, `InternalPipeTransport`, isn't configured via
+TOML/CLI — the `emma65` binary and the debugger UI use it internally to wire
+a console device directly to the host process's own stdin/stdout (CLI) or
+terminal window (debugger) when no `transport` attribute is given.
 
 All transports are non-blocking: `try_recv()` returns `None` immediately when
 no data is available, so device `tick()` implementations never stall the CPU
 thread.
+
+The VIA and MC6840 additionally support framing their transport traffic with
+a structured peer-communication protocol (`protocol = "ascii"` or `"binary"`)
+that exchanges full port/pin state on connection and incremental updates
+thereafter, so a real or emulated peripheral always has an accurate picture
+of the device's signals.
 
 ### Extensibility
 
@@ -241,17 +329,37 @@ comparisons, and a walrus operator (`:=`) for snapshotting values across
 steps. Expressions are compiled to bytecode once and evaluated efficiently on
 every step, making it practical to run many watchpoints simultaneously.
 
+### Execution Tracing
+
+The CPU can record every register snapshot and bus read/write to a compact
+binary trace format (magic `E65T`) as it executes, via a pluggable
+`TraceCallback` — writing is offloaded to a background thread so recording
+does not slow down execution. Two tools consume these traces:
+
+- The `emma65` binary writes a trace directly to a file with `--trace-file`
+- The debugger's Trace window records and displays a scrolling, live view of
+  recent execution without stopping the CPU
+- The standalone `emma65-tracer` binary decodes a previously recorded trace
+  file into a disassembly listing, optionally annotated with symbols from a
+  VICE label file and per-instruction bus operation detail
+
 ## Running the Emulator
 
 ### Default configuration
 
-When launched with no arguments, the emulator runs with a built-in
-[TaliForth 2](https://github.com/SamCoVT/TaliForth2) ROM:
+When launched with no devices configured, the emulator runs with a built-in
+[TaliForth 2](https://github.com/SamCoVT/TaliForth2) ROM and a full set of
+peripherals:
 
 - 32 KB RAM at `0x0000`–`0x7FFF`
 - TaliForth ROM at `0x8000`–`0xFFFF`
-- Console device at `0xFFF8`–`0xFFF9` with a pipe transport connected
-  to the process input and output
+- VIA at `0xFF80` on a Unix-domain socket (`~/.emma/sock/via6522`)
+- MC6840 PTM at `0xFF90` on a Unix-domain socket (`~/.emma/sock/mc6840`)
+- R6551 ACIA at `0xFFF0` on a pseudo-terminal (`~/.emma/dev/ttyS0`)
+- MC6850 ACIA at `0xFFF4` on a pseudo-terminal (`~/.emma/dev/ttyS1`)
+- LFSR at `0xFFF6` in step mode
+- Console device at `0xFFF8`–`0xFFF9`, connected to the process's own
+  standard input and output
 - WDC 65C02 variant at 1.8432 MHz
 
 Interact with the Forth interpreter via standard input and output.
@@ -313,21 +421,82 @@ EMMA65_CLOCK_SPEED_HZ=1843200
 
 ### Built-in device types
 
-| Type        | Registers | Key attributes                                                        |
-|-------------|:---------:|-----------------------------------------------------------------------|
-| `ram`       |     —     | `size` (required), `fill` (optional byte), `image` (optional path)    |
-| `rom`       |     —     | `size` (required), `image` (required path), `fill` (optional byte)    |
-| `console`   |     2     | `transport` (optional), `break` (bool)                                |
-| `acia/6551` |     4     | `transport` (optional), `with_tdre_bug` (bool), `with_overrun` (bool) |
-| `acia/6850` |     2     | `transport` (optional)                                                |
-| `via/6522`  |    16     | `transport` (optional)                                                |
+| Type            | Registers | Key attributes                                                                     |
+|-----------------|:---------:|-------------------------------------------------------------------------------------|
+| `ram`           |     —     | `size` (required), `fill` (optional byte), `image` (optional path)                  |
+| `rom`           |     —     | `size` (required), `image` (required path), `fill` (optional byte)                  |
+| `console`       |     2     | `transport` (optional), `break` (optional byte: break-key code)                     |
+| `acia/6551`     |     4     | `transport` (optional), `with-tdre-bug` (bool), `with-overrun` (bool)               |
+| `acia/6850`     |     2     | `transport` (optional)                                                              |
+| `via/6522`      |    16     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
+| `ptm/6840`      |     8     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
+| `display/matrix`|     8     | `transport` (optional)                                                              |
+| `lfsr`          |     2     | `taps` (optional u16), `mode` (`continuous` or `step`, optional)                    |
+| `mem/finch`     |     2     | `bank-registers`, `control-register` (required addresses), `image` (required path), `write-policy`, `fill`, `offset`, `labels` (all optional) |
+| `mem/phoebe`    |     1     | `control-register` (required address), `image` (required path), `write-policy`, `fill`, `ram-fill`, `offset`, `labels` (all optional) |
+| `mem/vireo`     |     1     | `control-register` (required address), `image` (required path), `write-policy`, `fill`, `ram-fill`, `offset`, `labels` (all optional) |
+
+`mem/finch`, `mem/phoebe`, and `mem/vireo` each occupy the entire 64 KB
+address space rather than a fixed-size register window; their register count
+above is the count of dedicated MMU/bank-control registers, placed at the
+configurable addresses shown, not a contiguous block.
 
 Transport shorthand values for CLI and TOML string form:
-`tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`, `pty:SYMLINK_PATH`
+`pipe:/path/to/exe,arg1,arg2`, `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`,
+`pty:SYMLINK_PATH`
+
+## Running the Debugger
+
+`emma65-debugger` is a native desktop application (built with
+[Tauri](https://tauri.app)) for interactively running and troubleshooting
+programs on the emulator. It reads its emulator configuration from
+`~/.emma/debugger/default/emulator.toml` — the same TOML format described
+above — and its own UI preferences from `~/.emma/debugger/default/ui.toml`.
+
+The main window shows live Register, CPU/Bus, Disassembly, Memory, Stack, and
+Watchpoint panels, all updated as the program runs or steps. From the
+Disassembly panel you can run, stop, step into, step over, and step out of
+subroutines, and set, enable, disable, or remove breakpoints. The CPU/Bus
+panel provides manual reset, IRQ assert/release, and NMI trigger controls. A
+Window menu toggles two additional windows:
+
+- **Terminal** — an interactive terminal emulator wired directly to the
+  configured console device
+- **Trace** — a live, scrolling view of recently executed instructions,
+  recorded using the same trace facility described in
+  [Execution Tracing](#execution-tracing)
+
+Watchpoints are edited as `watchpoints.emw` in the same config directory and
+can be added, removed, edited, and toggled from the Watchpoint panel; each
+shows only whether it is currently triggered. Light and dark themes are
+supported and persisted across sessions.
+
+Build and run it from `debugger/src-tauri` with the
+[Tauri CLI](https://tauri.app/develop/) (`cargo tauri dev` for development,
+`cargo tauri build` for a packaged release); this drives an `npm run build`
+of the `debugger/frontend` React/TypeScript UI automatically.
+
+## Running the Tracer
+
+`emma65-tracer` decodes a binary trace file — recorded via `emma65
+--trace-file <path>` or the debugger's Trace window — into a human-readable,
+disassembled instruction listing.
+
+```
+emma65-tracer [--output <path>] [--symbol-file <path>]... [--verbose] [<input>]
+```
+
+- `<input>` — path to the trace file; reads from stdin if omitted
+- `--output <path>` — path to write decoded output; writes to stdout if omitted
+- `--symbol-file <path>` — a VICE-format label file to resolve addresses to
+  symbol names; may be repeated to load labels from multiple files
+- `--verbose` — additionally print the bus reads and writes performed by each
+  instruction
 
 ## For Contributors
 
-Emma65 is written in Rust (2024 edition). Key dependencies:
+Emma65 is written in Rust (2024 edition), as a Cargo workspace. Key
+dependencies of the root `emma65` crate:
 
 | Crate               | Purpose                                                             |
 |---------------------|---------------------------------------------------------------------|
@@ -342,19 +511,25 @@ Emma65 is written in Rust (2024 edition). Key dependencies:
 | `figment`           | Multi-source configuration merging (TOML, env vars, CLI)            |
 | `tempfile`          | Temporary file for the embedded default ROM at startup              |
 
-The crate exposes both a library (`emma65`) and a binary (`emma65`). The
-library has two top-level public modules:
+The other workspace member, `debugger/src-tauri` (crate `emma65-debugger`),
+adds Tauri 2, `tauri-plugin-dialog`/`tauri-plugin-log`, and (on Linux) `gtk`
+on the Rust side, plus a React/TypeScript/Vite frontend in
+`debugger/frontend` — see [Running the Debugger](#running-the-debugger).
+
+The root crate exposes a library (`emma65`) and two binaries, `emma65` and
+`emma65-tracer`. The library has two top-level public modules:
 
 - **`emulator`** — the CPU, memory bus, and device infrastructure. Submodules:
-  `cpu`
-  (opcode decode table, addressing modes, status register, variant selection),
-  `bus`
-  (address regions, bus operations, tracing), `device` (device trait and
-  built-in devices), `exec` (clock speed, step results, free-running handle),
-  `interrupt` (IRQ/NMI controller), `transport` (byte-stream abstraction and
-  implementations), `disasm`
-  (instruction disassembler), and `error` (typed errors for every failure
-  category).
+  `cpu` (opcode decode table, addressing modes, status register, variant
+  selection, bus-access trace recording), `bus` (address regions, bus
+  operations, IRQ/NMI controller, device ID allocation, VICE symbol loading),
+  `device` (device trait, built-in devices, and the `protocol` submodule for
+  VIA/PTM peer-communication framing), `exec` (clock speed, step results, live
+  snapshots, free-running and single-step execution), `transport`
+  (byte-stream abstraction, implementations, and the relay/reporter types
+  that connect devices to them), `disasm` (instruction disassembler, and a
+  `trace` submodule that reconstructs disassembly from a recorded trace), and
+  `error` (typed errors for every failure category).
 
 - **`watch`** — a self-contained watchpoint expression pipeline: `Scanner` →
   `Vec<Token>` → `Parser` → `Expr` AST → `Compiler` → `Vec<OpCode>` →
@@ -366,10 +541,12 @@ library has two top-level public modules:
   `WatchEvaluator` owns variable name-to-index mappings and persistent
   variable storage so that watchpoint variables survive across steps.
 
-The binary (`src/bin/emulator/`) uses the `emulator::config` module to load
-configuration from all sources (TOML, environment, CLI), build an
-`EmulatorSession`, and run the free loop. The `emulator::config` module is the
-integration point for contributors adding new device types.
+The `emma65` binary (`src/bin/emulator/`) uses the `emulator::config` module
+to load configuration from all sources (TOML, environment, CLI), build an
+`EmulatorSession`, and run the free loop. The `emulator::config` module is
+the integration point for contributors adding new device types. The
+`emma65-tracer` binary (`src/bin/tracer/`) and the `emma65-debugger` crate
+(`debugger/src-tauri/`) are both thin front ends over the same library.
 
 ### Adding a Custom Device Module
 
@@ -381,20 +558,25 @@ in a TOML
 **Step 1** — Implement `DeviceModule`. The trait requires `name()` and an
 async
 `instantiate()` that receives a `BusConfig` builder, the mapped address, a
-`HashMap<String, figment::value::Value>` of configuration attributes, and an
-`InstantiationContext` (holds the configured clock speed and an error-event
-sender). The implementing struct must also be `Clone + Send + Sync + 'static`.
+`HashMap<String, figment::value::Value>` of configuration attributes, an
+`InstantiationContext` (holds the configured clock speed, an error-event
+sender, and — for the console only — a pre-built transport slot), and a
+shared `DeviceIdAllocator` for obtaining a `DeviceId` that won't collide with
+any other configured device. The implementing struct must also be
+`Clone + Send + Sync + 'static`.
 
 ```rust
 use std::collections::HashMap;
-use emma65::emulator::{AddressRange, BusConfig, DeviceId};
+use std::sync::{Arc, Mutex};
+use emma65::emulator::{AddressRange, BusConfig};
+use emma65::emulator::bus::DeviceIdAllocator;
 use emma65::emulator::config::{DeviceModule, DeviceModuleError, InstantiationContext};
 
 #[derive(Clone)]
-struct LedModule;
+struct BlinkerModule;
 
-impl DeviceModule for LedModule {
-    fn name(&self) -> &'static str { "myvendor/led" }
+impl DeviceModule for BlinkerModule {
+    fn name(&self) -> &'static str { "myvendor/blinker" }
 
     async fn instantiate(
         &self,
@@ -402,12 +584,14 @@ impl DeviceModule for LedModule {
         address: u16,
         _attributes: &HashMap<String, figment::value::Value>,
         _context: &InstantiationContext,
+        id_allocator: Arc<Mutex<DeviceIdAllocator>>,
     ) -> Result<BusConfig, DeviceModuleError> {
+        let device_id = id_allocator.lock().unwrap().next(false);
         bus_config
             .device(
                 AddressRange::new(address, address + 1),
-                DeviceId(address as u32),
-                Box::new(LedDevice::new()),
+                device_id,
+                Box::new(BlinkerDevice::new()),
             )
             .map_err(DeviceModuleError::BusConfig)
     }
@@ -424,12 +608,12 @@ use figment::providers::Serialized;
 use figment::value::{Dict, Value};
 
 #[derive(serde::Deserialize)]
-struct LedAttributes {
+struct BlinkerAttributes {
     color: String
 }
 
 let attrs = Dict::from_iter(attributes.clone());
-let config: LedAttributes = figment::Figment::new()
+let config: BlinkerAttributes = figment::Figment::new()
 .merge(Serialized::defaults(attrs))
 .extract()
 .map_err( | e| DeviceModuleError::Config(e.to_string())) ?;
@@ -439,7 +623,7 @@ let config: LedAttributes = figment::Figment::new()
 
 ```rust
 let mut registry = emma65::emulator::DeviceRegistry::with_builtins();
-registry.register(LedModule);
+registry.register(BlinkerModule);
 let session = config.build( & registry).await?;
 ```
 
@@ -448,13 +632,15 @@ configuration:
 
 ```toml
 [[devices]]
-type = "myvendor/led"
+type = "myvendor/blinker"
 address = 0xD000
 color = "red"
 ```
 
 ```
-cargo build      # build
-cargo test       # run all tests (includes Klaus Dormann and Bruce Clark suites)
-cargo clippy     # lint
+cargo build                # build the emma65 and emma65-tracer binaries
+cargo build --workspace    # also build the emma65-debugger crate
+cargo test                 # run all tests (includes Klaus Dormann and Bruce Clark suites)
+cargo test --workspace     # also run the debugger crate's tests
+cargo clippy               # lint the whole workspace
 ```
