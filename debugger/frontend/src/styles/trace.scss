@@ -305,23 +305,40 @@
   font-size: var(--font-size-btn);
 }
 
-.trace-detail-row {
-  display: flex;
-  gap: 8px;
-  padding: 0 10px;
+.trace-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+
+  th {
+    text-align: left;
+    padding: 0 10px 2px;
+    color: var(--color-muted);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-btn);
+    font-weight: normal;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+}
+
+.trace-detail-row:hover {
+  background-color: var(--color-bg-hover);
 }
 
 .trace-detail-addr {
-  flex: 0 0 4ch;
+  width: 4ch;
+  padding: 0 8px 0 10px;
   color: var(--color-muted);
 }
 
 .trace-detail-op {
-  flex: 0 0 3ch;
+  width: 3ch;
+  padding: 0 8px;
   color: var(--color-directive);
 }
 
 .trace-detail-value {
+  padding: 0 10px;
   color: var(--color-string);
 }
 
