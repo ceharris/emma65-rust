@@ -8,8 +8,8 @@ use std::thread::JoinHandle;
 use tauri::{AppHandle, State};
 
 use emma65::emulator::{
-    BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, OverflowPolicy, TraceBusOp, TraceCallback, TraceKind,
-    TraceRecord, TraceRowAssembler, spawn_trace_writer,
+    BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, Disassembler, OverflowPolicy, TraceBusOp,
+    TraceCallback, TraceKind, TraceRecord, TraceRowAssembler, spawn_trace_writer,
 };
 
 use crate::CpuState;
@@ -83,6 +83,9 @@ pub struct TraceBusOpDto {
     pub op: String,
     /// The byte value read or written.
     pub value: u8,
+    /// Alternate representations of `value` (decimal, ASCII/signed), the same
+    /// text `emma65-tracer` shows alongside a bus op's hex value.
+    pub comment: String,
 }
 
 /// One reconstructed trace row returned to the frontend.
@@ -239,8 +242,18 @@ pub fn get_trace_window(
             let bus_ops = row
                 .non_fetch_bus_ops()
                 .map(|op| match *op {
-                    TraceBusOp::Read { addr, value } => TraceBusOpDto { addr, op: "Read".to_string(), value },
-                    TraceBusOp::Write { addr, value } => TraceBusOpDto { addr, op: "Write".to_string(), value },
+                    TraceBusOp::Read { addr, value } => TraceBusOpDto {
+                        addr,
+                        op: "Read".to_string(),
+                        value,
+                        comment: Disassembler::immediate_mode_comment(value),
+                    },
+                    TraceBusOp::Write { addr, value } => TraceBusOpDto {
+                        addr,
+                        op: "Write".to_string(),
+                        value,
+                        comment: Disassembler::immediate_mode_comment(value),
+                    },
                 })
                 .collect();
             rows.push(TraceRowDto {

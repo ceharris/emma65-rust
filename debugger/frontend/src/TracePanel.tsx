@@ -10,6 +10,7 @@ interface TraceBusOpDto {
   addr: number;
   op: string;
   value: number;
+  comment: string;
 }
 
 interface TraceRowDto {
@@ -461,7 +462,9 @@ export default function TracePanel() {
                   <tr key={i} className="trace-detail-row">
                     <td className="trace-detail-addr">{formatAddr(op.addr)}</td>
                     <td className="trace-detail-op">{op.op}</td>
-                    <td className="trace-detail-value">{formatByte(op.value)}</td>
+                    <td className="trace-detail-value">
+                      {formatByte(op.value)} <span className="trace-detail-comment">{op.comment}</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
