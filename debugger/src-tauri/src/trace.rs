@@ -79,7 +79,7 @@ impl TraceCallback for RowIndexingTraceCallback {
 pub struct TraceBusOpDto {
     /// The bus address accessed.
     pub addr: u16,
-    /// `"RD"` or `"WR"`.
+    /// `"Read"` or `"Write"`.
     pub op: String,
     /// The byte value read or written.
     pub value: u8,
@@ -254,8 +254,8 @@ pub fn get_trace_window(
                     .bus_ops
                     .into_iter()
                     .map(|op| match op {
-                        TraceBusOp::Read { addr, value } => TraceBusOpDto { addr, op: "RD".to_string(), value },
-                        TraceBusOp::Write { addr, value } => TraceBusOpDto { addr, op: "WR".to_string(), value },
+                        TraceBusOp::Read { addr, value } => TraceBusOpDto { addr, op: "Read".to_string(), value },
+                        TraceBusOp::Write { addr, value } => TraceBusOpDto { addr, op: "Write".to_string(), value },
                     })
                     .collect(),
             });
