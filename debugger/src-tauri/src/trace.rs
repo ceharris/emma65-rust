@@ -206,18 +206,25 @@ pub fn get_trace_window(
 
     let state = trace_state.0.lock().unwrap();
     let path = state.path.as_ref().ok_or("No trace recorded yet")?;
-    let row_offsets = state.row_index.lock().unwrap().clone();
-    let total_rows = row_offsets.len();
-    if total_rows == 0 {
-        return Ok(TraceWindowPage { rows: Vec::new(), total_rows: 0 });
-    }
-    let start_row = start_row.min(total_rows - 1);
+    // Only the length and one offset are ever needed here, so read them out
+    // without cloning the whole index — with a long recording, `row_index`
+    // can hold millions of entries, and cloning it on every scroll/poll made
+    // the window sluggish even though the DOM itself stays small (issue #272).
+    let (total_rows, start_row, seek_record) = {
+        let row_offsets = state.row_index.lock().unwrap();
+        let total_rows = row_offsets.len();
+        if total_rows == 0 {
+            return Ok(TraceWindowPage { rows: Vec::new(), total_rows: 0 });
+        }
+        let start_row = start_row.min(total_rows - 1);
+        (total_rows, start_row, row_offsets[start_row])
+    };
 
     // Opened fresh per call: simplest option, and an extra open/close per
     // viewport-sized fetch is cheap relative to a UI-paced scroll/poll action.
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut reader = BinaryTraceReader::new(file).map_err(|e| e.to_string())?;
-    reader.seek_to_record(row_offsets[start_row]).map_err(|e| e.to_string())?;
+    reader.seek_to_record(seek_record).map_err(|e| e.to_string())?;
 
     let mut assembler = TraceRowAssembler::new(cpu.variant(), cpu.bus().symbol_table().clone());
     let mut rows = Vec::with_capacity(count.min(total_rows - start_row));
