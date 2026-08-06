@@ -675,12 +675,66 @@ the integration point for contributors adding new device types. The
 
 ### Adding a Custom Device Module
 
-Device modules are registered with `DeviceRegistry` before `Config::build()`
-is called. Once registered, a module's `name()` can appear as the `type` field
-in a TOML
-`[[devices]]` entry or in a CLI `--device` shorthand.
+A custom device is two pieces: an `IoDevice` implementation (the device
+itself) and a `DeviceModule` implementation (the glue that lets it be
+configured from TOML/CLI). Device modules are registered with
+`DeviceRegistry` before `Config::build()` is called; once registered, a
+module's `name()` can appear as the `type` field in a TOML `[[devices]]`
+entry or in a CLI `--device` shorthand.
 
-**Step 1** — Implement `DeviceModule`. The trait requires `name()` and an
+**Step 1** — Implement `IoDevice`. `read`/`write`/`peek` are always passed
+the *absolute* bus address, not an offset into the device's own registers —
+store the device's own base address (typically via a `with_address()`
+builder, matching every built-in device) and compute `address - self.address`
+yourself if you have more than one register. `peek()` must be side-effect-free
+— it backs the debugger's Memory panel, watchpoints, and the disassembler, so
+it must never change device state or interrupt lines the way a real access
+might. Beyond those three required methods, override whichever optional ones
+your device actually needs — `tick()` for cycle-accurate timing,
+`irq_active()`/`take_nmi()` for interrupts, `reset()`/`shutdown()` for
+lifecycle, `claims()` for conditional chip-select — all described in
+[Memory-Mapped I/O Devices](#memory-mapped-io-devices) above; everything
+else defaults to a no-op.
+
+```rust
+use emma65::emulator::IoDevice;
+
+struct BlinkerDevice {
+    address: u16,
+    on: bool,
+}
+
+impl BlinkerDevice {
+    fn new() -> Self {
+        Self { address: 0, on: false }
+    }
+
+    fn with_address(mut self, address: u16) -> Self {
+        self.address = address;
+        self
+    }
+}
+
+impl IoDevice for BlinkerDevice {
+    fn read(&mut self, _address: u16) -> u8 {
+        self.on as u8
+    }
+
+    fn write(&mut self, _address: u16, value: u8) {
+        self.on = value != 0;
+    }
+
+    fn peek(&self, _address: u16) -> u8 {
+        self.on as u8
+    }
+
+    fn name(&self) -> &str {
+        "myvendor/blinker"
+    }
+}
+```
+
+**Step 2** — Implement `DeviceModule`. The trait requires `name()` and an
 async
 `instantiate()` that receives a `BusConfig` builder, the mapped address, a
 `HashMap<String, figment::value::Value>` of configuration attributes, an
@@ -716,14 +770,14 @@ impl DeviceModule for BlinkerModule {
             .device(
                 AddressRange::new(address, address + 1),
                 device_id,
-                Box::new(BlinkerDevice::new()),
+                Box::new(BlinkerDevice::new().with_address(address)),
             )
             .map_err(DeviceModuleError::BusConfig)
     }
 }
 ```
 
-**Step 2** — Deserialize attributes from the `HashMap`. Follow the pattern
+**Step 3** — Deserialize attributes from the `HashMap`. Follow the pattern
 used by
 `RamModule` and `RomModule` in `src/emulator/config/memory.rs`: define a serde
 `Deserialize` struct, then extract it with `figment::Figment`:
@@ -744,7 +798,7 @@ let config: BlinkerAttributes = figment::Figment::new()
 .map_err( | e| DeviceModuleError::Config(e.to_string())) ?;
 ```
 
-**Step 3** — Register the module and build:
+**Step 4** — Register the module and build:
 
 ```rust
 let mut registry = emma65::emulator::DeviceRegistry::with_builtins();
@@ -760,6 +814,132 @@ configuration:
 type = "myvendor/blinker"
 address = 0xD000
 color = "red"
+```
+
+#### A Device That Uses a Transport
+
+`BlinkerDevice` never talks to anything outside the emulator, so its module
+never touches [Transport Options](#transport-options). A device that does —
+follow the pattern used by every built-in transport-attached device (see
+`src/emulator/config/mc6850.rs` for the simplest real example): deserialize
+an optional `transport` attribute, convert it to a `TransportSpec`, and hand
+it to `TransportSpec::to_transport_with_reporter()` to get back a connected
+`Transport` and its paired `TransportRelay`. `EchoDevice` below sends
+whatever's written to it out over its transport, and buffers whatever the
+transport delivers for the next read — draining the relay from `tick()`,
+never from `read()`, so an idle transport never blocks CPU execution (see
+[Transport Options](#transport-options) for why that's safe to rely on):
+
+```rust
+use std::collections::VecDeque;
+use emma65::emulator::{IoDevice, Transport, TransportRelay};
+
+struct EchoDevice {
+    address: u16,
+    transport: Option<Box<dyn Transport>>,
+    relay: Option<TransportRelay>,
+    rx_buffer: VecDeque<u8>,
+}
+
+impl EchoDevice {
+    fn new() -> Self {
+        Self { address: 0, transport: None, relay: None, rx_buffer: VecDeque::new() }
+    }
+
+    fn with_address(mut self, address: u16) -> Self {
+        self.address = address;
+        self
+    }
+
+    fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: TransportRelay) {
+        self.transport = Some(transport);
+        self.relay = Some(relay);
+    }
+}
+
+impl IoDevice for EchoDevice {
+    fn read(&mut self, _address: u16) -> u8 {
+        self.rx_buffer.pop_front().unwrap_or(0)
+    }
+
+    fn write(&mut self, _address: u16, value: u8) {
+        if let Some(transport) = self.transport.as_mut() {
+            transport.send(value);
+        }
+    }
+
+    fn peek(&self, _address: u16) -> u8 {
+        self.rx_buffer.front().copied().unwrap_or(0)
+    }
+
+    fn tick(&mut self, _cycles: u32) {
+        if let Some(relay) = self.relay.as_mut() {
+            let rx_buffer = &mut self.rx_buffer;
+            relay.drain_bytes_into(|b| rx_buffer.push_back(b));
+        }
+    }
+
+    fn name(&self) -> &str {
+        "myvendor/echo"
+    }
+}
+```
+
+```rust
+use emma65::emulator::config::{TransportSpec, TransportSpecFormat};
+
+#[derive(Clone)]
+struct EchoModule;
+
+#[derive(serde::Deserialize)]
+struct EchoAttributes {
+    transport: Option<TransportSpecFormat>,
+}
+
+impl DeviceModule for EchoModule {
+    fn name(&self) -> &'static str { "myvendor/echo" }
+
+    async fn instantiate(
+        &self,
+        bus_config: BusConfig,
+        address: u16,
+        attributes: &HashMap<String, figment::value::Value>,
+        context: &InstantiationContext,
+        id_allocator: Arc<Mutex<DeviceIdAllocator>>,
+    ) -> Result<BusConfig, DeviceModuleError> {
+        let attrs = figment::value::Dict::from_iter(attributes.clone());
+        let config: EchoAttributes = figment::Figment::new()
+            .merge(figment::providers::Serialized::defaults(attrs))
+            .extract()
+            .map_err(|e| DeviceModuleError::Config(e.to_string()))?;
+
+        let transport_spec = config.transport
+            .map(TransportSpec::try_from)
+            .transpose()
+            .map_err(DeviceModuleError::Config)?;
+
+        let device_id = id_allocator.lock().unwrap().next(false);
+        let mut device = EchoDevice::new().with_address(address);
+        if let Some(transport_spec) = transport_spec {
+            let (transport, relay) = transport_spec
+                .to_transport_with_reporter(context.pipe_exit_reporter(device_id))
+                .await
+                .map_err(DeviceModuleError::Transport)?;
+            device.attach_transport(transport, relay);
+        }
+
+        bus_config
+            .device(AddressRange::new(address, address + 1), device_id, Box::new(device))
+            .map_err(DeviceModuleError::BusConfig)
+    }
+}
+```
+
+```toml
+[[devices]]
+type = "myvendor/echo"
+address = 0xD100
+transport = { pty = { path = "~/.emma/dev/ttyEcho" } }
 ```
 
 ```
