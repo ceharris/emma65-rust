@@ -260,37 +260,6 @@ are complete bank-switched memory subsystems that occupy the entire 64 KB
 address space in place of separate RAM/ROM regions; see
 [Bank-Switched Memory Modules](#bank-switched-memory-modules) below.
 
-### Transport Options
-
-Devices that exchange byte streams attach a `Transport`. Configurable via TOML/CLI:
-
-| Transport             | Shorthand                       | Best for                                                              |
-|------------------------|---------------------------------|-------------------------------------------------------------------------|
-| `PipeTransport`        | `pipe:/path/to/exe,arg1,arg2`   | Spawning a child process and bridging its stdin/stdout to the device    |
-| `TcpSocketTransport`   | `tcp:PORT` or `tcp:IP:PORT`     | Connecting a terminal emulator or remote process over the network       |
-| `UnixSocketTransport`  | `unix:PATH`                     | Low-latency local IPC (lower overhead than TCP)                         |
-| `PtyTransport`         | `pty` or `pty:SYMLINK_PATH`     | Any program that expects a real TTY — `screen`, `minicom`, `cu`, etc.   |
-
-A fifth implementation, `InternalPipeTransport`, isn't configured via
-TOML/CLI — the `emma65` binary and the debugger UI use it internally to wire
-a console device directly to the host process's own stdin/stdout (CLI) or
-terminal window (debugger) when no `transport` attribute is given.
-
-Every transport's actual I/O runs on its own thread or async task, decoupled
-from device `tick()` by a lock-free `rtrb` ring buffer (`ChannelRelay`): the
-transport side pushes into the ring as bytes arrive, and `tick()` drains
-whatever is currently available and returns immediately, whether that's
-nothing, one byte, or a burst. Neither side ever blocks the other. Because
-the CPU thread is practically unburdened by communication with external
-peripherals, it can easily sustain common effective clock speeds — and much
-higher ones with clock throttling disabled (`ClockSpeed::unlimited()`).
-
-The VIA and MC6840 additionally support framing their transport traffic with
-a structured peer-communication protocol (`protocol = "ascii"` or `"binary"`)
-that exchanges full port/pin state on connection and incremental updates
-thereafter, so a real or emulated peripheral always has an accurate picture
-of the device's signals.
-
 ### Console (`Console`)
 
 A simple polling console device for byte-stream I/O over a configurable
@@ -447,6 +416,37 @@ the underlying RAM instead) occupies the lower half.
 four configurations — from a plain 32 KB RAM / 32 KB ROM split up to modes
 that expose additional RAM banks beyond the 64 KB address space — selected
 via a single memory-mapped control register.
+
+### Transport Options
+
+Devices that exchange byte streams attach a `Transport`. Configurable via TOML/CLI:
+
+| Transport             | Shorthand                       | Best for                                                              |
+|------------------------|---------------------------------|-------------------------------------------------------------------------|
+| `PipeTransport`        | `pipe:/path/to/exe,arg1,arg2`   | Spawning a child process and bridging its stdin/stdout to the device    |
+| `TcpSocketTransport`   | `tcp:PORT` or `tcp:IP:PORT`     | Connecting a terminal emulator or remote process over the network       |
+| `UnixSocketTransport`  | `unix:PATH`                     | Low-latency local IPC (lower overhead than TCP)                         |
+| `PtyTransport`         | `pty` or `pty:SYMLINK_PATH`     | Any program that expects a real TTY — `screen`, `minicom`, `cu`, etc.   |
+
+A fifth implementation, `InternalPipeTransport`, isn't configured via
+TOML/CLI — the `emma65` binary and the debugger UI use it internally to wire
+a console device directly to the host process's own stdin/stdout (CLI) or
+terminal window (debugger) when no `transport` attribute is given.
+
+Every transport's actual I/O runs on its own thread or async task, decoupled
+from device `tick()` by a lock-free `rtrb` ring buffer (`ChannelRelay`): the
+transport side pushes into the ring as bytes arrive, and `tick()` drains
+whatever is currently available and returns immediately, whether that's
+nothing, one byte, or a burst. Neither side ever blocks the other. Because
+the CPU thread is practically unburdened by communication with external
+peripherals, it can easily sustain common effective clock speeds — and much
+higher ones with clock throttling disabled (`ClockSpeed::unlimited()`).
+
+The VIA and MC6840 additionally support framing their transport traffic with
+a structured peer-communication protocol (`protocol = "ascii"` or `"binary"`)
+that exchanges full port/pin state on connection and incremental updates
+thereafter, so a real or emulated peripheral always has an accurate picture
+of the device's signals.
 
 ## Running the Emulator
 
