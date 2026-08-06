@@ -168,6 +168,14 @@ either silently act as NOPs or to halt execution with an error.
 
 Emma65 implements the full 65C02 interrupt model:
 
+- **RESET** — restores the CPU to its power-on state: every device on the
+  bus receives an `IoDevice::reset()` call, the stack pointer is set to
+  `$FF`, the status register to `I` (interrupts disabled, every other flag
+  clear), the cumulative cycle counter is zeroed, and any `STP`/`WAI`-halted
+  state is cleared. The program counter is then loaded from the reset vector
+  at `$FFFC`/`$FFFD`. Emma65 issues one automatically before running the
+  first instruction of a session, and the debugger's CPU/Bus panel exposes
+  it as an on-demand control.
 - **NMI** — edge-triggered and latched: the first falling edge sets a pending
   flag that is consumed exactly once, with highest priority over simultaneous
   IRQ. Any device can signal an NMI by implementing `IoDevice::take_nmi()`.
