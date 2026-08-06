@@ -220,6 +220,17 @@ impl Cpu {
         self.trace_callback = callback;
     }
 
+    /// Flushes the trace callback, if one is installed, making every record
+    /// emitted so far visible to an independent reader of the trace stream.
+    /// No-op when tracing is off. Callers that drive execution in batches
+    /// (e.g. the debugger's step/run commands) should call this once after
+    /// each batch completes rather than after every instruction.
+    pub fn flush_trace(&mut self) {
+        if let Some(cb) = &mut self.trace_callback {
+            cb.flush();
+        }
+    }
+
     /// Reads the reset vector and initializes registers. Clears WAI/STP state.
     pub fn reset(&mut self) -> Result<(), ExecError> {
         self.bus_reset();
