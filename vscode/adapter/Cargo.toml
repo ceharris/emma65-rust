@@ -12,3 +12,4 @@ emma65 = { path = "../.." }
 dap = "0.4.1-alpha1"
 tokio = { version = "1", features = ["rt"] }
 base64 = "0.22"
+figment = { version = "0.10", features = ["toml", "env"] }

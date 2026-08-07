@@ -935,6 +935,7 @@ dependencies = [
  "base64 0.22.1",
  "dap",
  "emma65",
+ "figment",
  "tokio",
 ]
 
