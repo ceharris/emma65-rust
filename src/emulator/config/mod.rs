@@ -2,6 +2,7 @@
 mod transport;
 mod device;
 mod path;
+mod default;
 mod console;
 mod finch;
 mod lfsr;
@@ -19,6 +20,7 @@ mod vireo;
 mod led_matrix;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
+pub use default::default_config;
 pub use registry::{DeviceRegistry, InstantiationContext, TransportSlot};
 pub use transport::{TransportSpec, TransportSpecFormat};
 pub use device::{DeviceSpec, DeviceModule, DeviceModuleError};

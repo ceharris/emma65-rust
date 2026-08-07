@@ -1,6 +1,5 @@
 use clap::Parser;
-use emma65::emulator::CpuVariantSpec;
-use figment::{Figment, providers::{Env, Format, Serialized, Toml}};
+use figment::providers::Serialized;
 use serde::{Deserialize, Serialize};
 
 // CLI args.
@@ -35,12 +34,7 @@ impl AppConfig {
 
     pub fn load() -> Result<Self, Box<figment::Error>> {
         let cli = CliArgs::parse();
-        let mut figment = Figment::new();
-        if let Some(path) = cli.config {
-            figment = figment.merge(Toml::file(path))
-        }
-        figment
-            .merge(Env::prefixed("EMMA65_").map(|k| k.as_str().replace('_', "-").into()))
+        emma65::emulator::Config::figment(cli.config.as_deref())
             .merge(Serialized::globals(&cli.app))
             .extract()
             .map_err(Box::new)
@@ -48,35 +42,13 @@ impl AppConfig {
 
 }
 
-const DEFAULT_CLOCK_SPEED: u64 = 1_843_200;
-const DEFAULT_CPU_VARIANT: CpuVariantSpec = CpuVariantSpec::Wdc6502;
-
-/// If no devices are configured, writes the embedded default ROM to a tempfile,
-/// populates `config.emulator.devices` with the default RAM + ROM + console layout,
-/// and returns the tempfile handle (must be kept alive until `Config::build()` completes).
+/// If no devices are configured, replaces `config.emulator` with the built-in default RAM +
+/// ROM + console layout (see [`emma65::emulator::default_config`]) and returns the tempfile
+/// handle backing the ROM image (must be kept alive until `Config::build()` completes).
 pub fn apply_default_if_unconfigured(config: &mut AppConfig, default_rom: &[u8]) -> Option<tempfile::NamedTempFile> {
     if config.emulator.devices.as_ref().is_none_or(|d| d.is_empty()) {
-        let f = tempfile::Builder::new()
-            .suffix(".bin")
-            .tempfile()
-            .expect("failed to create tempfile for default ROM");
-        std::fs::write(f.path(), default_rom)
-            .expect("failed to write default ROM to tempfile");
-        let rom_path = f.path().to_path_buf();
-        config.emulator.cpu_variant_spec.get_or_insert(DEFAULT_CPU_VARIANT);
-        config.emulator.clock_speed_hz.get_or_insert(DEFAULT_CLOCK_SPEED);
-        config.emulator.devices = Some(vec![
-            "ram@0x0000,size=32768,fill=0".parse().unwrap(),
-            format!("rom@0x8000,size=32768,image={}", rom_path.display())
-                .parse()
-                .unwrap(),
-            "via/6522@0xff80,transport=unix:~/.emma/sock/via6522".parse().unwrap(),
-            "ptm/6840@0xff90,transport=unix:~/.emma/sock/mc6840".parse().unwrap(),
-            "acia/6551@0xfff0,transport=pty:~/.emma/dev/ttyS0".parse().unwrap(),
-            "acia/6850@0xfff4,transport=pty:~/.emma/dev/ttyS1".parse().unwrap(),
-            "lfsr@0xfff6,mode=step".parse().unwrap(),
-            "console@0xfff8,break=0x3".parse().unwrap(),
-        ]);
+        let (default, f) = emma65::emulator::default_config(default_rom);
+        config.emulator = default;
         Some(f)
     } else {
         None

@@ -4,8 +4,11 @@ use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::device_event_channel;
 use crate::emulator::{BusConfig, ClockSpeed, Cpu, CpuBuildError, CpuVariant, EmulatorSession, ErrorReceiver};
 use clap::Parser;
+use figment::providers::{Env, Format, Toml};
+use figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -110,6 +113,18 @@ pub struct Config {
 }
 
 impl Config {
+
+    /// Builds a base [`Figment`] for loading a `Config`: an optional TOML file at `config_path`
+    /// merged with `EMMA65_*`-prefixed environment variables (underscores mapped to dashes).
+    /// Callers needing additional providers (CLI args, other config sections) should merge them
+    /// onto the result before calling `.extract()`.
+    pub fn figment(config_path: Option<&Path>) -> Figment {
+        let mut figment = Figment::new();
+        if let Some(path) = config_path {
+            figment = figment.merge(Toml::file(path));
+        }
+        figment.merge(Env::prefixed("EMMA65_").map(|k| k.as_str().replace('_', "-").into()))
+    }
 
     /// Builds an [`EmulatorSession`] using a default [`InstantiationContext`].
     pub async fn build(&self, registry: &DeviceRegistry) -> Result<EmulatorSession, BuildError> {
