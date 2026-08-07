@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use dap::prelude::*;
 use dap::events::StoppedEventBody;
-use dap::responses::ThreadsResponse;
-use dap::types::{Capabilities, StoppedEventReason, Thread};
+use dap::responses::{DisassembleResponse, ScopesResponse, StackTraceResponse, ThreadsResponse};
+use dap::types::{Capabilities, StackFrame, StoppedEventReason, Thread};
 
+mod disasm;
 mod exec;
 mod session;
 
@@ -51,6 +52,7 @@ fn handle_request<W: Write + Send + 'static>(
             let capabilities = Capabilities {
                 supports_configuration_done_request: Some(true),
                 supports_restart_request: Some(true),
+                supports_disassemble_request: Some(true),
                 ..Default::default()
             };
             let _ = server.respond(request.success(ResponseBody::Initialize(capabilities)));
@@ -92,6 +94,42 @@ fn handle_request<W: Write + Send + 'static>(
             let threads = vec![Thread { id: exec::THREAD_ID, name: "CPU".to_string() }];
             let _ = server.respond(request.success(ResponseBody::Threads(ThreadsResponse { threads })));
         }
+        Command::StackTrace(_) => {
+            // A single synthetic frame with no `source`: this emulator has no source-level
+            // debug info (see the plan's "Deferred" section), and an absent `source` plus
+            // `instruction_pointer_reference` is what tells VS Code to land on its built-in
+            // Disassembly View instead of a source editor.
+            match state.with_cpu(|cpu| cpu.registers().pc) {
+                Some(pc) => {
+                    let frame = StackFrame {
+                        id: exec::THREAD_ID,
+                        name: "CPU".to_string(),
+                        instruction_pointer_reference: Some(format!("0x{pc:04X}")),
+                        ..Default::default()
+                    };
+                    let body = StackTraceResponse { stack_frames: vec![frame], total_frames: Some(1) };
+                    let _ = server.respond(request.success(ResponseBody::StackTrace(body)));
+                }
+                None => {
+                    let _ = server.respond(request.error("CPU not ready"));
+                }
+            }
+        }
+        Command::Scopes(_) => {
+            // No "CPU Registers" scope yet (story 6); an empty scope list is a valid response.
+            let _ = server.respond(request.success(ResponseBody::Scopes(ScopesResponse { scopes: vec![] })));
+        }
+        Command::Disassemble(args) => match state.with_cpu(|cpu| disasm::disassemble(cpu, args)) {
+            Some(Ok(instructions)) => {
+                let _ = server.respond(request.success(ResponseBody::Disassemble(DisassembleResponse { instructions })));
+            }
+            Some(Err(message)) => {
+                let _ = server.respond(request.error(&message));
+            }
+            None => {
+                let _ = server.respond(request.error("CPU not ready"));
+            }
+        },
         Command::Continue(_) => {
             match exec::continue_cpu(state, runtime, server.output.clone()) {
                 Ok(body) => {
