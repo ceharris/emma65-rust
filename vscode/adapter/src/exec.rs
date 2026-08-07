@@ -60,6 +60,12 @@ impl ExecState {
     pub fn with_cpu<R>(&self, f: impl FnOnce(&Cpu) -> R) -> Option<R> {
         self.cpu.lock().unwrap().as_ref().map(f)
     }
+
+    /// Runs `f` with mutable access to the CPU, or `None` under the same conditions as
+    /// [`ExecState::with_cpu`].
+    pub fn with_cpu_mut<R>(&self, f: impl FnOnce(&mut Cpu) -> R) -> Option<R> {
+        self.cpu.lock().unwrap().as_mut().map(f)
+    }
 }
 
 /// Sends a `stopped` event for the CPU thread with the given `reason`.
