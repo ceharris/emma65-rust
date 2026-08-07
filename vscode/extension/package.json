@@ -11,10 +11,17 @@
     "Debuggers"
   ],
   "activationEvents": [
-    "onDebug"
+    "onDebug",
+    "onCommand:emma65.openTerminal"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "emma65.openTerminal",
+        "title": "emma65: Open Console Terminal"
+      }
+    ],
     "debuggers": [
       {
         "type": "emma65",
