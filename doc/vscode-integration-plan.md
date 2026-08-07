@@ -276,7 +276,22 @@ Deferred (out of scope for this spike)
 
 - Source-level debugging: mapping VICE labels to assembly source lines,
   source-level breakpoints, `launch.json`/build-task conventions for
-  assembling a project before debugging.
+  assembling a project before debugging. Deferred for scope, not
+  feasibility — confirmed feasible for `ca65`/`ld65` projects (the
+  project's own preferred 6502 toolchain): assembling with `-g` and
+  linking with `--dbgfile` produces a documented debug-info file with
+  Lines (source file + line, including macro-expansion context), Spans
+  (address ranges), Symbols, and Scopes — exactly the source↔address
+  mapping DAP's `setBreakpoints`/`stackTrace` need. `64tass` has no
+  equivalent; only human-readable listing/label output, so it would need
+  its own (fragile, unversioned) listing-file scraper if ever supported.
+  Prior art exists for the ca65 case: [db65xx](https://github.com/tmr4/db65xx)
+  and [X65/cc65-dbg](https://github.com/X65/cc65-dbg) are both existing VS
+  Code DAP extensions built on ca65/ld65 debug info. db65xx looks idle and
+  its bundled 6502/65816 simulation is a weaker fit than emma65's own CPU
+  core, so it's not a dependency to take on directly — but its handling of
+  the `.dbg`/`.sym`/`.lst`/`.map` files is worth reading before designing
+  our own source-mapping story, since it could save real design time.
 - Memory load/fill file commands (`load_memory`/`fill_memory`) as
   contributed commands.
 - Theme sync between VS Code's theme and the emulator UI (moot if the
