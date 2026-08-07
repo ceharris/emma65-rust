@@ -15,6 +15,7 @@ use dap::types::StoppedEventReason;
 use emma65::emulator::cpu::StepResult;
 use emma65::emulator::{
     Cpu, RunStopper, run_from as exec_run_from, step_into as exec_step_into,
+    step_over_breakpoint as exec_step_over_breakpoint,
     step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return,
 };
 
@@ -36,6 +37,11 @@ pub struct ExecState {
     /// operation's completion handler to distinguish a user-requested pause from
     /// any other reason the run/step halted.
     pause_requested: Arc<Mutex<bool>>,
+    /// When the CPU is halted at a breakpoint, holds that PC so the next
+    /// `continue`/`stepIn` can skip past it without disabling it. Cleared after
+    /// each operation that consumes it, and set again only when a halt lands on
+    /// a breakpoint. Mirrors the Tauri debugger's `SkipBreakpointPc`.
+    skip_breakpoint_pc: Arc<Mutex<Option<u16>>>,
 }
 
 impl ExecState {
@@ -94,6 +100,7 @@ fn finish_run<W: Write>(
 ) {
     *state.run_stopper.lock().unwrap() = None;
     let pause_requested = std::mem::take(&mut *state.pause_requested.lock().unwrap());
+    let pc = cpu.registers().pc;
     *state.cpu.lock().unwrap() = Some(cpu);
 
     let reason = if pause_requested {
@@ -105,6 +112,10 @@ fn finish_run<W: Write>(
             _ => StoppedEventReason::Step,
         }
     };
+    // Record the halted PC when a breakpoint stopped this run, so the next
+    // `continue`/`stepIn` can advance past it without disabling it.
+    *state.skip_breakpoint_pc.lock().unwrap() =
+        if matches!(reason, StoppedEventReason::Breakpoint) { Some(pc) } else { None };
     send_stopped(output, reason);
 }
 
@@ -119,17 +130,26 @@ pub fn continue_cpu<W: Write + Send + 'static>(
     output: Arc<Mutex<ServerOutput<W>>>,
 ) -> Result<ContinueResponse, String> {
     let cpu = state.cpu.lock().unwrap().take().ok_or("CPU not ready")?;
-    let handle = exec_run_from(cpu, None, Arc::new(AtomicU16::new(0)));
+    // Advance past a breakpoint the CPU is currently halted at, if any, without
+    // disabling it — otherwise `run_loop` would immediately re-halt on it.
+    let skip_pc = state.skip_breakpoint_pc.lock().unwrap().take();
+    let handle = exec_run_from(cpu, skip_pc, Arc::new(AtomicU16::new(0)));
     *state.run_stopper.lock().unwrap() = Some(handle.stopper());
     *state.pause_requested.lock().unwrap() = false;
 
     let cpu_arc = Arc::clone(&state.cpu);
     let stopper_arc = Arc::clone(&state.run_stopper);
     let pause_arc = Arc::clone(&state.pause_requested);
+    let skip_arc = Arc::clone(&state.skip_breakpoint_pc);
     let runtime = Arc::clone(runtime);
     std::thread::spawn(move || {
         let (result, cpu) = runtime.block_on(handle.take_cpu_with_result());
-        let state = ExecState { cpu: cpu_arc, run_stopper: stopper_arc, pause_requested: pause_arc };
+        let state = ExecState {
+            cpu: cpu_arc,
+            run_stopper: stopper_arc,
+            pause_requested: pause_arc,
+            skip_breakpoint_pc: skip_arc,
+        };
         finish_run(&state, &output, cpu, Some(result));
     });
 
@@ -159,6 +179,10 @@ pub fn step_over<W: Write + Send + 'static>(
     output: Arc<Mutex<ServerOutput<W>>>,
 ) -> Result<(), String> {
     let mut cpu = state.cpu.lock().unwrap().take().ok_or("CPU not ready")?;
+    // `exec_step_over_subroutine` always skips the breakpoint/watch check at the
+    // CPU's current PC on its first instruction, so the pending skip (if any) is
+    // consumed here without needing to be passed through.
+    state.skip_breakpoint_pc.lock().unwrap().take();
     let (stopper, stop_rx, mut cmd_rx) = RunStopper::channel();
     *state.run_stopper.lock().unwrap() = Some(stopper);
     *state.pause_requested.lock().unwrap() = false;
@@ -166,10 +190,16 @@ pub fn step_over<W: Write + Send + 'static>(
     let cpu_arc = Arc::clone(&state.cpu);
     let stopper_arc = Arc::clone(&state.run_stopper);
     let pause_arc = Arc::clone(&state.pause_requested);
+    let skip_arc = Arc::clone(&state.skip_breakpoint_pc);
     std::thread::spawn(move || {
         let result =
             exec_step_over_subroutine(&mut cpu, &stop_rx, &mut cmd_rx, None, &Arc::new(AtomicU16::new(0)));
-        let state = ExecState { cpu: cpu_arc, run_stopper: stopper_arc, pause_requested: pause_arc };
+        let state = ExecState {
+            cpu: cpu_arc,
+            run_stopper: stopper_arc,
+            pause_requested: pause_arc,
+            skip_breakpoint_pc: skip_arc,
+        };
         finish_run(&state, &output, cpu, result);
     });
 
@@ -183,8 +213,17 @@ pub fn step_over<W: Write + Send + 'static>(
 pub fn step_into(state: &ExecState) -> Result<StoppedEventReason, String> {
     let mut guard = state.cpu.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
-    let result = exec_step_into(cpu);
+
+    let pc = cpu.registers().pc;
+    // Skip the breakpoint/watch check only if we are halted at that PC because
+    // of a prior breakpoint — not on every step.
+    let skip_pc = state.skip_breakpoint_pc.lock().unwrap().take();
+    let result =
+        if skip_pc == Some(pc) { exec_step_over_breakpoint(cpu, pc) } else { exec_step_into(cpu) };
     drop(guard);
+
+    *state.skip_breakpoint_pc.lock().unwrap() =
+        if let StepResult::Breakpoint(addr) = result { Some(addr) } else { None };
 
     Ok(match result {
         StepResult::Reset => StoppedEventReason::Entry,
@@ -203,6 +242,10 @@ pub fn step_return<W: Write + Send + 'static>(
     output: Arc<Mutex<ServerOutput<W>>>,
 ) -> Result<(), String> {
     let mut cpu = state.cpu.lock().unwrap().take().ok_or("CPU not ready")?;
+    // `exec_step_return` always skips the breakpoint/watch check at the CPU's
+    // current PC on its first instruction, so the pending skip (if any) is
+    // consumed here without needing to be passed through.
+    state.skip_breakpoint_pc.lock().unwrap().take();
     let (stopper, stop_rx, mut cmd_rx) = RunStopper::channel();
     *state.run_stopper.lock().unwrap() = Some(stopper);
     *state.pause_requested.lock().unwrap() = false;
@@ -210,9 +253,15 @@ pub fn step_return<W: Write + Send + 'static>(
     let cpu_arc = Arc::clone(&state.cpu);
     let stopper_arc = Arc::clone(&state.run_stopper);
     let pause_arc = Arc::clone(&state.pause_requested);
+    let skip_arc = Arc::clone(&state.skip_breakpoint_pc);
     std::thread::spawn(move || {
         let result = exec_step_return(&mut cpu, &stop_rx, &mut cmd_rx, None, &Arc::new(AtomicU16::new(0)));
-        let state = ExecState { cpu: cpu_arc, run_stopper: stopper_arc, pause_requested: pause_arc };
+        let state = ExecState {
+            cpu: cpu_arc,
+            run_stopper: stopper_arc,
+            pause_requested: pause_arc,
+            skip_breakpoint_pc: skip_arc,
+        };
         finish_run(&state, &output, cpu, result);
     });
 
@@ -245,6 +294,7 @@ pub fn restart(state: &ExecState) -> Result<Option<StoppedEventReason>, String> 
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
     cpu.reset().map_err(|e| format!("CPU reset failed: {e}"))?;
     drop(guard);
+    *state.skip_breakpoint_pc.lock().unwrap() = None;
 
     Ok(Some(StoppedEventReason::Entry))
 }
