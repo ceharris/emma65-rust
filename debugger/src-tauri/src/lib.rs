@@ -6,7 +6,8 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_log::{Target, TargetKind};
 use tokio::sync::oneshot;
 
-use emma65::emulator::{Config, Cpu, Disassembler, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
+use emma65::disasm::Disassembler;
+use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
 
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
