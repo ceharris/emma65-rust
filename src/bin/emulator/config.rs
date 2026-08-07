@@ -1,5 +1,5 @@
 use clap::Parser;
-use figment::{Figment, providers::{Env, Format, Serialized, Toml}};
+use figment::providers::Serialized;
 use serde::{Deserialize, Serialize};
 
 // CLI args.
@@ -34,12 +34,7 @@ impl AppConfig {
 
     pub fn load() -> Result<Self, Box<figment::Error>> {
         let cli = CliArgs::parse();
-        let mut figment = Figment::new();
-        if let Some(path) = cli.config {
-            figment = figment.merge(Toml::file(path))
-        }
-        figment
-            .merge(Env::prefixed("EMMA65_").map(|k| k.as_str().replace('_', "-").into()))
+        emma65::emulator::Config::figment(cli.config.as_deref())
             .merge(Serialized::globals(&cli.app))
             .extract()
             .map_err(Box::new)
