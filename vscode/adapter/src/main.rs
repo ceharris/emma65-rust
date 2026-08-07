@@ -18,6 +18,7 @@ mod memory;
 mod registers;
 mod session;
 mod trace;
+mod watchpoints;
 
 fn main() {
     let stdin = std::io::stdin();
@@ -31,6 +32,7 @@ fn main() {
 
     let state = exec::ExecState::default();
     let trace_state = std::sync::Mutex::new(trace::TraceData::default());
+    let watch_state = std::sync::Mutex::new(watchpoints::WatchData::default());
 
     loop {
         let request = match server.poll_request() {
@@ -42,7 +44,7 @@ fn main() {
             }
         };
 
-        if !handle_request(&mut server, &runtime, &state, &trace_state, request) {
+        if !handle_request(&mut server, &runtime, &state, &trace_state, &watch_state, request) {
             break;
         }
     }
@@ -55,6 +57,7 @@ fn handle_request<W: Write + Send + 'static>(
     runtime: &Arc<tokio::runtime::Runtime>,
     state: &exec::ExecState,
     trace_state: &std::sync::Mutex<trace::TraceData>,
+    watch_state: &std::sync::Mutex<watchpoints::WatchData>,
     request: Request,
 ) -> bool {
     match &request.command {
@@ -81,7 +84,30 @@ fn handle_request<W: Write + Send + 'static>(
                 .map(PathBuf::from);
 
             match runtime.block_on(session::build_session(config_path.as_deref())) {
-                Ok((new_cpu, ui_irq_source)) => {
+                Ok((mut new_cpu, ui_irq_source)) => {
+                    // A bad watchpoints.emw is reported inside the watchpoints webview
+                    // (via its own compile_error field), not as a launch failure, so it
+                    // never blocks the rest of the session from starting.
+                    let symbol_table = new_cpu.bus().symbol_table().clone();
+                    let watch_data = match watchpoints::load_watchpoints(&symbol_table) {
+                        Ok((evaluator, enabled)) => watchpoints::WatchData { evaluator, compile_error: None, enabled },
+                        Err(message) => {
+                            eprintln!("watchpoints.emw: {message}");
+                            watchpoints::WatchData {
+                                evaluator: emma65::watch::WatchEvaluator::new(),
+                                compile_error: Some(message),
+                                enabled: Vec::new(),
+                            }
+                        }
+                    };
+                    // Install the loaded, enabled watchpoints into the CPU's own
+                    // evaluator too, so they actually halt execution in step()/run() —
+                    // not just show up in the webview's display snapshot.
+                    if let Err(e) = watchpoints::sync_cpu_evaluator(&mut new_cpu, &watch_data.evaluator, &watch_data.enabled) {
+                        eprintln!("Failed to install watchpoints for execution: {e}");
+                    }
+                    *watch_state.lock().unwrap() = watch_data;
+
                     state.set_cpu(new_cpu);
                     state.set_ui_irq_source(ui_irq_source);
                     let _ = server.respond(request.ack().expect("launch is ack-able"));
@@ -215,6 +241,7 @@ fn handle_request<W: Write + Send + 'static>(
         }
         Command::Evaluate(args) => match bus::handle_evaluate(state, args)
             .or_else(|| trace::handle_evaluate(state, trace_state, args))
+            .or_else(|| watchpoints::handle_evaluate(state, watch_state, args))
         {
             Some(Ok(response)) => {
                 let _ = server.respond(request.success(ResponseBody::Evaluate(response)));
