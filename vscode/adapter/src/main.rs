@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use dap::prelude::*;
 use dap::events::StoppedEventBody;
-use dap::responses::{DisassembleResponse, ScopesResponse, StackTraceResponse, ThreadsResponse};
+use dap::responses::{DisassembleResponse, ScopesResponse, SetInstructionBreakpointsResponse, StackTraceResponse, ThreadsResponse};
 use dap::types::{Capabilities, StackFrame, StoppedEventReason, Thread};
 
+mod breakpoints;
 mod disasm;
 mod exec;
 mod session;
@@ -53,6 +54,7 @@ fn handle_request<W: Write + Send + 'static>(
                 supports_configuration_done_request: Some(true),
                 supports_restart_request: Some(true),
                 supports_disassemble_request: Some(true),
+                supports_instruction_breakpoints: Some(true),
                 ..Default::default()
             };
             let _ = server.respond(request.success(ResponseBody::Initialize(capabilities)));
@@ -130,6 +132,20 @@ fn handle_request<W: Write + Send + 'static>(
                 let _ = server.respond(request.error("CPU not ready"));
             }
         },
+        Command::SetInstructionBreakpoints(args) => {
+            match state.with_cpu_mut(|cpu| breakpoints::set_instruction_breakpoints(cpu, args)) {
+                Some(Ok(breakpoints)) => {
+                    let body = SetInstructionBreakpointsResponse { breakpoints };
+                    let _ = server.respond(request.success(ResponseBody::SetInstructionBreakpoints(body)));
+                }
+                Some(Err(message)) => {
+                    let _ = server.respond(request.error(&message));
+                }
+                None => {
+                    let _ = server.respond(request.error("CPU not ready"));
+                }
+            }
+        }
         Command::Continue(_) => {
             match exec::continue_cpu(state, runtime, server.output.clone()) {
                 Ok(body) => {

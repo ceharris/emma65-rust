@@ -12,7 +12,7 @@ use emma65::disasm::{DisassembledLine, Disassembler};
 use emma65::emulator::Cpu;
 
 /// Parses a DAP `memoryReference` (hex if `0x`/`0X`-prefixed, decimal otherwise).
-fn parse_memory_reference(memory_reference: &str) -> Result<i64, String> {
+pub(crate) fn parse_memory_reference(memory_reference: &str) -> Result<i64, String> {
     match memory_reference.strip_prefix("0x").or_else(|| memory_reference.strip_prefix("0X")) {
         Some(hex) => i64::from_str_radix(hex, 16).map_err(|e| format!("invalid memoryReference: {e}")),
         None => memory_reference.parse::<i64>().map_err(|e| format!("invalid memoryReference: {e}")),
