@@ -2,7 +2,7 @@
 //! construction and halted-at-reset-vector startup.
 use std::path::Path;
 
-use emma65::emulator::{Config, Cpu, DeviceRegistry, DeviceSpec, default_config};
+use emma65::emulator::{Config, Cpu, DeviceRegistry, DeviceSpec, IrqSource, default_config};
 use figment::Figment;
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
@@ -32,7 +32,12 @@ const TERMINAL_SOCKET_SPEC: &str = "unix:~/.emma/sock/vscode-terminal";
 /// variables, falling back to the built-in default device layout (the same fallback the
 /// `emma65` binary uses) when no devices are configured. Builds the session and resets the
 /// CPU so it halts at the reset vector.
-pub async fn build_session(config_path: Option<&Path>) -> Result<Cpu, String> {
+///
+/// Also allocates an [`IrqSource`] for the extension's IRQ-assert/release commands (story
+/// 9), from the session's post-configuration `DeviceIdAllocator` — guaranteed not to
+/// collide with any configured device's own IRQ source, mirroring the Tauri debugger's
+/// `ui_irq_source` allocation in `debugger/src-tauri/src/lib.rs`.
+pub async fn build_session(config_path: Option<&Path>) -> Result<(Cpu, IrqSource), String> {
     let mut config: Config = Config::figment(config_path).extract().map_err(|e| format!("configuration error: {e}"))?;
     let _default_rom_file = config.devices.as_ref().is_none_or(|d| d.is_empty()).then(|| {
         let (default, rom_file) = default_config(DEFAULT_ROM);
@@ -50,7 +55,9 @@ pub async fn build_session(config_path: Option<&Path>) -> Result<Cpu, String> {
 
     let mut cpu = session.cpu;
     cpu.reset().map_err(|e| format!("CPU reset failed: {e}"))?;
-    Ok(cpu)
+    let mut id_allocator = session.id_allocator;
+    let ui_irq_source = IrqSource::from(id_allocator.next(true));
+    Ok((cpu, ui_irq_source))
 }
 
 /// Points the configured console device (if any) at [`TERMINAL_SOCKET_SPEC`], unless it

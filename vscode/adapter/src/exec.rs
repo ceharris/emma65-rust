@@ -14,7 +14,7 @@ use dap::server::ServerOutput;
 use dap::types::StoppedEventReason;
 use emma65::emulator::cpu::StepResult;
 use emma65::emulator::{
-    Cpu, RunStopper, run_from as exec_run_from, step_into as exec_step_into,
+    Cpu, IrqSource, RunStopper, run_from as exec_run_from, step_into as exec_step_into,
     step_over_breakpoint as exec_step_over_breakpoint,
     step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return,
 };
@@ -42,6 +42,10 @@ pub struct ExecState {
     /// each operation that consumes it, and set again only when a halt lands on
     /// a breakpoint. Mirrors the Tauri debugger's `SkipBreakpointPc`.
     skip_breakpoint_pc: Arc<Mutex<Option<u16>>>,
+    /// `IrqSource` allocated for the extension's NMI/IRQ commands (story 9), set once
+    /// after `launch` succeeds. `None` before then, which the bus commands report as
+    /// "CPU not ready" just like every other command that needs a live session.
+    ui_irq_source: Arc<Mutex<Option<IrqSource>>>,
 }
 
 impl ExecState {
@@ -71,6 +75,37 @@ impl ExecState {
     /// [`ExecState::with_cpu`].
     pub fn with_cpu_mut<R>(&self, f: impl FnOnce(&mut Cpu) -> R) -> Option<R> {
         self.cpu.lock().unwrap().as_mut().map(f)
+    }
+
+    /// Records the `IrqSource` allocated for the extension's NMI/IRQ commands. Called
+    /// once, right after a successful `launch`.
+    pub fn set_ui_irq_source(&self, source: IrqSource) {
+        *self.ui_irq_source.lock().unwrap() = Some(source);
+    }
+
+    /// The `IrqSource` allocated for the extension's NMI/IRQ commands, or `None` before
+    /// `launch` has completed.
+    pub fn ui_irq_source(&self) -> Option<IrqSource> {
+        *self.ui_irq_source.lock().unwrap()
+    }
+
+    /// True while a background run/step (`continue`/`next`/`stepOut`) owns the CPU.
+    pub fn is_running(&self) -> bool {
+        self.run_stopper.lock().unwrap().is_some()
+    }
+
+    /// Runs `f` against the in-progress run/step's `RunStopper`, or `None` if the CPU is
+    /// currently halted (no background operation owns it).
+    pub fn with_run_stopper<R>(&self, f: impl FnOnce(&RunStopper) -> R) -> Option<R> {
+        self.run_stopper.lock().unwrap().as_ref().map(f)
+    }
+
+    /// Installs `stopper` directly, simulating a background run/step in progress
+    /// without spawning one. Used by `bus`'s tests to exercise the "CPU currently
+    /// running" branch of the NMI/IRQ commands.
+    #[cfg(test)]
+    pub fn install_run_stopper_for_test(&self, stopper: RunStopper) {
+        *self.run_stopper.lock().unwrap() = Some(stopper);
     }
 }
 
@@ -141,6 +176,7 @@ pub fn continue_cpu<W: Write + Send + 'static>(
     let stopper_arc = Arc::clone(&state.run_stopper);
     let pause_arc = Arc::clone(&state.pause_requested);
     let skip_arc = Arc::clone(&state.skip_breakpoint_pc);
+    let ui_irq_source_arc = Arc::clone(&state.ui_irq_source);
     let runtime = Arc::clone(runtime);
     std::thread::spawn(move || {
         let (result, cpu) = runtime.block_on(handle.take_cpu_with_result());
@@ -149,6 +185,7 @@ pub fn continue_cpu<W: Write + Send + 'static>(
             run_stopper: stopper_arc,
             pause_requested: pause_arc,
             skip_breakpoint_pc: skip_arc,
+            ui_irq_source: ui_irq_source_arc,
         };
         finish_run(&state, &output, cpu, Some(result));
     });
@@ -191,6 +228,7 @@ pub fn step_over<W: Write + Send + 'static>(
     let stopper_arc = Arc::clone(&state.run_stopper);
     let pause_arc = Arc::clone(&state.pause_requested);
     let skip_arc = Arc::clone(&state.skip_breakpoint_pc);
+    let ui_irq_source_arc = Arc::clone(&state.ui_irq_source);
     std::thread::spawn(move || {
         let result =
             exec_step_over_subroutine(&mut cpu, &stop_rx, &mut cmd_rx, None, &Arc::new(AtomicU16::new(0)));
@@ -199,6 +237,7 @@ pub fn step_over<W: Write + Send + 'static>(
             run_stopper: stopper_arc,
             pause_requested: pause_arc,
             skip_breakpoint_pc: skip_arc,
+            ui_irq_source: ui_irq_source_arc,
         };
         finish_run(&state, &output, cpu, result);
     });
@@ -254,6 +293,7 @@ pub fn step_return<W: Write + Send + 'static>(
     let stopper_arc = Arc::clone(&state.run_stopper);
     let pause_arc = Arc::clone(&state.pause_requested);
     let skip_arc = Arc::clone(&state.skip_breakpoint_pc);
+    let ui_irq_source_arc = Arc::clone(&state.ui_irq_source);
     std::thread::spawn(move || {
         let result = exec_step_return(&mut cpu, &stop_rx, &mut cmd_rx, None, &Arc::new(AtomicU16::new(0)));
         let state = ExecState {
@@ -261,6 +301,7 @@ pub fn step_return<W: Write + Send + 'static>(
             run_stopper: stopper_arc,
             pause_requested: pause_arc,
             skip_breakpoint_pc: skip_arc,
+            ui_irq_source: ui_irq_source_arc,
         };
         finish_run(&state, &output, cpu, result);
     });
@@ -293,6 +334,13 @@ pub fn restart(state: &ExecState) -> Result<Option<StoppedEventReason>, String> 
     let mut guard = state.cpu.lock().unwrap();
     let cpu = guard.as_mut().ok_or("CPU not ready")?;
     cpu.reset().map_err(|e| format!("CPU reset failed: {e}"))?;
+    // `Cpu::reset` doesn't touch the interrupt controller, so a UI-asserted IRQ or
+    // pending NMI would otherwise survive a reset — same fix as the Tauri debugger's
+    // `reset_cpu` (introduced there for the analogous reason).
+    if let Some(ui_irq_source) = state.ui_irq_source() {
+        cpu.interrupts_mut().release_irq(ui_irq_source);
+        cpu.interrupts_mut().take_nmi();
+    }
     drop(guard);
     *state.skip_breakpoint_pc.lock().unwrap() = None;
 

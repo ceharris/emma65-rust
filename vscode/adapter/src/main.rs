@@ -11,6 +11,7 @@ use dap::responses::{
 use dap::types::{Capabilities, StackFrame, StoppedEventReason, Thread};
 
 mod breakpoints;
+mod bus;
 mod disasm;
 mod exec;
 mod memory;
@@ -77,8 +78,9 @@ fn handle_request<W: Write + Send + 'static>(
                 .map(PathBuf::from);
 
             match runtime.block_on(session::build_session(config_path.as_deref())) {
-                Ok(new_cpu) => {
+                Ok((new_cpu, ui_irq_source)) => {
                     state.set_cpu(new_cpu);
+                    state.set_ui_irq_source(ui_irq_source);
                     let _ = server.respond(request.ack().expect("launch is ack-able"));
                 }
                 Err(message) => {
@@ -208,6 +210,17 @@ fn handle_request<W: Write + Send + 'static>(
                 }
             }
         }
+        Command::Evaluate(args) => match bus::handle_evaluate(state, args) {
+            Some(Ok(response)) => {
+                let _ = server.respond(request.success(ResponseBody::Evaluate(response)));
+            }
+            Some(Err(message)) => {
+                let _ = server.respond(request.error(&message));
+            }
+            None => {
+                let _ = server.respond(request.error("unsupported evaluate context"));
+            }
+        },
         Command::Continue(_) => {
             match exec::continue_cpu(state, runtime, server.output.clone()) {
                 Ok(body) => {
