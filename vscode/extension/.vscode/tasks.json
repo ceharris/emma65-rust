@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "npm: compile",
+      "type": "npm",
+      "script": "compile",
+      "problemMatcher": "$tsc",
+      "presentation": {
+        "reveal": "silent"
+      }
+    },
+    {
+      "label": "cargo: build adapter",
+      "type": "shell",
+      "command": "cargo build -p emma65-vscode-adapter",
+      "options": {
+        "cwd": "${workspaceFolder}/../.."
+      },
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "reveal": "silent"
+      }
+    },
+    {
+      "label": "build",
+      "dependsOn": [
+        "npm: compile",
+        "cargo: build adapter"
+      ],
+      "dependsOrder": "parallel",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}
