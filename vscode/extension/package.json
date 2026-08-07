@@ -12,7 +12,11 @@
   ],
   "activationEvents": [
     "onDebug",
-    "onCommand:emma65.openTerminal"
+    "onCommand:emma65.openTerminal",
+    "onCommand:emma65.triggerNmi",
+    "onCommand:emma65.assertIrq",
+    "onCommand:emma65.releaseIrq",
+    "onCommand:emma65.showBusState"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -20,8 +24,48 @@
       {
         "command": "emma65.openTerminal",
         "title": "emma65: Open Console Terminal"
+      },
+      {
+        "command": "emma65.triggerNmi",
+        "title": "emma65: Trigger NMI",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "emma65.assertIrq",
+        "title": "emma65: Assert IRQ",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "emma65.releaseIrq",
+        "title": "emma65: Release IRQ",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "emma65.showBusState",
+        "title": "emma65: Show Bus/Interrupt State",
+        "icon": "$(pulse)"
       }
     ],
+    "menus": {
+      "debug/toolBar": [
+        {
+          "command": "emma65.triggerNmi",
+          "when": "debugType == 'emma65'"
+        },
+        {
+          "command": "emma65.assertIrq",
+          "when": "debugType == 'emma65'"
+        },
+        {
+          "command": "emma65.releaseIrq",
+          "when": "debugType == 'emma65'"
+        },
+        {
+          "command": "emma65.showBusState",
+          "when": "debugType == 'emma65'"
+        }
+      ]
+    },
     "debuggers": [
       {
         "type": "emma65",

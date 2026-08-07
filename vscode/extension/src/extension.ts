@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { registerTerminal } from './terminal';
+import { registerBusCommands } from './bus';
 
 /**
  * Resolves the `emma65-vscode-adapter` binary built by the `cargo build -p
@@ -51,6 +52,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.debug.registerDebugAdapterTrackerFactory('emma65', new Emma65DebugAdapterTrackerFactory(output)),
   );
   registerTerminal(context);
+  registerBusCommands(context);
 }
 
 /** Extension teardown. Nothing to release yet. */
