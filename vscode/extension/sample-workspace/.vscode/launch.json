@@ -1,0 +1,10 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "emma65",
+      "request": "launch",
+      "name": "Launch emma65"
+    }
+  ]
+}

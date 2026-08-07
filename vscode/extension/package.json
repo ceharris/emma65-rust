@@ -12,7 +12,42 @@
   ],
   "activationEvents": [],
   "main": "./out/extension.js",
-  "contributes": {},
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "emma65",
+        "label": "emma65",
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "configPath": {
+                "type": "string",
+                "description": "Path to an emma65 emulator.toml config file. Falls back to the built-in default device layout (32K RAM, embedded TaliForth ROM, VIA, PTM, two ACIAs, LFSR, console) when omitted."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "emma65",
+            "request": "launch",
+            "name": "Launch emma65"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "emma65: Launch",
+            "description": "Launch the emma65 emulator under the debugger",
+            "body": {
+              "type": "emma65",
+              "request": "launch",
+              "name": "Launch emma65"
+            }
+          }
+        ]
+      }
+    ]
+  },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
