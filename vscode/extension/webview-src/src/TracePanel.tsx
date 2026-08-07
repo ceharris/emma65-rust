@@ -1,0 +1,451 @@
+import {useCallback, useEffect, useRef, useState} from "react";
+import {invoke, listen} from "./vscodeClient";
+import "./styles/trace.scss";
+
+interface TraceBusOpDto {
+  addr: number;
+  op: string;
+  value: number;
+  comment: string;
+}
+
+interface TraceRowDto {
+  seq: number;
+  addr: number;
+  bytes: string[];
+  labels: string[];
+  mnemonic: string;
+  operand: string;
+  comment: string;
+  isValid: boolean;
+  cycles: number | null;
+  a: number;
+  x: number;
+  y: number;
+  s: number;
+  p: number;
+  pc: number;
+  busOps: TraceBusOpDto[];
+}
+
+interface TraceWindowPage {
+  rows: TraceRowDto[];
+  totalRows: number;
+}
+
+interface TraceStatus {
+  recording: boolean;
+  path: string | null;
+}
+
+/** Fixed number of rows shown in the windowed log viewport. */
+const VIEWPORT_ROWS = 40;
+
+/** `(letter, bit)` pairs for the P register, in NV-BDIZC display order. */
+const FLAG_BITS: [string, number][] = [
+  ["N", 0x80], ["V", 0x40], ["B", 0x10], ["D", 0x08], ["I", 0x04], ["Z", 0x02], ["C", 0x01],
+];
+
+/** Formats P as an 8-char NV-BDIZC field, with a blank where the always-set UNUSED bit would render. */
+function formatFlags(p: number): string {
+  const chars = FLAG_BITS.map(([c, bit]) => (p & bit ? c : " "));
+  chars.splice(2, 0, " ");
+  return chars.join("");
+}
+
+function formatAddr(addr: number): string {
+  return addr.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function formatByte(b: number): string {
+  return b.toString(16).toUpperCase().padStart(2, "0");
+}
+
+function formatBytes(bytes: string[]): string {
+  return bytes.map((b) => b.padStart(2, "0")).join(" ").padEnd(8, " ");
+}
+
+/** Basename of a file path, for the compact toolbar path display. */
+function basename(path: string): string {
+  return path.split(/[/\\]/).pop() ?? path;
+}
+
+/**
+ * Shared column widths for the header table and the body table — they're
+ * separate `<table>` elements (so the header can stay put while the body's
+ * content is bottom-anchored) but need identical `<col>` widths to stay
+ * visually aligned as columns.
+ */
+function TraceColGroup() {
+  return (
+    <colgroup>
+      <col className="col-seq" />
+      <col className="col-cyc" />
+      <col className="col-reg" />
+      <col className="col-reg" />
+      <col className="col-reg" />
+      <col className="col-reg" />
+      <col className="col-reg" />
+      <col className="col-flags" />
+      <col className="col-addr" />
+      <col className="col-bytes" />
+      <col className="col-mnemonic" />
+      <col className="col-operand" />
+      <col />
+    </colgroup>
+  );
+}
+
+export default function TracePanel() {
+  const [recording, setRecording] = useState(false);
+  const [tracePath, setTracePath] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [rows, setRows] = useState<TraceRowDto[]>([]);
+  const [startRow, setStartRow] = useState(0);
+  const [totalRows, setTotalRows] = useState(0);
+  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Refs mirror state so event listeners and callbacks always see the latest
+  // values without needing to be re-created (same pattern as the Tauri debugger's
+  // DisassemblyPanel/TracePanel).
+  const recordingRef = useRef(false);
+  const pausedRef = useRef(false);
+  const totalRowsRef = useRef(0);
+  const startRowRef = useRef(0);
+  recordingRef.current = recording;
+  pausedRef.current = paused;
+  totalRowsRef.current = totalRows;
+  startRowRef.current = startRow;
+
+  // Whether the log body should snap to the bottom of its content once the
+  // window just fetched is rendered. Only true for tail-follow fetches; scroll/
+  // jump fetches anchor to the top of the fetched window instead (see the
+  // scroll-position effect below).
+  const stickToBottomRef = useRef(false);
+
+  /** Fetch `VIEWPORT_ROWS` rows starting at `start` and replace the displayed window. */
+  const fetchWindow = useCallback(async (start: number, stickToBottom = false) => {
+    try {
+      const page = await invoke<TraceWindowPage>("getWindow", { startRow: start, count: VIEWPORT_ROWS });
+      stickToBottomRef.current = stickToBottom;
+      setRows(page.rows);
+      setTotalRows(page.totalRows);
+      setStartRow(start);
+    } catch (e) {
+      console.error("getWindow failed:", e);
+    }
+  }, []);
+
+  /** Re-fetches the tail window, following the live end of the recording. */
+  const fetchTail = useCallback(() => {
+    return fetchWindow(Math.max(0, totalRowsRef.current - VIEWPORT_ROWS), true);
+  }, [fetchWindow]);
+
+  // Restore toolbar state on mount (e.g. the panel was closed and reopened
+  // mid-recording).
+  useEffect(() => {
+    invoke<TraceStatus>("getStatus")
+      .then((status) => {
+        setRecording(status.recording);
+        setTracePath(status.path);
+        if (status.path) fetchTail();
+      })
+      .catch((e) => console.error("getStatus failed:", e));
+  }, [fetchTail]);
+
+  // Live-follow: while recording and not paused, re-fetch the tail window every
+  // time the extension host observes a DAP `stopped` event (each step, breakpoint,
+  // or end of a free run) — the closest equivalent of the Tauri debugger's
+  // `debugger-halted`/`debugger-run-stopped` events, which this webview has no
+  // direct DAP connection of its own to listen for.
+  useEffect(() => {
+    return listen("halted", () => {
+      if (recordingRef.current && !pausedRef.current) fetchTail();
+    });
+  }, [fetchTail]);
+
+  const handleRecord = useCallback(async () => {
+    try {
+      // `null` means the user cancelled the extension host's save dialog.
+      const status = await invoke<TraceStatus | null>("record");
+      if (!status) return;
+      setRecording(status.recording);
+      setTracePath(status.path);
+      setPaused(false);
+      setSelectedSeq(null);
+      await fetchWindow(0);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [fetchWindow]);
+
+  const handleStop = useCallback(async () => {
+    try {
+      const status = await invoke<TraceStatus>("stop");
+      setRecording(status.recording);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  /** Pause is webview-only: the file keeps writing, only tail-following stops. */
+  const togglePause = useCallback(() => {
+    setPaused((prev) => {
+      const next = !prev;
+      if (!next) fetchTail();
+      return next;
+    });
+  }, [fetchTail]);
+
+  const scrollBy = useCallback(
+    (delta: number) => {
+      const maxStart = Math.max(0, totalRowsRef.current - 1);
+      const next = Math.max(0, Math.min(maxStart, startRowRef.current + delta));
+      fetchWindow(next);
+    },
+    [fetchWindow],
+  );
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      e.preventDefault();
+      scrollBy(e.deltaY > 0 ? 1 : -1);
+    },
+    [scrollBy],
+  );
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (document.activeElement instanceof HTMLInputElement) return;
+      if (e.key === "ArrowDown") scrollBy(1);
+      else if (e.key === "ArrowUp") scrollBy(-1);
+      else if (e.key === "PageDown") scrollBy(VIEWPORT_ROWS);
+      else if (e.key === "PageUp") scrollBy(-VIEWPORT_ROWS);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [scrollBy]);
+
+  // Custom scrollbar: the log is a fixed-size window fetched from the
+  // backend (not a real scrollable DOM list, since total_rows can be huge),
+  // so a native scrollbar has nothing to attach to. This track+thumb gives
+  // the same "see how much history there is, and jump anywhere in it" UX.
+  const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
+
+  /** Maps a track-relative Y coordinate to a row and, if it differs, fetches that window. */
+  const jumpToClientY = useCallback(
+    (clientY: number) => {
+      const track = scrollbarTrackRef.current;
+      const total = totalRowsRef.current;
+      const maxStart = Math.max(0, total - VIEWPORT_ROWS);
+      if (!track || maxStart <= 0) return;
+      const rect = track.getBoundingClientRect();
+      const thumbFrac = Math.max(0.04, Math.min(1, VIEWPORT_ROWS / total));
+      const usable = rect.height * (1 - thumbFrac);
+      const thumbHalf = (rect.height * thumbFrac) / 2;
+      const frac = usable > 0 ? Math.max(0, Math.min(1, (clientY - rect.top - thumbHalf) / usable)) : 0;
+      const next = Math.round(frac * maxStart);
+      if (next !== startRowRef.current) fetchWindow(next);
+    },
+    [fetchWindow],
+  );
+
+  const handleThumbMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const onMove = (ev: MouseEvent) => jumpToClientY(ev.clientY);
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [jumpToClientY],
+  );
+
+  const handleTrackMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      jumpToClientY(e.clientY);
+    },
+    [jumpToClientY],
+  );
+
+  // Rows lay out top-down; once the fetched window's rendered height exceeds
+  // the viewport (label rows can push it past VIEWPORT_ROWS' worth), the log
+  // body needs an explicit scroll position. Tail-follow fetches stick to the
+  // bottom so the newest row stays visible; scroll/jump fetches anchor to the
+  // top so the fetched window (including its first row) is reachable instead
+  // of being immediately scrolled past.
+  const logBodyRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = logBodyRef.current;
+    if (!el) return;
+    el.scrollTop = stickToBottomRef.current ? el.scrollHeight : 0;
+  }, [rows]);
+
+  const selectedRow = rows.find((r) => r.seq === selectedSeq) ?? null;
+  const maxStart = Math.max(0, totalRows - VIEWPORT_ROWS);
+  const thumbHeightPct = totalRows > 0 ? Math.max(4, Math.min(100, (VIEWPORT_ROWS / totalRows) * 100)) : 100;
+  const thumbTopPct = maxStart > 0 ? (startRow / maxStart) * (100 - thumbHeightPct) : 0;
+
+  return (
+    <div className="trace-panel">
+      <div className="trace-toolbar">
+        <button
+          className={`trace-btn trace-record-btn${recording ? " recording" : ""}`}
+          onClick={handleRecord}
+          disabled={recording}
+          title="Record trace to a new file"
+        >
+          <i className="codicon codicon-record" />
+        </button>
+        <button
+          className="trace-btn trace-stop-btn"
+          onClick={handleStop}
+          disabled={!recording}
+          title="Stop recording"
+        >
+          <i className="codicon codicon-debug-stop" />
+        </button>
+        <button
+          className={`trace-btn trace-pause-btn${paused ? " active" : ""}`}
+          onClick={togglePause}
+          disabled={!recording}
+          title={paused ? "Resume following the live tail" : "Pause (stop following the live tail)"}
+        >
+          <i className={`codicon codicon-${paused ? "play" : "debug-pause"}`} />
+        </button>
+        <span className="trace-path">{tracePath ? basename(tracePath) : "No trace recorded"}</span>
+        <span className="trace-row-count">{totalRows} rows</span>
+      </div>
+      <div className="trace-log-area">
+        <div className="trace-log-header">
+          <table className="trace-table">
+            <TraceColGroup />
+            <thead>
+              <tr>
+                <th>Seq#</th>
+                <th>Cyc</th>
+                <th>A</th>
+                <th>X</th>
+                <th>Y</th>
+                <th>S</th>
+                <th>P</th>
+                <th>Flags</th>
+                <th>Addr</th>
+                <th>Code</th>
+                <th colSpan={3}>Instruction</th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+        <div className="trace-log-scroller">
+          <div className="trace-log-body" ref={logBodyRef} onWheel={handleWheel}>
+            <table className="trace-table">
+              <TraceColGroup />
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr className="trace-empty-row">
+                    <td colSpan={13} className="trace-empty">
+                      {recording ? "Waiting for instructions…" : "Not recording"}
+                    </td>
+                  </tr>
+                ) : (
+                  rows.flatMap((row) => {
+                    const labelRows = row.labels.map((label, i) => (
+                      <tr key={`${row.seq}-label-${i}`} className="trace-row trace-label-row">
+                        <td colSpan={8} />
+                        <td colSpan={5} className="trace-label">
+                          {label}:
+                        </td>
+                      </tr>
+                    ));
+                    const instrRow = (
+                      <tr
+                        key={row.seq}
+                        className={`trace-row${row.seq === selectedSeq ? " selected" : ""}${row.isValid ? "" : " invalid-op"}`}
+                        onClick={() => setSelectedSeq(row.seq)}
+                      >
+                        <td className="trace-seq">{row.seq}</td>
+                        <td className="trace-cyc">{row.cycles ?? ""}</td>
+                        <td className="trace-reg">{formatByte(row.a)}</td>
+                        <td className="trace-reg">{formatByte(row.x)}</td>
+                        <td className="trace-reg">{formatByte(row.y)}</td>
+                        <td className="trace-reg">{formatByte(row.s)}</td>
+                        <td className="trace-reg">{formatByte(row.p)}</td>
+                        <td className="trace-flags">{formatFlags(row.p)}</td>
+                        <td className="trace-addr">{formatAddr(row.addr)}</td>
+                        <td className="trace-bytes">{formatBytes(row.bytes)}</td>
+                        <td className="trace-mnemonic">{row.mnemonic}</td>
+                        <td className="trace-operand">{row.operand}</td>
+                        <td className="trace-comment">{row.comment}</td>
+                      </tr>
+                    );
+                    return [...labelRows, instrRow];
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+          {totalRows > VIEWPORT_ROWS && (
+            <div className="trace-scrollbar" ref={scrollbarTrackRef} onMouseDown={handleTrackMouseDown}>
+              <div
+                className="trace-scrollbar-thumb"
+                style={{ height: `${thumbHeightPct}%`, top: `${thumbTopPct}%` }}
+                onMouseDown={handleThumbMouseDown}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="trace-detail">
+        {selectedRow ? (
+          selectedRow.busOps.length === 0 ? (
+            <span className="trace-detail-empty">No bus operations recorded for this instruction.</span>
+          ) : (
+            <table className="trace-detail-table">
+              <thead>
+                <tr>
+                  <th className="trace-detail-addr">Address</th>
+                  <th className="trace-detail-op">Operation</th>
+                  <th className="trace-detail-value">Data</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedRow.busOps.map((op, i) => (
+                  <tr key={i} className="trace-detail-row">
+                    <td className="trace-detail-addr">{formatAddr(op.addr)}</td>
+                    <td className="trace-detail-op">{op.op}</td>
+                    <td className="trace-detail-value">
+                      {formatByte(op.value)} <span className="trace-detail-comment">{op.comment}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        ) : (
+          <span className="trace-detail-empty">Select a row to see its bus operations.</span>
+        )}
+      </div>
+      {error && (
+        <div className="trace-error-backdrop" onClick={() => setError(null)}>
+          <div className="trace-error-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="trace-error-title">Trace Error</div>
+            <div className="trace-error-message">{error}</div>
+            <div className="trace-error-buttons">
+              <button className="trace-error-btn" onClick={() => setError(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

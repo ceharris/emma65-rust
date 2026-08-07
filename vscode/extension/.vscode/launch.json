@@ -13,6 +13,22 @@
         "${workspaceFolder}/out/**/*.js"
       ],
       "preLaunchTask": "build"
+    },
+    {
+      "name": "Run Extension (trace dev server)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}/sample-workspace"
+      ],
+      "env": {
+        "EMMA65_TRACE_WEBVIEW_DEV": "1"
+      },
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],
+      "preLaunchTask": "build (trace webview dev server)"
     }
   ]
 }

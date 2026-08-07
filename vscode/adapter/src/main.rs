@@ -17,6 +17,7 @@ mod exec;
 mod memory;
 mod registers;
 mod session;
+mod trace;
 
 fn main() {
     let stdin = std::io::stdin();
@@ -29,6 +30,7 @@ fn main() {
     );
 
     let state = exec::ExecState::default();
+    let trace_state = std::sync::Mutex::new(trace::TraceData::default());
 
     loop {
         let request = match server.poll_request() {
@@ -40,7 +42,7 @@ fn main() {
             }
         };
 
-        if !handle_request(&mut server, &runtime, &state, request) {
+        if !handle_request(&mut server, &runtime, &state, &trace_state, request) {
             break;
         }
     }
@@ -52,6 +54,7 @@ fn handle_request<W: Write + Send + 'static>(
     server: &mut Server<impl Read, W>,
     runtime: &Arc<tokio::runtime::Runtime>,
     state: &exec::ExecState,
+    trace_state: &std::sync::Mutex<trace::TraceData>,
     request: Request,
 ) -> bool {
     match &request.command {
@@ -210,7 +213,9 @@ fn handle_request<W: Write + Send + 'static>(
                 }
             }
         }
-        Command::Evaluate(args) => match bus::handle_evaluate(state, args) {
+        Command::Evaluate(args) => match bus::handle_evaluate(state, args)
+            .or_else(|| trace::handle_evaluate(state, trace_state, args))
+        {
             Some(Ok(response)) => {
                 let _ = server.respond(request.success(ResponseBody::Evaluate(response)));
             }

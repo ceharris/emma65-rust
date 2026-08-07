@@ -16,7 +16,8 @@
     "onCommand:emma65.triggerNmi",
     "onCommand:emma65.assertIrq",
     "onCommand:emma65.releaseIrq",
-    "onCommand:emma65.showBusState"
+    "onCommand:emma65.showBusState",
+    "onCommand:emma65.showTrace"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -44,6 +45,11 @@
         "command": "emma65.showBusState",
         "title": "emma65: Show Bus/Interrupt State",
         "icon": "$(pulse)"
+      },
+      {
+        "command": "emma65.showTrace",
+        "title": "emma65: Show Trace",
+        "icon": "$(graph-line)"
       }
     ],
     "menus": {
@@ -62,6 +68,10 @@
         },
         {
           "command": "emma65.showBusState",
+          "when": "debugType == 'emma65'"
+        },
+        {
+          "command": "emma65.showTrace",
           "when": "debugType == 'emma65'"
         }
       ]
@@ -103,8 +113,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "compile": "tsc -p ./ && npm --prefix webview-src run build",
+    "watch": "tsc -watch -p ./",
+    "webview:dev": "npm --prefix webview-src run dev"
   },
   "devDependencies": {
     "@types/node": "^20",

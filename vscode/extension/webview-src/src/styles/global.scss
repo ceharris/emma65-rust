@@ -1,0 +1,55 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+// Maps this app's --color-*/--font-* tokens (same names `trace.scss` uses, ported
+// unchanged from `debugger/frontend/src/styles/trace.scss`) onto VS Code's own
+// webview theme variables. VS Code injects a `--vscode-*` custom property for every
+// theme color/font token and updates them live when the user switches themes, so —
+// unlike the Tauri debugger's ThemeContext/light-dark palette toggle — no explicit
+// theme state or `data-theme` attribute is needed here at all. Each mapping carries a
+// literal fallback (the Tauri debugger's dark-palette color) for the few tokens VS
+// Code might not define in a given theme.
+:root {
+  --color-bg: var(--vscode-editor-background);
+  --color-bg-alt: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --color-bg-hover: var(--vscode-list-hoverBackground);
+  --color-bg-selected: var(--vscode-list-activeSelectionBackground);
+  --color-bg-selected-hover: var(--vscode-list-activeSelectionBackground);
+  --color-bg-active: var(--vscode-list-inactiveSelectionBackground, var(--vscode-list-activeSelectionBackground));
+  --color-fg: var(--vscode-editor-foreground);
+  --color-fg-strong: var(--vscode-foreground);
+  --color-accent: var(--vscode-textLink-foreground);
+  --color-border: var(--vscode-panel-border);
+  --color-border-strong: var(--vscode-focusBorder);
+  --color-muted: var(--vscode-descriptionForeground);
+  --color-muted-2: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  --color-number: var(--vscode-debugTokenExpression-number, #b5cea8);
+  --color-string: var(--vscode-debugTokenExpression-string, #ce9178);
+  --color-keyword: var(--vscode-debugTokenExpression-name, #569cd6);
+  --color-directive: var(--vscode-symbolIcon-functionForeground, #c586c0);
+  --color-danger: var(--vscode-errorForeground);
+  --font-mono: var(--vscode-editor-font-family, monospace);
+  --font-ui: var(--vscode-font-family, system-ui, sans-serif);
+  --font-size-btn: 11px;
+  --font-size-ui-panel: 12px;
+  --font-size-mono: var(--vscode-editor-font-size, 13px);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  overflow: hidden;
+}
