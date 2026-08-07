@@ -20,10 +20,34 @@ class Emma65DebugAdapterDescriptorFactory implements vscode.DebugAdapterDescript
   }
 }
 
+/**
+ * Logs every DAP request/response/event to the "emma65 DAP" output channel, so
+ * toolbar-driven UAT has something concrete to watch without needing the
+ * disassembly/registers/memory panels (stories 4, 6, 7) built yet.
+ */
+class Emma65DebugAdapterTrackerFactory implements vscode.DebugAdapterTrackerFactory {
+  constructor(private readonly output: vscode.OutputChannel) {}
+
+  createDebugAdapterTracker(_session: vscode.DebugSession): vscode.ProviderResult<vscode.DebugAdapterTracker> {
+    const output = this.output;
+    return {
+      onWillReceiveMessage(message: unknown) {
+        output.appendLine(`-> ${JSON.stringify(message)}`);
+      },
+      onDidSendMessage(message: unknown) {
+        output.appendLine(`<- ${JSON.stringify(message)}`);
+      },
+    };
+  }
+}
+
 /** Extension entry point. Registers the `emma65` debug adapter type. */
 export function activate(context: vscode.ExtensionContext) {
+  const output = vscode.window.createOutputChannel('emma65 DAP');
   context.subscriptions.push(
+    output,
     vscode.debug.registerDebugAdapterDescriptorFactory('emma65', new Emma65DebugAdapterDescriptorFactory()),
+    vscode.debug.registerDebugAdapterTrackerFactory('emma65', new Emma65DebugAdapterTrackerFactory(output)),
   );
 }
 
