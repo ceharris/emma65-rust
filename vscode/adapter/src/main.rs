@@ -13,6 +13,7 @@ use dap::types::{Capabilities, StackFrame, StoppedEventReason, Thread};
 mod breakpoints;
 mod disasm;
 mod exec;
+mod memory;
 mod registers;
 mod session;
 
@@ -60,6 +61,8 @@ fn handle_request<W: Write + Send + 'static>(
                 supports_disassemble_request: Some(true),
                 supports_instruction_breakpoints: Some(true),
                 supports_set_variable: Some(true),
+                supports_read_memory_request: Some(true),
+                supports_write_memory_request: Some(true),
                 ..Default::default()
             };
             let _ = server.respond(request.success(ResponseBody::Initialize(capabilities)));
@@ -161,6 +164,28 @@ fn handle_request<W: Write + Send + 'static>(
         Command::Disassemble(args) => match state.with_cpu(|cpu| disasm::disassemble(cpu, args)) {
             Some(Ok(instructions)) => {
                 let _ = server.respond(request.success(ResponseBody::Disassemble(DisassembleResponse { instructions })));
+            }
+            Some(Err(message)) => {
+                let _ = server.respond(request.error(&message));
+            }
+            None => {
+                let _ = server.respond(request.error("CPU not ready"));
+            }
+        },
+        Command::ReadMemory(args) => match state.with_cpu(|cpu| memory::read_memory(cpu, args)) {
+            Some(Ok(response)) => {
+                let _ = server.respond(request.success(ResponseBody::ReadMemory(response)));
+            }
+            Some(Err(message)) => {
+                let _ = server.respond(request.error(&message));
+            }
+            None => {
+                let _ = server.respond(request.error("CPU not ready"));
+            }
+        },
+        Command::WriteMemory(args) => match state.with_cpu_mut(|cpu| memory::write_memory(cpu, args)) {
+            Some(Ok(response)) => {
+                let _ = server.respond(request.success(ResponseBody::WriteMemory(response)));
             }
             Some(Err(message)) => {
                 let _ = server.respond(request.error(&message));
