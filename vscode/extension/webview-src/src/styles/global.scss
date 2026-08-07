@@ -33,6 +33,10 @@
   --color-keyword: var(--vscode-debugTokenExpression-name, #569cd6);
   --color-directive: var(--vscode-symbolIcon-functionForeground, #c586c0);
   --color-danger: var(--vscode-errorForeground);
+  --color-danger-strong: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+  --color-btn-bg: var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background));
+  --color-indicator-stop: var(--vscode-debugIcon-stopForeground, var(--vscode-errorForeground));
+  --color-idle: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
   --font-mono: var(--vscode-editor-font-family, monospace);
   --font-ui: var(--vscode-font-family, system-ui, sans-serif);
   --font-size-btn: 11px;

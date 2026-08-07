@@ -23,6 +23,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         trace: resolve(__dirname, "trace.html"),
+        watchpoints: resolve(__dirname, "watchpoints.html"),
       },
       output: {
         // Fixed names (no content hash): the extension host references these

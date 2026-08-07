@@ -1,0 +1,360 @@
+.watchpoint-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.watchpoint-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background-color: var(--color-bg-alt);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+
+  .panel-title {
+    padding: 0;
+    border-bottom: none;
+    background: none;
+  }
+}
+
+.panel-title {
+  display: block;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-accent);
+}
+
+.watchpoint-add-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  line-height: 1;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover:not(:disabled) {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &:disabled {
+    color: var(--color-muted-2);
+    cursor: default;
+  }
+}
+
+.watchpoint-empty {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px;
+  color: var(--color-muted-2);
+  font-size: var(--font-size-mono);
+}
+
+.watchpoint-error {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px;
+  color: var(--color-danger);
+  font-size: var(--font-size-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.watchpoint-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.watchpoint-row {
+  display: flex;
+  align-items: baseline;
+  padding: 2px 10px;
+  gap: 8px;
+  font-size: var(--font-size-mono);
+  line-height: 1.7;
+
+  &:hover {
+    background-color: var(--color-bg-hover);
+  }
+
+  &.selected {
+    background-color: var(--color-bg-selected);
+
+    &:hover {
+      background-color: var(--color-bg-selected-hover);
+    }
+  }
+
+  &.disabled .watchpoint-source {
+    color: var(--color-muted);
+  }
+}
+
+.watchpoint-remove-btn {
+  flex: 0 0 auto;
+  visibility: hidden;
+  background: none;
+  border: none;
+  color: var(--color-muted);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-mono);
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  .watchpoint-row:hover &,
+  .watchpoint-row.selected & {
+    visibility: visible;
+  }
+
+  &:hover:not(:disabled) {
+    color: var(--color-danger-strong);
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+.watchpoint-source {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &.expanded {
+    white-space: normal;
+    word-break: break-word;
+  }
+}
+
+.indicator {
+  flex: 0 0 auto;
+  cursor: pointer;
+
+  &.readonly {
+    cursor: default;
+  }
+}
+
+.wp-true     { color: var(--color-indicator-stop); }
+.wp-false    { color: var(--color-idle); }
+.wp-error    { color: var(--color-danger); }
+.wp-disabled { color: var(--color-muted); }
+
+.wp-vars-section {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--color-border);
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wp-vars-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background-color: var(--color-bg-alt);
+  cursor: pointer;
+  flex-shrink: 0;
+
+  .codicon {
+    font-size: 14px;
+    color: var(--color-muted);
+  }
+}
+
+.wp-vars-title {
+  flex: 1 1 auto;
+  font-size: var(--font-size-btn);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+}
+
+.wp-vars-empty {
+  display: block;
+  padding: 8px 10px;
+  color: var(--color-muted-2);
+  font-size: var(--font-size-mono);
+}
+
+.wp-vars-body {
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+// table-layout: auto (the default) sizes .wp-vars-name and .wp-vars-value
+// to their widest content across all rows — a true table column, unlike a
+// per-row flex layout — while .wp-vars-filler's 100% width claims whatever
+// space is left over, keeping the name/value pair clustered on the left.
+.wp-vars-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-mono);
+}
+
+.wp-vars-row {
+  line-height: 1.7;
+
+  &:hover {
+    background-color: var(--color-bg-hover);
+  }
+}
+
+.wp-vars-name {
+  color: var(--color-accent);
+  padding: 2px 12px 2px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wp-vars-value {
+  color: var(--color-number);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 10px 2px 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.wp-vars-filler {
+  width: 100%;
+}
+
+.wp-add-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wp-add-dialog {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+  min-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--font-ui);
+}
+
+.wp-add-title {
+  font-size: var(--font-size-btn);
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-accent);
+}
+
+.wp-add-field {
+  display: flex;
+  align-items: center;
+}
+
+.wp-add-input {
+  flex: 1;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  padding: 3px 6px;
+  border-radius: 3px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent);
+  }
+
+  &.invalid {
+    border-color: var(--color-danger-strong);
+  }
+}
+
+.wp-add-error {
+  font-size: var(--font-size-btn);
+  color: var(--color-danger-strong);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wp-add-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wp-add-btn-action {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 3px 12px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &.wp-add-btn-ok {
+    color: var(--color-accent);
+  }
+
+  &:disabled {
+    color: var(--color-muted-2);
+    cursor: default;
+
+    &:hover {
+      background: var(--color-btn-bg);
+      border-color: var(--color-border-strong);
+    }
+  }
+}
+
+.radix-btn {
+  background: none;
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-muted);
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1.4;
+
+  &:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+}
