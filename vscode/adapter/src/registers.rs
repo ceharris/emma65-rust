@@ -3,7 +3,9 @@
 //! Mirrors the Tauri debugger's `registers.rs::get_registers`/`set_register`, translated
 //! from Tauri commands to DAP's Variables view: A, X, Y, PC, S, P as a flat "CPU Registers"
 //! scope, with P's value rendered as the same 8-character NV-BDIZC flag string (dash where
-//! clear) the Tauri register panel shows.
+//! clear) the Tauri register panel shows. `setVariable` accepts `0b`/`0o`/`0q`/`0x`-prefixed
+//! binary/octal/hex or (unprefixed) signed decimal, same as the Tauri panel's editable
+//! register fields.
 
 use dap::types::{Scope, ScopePresentationhint, Variable};
 use emma65::emulator::{Cpu, StatusRegister};
@@ -57,13 +59,48 @@ fn parse_flags_string(s: &str) -> Option<StatusRegister> {
     Some(result)
 }
 
-/// Parses a DAP `setVariable` value: hex if `0x`/`0X`/`$`-prefixed, decimal otherwise.
-fn parse_numeric(value: &str) -> Result<u32, String> {
+/// Parses a DAP `setVariable` value: `0b`-prefixed binary, `0o`/`0q`-prefixed octal,
+/// `0x`/`$`-prefixed hex (all case-insensitive, all unsigned), or decimal otherwise —
+/// decimal accepts a leading `+`/`-` sign, since unlike the other radixes there's no
+/// prefix to carry it. Mirrors the Tauri register panel's `parseRegisterInput` prefix
+/// convention (`RegisterPanel.tsx`), minus its "no prefix falls back to the current
+/// display radix" behavior, since a DAP Variables scope has no such display-radix state
+/// to fall back to.
+fn parse_numeric(value: &str) -> Result<i64, String> {
     let value = value.trim();
-    match value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")).or_else(|| value.strip_prefix('$')) {
-        Some(hex) => u32::from_str_radix(hex, 16).map_err(|e| format!("invalid value: {e}")),
-        None => value.parse::<u32>().map_err(|e| format!("invalid value: {e}")),
+    if let Some(bin) = value.strip_prefix("0b").or_else(|| value.strip_prefix("0B")) {
+        return i64::from_str_radix(bin, 2).map_err(|e| format!("invalid value: {e}"));
     }
+    if let Some(oct) = value
+        .strip_prefix("0o")
+        .or_else(|| value.strip_prefix("0O"))
+        .or_else(|| value.strip_prefix("0q"))
+        .or_else(|| value.strip_prefix("0Q"))
+    {
+        return i64::from_str_radix(oct, 8).map_err(|e| format!("invalid value: {e}"));
+    }
+    if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")).or_else(|| value.strip_prefix('$')) {
+        return i64::from_str_radix(hex, 16).map_err(|e| format!("invalid value: {e}"));
+    }
+    value.parse::<i64>().map_err(|e| format!("invalid value: {e}"))
+}
+
+/// Validates a parsed integer against a register field's bit width and returns its unsigned
+/// representation, or an error naming `field` if out of range. Byte/word fields accept the
+/// union of the unsigned range (`0..2^width_bits-1`) and the signed two's-complement range
+/// (`-2^(width_bits-1)..-1`) when `allow_signed` — so e.g. `-1` for an 8-bit register means
+/// 0xFF — mirroring the Tauri panel's `toUnsignedInRange`. PC has no signed display mode, so
+/// only the unsigned range applies there.
+fn to_unsigned_in_range(field: &str, value: i64, width_bits: u32, allow_signed: bool) -> Result<u32, String> {
+    let max = (1i64 << width_bits) - 1;
+    if !allow_signed {
+        return (0..=max).contains(&value).then_some(value as u32).ok_or_else(|| format!("{field} value out of range: must be 0 to {max}"));
+    }
+    let min = -(1i64 << (width_bits - 1));
+    (min..=max)
+        .contains(&value)
+        .then_some((value & max) as u32)
+        .ok_or_else(|| format!("{field} value out of range: must be {min} to {max}"))
 }
 
 /// Builds the single "CPU Registers" scope.
@@ -106,8 +143,7 @@ pub fn set_variable(cpu: &mut Cpu, name: &str, value: &str) -> Result<String, St
             let p = match parse_flags_string(value) {
                 Some(p) => p,
                 None => {
-                    let byte: u8 =
-                        parse_numeric(value)?.try_into().map_err(|_| "P value out of range: must be 0-255".to_string())?;
+                    let byte = to_unsigned_in_range("P", parse_numeric(value)?, 8, true)? as u8;
                     StatusRegister::from_byte(byte) | StatusRegister::UNUSED
                 }
             };
@@ -115,12 +151,12 @@ pub fn set_variable(cpu: &mut Cpu, name: &str, value: &str) -> Result<String, St
             Ok(flags_string(cpu.registers().p))
         }
         "PC" => {
-            let word: u16 = parse_numeric(value)?.try_into().map_err(|_| "PC value out of range: must be 0-65535".to_string())?;
+            let word = to_unsigned_in_range("PC", parse_numeric(value)?, 16, false)? as u16;
             cpu.registers_mut().pc = word;
             Ok(format!("0x{word:04X}"))
         }
         "A" | "X" | "Y" | "S" => {
-            let byte: u8 = parse_numeric(value)?.try_into().map_err(|_| format!("{name} value out of range: must be 0-255"))?;
+            let byte = to_unsigned_in_range(name, parse_numeric(value)?, 8, true)? as u8;
             match name {
                 "A" => cpu.registers_mut().a = byte,
                 "X" => cpu.registers_mut().x = byte,
@@ -209,9 +245,43 @@ mod tests {
     }
 
     #[test]
+    fn set_variable_writes_a_byte_register_from_binary() {
+        let mut cpu = make_cpu();
+        let result = set_variable(&mut cpu, "Y", "0b01010101").unwrap();
+        assert_eq!(result, "0x55");
+        assert_eq!(cpu.registers().y, 0x55);
+    }
+
+    #[test]
+    fn set_variable_writes_a_byte_register_from_octal() {
+        let mut cpu = make_cpu();
+        let result = set_variable(&mut cpu, "X", "0o17").unwrap();
+        assert_eq!(result, "0x0F");
+        assert_eq!(cpu.registers().x, 0x0F);
+
+        let result = set_variable(&mut cpu, "X", "0q17").unwrap();
+        assert_eq!(result, "0x0F");
+    }
+
+    #[test]
+    fn set_variable_writes_a_byte_register_from_signed_decimal() {
+        let mut cpu = make_cpu();
+        let result = set_variable(&mut cpu, "A", "-1").unwrap();
+        assert_eq!(result, "0xFF");
+        assert_eq!(cpu.registers().a, 0xFF);
+    }
+
+    #[test]
+    fn set_variable_rejects_a_negative_pc_since_pc_has_no_signed_range() {
+        let mut cpu = make_cpu();
+        assert!(set_variable(&mut cpu, "PC", "-1").is_err());
+    }
+
+    #[test]
     fn set_variable_rejects_an_out_of_range_byte() {
         let mut cpu = make_cpu();
         assert!(set_variable(&mut cpu, "A", "256").is_err());
+        assert!(set_variable(&mut cpu, "A", "-129").is_err());
     }
 
     #[test]
