@@ -4,12 +4,16 @@ use std::sync::Arc;
 
 use dap::prelude::*;
 use dap::events::StoppedEventBody;
-use dap::responses::{DisassembleResponse, ScopesResponse, SetInstructionBreakpointsResponse, StackTraceResponse, ThreadsResponse};
+use dap::responses::{
+    DisassembleResponse, ScopesResponse, SetInstructionBreakpointsResponse, SetVariableResponse, StackTraceResponse,
+    ThreadsResponse, VariablesResponse,
+};
 use dap::types::{Capabilities, StackFrame, StoppedEventReason, Thread};
 
 mod breakpoints;
 mod disasm;
 mod exec;
+mod registers;
 mod session;
 
 fn main() {
@@ -55,6 +59,7 @@ fn handle_request<W: Write + Send + 'static>(
                 supports_restart_request: Some(true),
                 supports_disassemble_request: Some(true),
                 supports_instruction_breakpoints: Some(true),
+                supports_set_variable: Some(true),
                 ..Default::default()
             };
             let _ = server.respond(request.success(ResponseBody::Initialize(capabilities)));
@@ -118,8 +123,40 @@ fn handle_request<W: Write + Send + 'static>(
             }
         }
         Command::Scopes(_) => {
-            // No "CPU Registers" scope yet (story 6); an empty scope list is a valid response.
-            let _ = server.respond(request.success(ResponseBody::Scopes(ScopesResponse { scopes: vec![] })));
+            let scopes = if state.has_cpu() { registers::scopes() } else { vec![] };
+            let _ = server.respond(request.success(ResponseBody::Scopes(ScopesResponse { scopes })));
+        }
+        Command::Variables(args) => {
+            if args.variables_reference != registers::REGISTERS_VARIABLES_REFERENCE {
+                let _ = server.respond(request.error("unknown variablesReference"));
+            } else {
+                match state.with_cpu(registers::variables) {
+                    Some(variables) => {
+                        let _ = server.respond(request.success(ResponseBody::Variables(VariablesResponse { variables })));
+                    }
+                    None => {
+                        let _ = server.respond(request.error("CPU not ready"));
+                    }
+                }
+            }
+        }
+        Command::SetVariable(args) => {
+            if args.variables_reference != registers::REGISTERS_VARIABLES_REFERENCE {
+                let _ = server.respond(request.error("unknown variablesReference"));
+            } else {
+                match state.with_cpu_mut(|cpu| registers::set_variable(cpu, &args.name, &args.value)) {
+                    Some(Ok(value)) => {
+                        let body = SetVariableResponse { value, ..Default::default() };
+                        let _ = server.respond(request.success(ResponseBody::SetVariable(body)));
+                    }
+                    Some(Err(message)) => {
+                        let _ = server.respond(request.error(&message));
+                    }
+                    None => {
+                        let _ = server.respond(request.error("CPU not ready"));
+                    }
+                }
+            }
         }
         Command::Disassemble(args) => match state.with_cpu(|cpu| disasm::disassemble(cpu, args)) {
             Some(Ok(instructions)) => {
