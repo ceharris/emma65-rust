@@ -1,2 +1,4 @@
 .claude/settings.local.json
 target/
+node_modules/
+vscode/extension/out/
