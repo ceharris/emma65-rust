@@ -936,6 +936,8 @@ dependencies = [
  "dap",
  "emma65",
  "figment",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
