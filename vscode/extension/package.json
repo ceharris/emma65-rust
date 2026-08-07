@@ -10,7 +10,9 @@
   "categories": [
     "Debuggers"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onDebug"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "debuggers": [
