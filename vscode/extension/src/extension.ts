@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { registerTerminal } from './terminal';
 import { registerBusCommands } from './bus';
+import { registerTrace } from './trace';
 
 /**
  * Resolves the `emma65-vscode-adapter` binary built by the `cargo build -p
@@ -53,6 +54,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
   registerTerminal(context);
   registerBusCommands(context);
+  registerTrace(context);
 }
 
 /** Extension teardown. Nothing to release yet. */

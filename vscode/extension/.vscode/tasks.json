@@ -33,6 +33,34 @@
         "kind": "build",
         "isDefault": true
       }
+    },
+    {
+      "label": "webview: dev server",
+      "type": "npm",
+      "script": "webview:dev",
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*VITE.*",
+          "endsPattern": ".*ready in.*"
+        }
+      },
+      "presentation": {
+        "reveal": "silent"
+      }
+    },
+    {
+      "label": "build (trace webview dev server)",
+      "dependsOn": [
+        "npm: compile",
+        "cargo: build adapter",
+        "webview: dev server"
+      ],
+      "dependsOrder": "parallel"
     }
   ]
 }
