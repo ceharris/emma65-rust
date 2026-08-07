@@ -2,7 +2,6 @@
 
 pub mod bus;
 pub mod cpu;
-pub mod disasm;
 pub mod device;
 pub mod error;
 pub mod exec;
@@ -21,8 +20,6 @@ pub use cpu::StepResult;
 pub use device::{device_event_channel, DeviceEvent, DeviceId, ErrorReceiver, ErrorSender, IoDevice};
 pub use device::{PtmAsciiProtocolDecoder, PtmAsciiProtocolEncoder, PtmBinaryProtocolDecoder, PtmBinaryProtocolEncoder, PtmProtocolMessage};
 pub use device::{ViaAsciiProtocolDecoder, ViaAsciiProtocolEncoder, ViaBinaryProtocolDecoder, ViaBinaryProtocolEncoder, ViaProtocolMessage};
-pub use disasm::trace::{TraceBusOp, TraceDisassembler, TraceRow, TraceRowAssembler};
-pub use disasm::{DisassembledLine, Disassembler};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
 pub use exec::{run, run_from, step_into, step_over_breakpoint, step_over_subroutine, step_return, ClockSpeed, CpuLiveSnapshot, RunHandle, RunStopper};
 pub use session::EmulatorSession;

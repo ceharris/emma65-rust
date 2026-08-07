@@ -7,9 +7,10 @@ use std::thread::JoinHandle;
 
 use tauri::{AppHandle, State};
 
+use emma65::disasm::{Disassembler, TraceBusOp, TraceRowAssembler};
 use emma65::emulator::{
-    BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, Disassembler, OverflowPolicy, TraceBusOp,
-    TraceCallback, TraceKind, TraceRecord, TraceRowAssembler, spawn_trace_writer,
+    BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, OverflowPolicy,
+    TraceCallback, TraceKind, TraceRecord, spawn_trace_writer,
 };
 
 use crate::CpuState;
