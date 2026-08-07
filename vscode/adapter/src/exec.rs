@@ -53,6 +53,13 @@ impl ExecState {
     pub fn has_cpu(&self) -> bool {
         self.cpu.lock().unwrap().is_some()
     }
+
+    /// Runs `f` with read-only access to the CPU, or `None` if no session is installed or a
+    /// background run/step currently owns it (mirrors the "CPU not ready" case every other
+    /// command reports in that window).
+    pub fn with_cpu<R>(&self, f: impl FnOnce(&Cpu) -> R) -> Option<R> {
+        self.cpu.lock().unwrap().as_ref().map(f)
+    }
 }
 
 /// Sends a `stopped` event for the CPU thread with the given `reason`.
