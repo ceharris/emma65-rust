@@ -1,0 +1,13 @@
+[package]
+name = "emma65-vscode-adapter"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "emma65-vscode-adapter"
+path = "src/main.rs"
+
+[dependencies]
+emma65 = { path = "../.." }
+clap = { version = "4.0", features = ["derive"] }
+figment = { version = "0.10", features = ["toml", "env"] }

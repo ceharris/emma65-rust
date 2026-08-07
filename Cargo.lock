@@ -918,6 +918,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emma65-vscode-adapter"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "emma65",
+ "figment",
+]
+
+[[package]]
 name = "env_filter"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
