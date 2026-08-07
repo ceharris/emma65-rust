@@ -127,7 +127,11 @@ pub fn variables(cpu: &Cpu) -> Vec<Variable> {
         variable("A", format!("0x{:02X}", regs.a)),
         variable("X", format!("0x{:02X}", regs.x)),
         variable("Y", format!("0x{:02X}", regs.y)),
-        variable("PC", format!("0x{:04X}", regs.pc)),
+        // `memory_reference` set (only here, not on the other registers): with
+        // `supportsReadMemoryRequest` advertised, this is what makes VS Code offer a
+        // "View Binary Data" action on PC, the story 7 acceptance criterion's entry point
+        // into the built-in Memory Inspector without a custom command.
+        Variable { memory_reference: Some(format!("0x{:04X}", regs.pc)), ..variable("PC", format!("0x{:04X}", regs.pc)) },
         variable("S", format!("0x{:02X}", regs.s)),
         variable("P", flags_string(regs.p)),
     ]
@@ -199,6 +203,8 @@ mod tests {
         assert_eq!(vars[3].value, "0xABCD");
         assert_eq!(vars[4].value, "0xFF");
         assert_eq!(vars[5].value, "N------C"); // N and C set, rest (including UNUSED) clear
+        assert_eq!(vars[3].memory_reference, Some("0xABCD".to_string())); // PC's "View Binary Data" entry point
+        assert_eq!(vars[0].memory_reference, None); // no other register carries one
     }
 
     #[test]

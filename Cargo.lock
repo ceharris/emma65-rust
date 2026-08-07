@@ -932,6 +932,7 @@ dependencies = [
 name = "emma65-vscode-adapter"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dap",
  "emma65",
  "tokio",
