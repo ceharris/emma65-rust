@@ -7,6 +7,7 @@ use tauri_plugin_log::{Target, TargetKind};
 use tokio::sync::oneshot;
 
 use emma65::disasm::Disassembler;
+use emma65::emulator::bus::MAX_IRQ_SOURCES;
 use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
 
 /// Debugger UI theme selection: persisted preference and Tauri commands.
@@ -39,6 +40,9 @@ mod trace;
 
 /// Native app menu bar (File/Edit/Window/Help) and Window-menu checkbox sync.
 mod menu;
+
+/// IRQ used by the debugger
+pub const DEBUGGER_IRQ: u32 = MAX_IRQ_SOURCES - 1;
 
 /// Holds the CPU once the session is ready.
 pub struct CpuState(pub Mutex<Option<Cpu>>);
@@ -86,11 +90,10 @@ async fn load_session() -> Result<(EmulatorSession, InternalPipeTransport, IrqSo
     let mut session = config.build_with_context(&registry, context).await
         .map_err(|e| format!("Failed to build emulator session: {e}"))?;
 
-    // Reserve an IRQ-capable device ID for the debugger UI's own IRQ toggle
-    // control. Allocated after all configured devices, so it never collides
-    // with a device's `IrqSource`.
-    let ui_irq_source = IrqSource::from(session.id_allocator.next(true));
+    let device_id = session.id_allocator.for_irq(DEBUGGER_IRQ)
+        .map_err(|e| format!("Failed to build emulator session: {e}"))?;
 
+    let ui_irq_source = IrqSource::from(device_id);
     Ok((session, remote, ui_irq_source))
 }
 

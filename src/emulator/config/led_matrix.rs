@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex};
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 8;
 
+// Default IRQ to assign to this device
+const DEFAULT_IRQ: u32 = 6;
+
 
 /// RGB LED matrix display adapter module.
 #[derive(Clone)]
@@ -19,6 +22,7 @@ pub struct LedMatrixModule;
 #[derive(Deserialize)]
 pub struct LedMatrixAttributes {
     transport: Option<TransportSpecFormat>,
+    irq: Option<u32>,
 }
 
 impl DeviceModule for LedMatrixModule {
@@ -43,7 +47,11 @@ impl DeviceModule for LedMatrixModule {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = id_allocator.lock().unwrap().next(true);
+        let irq = config.irq.unwrap_or(DEFAULT_IRQ);
+        let device_id = id_allocator.lock().unwrap()
+            .for_irq(irq)
+            .map_err(DeviceModuleError::BusConfig)?;
+
         let device = {
             let mut dev = LedMatrix::new(self.name(), AddressRange::new(address, address + (BUS_SIZE - 1)));
             if let Some(transport_spec) = transport_spec {

@@ -1,8 +1,8 @@
 //! Error types for execution, bus, configuration, and CPU construction failures.
 
-use thiserror::Error;
 use crate::emulator::bus::{AddressRange, BusOp};
 use crate::emulator::device::DeviceId;
+use thiserror::Error;
 
 /// A fatal error that halts CPU execution and is returned via `StepResult::Error`.
 #[derive(Debug, Error)]
@@ -38,6 +38,10 @@ pub enum BusConfigError {
     DuplicateDeviceId(DeviceId),
     #[error("extend_device references unknown device ID {0:?}: call .device() to register it first")]
     UnknownDeviceId(DeviceId),
+    #[error("IRQ {actual:?} must be between 0 and {max:?}")]
+    UndefinedIrq { actual: u32, max: u32 },
+    #[error("duplicate IRQ {0:?}")]
+    DuplicateIrq(u32),
 }
 
 /// An error returned by `CpuBuilder::build()`.

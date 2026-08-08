@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 16;
 
+// Default IRQ to assign to this device
+const DEFAULT_IRQ: u32 = 1;
 
 /// 6522 Versatile Interface Adapter module.
 #[derive(Clone)]
@@ -20,6 +22,7 @@ pub struct Via6522Module;
 pub struct Via6522Attributes {
     protocol: Option<ProtocolMessageEncoding>,
     transport: Option<TransportSpecFormat>,
+    irq: Option<u32>,
 }
 
 impl DeviceModule for Via6522Module {
@@ -44,7 +47,11 @@ impl DeviceModule for Via6522Module {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = id_allocator.lock().unwrap().next(true);
+        let irq = config.irq.unwrap_or(DEFAULT_IRQ);
+        let device_id = id_allocator.lock().unwrap()
+            .for_irq(irq)
+            .map_err(DeviceModuleError::BusConfig)?;
+
         let device = {
             let mut dev = Via6522::new(self.name()).with_address(address);
             if let Some(protocol) = config.protocol {

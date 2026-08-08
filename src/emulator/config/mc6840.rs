@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 8;
 
+// Default IRQ number to assign to this device.
+const DEFAULT_IRQ: u32 = 2;
 
 /// MC6840 Programmable Timer Module (PTM)
 #[derive(Clone)]
@@ -20,6 +22,7 @@ pub struct Mc6840Module;
 pub struct Mc6840Attributes {
     protocol: Option<ProtocolMessageEncoding>,
     transport: Option<TransportSpecFormat>,
+    irq: Option<u32>,
 }
 
 impl DeviceModule for Mc6840Module {
@@ -44,7 +47,11 @@ impl DeviceModule for Mc6840Module {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = id_allocator.lock().unwrap().next(true);
+        let irq = config.irq.unwrap_or(DEFAULT_IRQ);
+        let device_id = id_allocator.lock().unwrap()
+            .for_irq(irq)
+            .map_err(DeviceModuleError::BusConfig)?;
+
         let device = {
             let mut dev = Mc6840::new(self.name()).with_address(address);
             if let Some(protocol) = config.protocol {
