@@ -175,12 +175,12 @@ impl<'a> LoadTarget for SliceLoadTarget<'a> {
 /// biased by the specified `bias`. The biased address and length of each record must be within the
 /// bounds of `mem`. Overlapping records are not detected.
 //
-pub async fn load_image(path: &Path, mem: &mut [u8], bias: u16)
+pub async fn load_image(path: &Path, mem: &mut [u8], bias: isize)
                         -> Result<Option<u16>, LoadError> {
     let format = LoadFormat::from_path_suffix(path)?;
     let bias = match format {
-        LoadFormat::Image => bias as isize,
-        LoadFormat::IntelHex | LoadFormat::MotorolaSrec => -(bias as isize),
+        LoadFormat::Image => bias,
+        LoadFormat::IntelHex | LoadFormat::MotorolaSrec => -bias,
     };
     let mut target = SliceLoadTarget::new(mem, bias);
     let data = tokio::fs::read(path).await.map_err(LoadError::Io)?;

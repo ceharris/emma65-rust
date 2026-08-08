@@ -24,7 +24,7 @@ pub struct RomModule;
 #[derive(Deserialize)]
 pub struct MemoryAttributes {
     size: u32,
-    offset: Option<u16>,
+    offset: Option<isize>,
     fill: Option<u8>,
     image: Option<ExpandedPathBuf>,
     labels: Option<ExpandedPathBuf>,
