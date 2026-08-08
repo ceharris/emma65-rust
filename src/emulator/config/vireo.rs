@@ -23,7 +23,7 @@ pub struct VireoAttributes {
     #[serde(rename = "write-policy", skip_serializing_if = "Option::is_none")]
     write_policy: Option<WritePolicySpec>,
     fill: Option<u8>,
-    offset: Option<u16>,
+    offset: Option<isize>,
     image: ExpandedPathBuf,
     labels: Option<ExpandedPathBuf>,
     ram_fill: Option<u8>,

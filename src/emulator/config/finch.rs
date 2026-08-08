@@ -25,7 +25,7 @@ pub struct FinchAttributes {
     #[serde(rename = "write-policy", skip_serializing_if = "Option::is_none")]
     write_policy: Option<WritePolicySpec>,
     fill: Option<u8>,
-    offset: Option<u16>,
+    offset: Option<isize>,
     image: ExpandedPathBuf,
     labels: Option<ExpandedPathBuf>,
 }
@@ -50,7 +50,7 @@ impl DeviceModule for FinchModule {
                          id_allocator: Arc<Mutex<DeviceIdAllocator>>) -> Result<BusConfig, DeviceModuleError> {
         let config = FinchAttributes::from_attributes(attributes)?;
         let device_id = id_allocator.lock().unwrap().next(false);
-        let offset = finch::ROM_START as u16 + config.offset.unwrap_or(0);
+        let offset = finch::ROM_START as isize + config.offset.unwrap_or(0);
 
         let bus_config = if let Some(filename) = config.labels {
             let table = symbol::load_vice_labels(filename)
