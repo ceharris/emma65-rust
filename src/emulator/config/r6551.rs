@@ -12,6 +12,9 @@ use crate::emulator::{AddressRange, BusConfig};
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 4;
 
+// Default IRQ to assign to this device
+const DEFAULT_IRQ: u32 = 5;
+
 
 /// R6551 Asynchronous Communications Interface Adapter module.
 #[derive(Clone)]
@@ -23,6 +26,7 @@ pub struct R6551Attributes {
     with_tdre_bug: Option<bool>,
     with_overrun: Option<bool>,
     transport: Option<TransportSpecFormat>,
+    irq: Option<u32>,
 }
 
 impl DeviceModule for R6551Module {
@@ -47,7 +51,11 @@ impl DeviceModule for R6551Module {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = id_allocator.lock().unwrap().next(true);
+        let irq = config.irq.unwrap_or(DEFAULT_IRQ);
+        let device_id = id_allocator.lock().unwrap()
+            .for_irq(irq)
+            .map_err(DeviceModuleError::BusConfig)?;
+
         let device = {
             let mut dev = R6551::new(self.name())
                 .with_address(address)

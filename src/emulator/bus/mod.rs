@@ -77,7 +77,7 @@ impl From<IrqSource> for DeviceId {
 /// An allocator for unique device IDs.
 #[derive(Clone, Copy)]
 pub struct DeviceIdAllocator {
-    next_irq_source: u32,
+    irq_sources: u64,
     next_other_id: u32,
 }
 
@@ -91,35 +91,32 @@ impl DeviceIdAllocator {
 
     pub fn new() -> Self {
         Self {
-            next_irq_source: 0,
+            irq_sources: 0,
             next_other_id: MAX_IRQ_SOURCES,
         }
     }
 
-    /// Returns the next device ID
-    pub fn next(&mut self, wants_irq_source: bool) -> DeviceId {
-        if wants_irq_source {
-            self.next_irq_source()
+    // Returns the DeviceId that corresponds to an IRQ number
+    pub fn for_irq(&mut self, irq: u32) -> Result<DeviceId, BusConfigError> {
+        if irq >= MAX_IRQ_SOURCES {
+            return Err(BusConfigError::UndefinedIrq { actual: irq, max: MAX_IRQ_SOURCES - 1})
+        }
+        let irq_mask = 1 << irq as u64;
+        if self.irq_sources & irq_mask == 0 {
+            self.irq_sources |= irq_mask;
+            Ok(DeviceId(irq))
         } else {
-            self.next_other_id()
+            Err(BusConfigError::DuplicateIrq(irq))
         }
     }
 
-    /// Returns the next ID for a device that needs to assert IRQ
-    fn next_irq_source(&mut self) -> DeviceId {
-        assert_ne!(self.next_irq_source, MAX_IRQ_SOURCES);
-        let irq_source = DeviceId(self.next_irq_source);
-        self.next_irq_source += 1;
-        irq_source
-    }
-
-    /// Returns the next ID for a device that never needs to assert IRQ
-    fn next_other_id(&mut self) -> DeviceId {
+    /// Returns the next device ID
+    pub fn next(&mut self) -> DeviceId {
         let id = DeviceId(self.next_other_id);
         self.next_other_id += 1;
         id
     }
-
+    
 }
 
 /// The configurable memory bus with RAM, ROM, and IO device regions.
@@ -1065,31 +1062,35 @@ mod tests {
     }
 
     #[test]
-    fn device_id_allocator_next_other_id() {
+    fn device_id_allocator_next() {
         let mut allocator = DeviceIdAllocator::new();
-        let id1 = allocator.next(false);
+        let id1 = allocator.next();
         assert!(id1.0 >= MAX_IRQ_SOURCES, "must not be within range of IRQ source");
-        let id2 = allocator.next(false);
+        let id2 = allocator.next();
         assert!(id2.0 >= MAX_IRQ_SOURCES, "must not be within range of IRQ source");
         assert_ne!(id1, id2);
     }
 
     #[test]
-    fn device_id_allocator_next_irq_source() {
+    fn device_id_for_irq_when_in_range() {
         let mut allocator = DeviceIdAllocator::new();
-        let id1 = allocator.next(true);
-        assert!(id1.0 < MAX_IRQ_SOURCES, "must be within range of IRQ source");
-        let id2 = allocator.next(true);
-        assert!(id2.0 < MAX_IRQ_SOURCES, "must be within range of IRQ source");
-        assert_ne!(id1, id2);
+        assert!(matches!(allocator.for_irq(0), Ok(DeviceId(0))));
+        assert!(matches!(allocator.for_irq(63), Ok(DeviceId(63))));
     }
 
     #[test]
-    #[should_panic]
-    fn device_id_allocator_next_irq_source_panics_on_max_sources() {
+    fn device_id_for_irq_when_out_of_range() {
         let mut allocator = DeviceIdAllocator::new();
-        allocator.next_irq_source = MAX_IRQ_SOURCES;
-        allocator.next(true);
+        let irq = MAX_IRQ_SOURCES;
+        assert!(matches!(allocator.for_irq(irq),
+            Err(BusConfigError::UndefinedIrq { actual, max }) if actual == irq && max == irq -1));
+    }
+
+    #[test]
+    fn device_id_for_irq_duplicate() {
+        let mut allocator = DeviceIdAllocator::new();
+        assert!(matches!(allocator.for_irq(0), Ok(DeviceId(0))));
+        assert!(matches!(allocator.for_irq(0), Err(BusConfigError::DuplicateIrq(0))));
     }
 
 }

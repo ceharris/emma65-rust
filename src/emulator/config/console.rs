@@ -13,6 +13,9 @@ use crate::emulator::{AddressRange, BusConfig};
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 2;
 
+// Default device/IRQ identifier
+const DEFAULT_IRQ: u32 = 3;
+
 /// Buffered console device module.
 #[derive(Clone)]
 pub struct ConsoleModule;
@@ -23,6 +26,7 @@ pub struct ConsoleAttributes {
     #[serde(rename = "break", skip_serializing_if = "Option::is_none")]
     break_key: Option <u8>,
     transport: Option<TransportSpecFormat>,
+    irq: Option<u32>,
 }
 
 impl DeviceModule for ConsoleModule {
@@ -47,7 +51,10 @@ impl DeviceModule for ConsoleModule {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = id_allocator.lock().unwrap().next(true);
+        let irq = config.irq.unwrap_or(DEFAULT_IRQ);
+        let device_id = id_allocator.lock().unwrap()
+            .for_irq(irq)
+            .map_err(DeviceModuleError::BusConfig)?;
 
         let console = {
             let mut dev = Console::new(self.name()).with_address(address);

@@ -12,6 +12,8 @@ use crate::emulator::{AddressRange, BusConfig};
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 2;
 
+// Default IRQ to assign to this device
+const DEFAULT_IRQ: u32 = 4;
 
 /// MC6850 Asynchronous Communications Interface Adapter module.
 #[derive(Clone)]
@@ -20,6 +22,7 @@ pub struct Mc6850Module;
 #[derive(Deserialize)]
 pub struct Mc6850Attributes {
     transport: Option<TransportSpecFormat>,
+    irq: Option<u32>,
 }
 
 impl DeviceModule for Mc6850Module {
@@ -44,7 +47,11 @@ impl DeviceModule for Mc6850Module {
             .transpose()
             .map_err(DeviceModuleError::Config)?;
 
-        let device_id = id_allocator.lock().unwrap().next(true);
+        let irq = config.irq.unwrap_or(DEFAULT_IRQ);
+        let device_id = id_allocator.lock().unwrap()
+            .for_irq(irq)
+            .map_err(DeviceModuleError::BusConfig)?;
+
         let device = {
             let mut dev = Mc6850::new(self.name()).with_address(address);
             if let Some(transport_spec) = transport_spec {

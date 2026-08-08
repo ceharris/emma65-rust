@@ -48,7 +48,7 @@ impl DeviceModule for PhoebeModule {
                          id_allocator: Arc<Mutex<DeviceIdAllocator>>)
                          -> Result<BusConfig, DeviceModuleError> {
         let config = PhoebeAttributes::from_attributes(attributes)?;
-        let device_id = id_allocator.lock().unwrap().next(false);
+        let device_id = id_allocator.lock().unwrap().next();
         let offset = config.offset.unwrap_or(0);
 
         let bus_config = if let Some(filename) = config.labels {

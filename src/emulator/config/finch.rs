@@ -49,7 +49,7 @@ impl DeviceModule for FinchModule {
                          context: &InstantiationContext, 
                          id_allocator: Arc<Mutex<DeviceIdAllocator>>) -> Result<BusConfig, DeviceModuleError> {
         let config = FinchAttributes::from_attributes(attributes)?;
-        let device_id = id_allocator.lock().unwrap().next(false);
+        let device_id = id_allocator.lock().unwrap().next();
         let offset = finch::ROM_START as isize + config.offset.unwrap_or(0);
 
         let bus_config = if let Some(filename) = config.labels {

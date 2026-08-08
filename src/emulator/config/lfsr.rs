@@ -96,7 +96,7 @@ impl DeviceModule for LfsrModule {
         let taps = config.taps.unwrap_or(0xB400);
         let continuous = !matches!(config.mode, Some(AdvanceMode::Step));
 
-        let device_id = id_allocator.lock().unwrap().next(false);
+        let device_id = id_allocator.lock().unwrap().next();
         let device = Lfsr16::new(self.name())
             .with_address(address)
             .with_taps(taps)
