@@ -8,6 +8,7 @@ pub mod opcodes;
 pub mod status;
 pub mod variant;
 pub mod trace;
+pub mod vector;
 
 use crate::emulator::bus::{Bus, BusOp, InterruptController};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
@@ -20,6 +21,7 @@ use status::StatusRegister;
 use std::collections::HashSet;
 use trace::TraceState;
 use variant::{CpuVariant, InvalidOpcodePolicy};
+use vector::{IdentityVectorResolver, VectorResolver};
 
 const STACK_BASE: u16 = 0x0100;
 const RESET_VECTOR: u16 = 0xFFFC;
@@ -107,6 +109,10 @@ pub struct Cpu {
     trace_state: TraceState,
     /// Optional callback invoked on every `read()` and `write()` (not `peek`).
     trace_callback: Option<Box<dyn TraceCallback>>,
+    /// Resolves the effective address for a RESET/NMI/IRQ/BRK vector fetch.
+    /// Defaults to [`IdentityVectorResolver`] unless a custom resolver was
+    /// supplied via [`CpuBuilder::vector_resolver`].
+    vector_resolver: Box<dyn VectorResolver>,
 
 }
 
@@ -231,11 +237,13 @@ impl Cpu {
         }
     }
 
-    /// Reads the reset vector and initializes registers. Clears WAI/STP state.
+    /// Reads the reset vector (through the installed [`VectorResolver`]) and
+    /// initializes registers. Clears WAI/STP state.
     pub fn reset(&mut self) -> Result<(), ExecError> {
         self.bus_reset();
-        let lo = self.bus_read(RESET_VECTOR)?;
-        let hi = self.bus_read(RESET_VECTOR + 1)?;
+        let vector_addr = self.vector_resolver.resolve(RESET_VECTOR);
+        let lo = self.bus_read(vector_addr)?;
+        let hi = self.bus_read(vector_addr + 1)?;
         self.regs.pc = u16::from_le_bytes([lo, hi]);
         self.regs.s = 0xFF;
         self.regs.p = StatusRegister::UNUSED | StatusRegister::I;
@@ -906,7 +914,10 @@ impl Cpu {
         }
     }
 
-    /// Pushes PC and P, reads the vector at `vector_addr`, and sets the I flag.
+    /// Pushes PC and P, resolves `vector_addr` through the installed
+    /// [`VectorResolver`] and reads the two vector bytes from the resolved
+    /// address, and sets the I flag. `vector_addr` is always the nominal
+    /// RESET/NMI/IRQ address; the resolver may redirect the actual read.
     /// Returns the cycle count for the interrupt sequence (7 cycles).
     fn service_interrupt(&mut self, vector_addr: u16, is_brk: bool) -> Result<u8, ExecError> {
         let pc = self.regs.pc;
@@ -920,8 +931,9 @@ impl Cpu {
         self.push(p)?;
         self.regs.p.insert(StatusRegister::I);
         self.regs.p.remove(StatusRegister::D);
-        let lo = self.bus_read(vector_addr)?;
-        let hi = self.bus_read(vector_addr + 1)?;
+        let resolved_addr = self.vector_resolver.resolve(vector_addr);
+        let lo = self.bus_read(resolved_addr)?;
+        let hi = self.bus_read(resolved_addr + 1)?;
         self.regs.pc = u16::from_le_bytes([lo, hi]);
         Ok(7)
     }
@@ -1155,6 +1167,7 @@ pub struct CpuBuilder {
     invalid_opcode_policy: InvalidOpcodePolicy,
     clock_speed: ClockSpeed,
     bus: Option<Bus>,
+    vector_resolver: Option<Box<dyn VectorResolver>>,
 }
 
 impl CpuBuilder {
@@ -1165,6 +1178,7 @@ impl CpuBuilder {
             invalid_opcode_policy: InvalidOpcodePolicy::Nop,
             clock_speed: ClockSpeed::unlimited(),
             bus: None,
+            vector_resolver: None,
         }
     }
 
@@ -1183,6 +1197,15 @@ impl CpuBuilder {
     /// Provides the memory bus.
     pub fn bus(mut self, bus: Bus) -> Self {
         self.bus = Some(bus);
+        self
+    }
+
+    /// Installs a custom interrupt-vector resolver, consulted whenever the
+    /// CPU fetches the RESET, NMI, or IRQ/BRK vector (models the WDC65C02
+    /// VPB pin). If not called, `build()` installs [`IdentityVectorResolver`].
+    /// The resolver is fixed for the lifetime of the `Cpu`.
+    pub fn vector_resolver(mut self, resolver: Box<dyn VectorResolver>) -> Self {
+        self.vector_resolver = Some(resolver);
         self
     }
 
@@ -1206,6 +1229,7 @@ impl CpuBuilder {
             tracing: false,
             trace_state: TraceState::new(),
             trace_callback: None,
+            vector_resolver: self.vector_resolver.unwrap_or_else(|| Box::new(IdentityVectorResolver)),
         })
     }
 }
@@ -1984,6 +2008,94 @@ mod tests {
         cpu.step(None, true);
         // Should vector through NMI, not IRQ
         assert_eq!(cpu.regs.pc, 0x0300);
+    }
+
+    // --- vector resolver ---
+
+    #[test]
+    fn default_resolver_is_identity_for_reset() {
+        let mut cpu = make_cpu(0x0200);
+        cpu.bus.write(RESET_VECTOR, 0x00).unwrap();
+        cpu.bus.write(RESET_VECTOR + 1, 0x03).unwrap();
+        cpu.reset().unwrap();
+        assert_eq!(cpu.regs.pc, 0x0300);
+    }
+
+    struct RemapResolver {
+        from: u16,
+        to: u16,
+    }
+
+    impl VectorResolver for RemapResolver {
+        fn resolve(&self, vector_addr: u16) -> u16 {
+            if vector_addr == self.from { self.to } else { vector_addr }
+        }
+    }
+
+    fn make_cpu_with_resolver(start: u16, resolver: RemapResolver) -> Cpu {
+        let mut bus = Bus::config()
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
+            .unwrap()
+            .build();
+        bus.write(RESET_VECTOR, (start & 0xFF) as u8).unwrap();
+        bus.write(RESET_VECTOR + 1, (start >> 8) as u8).unwrap();
+        Cpu::builder(CpuVariant::Wdc65C02)
+            .bus(bus)
+            .vector_resolver(Box::new(resolver))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn reset_uses_resolver_remapped_vector() {
+        let mut cpu = make_cpu_with_resolver(0x0200, RemapResolver { from: RESET_VECTOR, to: 0x0500 });
+        // Decoy at the nominal address proves redirection, not coincidence.
+        cpu.bus.write(RESET_VECTOR, 0xAD).unwrap();
+        cpu.bus.write(RESET_VECTOR + 1, 0xDE).unwrap();
+        cpu.bus.write(0x0500, 0x00).unwrap();
+        cpu.bus.write(0x0501, 0x06).unwrap();
+        cpu.reset().unwrap();
+        assert_eq!(cpu.regs.pc, 0x0600);
+    }
+
+    #[test]
+    fn nmi_uses_resolver_remapped_vector() {
+        let mut cpu = make_cpu_with_resolver(0x0200, RemapResolver { from: NMI_VECTOR, to: 0x0500 });
+        cpu.reset().unwrap();
+        cpu.bus.write(NMI_VECTOR, 0xAD).unwrap();
+        cpu.bus.write(NMI_VECTOR + 1, 0xDE).unwrap();
+        cpu.bus.write(0x0500, 0x00).unwrap();
+        cpu.bus.write(0x0501, 0x06).unwrap();
+        cpu.interrupts_mut().signal_nmi();
+        cpu.step(None, true);
+        assert_eq!(cpu.regs.pc, 0x0600);
+    }
+
+    #[test]
+    fn irq_uses_resolver_remapped_vector() {
+        let mut cpu = make_cpu_with_resolver(0x0200, RemapResolver { from: IRQ_VECTOR, to: 0x0500 });
+        cpu.reset().unwrap();
+        cpu.bus.write(IRQ_VECTOR, 0xAD).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0xDE).unwrap();
+        cpu.bus.write(0x0500, 0x00).unwrap();
+        cpu.bus.write(0x0501, 0x06).unwrap();
+        cpu.regs.p.remove(StatusRegister::I);
+        cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
+        cpu.step(None, true);
+        assert_eq!(cpu.regs.pc, 0x0600);
+    }
+
+    #[test]
+    fn brk_uses_resolver_remapped_vector() {
+        let mut cpu = make_cpu_with_resolver(0x0200, RemapResolver { from: IRQ_VECTOR, to: 0x0500 });
+        cpu.reset().unwrap();
+        cpu.bus.write(IRQ_VECTOR, 0xAD).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0xDE).unwrap();
+        cpu.bus.write(0x0500, 0x00).unwrap();
+        cpu.bus.write(0x0501, 0x06).unwrap();
+        write_program(&mut cpu, 0x0200, &[0x00, 0xEA]); // BRK (pad byte)
+        cpu.step(None, true);
+        assert_eq!(cpu.regs.pc, 0x0600);
     }
 
     // --- WAI ---
