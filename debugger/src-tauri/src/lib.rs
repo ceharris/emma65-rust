@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 use emma65::disasm::Disassembler;
 use emma65::emulator::bus::MAX_IRQ_SOURCES;
-use emma65::emulator::{Config, Cpu, DeviceModuleError, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
+use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
 
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
