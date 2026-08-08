@@ -82,7 +82,7 @@ async fn session_id_allocator_yields_usable_irq_source_after_devices() {
     let config = config_with_devices(Some(vec!["console@0xfff8"]));
     let mut session = config.build(&registry).await.unwrap();
 
-    let extra_source = session.id_allocator.next().into();
+    let extra_source = session.id_allocator.next_available().into();
     session.cpu.interrupts_mut().assert_irq(extra_source);
     assert!(session.cpu.interrupts().irq_active());
     session.cpu.interrupts_mut().release_irq(extra_source);

@@ -111,7 +111,7 @@ impl DeviceIdAllocator {
     }
 
     /// Returns the next device ID
-    pub fn next(&mut self) -> DeviceId {
+    pub fn next_available(&mut self) -> DeviceId {
         let id = DeviceId(self.next_other_id);
         self.next_other_id += 1;
         id
@@ -1064,9 +1064,9 @@ mod tests {
     #[test]
     fn device_id_allocator_next() {
         let mut allocator = DeviceIdAllocator::new();
-        let id1 = allocator.next();
+        let id1 = allocator.next_available();
         assert!(id1.0 >= MAX_IRQ_SOURCES, "must not be within range of IRQ source");
-        let id2 = allocator.next();
+        let id2 = allocator.next_available();
         assert!(id2.0 >= MAX_IRQ_SOURCES, "must not be within range of IRQ source");
         assert_ne!(id1, id2);
     }
