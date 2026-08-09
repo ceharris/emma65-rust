@@ -1098,7 +1098,7 @@ mod tests {
     use super::*;
     use crate::emulator::transport::InternalPipeTransport;
     use crossbeam_channel::{Sender, unbounded};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const DEVICE_NAME: &str = "via6522";
     /// Client tag used for every simulated peripheral connection in these
@@ -1107,6 +1107,56 @@ mod tests {
 
     fn device() -> Via6522 {
         Via6522::new(DEVICE_NAME)
+    }
+
+    /// Blocks until `condition` returns `true`, polling with a yield loop
+    /// rather than sleeping a guessed duration. Bounded so a genuinely stuck
+    /// condition fails the test fast instead of hanging the suite.
+    fn wait_until(mut condition: impl FnMut() -> bool, message: &str) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !condition() {
+            assert!(Instant::now() < deadline, "{message}");
+            std::thread::yield_now();
+        }
+    }
+
+    /// Blocks until `tx`'s background relay thread has pulled every event
+    /// sent so far off `tx`'s channel. `Sender::len() == 0` is a real
+    /// completion signal from the channel itself, but only a partial one:
+    /// the relay thread can be preempted between draining the channel and
+    /// finishing the corresponding push into the device's relay ring, so
+    /// this alone isn't sufficient synchronization before ticking — see
+    /// [`wait_for_relay`].
+    fn wait_for_channel_drain(tx: &Sender<TransportEvent>) {
+        wait_until(|| tx.is_empty(), "relay thread did not drain the send channel in time");
+    }
+
+    /// Blocks until `via`'s relay has buffered at least `expected_total`
+    /// events (the ring's own count, via `ProtocolManager::pending_len`), on
+    /// top of confirming `tx`'s channel is drained. The channel alone isn't
+    /// enough — the relay thread can be preempted between draining it and
+    /// completing the ring push, a gap that widens under a loaded/parallel
+    /// test run and was still enough to flake
+    /// `sr_in_t2_data_captured_via_transport` with a channel-only check.
+    /// [`send_byte`]/[`send_bytes`] compute `expected_total` from a baseline
+    /// captured before sending, since the ring may already hold undrained
+    /// events (e.g. the initial `Connected` message) by the time they're
+    /// called. Replaces a fixed sleep-based guess that made these tests
+    /// flaky under CI load (issue #321).
+    fn wait_for_relay(via: &Via6522, tx: &Sender<TransportEvent>, expected_total: usize) {
+        wait_for_channel_drain(tx);
+        wait_until(
+            || via.protocol_manager.as_ref().unwrap().pending_len() >= expected_total,
+            "relay did not buffer the expected event(s) in time",
+        );
+    }
+
+    /// Sends a single `Data(TAG, byte)` event and blocks until `via`'s relay
+    /// has actually buffered it.
+    fn send_byte(via: &Via6522, tx: &Sender<TransportEvent>, byte: u8) {
+        let baseline = via.protocol_manager.as_ref().unwrap().pending_len();
+        tx.send(TransportEvent::Data(TAG, byte)).unwrap();
+        wait_for_relay(via, tx, baseline + 1);
     }
 
     /// `remote` is the device's outbound-write sink (verified via
@@ -1121,7 +1171,8 @@ mod tests {
         let (tx, rx) = unbounded();
         tx.send(TransportEvent::Connected(TAG)).unwrap();
         let relay = ChannelRelay::spawn(rx, 256);
-        std::thread::sleep(Duration::from_millis(5));
+        wait_for_channel_drain(&tx);
+        wait_until(|| !relay.is_empty(), "relay did not buffer the Connected event in time");
         let mut via = Via6522::new(DEVICE_NAME);
         via.attach_transport(Box::new(local), relay);
         (via, remote, tx)
@@ -1129,12 +1180,14 @@ mod tests {
 
     /// Feeds `s`'s bytes into the device's inbound relay as `Data(TAG, _)`
     /// events, simulating a peripheral protocol message arriving from the
-    /// already-connected peer established by `device_with_pipe`.
-    fn send_bytes(tx: &Sender<TransportEvent>, s: &str) {
+    /// already-connected peer established by `device_with_pipe`, and blocks
+    /// until `via`'s relay has actually buffered all of them.
+    fn send_bytes(via: &Via6522, tx: &Sender<TransportEvent>, s: &str) {
+        let baseline = via.protocol_manager.as_ref().unwrap().pending_len();
         for &b in s.as_bytes() {
             tx.send(TransportEvent::Data(TAG, b)).unwrap();
         }
-        std::thread::sleep(Duration::from_millis(5));
+        wait_for_relay(via, tx, baseline + s.len());
     }
 
     fn collect_bytes(remote: &mut InternalPipeTransport) -> Vec<u8> {
@@ -1384,8 +1437,7 @@ mod tests {
     #[test]
     fn t1_one_shot_with_pb7_output_sends_pb7_low_at_start_when_needed() {
         let (mut via, mut remote, tx) = device_with_pipe();
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20);
         via.tick(1); // process handshake
 
         via.orb = 0x80;     // set PB7 high
@@ -1421,8 +1473,7 @@ mod tests {
     #[test]
     fn t1_pb7_output_mode_sends_pb7_low_if_needed_when_pb7_output_mode_disabled() {
         let (mut via, mut remote, tx) = device_with_pipe();
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20);
         via.tick(1); // process handshake
 
         via.ddrb = 0x80;    // PB7 is an output
@@ -1586,7 +1637,6 @@ mod tests {
     #[test]
     fn t1_pb7_overrides_orb7() {
         let (mut via, mut remote, _tx) = device_with_pipe();
-        std::thread::sleep(Duration::from_millis(1));
         via.tick(1); // process handshake
 
         let received = collect_bytes(&mut remote);
@@ -1617,15 +1667,13 @@ mod tests {
     #[test]
     fn write_orb_sends_port_b_state_change() {
         let (mut via, mut remote, tx) = device_with_pipe();
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20);
         via.tick(1); // process handshake
 
         // Configure PB0 as output.
         via.write(0x2, 0x01);
         via.write(0x0, 0x01); // drive PB0 high
 
-        std::thread::sleep(Duration::from_millis(1));
         let received = collect_bytes(&mut remote);
         // The state dump sends initial state; ORB write sends "B01".
         assert!(received.windows(3).any(|w| w == b"B01"),
@@ -1637,12 +1685,10 @@ mod tests {
     #[test]
     fn incoming_port_b_message_updates_input_b() {
         let (mut via, _remote, tx) = device_with_pipe();
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap(); // ASCII
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20); // ASCII
         via.tick(1); // handshake
 
-        for &b in b"BAB".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
-        std::thread::sleep(Duration::from_millis(1));
+        send_bytes(&via, &tx, "BAB");
         via.tick(1);
 
         // PB pins configured as inputs (DDRB=0), so read returns input_b.
@@ -1652,12 +1698,10 @@ mod tests {
     #[test]
     fn incoming_port_a_message_updates_input_a() {
         let (mut via, _remote, tx) = device_with_pipe();
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap(); // ASCII
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20); // ASCII
         via.tick(1); // handshake
 
-        for &b in b"A55".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
-        std::thread::sleep(Duration::from_millis(1));
+        send_bytes(&via, &tx, "A55");
         via.tick(1);
 
         // PA pins configured as inputs (DDRA=0), so read returns input_a.
@@ -1673,12 +1717,10 @@ mod tests {
         via.write(0xC, 0x00); // PCR: CA1 negative edge (bit 0 = 0)
         via.ca1 = true; // start high
 
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20);
         via.tick(1); // handshake
 
-        for &b in b"RCA1".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
-        std::thread::sleep(Duration::from_millis(1));
+        send_bytes(&via, &tx, "RCA1");
         via.tick(1);
 
         assert_ne!(via.peek(0xD) & IRQ_CA1, 0);
@@ -1692,12 +1734,10 @@ mod tests {
         via.write(0xC, 0x00); // PCR: CA1 negative edge
         via.ca1 = false;
 
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20);
         via.tick(1);
 
-        for &b in b"CA11".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
-        std::thread::sleep(Duration::from_millis(1));
+        send_bytes(&via, &tx, "CA11");
         via.tick(1);
 
         assert_eq!(via.peek(0xD) & IRQ_CA1, 0);
@@ -1710,12 +1750,10 @@ mod tests {
         via.write(0xC, 0x00); // PCR bits 3:1 = 000 → CA2 input, negative edge
         via.ca2 = true;
 
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20);
         via.tick(1);
 
-        for &b in b"RCA2".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
-        std::thread::sleep(Duration::from_millis(1));
+        send_bytes(&via, &tx, "RCA2");
         via.tick(1);
 
         assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
@@ -1728,12 +1766,10 @@ mod tests {
         via.write(0xC, 0x00); // PCR: CB1 negative edge (bit 4 = 0)
         via.cb1 = true;
 
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20);
         via.tick(1);
 
-        for &b in b"RCB1".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
-        std::thread::sleep(Duration::from_millis(1));
+        send_bytes(&via, &tx, "RCB1");
         via.tick(1);
 
         assert_ne!(via.peek(0xD) & IRQ_CB1, 0);
@@ -1747,12 +1783,10 @@ mod tests {
         via.write(0xC, 0x00); // PCR bits 7:5 = 000 → CB2 input, negative edge
         via.cb2 = true;
 
-        tx.send(TransportEvent::Data(TAG, 0x20)).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        send_byte(&via, &tx, 0x20);
         via.tick(1);
 
-        for &b in b"RCB2".iter() { tx.send(TransportEvent::Data(TAG, b)).unwrap(); }
-        std::thread::sleep(Duration::from_millis(1));
+        send_bytes(&via, &tx, "RCB2");
         via.tick(1);
 
         assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
@@ -1791,10 +1825,8 @@ mod tests {
         via.ca1 = true;
         via.cb2 = true;
 
-        std::thread::sleep(Duration::from_millis(1));
         via.tick(3);
 
-        std::thread::sleep(Duration::from_millis(1));
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
 
@@ -2021,7 +2053,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_INPUT_NEGATIVE_EDGE);
-        send_bytes(&tx, "RCA2");
+        send_bytes(&via, &tx, "RCA2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
@@ -2032,7 +2064,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = false;
         via.write(0xC, PCR_CA2_INPUT_POSITIVE_EDGE);
-        send_bytes(&tx, "SCA2");
+        send_bytes(&via, &tx, "SCA2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CA2, 0);
     }
@@ -2043,7 +2075,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.ca2 = true;
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
-        send_bytes(&tx, "RCA2");
+        send_bytes(&via, &tx, "RCA2");
         via.tick(1);
         assert_eq!(via.peek(0xD) & IRQ_CA2, 0);
     }
@@ -2055,7 +2087,7 @@ mod tests {
         // Write PCR first (ca2 is false by default, so no immediate transition).
         via.write(0xC, PCR_CA2_OUTPUT_LOW);
         // A peripheral message asserting CA2 high must not overwrite the driven-low state.
-        send_bytes(&tx, "SCA2");
+        send_bytes(&via, &tx, "SCA2");
         via.tick(1);
         assert!(!via.ca2, "ca2 must not be overwritten by peripheral message in output mode");
     }
@@ -2066,7 +2098,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_INPUT_NEGATIVE_EDGE);
-        send_bytes(&tx, "RCB2");
+        send_bytes(&via, &tx, "RCB2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
@@ -2077,7 +2109,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = false;
         via.write(0xC, PCR_CB2_INPUT_POSITIVE_EDGE);
-        send_bytes(&tx, "SCB2");
+        send_bytes(&via, &tx, "SCB2");
         via.tick(1);
         assert_ne!(via.peek(0xD) & IRQ_CB2, 0);
     }
@@ -2088,7 +2120,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.cb2 = true;
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
-        send_bytes(&tx, "RCB2");
+        send_bytes(&via, &tx, "RCB2");
         via.tick(1);
         assert_eq!(via.peek(0xD) & IRQ_CB2, 0);
     }
@@ -2100,7 +2132,7 @@ mod tests {
         // Write PCR first (cb2 is false by default, so no immediate transition).
         via.write(0xC, PCR_CB2_OUTPUT_LOW);
         // A peripheral message asserting CB2 high must not overwrite the driven-low state.
-        send_bytes(&tx, "SCB2");
+        send_bytes(&via, &tx, "SCB2");
         via.tick(1);
         assert!(!via.cb2, "cb2 must not be overwritten by peripheral message in output mode");
     }
@@ -2264,7 +2296,7 @@ mod tests {
         collect_bytes(&mut remote);
         via.read(0x1); // assert CA2 low
         collect_bytes(&mut remote); // drain RCA2
-        send_bytes(&tx, "RCA1"); // CA1 falling edge — active edge in neg-edge mode
+        send_bytes(&via, &tx, "RCA1"); // CA1 falling edge — active edge in neg-edge mode
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
@@ -2325,7 +2357,7 @@ mod tests {
         collect_bytes(&mut remote);
         via.write(0x1, 0x00); // assert CA2 low
         collect_bytes(&mut remote);
-        send_bytes(&tx, "RCA1");
+        send_bytes(&via, &tx, "RCA1");
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
@@ -2402,7 +2434,7 @@ mod tests {
         collect_bytes(&mut remote);
         via.write(0x0, 0x00); // assert CB2 low
         collect_bytes(&mut remote);
-        send_bytes(&tx, "RCB1"); // CB1 falling edge — active in neg-edge mode
+        send_bytes(&via, &tx, "RCB1"); // CB1 falling edge — active in neg-edge mode
         via.tick(1);
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
@@ -2527,7 +2559,7 @@ mod tests {
         via.write(0xB, ACR_PA_LATCH_ENABLE);
         via.write(0xC, PCR_CA1_INPUT_POSITIVE_EDGE); // positive edge
         // Send port A update then CA1 rising edge in a single burst.
-        send_bytes(&tx, "A3F CA11");
+        send_bytes(&via, &tx, "A3F CA11");
         via.tick(1); // poll_transports processes both messages in order
         assert_eq!(via.ira_latch, 0x3F, "ira_latch must capture the value from the same-tick port update");
         assert_eq!(via.read(0x1), 0x3F, "ORA read must return latched value");
@@ -2541,10 +2573,10 @@ mod tests {
         via.write(0xB, ACR_PA_LATCH_ENABLE);
         via.write(0xC, PCR_CA1_INPUT_POSITIVE_EDGE);
         // Capture 0x3F via CA1 rising edge.
-        send_bytes(&tx, "A3F CA11");
+        send_bytes(&via, &tx, "A3F CA11");
         via.tick(1);
         // Port A changes after the latch was captured.
-        send_bytes(&tx, "AFF");
+        send_bytes(&via, &tx, "AFF");
         via.tick(1);
         assert_eq!(via.read(0x1), 0x3F, "latched value must be held despite subsequent port update");
     }
@@ -2555,7 +2587,7 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PB_LATCH_ENABLE);
         via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
-        send_bytes(&tx, "B5A SCB1");
+        send_bytes(&via, &tx, "B5A SCB1");
         via.tick(1);
         assert_eq!(via.irb_latch, 0x5A, "irb_latch must capture the value from the same-tick port update");
         assert_eq!(via.read(0x0), 0x5A, "ORB read must return latched value");
@@ -2567,9 +2599,9 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.write(0xB, ACR_PB_LATCH_ENABLE);
         via.write(0xC, PCR_CB1_INPUT_POSITIVE_EDGE);
-        send_bytes(&tx, "B5A SCB1");
+        send_bytes(&via, &tx, "B5A SCB1");
         via.tick(1);
-        send_bytes(&tx, "BFF");
+        send_bytes(&via, &tx, "BFF");
         via.tick(1);
         assert_eq!(via.read(0x0), 0x5A, "latched value must be held despite subsequent port update");
     }
@@ -2584,7 +2616,6 @@ mod tests {
 
     fn drain_state_dump(via: &mut Via6522, remote: &mut InternalPipeTransport) {
         via.tick(1);
-        std::thread::sleep(Duration::from_millis(1));
         collect_bytes(remote);
     }
 
@@ -2614,7 +2645,6 @@ mod tests {
             via.tick(2); // T2 underflow fires sr_clock
         }
 
-        std::thread::sleep(Duration::from_millis(1));
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         let actual: Vec<&str> = s.split_ascii_whitespace().collect();
@@ -2630,9 +2660,9 @@ mod tests {
         drain_state_dump(&mut via, &mut remote);
         via.write(0xA, 0b10110100); // MSB=1,1,0,1,1,0,1,0 → shifts out MSB first
         for _ in 0..8 {
-            send_bytes(&tx, " RCB1");
+            send_bytes(&via, &tx, " RCB1");
             via.tick(5);
-            send_bytes(&tx, " SCB1");
+            send_bytes(&via, &tx, " SCB1");
         }
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
@@ -2774,7 +2804,6 @@ mod tests {
 
         for _ in 0..8 { via.tick(1); }
 
-        std::thread::sleep(Duration::from_millis(1));
         let received = collect_bytes(&mut remote);
         let s = String::from_utf8_lossy(&received);
         let actual: Vec<&str> = s.trim().split_ascii_whitespace().collect();
@@ -2814,9 +2843,9 @@ mod tests {
         let data = 0b10110100u8;
         for i in 0..8 {
             let bit = (data >> (7 - i)) & 1;
-            send_bytes(&tx, " RCB1");
-            send_bytes(&tx, if bit != 0 { " SCB2" } else { " RCB2" });
-            send_bytes(&tx, " SCB1");
+            send_bytes(&via, &tx, " RCB1");
+            send_bytes(&via, &tx, if bit != 0 { " SCB2" } else { " RCB2" });
+            send_bytes(&via, &tx, " SCB1");
             via.tick(1); // poll processes RCB1, CB2x, SCB1 in order
         }
 
@@ -2838,7 +2867,7 @@ mod tests {
             let bit = (data >> (7 - i)) & 1;
             // Pre-send CB2x so poll_transports at the top of tick captures it
             // before T2 underflows and calls sr_update(true).
-            send_bytes(&tx, if bit != 0 { " SCB2" } else { " RCB2" });
+            send_bytes(&via, &tx, if bit != 0 { " SCB2" } else { " RCB2" });
             via.tick(2); // T2 counts 2→0 → captures cb2, sends SCB1 + RCB1 (if not last)
             collect_bytes(&mut remote);
         }
@@ -2886,7 +2915,7 @@ mod tests {
             let bit = (data >> (7 - i)) & 1;
             // Pre-send CB2x so poll_transports at the top of tick captures it
             // before the PHI2 rising edge calls sr_update(true).
-            send_bytes(&tx, if bit != 0 { " SCB2" } else { " RCB2" });
+            send_bytes(&via, &tx, if bit != 0 { " SCB2" } else { " RCB2" });
             via.tick(1); // falling edge (i=0) → RCB1; rising edge (i=1) → captures cb2, SCB1
             collect_bytes(&mut remote);
         }
@@ -2921,7 +2950,7 @@ mod tests {
         collect_bytes(&mut remote);
 
         for _ in 0..8 {
-            send_bytes(&tx, " RCB1 SCB1");
+            send_bytes(&via, &tx, " RCB1 SCB1");
             via.tick(1); // poll processes falling then rising edge; sr_count decrements
         }
 
@@ -3004,7 +3033,7 @@ mod tests {
         via.write(0xA, 0x00);
         collect_bytes(&mut remote);
         for _ in 0..8 {
-            send_bytes(&tx, " RCB1 SCB2 SCB1");
+            send_bytes(&via, &tx, " RCB1 SCB2 SCB1");
             via.tick(1);
         }
         let ifr = via.peek(0xD);
@@ -3019,7 +3048,7 @@ mod tests {
         via.write(0xA, 0xAA);
         collect_bytes(&mut remote);
         for _ in 0..8 {
-            send_bytes(&tx, " RCB1 SCB1");
+            send_bytes(&via, &tx, " RCB1 SCB1");
             via.tick(1);
         }
         let ifr = via.peek(0xD);

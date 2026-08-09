@@ -418,6 +418,22 @@ impl<T: Send + 'static> ChannelRelay<T> {
         self.consumer.is_empty()
     }
 
+    /// Returns the number of items currently buffered in the ring, available
+    /// to be popped.
+    ///
+    /// Lets a caller confirm the relay thread has actually finished pushing
+    /// N items into the ring, rather than merely having received them off
+    /// its inbound channel — the two are not the same instant: a thread can
+    /// be preempted between draining its channel and completing the
+    /// corresponding ring push, particularly under a loaded/parallel test
+    /// run. Test synchronization that only checks the channel is drained can
+    /// still race this gap; polling this count against an expected total
+    /// closes it.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.consumer.slots()
+    }
+
     /// Unparks the relay thread. Harmless if it isn't currently parked.
     fn unpark(&self) {
         if let Some(handle) = &self.handle {
