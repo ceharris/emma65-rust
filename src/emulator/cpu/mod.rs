@@ -264,7 +264,7 @@ impl Cpu {
         if self.waiting {
             // Tick devices and poll for interrupts; stay in WAI until one arrives.
             self.bus.tick_devices(1);
-            self.poll_interrupts();
+            self.interrupts.poll_devices(self.bus.device_interrupt_states());
             if !self.interrupts.irq_active() && !self.interrupts.nmi_pending() {
                 return StepResult::Waiting;
             }
@@ -945,11 +945,6 @@ impl Cpu {
     fn finish_cycle(&mut self, cycles: u8) {
         self.cycles += cycles as u64;
         self.bus.tick_devices(cycles as u32);
-        self.poll_interrupts();
-    }
-
-    /// Polls all devices and syncs their IRQ and NMI state into the interrupt controller.
-    fn poll_interrupts(&mut self) {
         self.interrupts.poll_devices(self.bus.device_interrupt_states());
     }
 
