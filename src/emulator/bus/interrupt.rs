@@ -27,7 +27,10 @@
 use crate::emulator::device::DeviceId;
 
 /// Identifies a source of IRQ, mapped from the `DeviceId` of the asserting device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Ordered by priority: a lower value is a higher-priority source (`IrqSource(0)` is
+/// highest), matching real PIC hardware conventions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IrqSource(pub u32);
 
 
@@ -173,6 +176,22 @@ impl InterruptController {
                 self.signal_reset();
             }
         }
+    }
+
+    /// Returns the currently-asserting IRQ sources in ascending `IrqSource` order (i.e.
+    /// priority order, highest first). Unlike [`take_nmi`](Self::take_nmi) and
+    /// [`take_reset`](Self::take_reset), this does not mutate state — a [`VectorResolver`]
+    /// only has `&self` access to the controller when resolving a vector address.
+    ///
+    /// [`VectorResolver`]: crate::emulator::cpu::VectorResolver
+    pub fn active_sources(&self) -> impl Iterator<Item = IrqSource> + '_ {
+        (0..MAX_IRQ_SOURCES).filter_map(|bit| {
+            if self.irq_sources & (1u64 << bit) != 0 {
+                Some(IrqSource(bit))
+            } else {
+                None
+            }
+        })
     }
 
     /// Validates and extracts the bit index for `source`.
@@ -393,6 +412,39 @@ mod tests {
         let mut ctrl = InterruptController::new();
         ctrl.poll_devices([dis(MAX_IRQ_SOURCES, true, false, false)].into_iter());
         assert!(!ctrl.irq_active());
+    }
+
+    #[test]
+    fn active_sources_is_empty_when_none_active() {
+        let ctrl = InterruptController::new();
+        assert_eq!(ctrl.active_sources().collect::<Vec<_>>(), vec![]);
+    }
+
+    #[test]
+    fn active_sources_yields_multiple_sources_in_ascending_order() {
+        let mut ctrl = InterruptController::new();
+        ctrl.assert_irq(IrqSource(5));
+        ctrl.assert_irq(IrqSource(1));
+        ctrl.assert_irq(IrqSource(3));
+        assert_eq!(
+            ctrl.active_sources().collect::<Vec<_>>(),
+            vec![IrqSource(1), IrqSource(3), IrqSource(5)]
+        );
+    }
+
+    #[test]
+    fn active_sources_does_not_mutate_state() {
+        let mut ctrl = InterruptController::new();
+        ctrl.assert_irq(IrqSource(2));
+        let _ = ctrl.active_sources().collect::<Vec<_>>();
+        assert!(ctrl.irq_active());
+        assert_eq!(ctrl.active_sources().collect::<Vec<_>>(), vec![IrqSource(2)]);
+    }
+
+    #[test]
+    fn irq_source_orders_by_ascending_value() {
+        assert!(IrqSource(0) < IrqSource(1));
+        assert!(IrqSource(63) > IrqSource(0));
     }
 
 }

@@ -24,9 +24,12 @@ use variant::{CpuVariant, InvalidOpcodePolicy};
 use vector::{IdentityVectorResolver, VectorResolver};
 
 const STACK_BASE: u16 = 0x0100;
-const RESET_VECTOR: u16 = 0xFFFC;
-const NMI_VECTOR: u16 = 0xFFFA;
-const IRQ_VECTOR: u16 = 0xFFFE;
+/// Bus address of the RESET vector, read on power-on/reset.
+pub const RESET_VECTOR: u16 = 0xFFFC;
+/// Bus address of the NMI vector, read when servicing a non-maskable interrupt.
+pub const NMI_VECTOR: u16 = 0xFFFA;
+/// Bus address of the IRQ/BRK vector, read when servicing a maskable interrupt or `BRK`.
+pub const IRQ_VECTOR: u16 = 0xFFFE;
 
 /// The CPU's general-purpose and special-purpose registers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,7 +244,7 @@ impl Cpu {
     /// initializes registers. Clears WAI/STP state.
     pub fn reset(&mut self) -> Result<(), ExecError> {
         self.bus_reset();
-        let vector_addr = self.vector_resolver.resolve(RESET_VECTOR);
+        let vector_addr = self.vector_resolver.resolve(RESET_VECTOR, &self.interrupts);
         let lo = self.bus_read(vector_addr)?;
         let hi = self.bus_read(vector_addr + 1)?;
         self.regs.pc = u16::from_le_bytes([lo, hi]);
@@ -931,7 +934,7 @@ impl Cpu {
         self.push(p)?;
         self.regs.p.insert(StatusRegister::I);
         self.regs.p.remove(StatusRegister::D);
-        let resolved_addr = self.vector_resolver.resolve(vector_addr);
+        let resolved_addr = self.vector_resolver.resolve(vector_addr, &self.interrupts);
         let lo = self.bus_read(resolved_addr)?;
         let hi = self.bus_read(resolved_addr + 1)?;
         self.regs.pc = u16::from_le_bytes([lo, hi]);
@@ -2019,7 +2022,7 @@ mod tests {
     }
 
     impl VectorResolver for RemapResolver {
-        fn resolve(&self, vector_addr: u16) -> u16 {
+        fn resolve(&self, vector_addr: u16, _interrupts: &InterruptController) -> u16 {
             if vector_addr == self.from { self.to } else { vector_addr }
         }
     }
