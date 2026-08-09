@@ -1,5 +1,5 @@
 use emma65::emulator::cpu::StepResult;
-use emma65::emulator::device::{Console, Mc6850, R6551, Via6522};
+use emma65::emulator::device::{Console, Mc6840, Mc6850, R6551, Via6522};
 use emma65::emulator::{AddressRange, Bus, ChannelRelay, ClockSpeed, CpuBuilder, CpuVariant, DeviceId, InternalPipeTransport, InvalidOpcodePolicy, Mnemonic, TransportRelay};
 
 const MAX_STEPS: u32 = 10_000;
@@ -782,4 +782,122 @@ fn via6522_timer1_sets_ifr() {
     // IFR bit 6 should be set (T1 fired).
     let ifr = cpu.bus_mut().peek(0xE00D).unwrap();
     assert_ne!(ifr & 0x40, 0, "VIA IFR bit 6 (T1) should be set after timer underflow, got IFR={ifr:#04X}");
+}
+
+/// Builds a CPU with a lone MC6840 PTM at $E000, runs `prog`, and returns the resulting
+/// CPU. `prog` is written at $0200, which is also the reset vector target.
+fn build_cpu_with_mc6840(prog: &[u8]) -> emma65::emulator::Cpu {
+    let ptm = Mc6840::new("mc6840").with_address(0xE000);
+
+    let bus = Bus::config()
+        .ram_with_fill(AddressRange::new(0x0000, 0xDFFF), 0).unwrap()
+        .device(AddressRange::new(0xE000, 0xE007), DeviceId(1), Box::new(ptm)).unwrap()
+        .ram_with_fill(AddressRange::new(0xE008, 0xFFFF), 0).unwrap()
+        .build();
+
+    let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
+        .clock_speed(ClockSpeed::unlimited())
+        .invalid_opcode_policy(InvalidOpcodePolicy::Error)
+        .bus(bus)
+        .build()
+        .unwrap();
+
+    for (i, &b) in prog.iter().enumerate() {
+        cpu.bus_mut().write(0x0200 + i as u16, b).unwrap();
+    }
+    cpu.bus_mut().write(0xFFFC, 0x00).unwrap();
+    cpu.bus_mut().write(0xFFFD, 0x02).unwrap();
+    cpu.reset().unwrap();
+    cpu
+}
+
+/// MC6840 Timer 2 in continuous mode fires after counting down from a known latch value;
+/// the status register's composite IRQ bit is set.
+///
+/// CR2 ($E001) = $40 (mode=continuous, immediate init, IRQ enabled). Timer 2 latch is
+/// loaded with 20 via the MSB buffer ($E004) then the latch-low write ($E005), which
+/// triggers an immediate init and starts the count. The CPU runs a NOP sled to accumulate
+/// cycles past the 21-tick reload point, then polls the status register ($E001) until the
+/// composite IRQ bit (bit 7) is set.
+#[test]
+fn mc6840_continuous_timer_sets_irq() {
+    // Program at $0200:
+    //   LDA #$40       A9 40       -- CR2: T2 continuous, immediate init, IRQ enabled
+    //   STA $E001      8D 01 E0
+    //   LDA #$00       A9 00       -- latch MSB = 0
+    //   STA $E004      8D 04 E0
+    //   LDA #$14       A9 14       -- latch LSB = 20 -- triggers init, starts count
+    //   STA $E005      8D 05 E0
+    //   NOP × 20       EA × 20    -- burn cycles past the 21-tick reload point
+    //   poll:
+    //   LDA $E001      AD 01 E0   -- status register
+    //   AND #$80       29 80      -- isolate composite IRQ bit
+    //   BEQ poll       F0 F9
+    //   STP            DB
+    let mut prog: Vec<u8> = vec![
+        0xA9, 0x40,
+        0x8D, 0x01, 0xE0,
+        0xA9, 0x00,
+        0x8D, 0x04, 0xE0,
+        0xA9, 0x14,
+        0x8D, 0x05, 0xE0,
+    ];
+    prog.extend(std::iter::repeat_n(0xEA, 20)); // 20× NOP
+    prog.extend_from_slice(&[
+        0xAD, 0x01, 0xE0,
+        0x29, 0x80,
+        0xF0, 0xF9,
+        0xDB,
+    ]);
+
+    let mut cpu = build_cpu_with_mc6840(&prog);
+
+    step_to_stop(&mut cpu);
+
+    let status = cpu.bus_mut().peek(0xE001).unwrap();
+    assert_ne!(status & 0x80, 0, "MC6840 status composite IRQ bit should be set after Timer 2 underflow, got status={status:#04X}");
+}
+
+/// MC6840 Timer 2 in single-shot mode fires exactly once after counting down from a known
+/// latch value; the status register's composite IRQ bit is set.
+///
+/// Same setup as [`mc6840_continuous_timer_sets_irq`], but CR2 ($E001) = $60 selects
+/// single-shot mode instead of continuous.
+#[test]
+fn mc6840_single_shot_timer_sets_irq() {
+    // Program at $0200:
+    //   LDA #$60       A9 60       -- CR2: T2 single-shot, immediate init, IRQ enabled
+    //   STA $E001      8D 01 E0
+    //   LDA #$00       A9 00       -- latch MSB = 0
+    //   STA $E004      8D 04 E0
+    //   LDA #$14       A9 14       -- latch LSB = 20 -- triggers init, starts count
+    //   STA $E005      8D 05 E0
+    //   NOP × 20       EA × 20    -- burn cycles past the 21-tick fire point
+    //   poll:
+    //   LDA $E001      AD 01 E0   -- status register
+    //   AND #$80       29 80      -- isolate composite IRQ bit
+    //   BEQ poll       F0 F9
+    //   STP            DB
+    let mut prog: Vec<u8> = vec![
+        0xA9, 0x60,
+        0x8D, 0x01, 0xE0,
+        0xA9, 0x00,
+        0x8D, 0x04, 0xE0,
+        0xA9, 0x14,
+        0x8D, 0x05, 0xE0,
+    ];
+    prog.extend(std::iter::repeat_n(0xEA, 20)); // 20× NOP
+    prog.extend_from_slice(&[
+        0xAD, 0x01, 0xE0,
+        0x29, 0x80,
+        0xF0, 0xF9,
+        0xDB,
+    ]);
+
+    let mut cpu = build_cpu_with_mc6840(&prog);
+
+    step_to_stop(&mut cpu);
+
+    let status = cpu.bus_mut().peek(0xE001).unwrap();
+    assert_ne!(status & 0x80, 0, "MC6840 status composite IRQ bit should be set after Timer 2 fires, got status={status:#04X}");
 }

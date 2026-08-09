@@ -507,9 +507,15 @@ impl Timer {
         }
         // A latch of 0 means a full 65536-count period; `carry_in` (set by
         // load()) defers is_zero() by one extra tick to model that, so a
-        // "virtual" counter of `effective_count` stands in for it here.
+        // "virtual" counter of 0x1_0000 stands in for it here. This must stay
+        // fixed at the value load() captured, not track the *current*
+        // `self.latch` — in deferred-init mode, software can rewrite the
+        // latch after the load (write() skips init() when is_deferred_init())
+        // while carry_in is still pending, and that rewrite must only affect
+        // the *next* reload's period, not the magnitude of the in-flight
+        // carry-in countdown.
         let effective_count: u32 = if self.latch == 0 { 0x1_0000 } else { self.latch as u32 };
-        let virtual_counter: u32 = if self.carry_in { effective_count } else { self.counter as u32 };
+        let virtual_counter: u32 = if self.carry_in { 0x1_0000 } else { self.counter as u32 };
         let ticks_to_reload = virtual_counter + 1;
         if remaining < ticks_to_reload {
             self.counter = (virtual_counter - remaining) as u16;
@@ -1389,6 +1395,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    // Regression test: in continuous + deferred-init mode, write() lets
+    // software rewrite a timer's latch without forcing a re-init (the
+    // trigger is a later gate edge or CR1 reset instead). If that rewrite
+    // lands while `carry_in` is still pending from an earlier latch=0 load
+    // (representing an in-flight, already-committed virtual 65536-tick
+    // countdown), fast_forward_continuous() must not let the *new* latch
+    // stand in for that in-flight countdown's magnitude -- doing so fired
+    // the timer (and its IRQ) tens of thousands of cycles early.
+    #[test]
+    fn tick_batch_matches_sequential_tick_after_deferred_latch_rewrite_during_carry_in() {
+        fn setup() -> Timer {
+            let mut timer = Timer::new();
+            timer.irq_enabled = true;
+            // Start in immediate-init continuous mode with latch=0 so
+            // init() runs now, capturing carry_in for a full virtual
+            // 65536-tick countdown.
+            timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS;
+            timer.latch = 0;
+            timer.init();
+            assert_eq!(timer.counter, 0);
+            assert!(timer.carry_in, "expected carry_in pending from the latch=0 load");
+            // Switch to deferred-init mode, as real firmware reprogramming a
+            // live timer would, and rewrite the latch -- write() only calls
+            // init() when !is_deferred_init(), so this rewrite must not
+            // disturb the in-flight carry_in countdown; it should only take
+            // effect at the next natural rollover.
+            timer.mode = CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_DEFERRED_INIT;
+            timer.latch = 5;
+            timer
+        }
+
+        let mut expected = setup();
+        let mut actual = setup();
+        for _ in 0..70_000 {
+            expected.tick();
+        }
+        actual.tick_batch(70_000);
+
+        assert_eq!(actual.counter, expected.counter, "counter mismatch");
+        assert_eq!(actual.carry_in, expected.carry_in, "carry_in mismatch");
+        assert_eq!(actual.irq_active, expected.irq_active, "irq_active mismatch");
     }
 
     #[test]
