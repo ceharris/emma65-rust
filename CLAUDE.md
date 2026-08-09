@@ -154,7 +154,7 @@ All built-in devices implement `IoDevice`:
 fn read(&mut self, offset: u16) -> u8;
 fn write(&mut self, offset: u16, value: u8);
 fn peek(&self, offset: u16) -> u8;   // side-effect-free (watchpoints, disassembler)
-// optional: tick(), irq_active(), take_nmi(), name()
+// optional: tick(), irq_active(), take_nmi(), take_reset(), name()
 ```
 
 Built-in devices: `Console`, `R6551`, `Mc6850`, `Via6522`, `Mc6840`, `Finch`, `Phoebe`, `Vireo`,

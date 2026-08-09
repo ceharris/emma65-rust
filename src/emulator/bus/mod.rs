@@ -6,7 +6,7 @@ mod loader;
 pub mod symbol;
 
 use rand::RngExt;
-pub use interrupt::{InterruptController, IrqSource, MAX_IRQ_SOURCES};
+pub use interrupt::{DeviceInterruptState, InterruptController, IrqSource, MAX_IRQ_SOURCES};
 pub use loader::BusLoadTarget;
 pub use region::{AddressRange, BusOp};
 pub use symbol::SymbolTable;
@@ -228,18 +228,17 @@ impl Bus {
         }
     }
 
-    /// Returns the IRQ state of every device as `(DeviceId, irq_active)` pairs.
-    pub fn device_irq_states(&self) -> impl Iterator<Item = (DeviceId, bool)> + '_ {
-        self.devices.iter().map(|(id, device)| (*id, device.irq_active()))
-    }
-
-    /// Drains pending NMI edge events from all devices. Returns `true` if any device had one.
-    pub fn take_device_nmi(&mut self) -> bool {
-        let mut any = false;
-        for (_, device) in &mut self.devices {
-            any |= device.take_nmi();
-        }
-        any
+    /// Returns each device's current interrupt state as a [`DeviceInterruptState`], in a
+    /// single pass over the device map. `nmi` drains the device's pending NMI edge (see
+    /// [`IoDevice::take_nmi`]), and `reset` drains its pending reset request (see
+    /// [`IoDevice::take_reset`]).
+    pub fn device_interrupt_states(&mut self) -> impl Iterator<Item = DeviceInterruptState> + '_ {
+        self.devices.iter_mut().map(|(id, device)| DeviceInterruptState {
+            id: *id,
+            irq_active: device.irq_active(),
+            nmi: device.take_nmi(),
+            reset: device.take_reset(),
+        })
     }
 
     /// Replaces the ROM data for the region starting at `range.start` with `data`.
@@ -894,6 +893,7 @@ mod tests {
         reset_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         irq_active_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         take_nmi_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        take_reset_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl IoDevice for CountingDevice {
@@ -914,6 +914,10 @@ mod tests {
             self.take_nmi_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             false
         }
+        fn take_reset(&mut self) -> bool {
+            self.take_reset_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            false
+        }
     }
 
     #[test]
@@ -925,11 +929,13 @@ mod tests {
         let reset_count = Arc::new(AtomicUsize::new(0));
         let irq_active_count = Arc::new(AtomicUsize::new(0));
         let take_nmi_count = Arc::new(AtomicUsize::new(0));
+        let take_reset_count = Arc::new(AtomicUsize::new(0));
         let device = Box::new(CountingDevice {
             tick_count: tick_count.clone(),
             reset_count: reset_count.clone(),
             irq_active_count: irq_active_count.clone(),
             take_nmi_count: take_nmi_count.clone(),
+            take_reset_count: take_reset_count.clone(),
         });
         let mut bus = Bus::config()
             .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), device)
@@ -938,13 +944,13 @@ mod tests {
 
         bus.tick_devices(1);
         bus.reset_devices();
-        bus.device_irq_states().for_each(drop);
-        bus.take_device_nmi();
+        bus.device_interrupt_states().for_each(drop);
 
         assert_eq!(tick_count.load(Ordering::SeqCst), 1);
         assert_eq!(reset_count.load(Ordering::SeqCst), 1);
         assert_eq!(irq_active_count.load(Ordering::SeqCst), 1);
         assert_eq!(take_nmi_count.load(Ordering::SeqCst), 1);
+        assert_eq!(take_reset_count.load(Ordering::SeqCst), 1);
     }
 
     /// A device that counts `claims()` invocations, for verifying that address
