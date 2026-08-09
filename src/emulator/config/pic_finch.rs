@@ -5,21 +5,21 @@ use figment::value::Value;
 
 use super::{DeviceModule, DeviceModuleError, InstantiationContext};
 use crate::emulator::bus::DeviceIdAllocator;
-use crate::emulator::device::Pic;
+use crate::emulator::device::PicFinch;
 use crate::emulator::{AddressRange, BusConfig};
 
 /// Number of bytes this device occupies in the bus address space: just the IER register.
 /// The 16-byte vector table at `0xFFE0`-`0xFFEF` is expected to be backed by ROM and is
-/// not claimed by the PIC itself — see [`Pic`]'s module docs.
+/// not claimed by the PIC itself — see [`PicFinch`]'s module docs.
 const BUS_SIZE: u16 = 1;
 
-/// Device module that registers a [`Pic`] as a bus device and installs its
+/// Device module that registers a [`PicFinch`] as a bus device and installs its
 /// [`VectorResolver`](crate::emulator::VectorResolver) on the `Cpu` being built. Accepts
 /// no device-specific attributes.
 #[derive(Clone)]
-pub struct PicModule;
+pub struct PicFinchModule;
 
-impl DeviceModule for PicModule {
+impl DeviceModule for PicFinchModule {
     fn name(&self) -> &'static str {
         "pic/finch"
     }
@@ -30,7 +30,7 @@ impl DeviceModule for PicModule {
             -> Result<BusConfig, DeviceModuleError> {
 
         let device_id = id_allocator.lock().unwrap().next_available();
-        let device = Pic::new(self.name()).with_address(address);
+        let device = PicFinch::new(self.name()).with_address(address);
         let resolver = device.vector_resolver();
 
         let bus_config = bus_config.device(
@@ -55,7 +55,7 @@ mod tests {
 
     #[tokio::test]
     async fn instantiate_registers_ier_as_a_bus_device() {
-        let module = PicModule;
+        let module = PicFinchModule;
         let attributes: HashMap<String, Value> = HashMap::new();
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let bus_config = module.instantiate(BusConfig::new(), 0xFFFF, &attributes, &context(), id_allocator)
@@ -67,7 +67,7 @@ mod tests {
 
     #[tokio::test]
     async fn instantiate_installs_a_vector_resolver_that_tracks_ier_writes() {
-        let module = PicModule;
+        let module = PicFinchModule;
         let attributes: HashMap<String, Value> = HashMap::new();
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         // RAM everywhere except the PIC's own IER byte at 0xFFFF, so the vector table

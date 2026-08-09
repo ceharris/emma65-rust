@@ -64,22 +64,22 @@ const IER_SET_FLAG: u8 = 0x80;
 /// active IRQ sources into an 8-slot vector table. See the module docs for the register
 /// and vector table layout.
 ///
-/// The IER is held behind an `Arc`, so [`Pic::vector_resolver`] can hand out a
-/// [`PicVectorResolver`] that shares this `Pic`'s enable state — needed because
+/// The IER is held behind an `Arc`, so [`PicFinch::vector_resolver`] can hand out a
+/// [`PicFinchVectorResolver`] that shares this `PicFinch`'s enable state — needed because
 /// `BusConfig::device` and `BusConfig::vector_resolver` each take ownership of their own
 /// boxed trait object, and both ultimately end up owned by different fields of the `Cpu`
 /// (the bus's device list and the CPU's own resolver slot, respectively).
-pub struct Pic {
+pub struct PicFinch {
     name: &'static str,
     /// Bus address of the IER register.
     address: u16,
     /// Enable state of slots 0..6, one bit per slot (bit 7 unused; always reads as 1).
-    /// Shared with any [`PicVectorResolver`] handed out via [`Pic::vector_resolver`].
+    /// Shared with any [`PicFinchVectorResolver`] handed out via [`PicFinch::vector_resolver`].
     ier: Arc<AtomicU8>,
 }
 
-impl Pic {
-    /// Creates a new `Pic` with all slots disabled and no IER address assigned.
+impl PicFinch {
+    /// Creates a new `PicFinch` with all slots disabled and no IER address assigned.
     pub fn new(name: &'static str) -> Self {
         Self { name, address: 0, ier: Arc::new(AtomicU8::new(0)) }
     }
@@ -90,15 +90,15 @@ impl Pic {
         self
     }
 
-    /// Returns a [`VectorResolver`] that shares this `Pic`'s IER state, suitable for
+    /// Returns a [`VectorResolver`] that shares this `PicFinch`'s IER state, suitable for
     /// installing on the `Cpu` (e.g. via `BusConfig::vector_resolver`) alongside
-    /// registering this `Pic` itself as a bus device (e.g. via `BusConfig::device`).
-    pub fn vector_resolver(&self) -> PicVectorResolver {
-        PicVectorResolver { ier: Arc::clone(&self.ier) }
+    /// registering this `PicFinch` itself as a bus device (e.g. via `BusConfig::device`).
+    pub fn vector_resolver(&self) -> PicFinchVectorResolver {
+        PicFinchVectorResolver { ier: Arc::clone(&self.ier) }
     }
 }
 
-impl super::IoDevice for Pic {
+impl super::IoDevice for PicFinch {
     fn read(&mut self, address: u16) -> u8 {
         self.peek(address)
     }
@@ -120,7 +120,7 @@ impl super::IoDevice for Pic {
     }
 }
 
-impl VectorResolver for Pic {
+impl VectorResolver for PicFinch {
     fn resolve(&self, vector_addr: u16, interrupts: &InterruptController) -> u16 {
         resolve_vector(self.ier.load(Ordering::Relaxed), vector_addr, interrupts)
     }
@@ -130,13 +130,13 @@ impl VectorResolver for Pic {
     }
 }
 
-/// A [`VectorResolver`] sharing a [`Pic`]'s IER state, obtained via [`Pic::vector_resolver`].
-/// See that method's docs for why this exists as a separate type from `Pic` itself.
-pub struct PicVectorResolver {
+/// A [`VectorResolver`] sharing a [`PicFinch`]'s IER state, obtained via [`PicFinch::vector_resolver`].
+/// See that method's docs for why this exists as a separate type from `PicFinch` itself.
+pub struct PicFinchVectorResolver {
     ier: Arc<AtomicU8>,
 }
 
-impl VectorResolver for PicVectorResolver {
+impl VectorResolver for PicFinchVectorResolver {
     fn resolve(&self, vector_addr: u16, interrupts: &InterruptController) -> u16 {
         resolve_vector(self.ier.load(Ordering::Relaxed), vector_addr, interrupts)
     }
@@ -161,7 +161,7 @@ fn read_ier(ier: &AtomicU8) -> u8 {
     ier.load(Ordering::Relaxed) | IER_SET_FLAG
 }
 
-/// Shared routing logic for [`Pic`] and [`PicVectorResolver`]: resolves `vector_addr`
+/// Shared routing logic for [`PicFinch`] and [`PicFinchVectorResolver`]: resolves `vector_addr`
 /// against the given IER byte and interrupt controller state.
 fn resolve_vector(ier: u8, vector_addr: u16, interrupts: &InterruptController) -> u16 {
     if vector_addr != IRQ_VECTOR {
@@ -173,7 +173,7 @@ fn resolve_vector(ier: u8, vector_addr: u16, interrupts: &InterruptController) -
     VECTOR_TABLE_BASE + slot * 2
 }
 
-/// Shared mask logic for [`Pic`] and [`PicVectorResolver`]: bits 0..6 reflect `ier`'s
+/// Shared mask logic for [`PicFinch`] and [`PicFinchVectorResolver`]: bits 0..6 reflect `ier`'s
 /// enable state, bits 7..63 (sources with no per-source mask) are always set.
 fn irq_mask_for(ier: u8) -> u64 {
     (ier as u64 & IER_ENABLE_MASK as u64) | !(IER_ENABLE_MASK as u64)
@@ -187,8 +187,8 @@ mod tests {
 
     const IER_ADDR: u16 = 0xFFFF;
 
-    fn pic() -> Pic {
-        Pic::new("pic").with_address(IER_ADDR)
+    fn pic_finch() -> PicFinch {
+        PicFinch::new("pic").with_address(IER_ADDR)
     }
 
     fn with_active(sources: &[u32]) -> InterruptController {
@@ -203,19 +203,19 @@ mod tests {
 
     #[test]
     fn new_ier_reads_with_bit7_set_and_all_slots_disabled() {
-        assert_eq!(pic().peek(IER_ADDR), 0x80);
+        assert_eq!(pic_finch().peek(IER_ADDR), 0x80);
     }
 
     #[test]
     fn write_with_bit7_set_enables_selected_slots() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         dev.write(IER_ADDR, 0x85); // select slots 0, 2; enable
         assert_eq!(dev.peek(IER_ADDR), 0x85);
     }
 
     #[test]
     fn write_with_bit7_clear_disables_selected_slots() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         dev.write(IER_ADDR, 0xFF); // enable all
         dev.write(IER_ADDR, 0x05); // select slots 0, 2; disable
         assert_eq!(dev.peek(IER_ADDR), 0x80 | (0x7F & !0x05));
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn write_leaves_unselected_slots_unchanged() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         dev.write(IER_ADDR, 0x81); // enable slot 0
         dev.write(IER_ADDR, 0x84); // enable slot 2, slot 0 untouched
         assert_eq!(dev.peek(IER_ADDR), 0x80 | 0x05);
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn reset_disables_all_slots() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         dev.write(IER_ADDR, 0xFF);
         dev.reset();
         assert_eq!(dev.peek(IER_ADDR), 0x80);
@@ -241,14 +241,14 @@ mod tests {
 
     #[test]
     fn irq_mask_reflects_enabled_low_slots() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         dev.write(IER_ADDR, 0x85); // enable slots 0, 2
         assert_eq!(dev.irq_mask() & 0x7F, 0x05);
     }
 
     #[test]
     fn irq_mask_always_recognizes_high_sources() {
-        let dev = pic(); // all low slots disabled
+        let dev = pic_finch(); // all low slots disabled
         assert_eq!(dev.irq_mask() & !0x7Fu64, !0x7Fu64);
     }
 
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn resolve_passes_through_reset_and_nmi_vectors() {
-        let dev = pic();
+        let dev = pic_finch();
         let ctrl = InterruptController::new();
         assert_eq!(dev.resolve(0xFFFC, &ctrl), 0xFFFC);
         assert_eq!(dev.resolve(0xFFFA, &ctrl), 0xFFFA);
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn resolve_routes_enabled_low_source_to_its_own_slot() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         dev.write(IER_ADDR, 0x80 | (1 << 3)); // enable slot 3
         let ctrl = with_active(&[3]);
         assert_eq!(dev.resolve(IRQ_VECTOR, &ctrl), VECTOR_TABLE_BASE + 3 * 2);
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn resolve_picks_highest_priority_among_enabled_active_low_sources() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         dev.write(IER_ADDR, 0xFF); // enable all low slots
         let ctrl = with_active(&[5, 1, 3]);
         assert_eq!(dev.resolve(IRQ_VECTOR, &ctrl), VECTOR_TABLE_BASE + 2);
@@ -280,14 +280,14 @@ mod tests {
 
     #[test]
     fn resolve_routes_high_source_to_fold_slot() {
-        let dev = pic();
+        let dev = pic_finch();
         let ctrl = with_active(&[40]);
         assert_eq!(dev.resolve(IRQ_VECTOR, &ctrl), VECTOR_TABLE_BASE + FOLD_SLOT * 2);
     }
 
     #[test]
     fn resolve_prefers_enabled_low_source_over_high_source() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         dev.write(IER_ADDR, 0x80 | (1 << 4)); // enable slot 4
         let ctrl = with_active(&[40, 4]);
         assert_eq!(dev.resolve(IRQ_VECTOR, &ctrl), VECTOR_TABLE_BASE + 4 * 2);
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn resolve_ignores_disabled_low_source_even_if_active() {
-        let dev = pic();
+        let dev = pic_finch();
         // slot 2 never enabled; only a high source is active alongside it
         let ctrl = with_active(&[2, 40]);
         assert_eq!(dev.resolve(IRQ_VECTOR, &ctrl), VECTOR_TABLE_BASE + FOLD_SLOT * 2);
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn vector_resolver_sees_ier_writes_made_through_the_device() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         let resolver = dev.vector_resolver();
         dev.write(IER_ADDR, 0x80 | (1 << 5)); // enable slot 5
         let ctrl = with_active(&[5]);
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn vector_resolver_irq_mask_tracks_device_state() {
-        let mut dev = pic();
+        let mut dev = pic_finch();
         let resolver = dev.vector_resolver();
         dev.write(IER_ADDR, 0x80 | (1 << 6)); // enable slot 6
         assert_eq!(resolver.irq_mask() & 0x7F, 1 << 6);
