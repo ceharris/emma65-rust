@@ -814,15 +814,15 @@ fn build_cpu_with_mc6840(prog: &[u8]) -> emma65::emulator::Cpu {
 /// MC6840 Timer 2 in continuous mode fires after counting down from a known latch value;
 /// the status register's composite IRQ bit is set.
 ///
-/// CR2 ($E001) = $40 (mode=continuous, immediate init, IRQ enabled). Timer 2 latch is
-/// loaded with 20 via the MSB buffer ($E004) then the latch-low write ($E005), which
+/// CR2 ($E001) = $42 (mode=continuous, immediate init, IRQ enabled, internal clock). Timer 2
+/// latch is loaded with 20 via the MSB buffer ($E004) then the latch-low write ($E005), which
 /// triggers an immediate init and starts the count. The CPU runs a NOP sled to accumulate
 /// cycles past the 21-tick reload point, then polls the status register ($E001) until the
 /// composite IRQ bit (bit 7) is set.
 #[test]
 fn mc6840_continuous_timer_sets_irq() {
     // Program at $0200:
-    //   LDA #$40       A9 40       -- CR2: T2 continuous, immediate init, IRQ enabled
+    //   LDA #$42       A9 42       -- CR2: T2 continuous, immediate init, IRQ enabled, internal clock
     //   STA $E001      8D 01 E0
     //   LDA #$00       A9 00       -- latch MSB = 0
     //   STA $E004      8D 04 E0
@@ -835,7 +835,7 @@ fn mc6840_continuous_timer_sets_irq() {
     //   BEQ poll       F0 F9
     //   STP            DB
     let mut prog: Vec<u8> = vec![
-        0xA9, 0x40,
+        0xA9, 0x42,
         0x8D, 0x01, 0xE0,
         0xA9, 0x00,
         0x8D, 0x04, 0xE0,
@@ -861,12 +861,12 @@ fn mc6840_continuous_timer_sets_irq() {
 /// MC6840 Timer 2 in single-shot mode fires exactly once after counting down from a known
 /// latch value; the status register's composite IRQ bit is set.
 ///
-/// Same setup as [`mc6840_continuous_timer_sets_irq`], but CR2 ($E001) = $60 selects
+/// Same setup as [`mc6840_continuous_timer_sets_irq`], but CR2 ($E001) = $62 selects
 /// single-shot mode instead of continuous.
 #[test]
 fn mc6840_single_shot_timer_sets_irq() {
     // Program at $0200:
-    //   LDA #$60       A9 60       -- CR2: T2 single-shot, immediate init, IRQ enabled
+    //   LDA #$62       A9 62       -- CR2: T2 single-shot, immediate init, IRQ enabled, internal clock
     //   STA $E001      8D 01 E0
     //   LDA #$00       A9 00       -- latch MSB = 0
     //   STA $E004      8D 04 E0
@@ -879,7 +879,7 @@ fn mc6840_single_shot_timer_sets_irq() {
     //   BEQ poll       F0 F9
     //   STP            DB
     let mut prog: Vec<u8> = vec![
-        0xA9, 0x60,
+        0xA9, 0x62,
         0x8D, 0x01, 0xE0,
         0xA9, 0x00,
         0x8D, 0x04, 0xE0,

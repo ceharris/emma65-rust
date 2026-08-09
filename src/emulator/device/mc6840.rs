@@ -69,7 +69,7 @@ const CTRL_CR1_ENABLE: u8          = 0b00000001;
 const CTRL_T3_PRESCALE: u8         = 0b00000001;
 const CTRL_INTERNAL_RESET: u8      = 0b00000001;
 
-const CTRL_USE_EXTERNAL_CLOCK: u8  = 0b00000010;
+const CTRL_INTERNAL_CLOCK: u8      = 0b00000010;
 const CTRL_COUNTER_DUAL_8BIT: u8   = 0b00000100;
 const CTRL_IRQ_ENABLE: u8          = 0b01000000;
 const CTRL_OUTPUT_ENABLE: u8       = 0b10000000;
@@ -305,7 +305,7 @@ impl Timer {
         self.compare_status = CompareStatus::Idle;
         self.mode = value & CTRL_MODE_MASK;
         self.dual8bit_mode = value & CTRL_COUNTER_DUAL_8BIT != 0;
-        self.external_clock = value & CTRL_USE_EXTERNAL_CLOCK != 0;
+        self.external_clock = value & CTRL_INTERNAL_CLOCK == 0;
         self.irq_enabled = value & CTRL_IRQ_ENABLE != 0;
         self.output_enabled = value & CTRL_OUTPUT_ENABLE != 0;
         if self.dual8bit_mode {
@@ -928,7 +928,7 @@ mod tests {
         assert!(device.cr1_enabled, "expected CR1 enabled");
         device.write(0, !CTRL_INTERNAL_RESET);
         assert!(!device.reset_active, "expected reset not active");
-        assert!(device.timers[T1].external_clock, "expected external clock");
+        assert!(!device.timers[T1].external_clock, "expected internal clock");
         assert_eq!(device.timers[T1].mode, CTRL_MODE_MASK);
         assert!(device.timers[T1].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T1].output_enabled, "expected output enabled");
@@ -956,7 +956,7 @@ mod tests {
         let mut device = device();
         device.write(1, 0xff);
         assert!(device.cr1_enabled, "expected CR1 enabled");
-        assert!(device.timers[T2].external_clock, "expected external clock");
+        assert!(!device.timers[T2].external_clock, "expected internal clock");
         assert_eq!(device.timers[T2].mode, CTRL_MODE_MASK);
         assert!(device.timers[T2].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T2].output_enabled, "expected output enabled");
@@ -968,7 +968,7 @@ mod tests {
         assert!(!device.cr1_enabled, "expected CR3 enabled");
         device.write(0, !CTRL_T3_PRESCALE);
         assert!(device.timers[T3].prescaler.is_none(), "expected no prescaler");
-        assert!(device.timers[T3].external_clock, "expected external clock");
+        assert!(!device.timers[T3].external_clock, "expected internal clock");
         assert_eq!(device.timers[T3].mode, CTRL_MODE_MASK);
         assert!(device.timers[T3].irq_enabled, "expected IRQ enabled");
         assert!(device.timers[T3].output_enabled, "expected output enabled");
@@ -979,6 +979,20 @@ mod tests {
         let mut device = device();
         device.write(0, CTRL_T3_PRESCALE);
         assert!(device.timers[T3].prescaler.is_some(), "expected prescaler");
+    }
+
+    #[test]
+    fn control_register_clock_bit_set_selects_internal_clock() {
+        let mut device = device();
+        device.write(1, CTRL_INTERNAL_CLOCK);
+        assert!(!device.timers[T2].external_clock, "expected internal clock");
+    }
+
+    #[test]
+    fn control_register_clock_bit_clear_selects_external_clock() {
+        let mut device = device();
+        device.write(1, 0);
+        assert!(device.timers[T2].external_clock, "expected external clock");
     }
 
     #[test]
@@ -1500,7 +1514,7 @@ mod tests {
     fn compare_frequency_lt_when_lt() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
-        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_LESS);
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_INTERNAL_CLOCK | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_LESS);
         timer.latch = 3;
         timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
         timer.gate_level = false; timer.tick();     // ?, ?, H, L
@@ -1541,7 +1555,7 @@ mod tests {
     fn compare_frequency_lt_when_ge() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
-        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_LESS);
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_INTERNAL_CLOCK | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_LESS);
         timer.latch = 3;
         timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
         timer.gate_level = false; timer.tick();     // ?, ?, H, L
@@ -1573,7 +1587,7 @@ mod tests {
     fn compare_frequency_gt_when_gt() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
-        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_GREATER);
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_INTERNAL_CLOCK | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_GREATER);
         timer.latch = 3;
         timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
         timer.gate_level = false; timer.tick();     // ?, ?, H, L
@@ -1612,7 +1626,7 @@ mod tests {
     fn compare_frequency_gt_when_le() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
-        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_GREATER);
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_INTERNAL_CLOCK | CTRL_MODE_COMPARE | CTRL_MODE_FREQUENCY | CTRL_MODE_GREATER);
         timer.latch = 3;
         timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
         timer.gate_level = false; timer.tick();     // ?, ?, H, L
@@ -1639,7 +1653,7 @@ mod tests {
     fn compare_pulse_width_lt_when_lt() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
-        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_LESS);
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_INTERNAL_CLOCK | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_LESS);
         timer.latch = 4;
         timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
         timer.gate_level = false; timer.tick();     // ?, ?, H, L
@@ -1674,7 +1688,7 @@ mod tests {
     fn compare_pulse_width_lt_when_ge() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
-        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_LESS);
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_INTERNAL_CLOCK | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_LESS);
         timer.latch = 2;
         timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
         timer.gate_level = false; timer.tick();     // ?, ?, H, L
@@ -1707,7 +1721,7 @@ mod tests {
     fn compare_pulse_width_gt_when_gt() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
-        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_GREATER);
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_INTERNAL_CLOCK | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_GREATER);
         timer.latch = 3;
         timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
         timer.gate_level = false; timer.tick();     // ?, ?, H, L
@@ -1741,7 +1755,7 @@ mod tests {
     fn compare_pulse_width_gt_when_le() {
         let mut timer = Timer::new();
         timer.irq_enabled = true;
-        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_GREATER);
+        timer.set_control_register(CTRL_IRQ_ENABLE | CTRL_INTERNAL_CLOCK | CTRL_MODE_COMPARE | CTRL_MODE_PULSE_WIDTH | CTRL_MODE_GREATER);
         timer.latch = 3;
         timer.gate_level = true;  timer.tick();     // ?, ?, ?, H
         timer.gate_level = false; timer.tick();     // ?, ?, H, L
