@@ -6,7 +6,7 @@ mod loader;
 pub mod symbol;
 
 use rand::RngExt;
-pub use interrupt::{InterruptController, IrqSource, MAX_IRQ_SOURCES};
+pub use interrupt::{DeviceInterruptState, InterruptController, IrqSource, MAX_IRQ_SOURCES};
 pub use loader::BusLoadTarget;
 pub use region::{AddressRange, BusOp};
 pub use symbol::SymbolTable;
@@ -228,11 +228,15 @@ impl Bus {
         }
     }
 
-    /// Returns each device's current interrupt state, as `(DeviceId, irq_active, nmi)`
-    /// triples, in a single pass over the device map. `nmi` drains the device's pending
-    /// NMI edge (see [`IoDevice::take_nmi`]).
-    pub fn device_interrupt_states(&mut self) -> impl Iterator<Item = (DeviceId, bool, bool)> + '_ {
-        self.devices.iter_mut().map(|(id, device)| (*id, device.irq_active(), device.take_nmi()))
+    /// Returns each device's current interrupt state as a [`DeviceInterruptState`], in a
+    /// single pass over the device map. `nmi` drains the device's pending NMI edge (see
+    /// [`IoDevice::take_nmi`]).
+    pub fn device_interrupt_states(&mut self) -> impl Iterator<Item = DeviceInterruptState> + '_ {
+        self.devices.iter_mut().map(|(id, device)| DeviceInterruptState {
+            id: *id,
+            irq_active: device.irq_active(),
+            nmi: device.take_nmi(),
+        })
     }
 
     /// Replaces the ROM data for the region starting at `range.start` with `data`.
