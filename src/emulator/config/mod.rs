@@ -14,6 +14,7 @@ mod registry;
 mod memory;
 pub mod loader;
 mod phoebe;
+mod pic_finch;
 mod write_policy;
 mod vireo;
 mod led_matrix;
@@ -32,6 +33,7 @@ pub use r6551::R6551Module;
 pub use mc6840::Mc6840Module;
 pub use mc6850::Mc6850Module;
 pub use phoebe::PhoebeModule;
+pub use pic_finch::PicFinchModule;
 pub use via6522::Via6522Module;
 pub use vireo::VireoModule;
 
