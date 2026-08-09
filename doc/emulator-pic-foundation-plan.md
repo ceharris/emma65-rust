@@ -54,15 +54,22 @@ Four small, additive changes:
 
 In `src/emulator/bus/interrupt.rs`:
 
-- Add `pub fn active_sources(&self) -> impl Iterator<Item = IrqSource> + '_`, yielding
-  currently-asserting sources in ascending `IrqSource` order (i.e. priority order). Non-draining
-  — unlike `take_nmi`/`take_reset`, it must not mutate state, since a `VectorResolver` is called
-  with only `&self` access.
+- Add `pub fn active_sources_mask(&self) -> u64`, returning the raw bitmask of
+  currently-asserting sources (bit `n` set means `IrqSource(n)` is asserting — exactly the
+  internal `irq_sources` field). A PIC masks this against its own priority/enable mask and finds
+  the highest-priority active source via `trailing_zeros()` (lower bit = higher priority, per
+  `IrqSource`'s `Ord` impl) — an `O(1)` bit-twiddle, with no need to reconstruct a bitmask from
+  an iterator (an earlier draft returned `impl Iterator<Item = IrqSource>`, but every real
+  consumer wants the mask directly, and rebuilding one from individually-yielded `IrqSource`
+  items would just redo, in reverse, the bit-scan that produced them). Non-mutating — unlike
+  `take_nmi`/`take_reset`, it must not mutate state, since a `VectorResolver` is called with
+  only `&self` access.
 - Add `PartialOrd, Ord` to `IrqSource`'s derive list, formalizing "lower value = higher
   priority" as a property of the type itself rather than something every consumer has to
   redefine.
-- Add a unit test for `active_sources()` alongside the existing `InterruptController` tests
-  (multiple sources asserted, ascending order, empty when none active).
+- Add a unit test for `active_sources_mask()` alongside the existing `InterruptController` tests
+  (multiple sources asserted, zero when none active, lowest set bit is the highest-priority
+  source).
 
 ### 2. `VectorResolver::resolve` gains access to the controller
 
@@ -162,7 +169,7 @@ attempt to install a resolver, asserting the second fails with `BuildError::Devi
 
 ## Files to modify
 
-- `src/emulator/bus/interrupt.rs` — `active_sources()`, `IrqSource` `Ord`/`PartialOrd`, new test.
+- `src/emulator/bus/interrupt.rs` — `active_sources_mask()`, `IrqSource` `Ord`/`PartialOrd`, new test.
 - `src/emulator/cpu/vector.rs` — `VectorResolver::resolve` signature, `IdentityVectorResolver`, test.
 - `src/emulator/cpu/mod.rs` — `pub` on the three vector constants; update the two `resolve(...)` call sites.
 - `src/emulator/bus/mod.rs` — `BusConfig.vector_resolver` field, `.vector_resolver()` builder method, `.take_vector_resolver()`.
@@ -174,13 +181,14 @@ attempt to install a resolver, asserting the second fails with `BuildError::Devi
 - `cargo build --workspace` — confirms the signature changes compile through the debugger crate.
 - `cargo test --workspace` — existing `IdentityVectorResolver`, `InterruptController`, and
   `BusConfig` tests must still pass with updated call signatures; new tests should cover
-  `active_sources()` (ascending order, multiple sources, empty when none active),
+  `active_sources_mask()` (multiple sources, zero when none active, lowest set bit is the
+  highest-priority source),
   `BusConfig::vector_resolver()`/`take_vector_resolver()` (installs, round-trips through
   `take_vector_resolver()`, and the "already installed" `DuplicateVectorResolver` conflict), and
   an integration-style `Config::build_devices` test with two device specs each attempting to
   install a resolver, asserting the second fails with `BuildError::Device { source: DeviceModuleError::BusConfig(BusConfigError::DuplicateVectorResolver), .. }`.
 - `cargo clippy` — run after the edits, not just after the initial pass.
-- All newly-`pub` items (`active_sources`, `BusConfig::vector_resolver`/`take_vector_resolver`,
+- All newly-`pub` items (`active_sources_mask`, `BusConfig::vector_resolver`/`take_vector_resolver`,
   the three vector constants, `DuplicateVectorResolver`) need doc comments before committing.
 
 ## Follow-up (out of scope for this pass)

@@ -11,7 +11,7 @@ pub trait VectorResolver: Send {
     /// Returns the effective vector address to read from, given the nominal
     /// `vector_addr` and a read-only view of the CPU's `InterruptController`
     /// (e.g. so a priority interrupt controller can rank currently-active
-    /// sources via [`InterruptController::active_sources`]).
+    /// sources via [`InterruptController::active_sources_mask`]).
     /// [`IdentityVectorResolver`] ignores `interrupts` and returns `vector_addr` unchanged.
     fn resolve(&self, vector_addr: u16, interrupts: &InterruptController) -> u16;
 }
