@@ -149,16 +149,79 @@ impl Config {
                 })?;
         }
         let variant = self.cpu_variant_spec.as_ref().map_or(CpuVariant::Cmos65C02, CpuVariantSpec::to_cpu_variant);
+        let vector_resolver = bus_config.take_vector_resolver();
         let bus = bus_config.build();
-        let cpu = Cpu::builder(variant)
+        let mut builder = Cpu::builder(variant)
             .clock_speed(self.clock_speed_hz.map_or(ClockSpeed::unlimited(), ClockSpeed::hz))
-            .bus(bus)
-            .build()
-            .map_err(BuildError::Cpu)?;
+            .bus(bus);
+        if let Some(resolver) = vector_resolver {
+            builder = builder.vector_resolver(resolver);
+        }
+        let cpu = builder.build().map_err(BuildError::Cpu)?;
         let id_allocator = *id_allocator.lock().unwrap();
         Ok(EmulatorSession {
             cpu, error_receiver, id_allocator
         })
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::emulator::bus::DeviceIdAllocator;
+    use crate::emulator::{BusConfigError, DeviceModule, IdentityVectorResolver};
+    use figment::value::Value;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    /// A test-only device module that installs an `IdentityVectorResolver` on the
+    /// `BusConfig` it's handed, used to exercise the "at most one PIC" rule.
+    #[derive(Clone)]
+    struct ResolverInstallerModule;
+
+    impl DeviceModule for ResolverInstallerModule {
+        fn name(&self) -> &'static str {
+            "resolver-installer"
+        }
+
+        async fn instantiate(&self, bus_config: BusConfig, _address: u16,
+                             _attributes: &HashMap<String, Value>, _context: &InstantiationContext,
+                             _id_allocator: Arc<Mutex<DeviceIdAllocator>>)
+                -> Result<BusConfig, DeviceModuleError> {
+            bus_config.vector_resolver(Box::new(IdentityVectorResolver))
+                .map_err(DeviceModuleError::BusConfig)
+        }
+    }
+
+    #[tokio::test]
+    async fn build_fails_when_two_device_specs_install_a_vector_resolver() {
+        let mut registry = DeviceRegistry::new();
+        registry.register(ResolverInstallerModule);
+        let config = Config {
+            cpu_variant_spec: None,
+            clock_speed_hz: None,
+            devices: Some(vec![
+                "resolver-installer@0x1000".parse().unwrap(),
+                "resolver-installer@0x2000".parse().unwrap(),
+            ]),
+        };
+        let err = config.build(&registry).await.err().unwrap();
+        assert!(matches!(
+            err,
+            BuildError::Device { source: DeviceModuleError::BusConfig(BusConfigError::DuplicateVectorResolver), .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn build_installs_resolver_from_a_single_device_spec() {
+        let mut registry = DeviceRegistry::new();
+        registry.register(ResolverInstallerModule);
+        let config = Config {
+            cpu_variant_spec: None,
+            clock_speed_hz: None,
+            devices: Some(vec!["resolver-installer@0x1000".parse().unwrap()]),
+        };
+        assert!(config.build(&registry).await.is_ok());
+    }
 }

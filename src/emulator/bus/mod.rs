@@ -11,6 +11,7 @@ pub use loader::BusLoadTarget;
 pub use region::{AddressRange, BusOp};
 pub use symbol::SymbolTable;
 
+use crate::emulator::cpu::vector::VectorResolver;
 use crate::emulator::device::{DeviceId, IoDevice};
 use crate::emulator::error::{BusConfigError, BusError};
 
@@ -352,6 +353,10 @@ pub struct BusConfig {
     unmapped_policy: UnmappedPolicy,
     rom_write_policy: RomWritePolicy,
     symbol_table: SymbolTable,
+    /// `VectorResolver` installed via [`vector_resolver`](Self::vector_resolver), if any.
+    /// Drained by [`take_vector_resolver`](Self::take_vector_resolver) and chained onto
+    /// the `CpuBuilder` at construction time.
+    vector_resolver: Option<Box<dyn VectorResolver>>,
 }
 
 impl BusConfig {
@@ -363,6 +368,7 @@ impl BusConfig {
             unmapped_policy: UnmappedPolicy::DefaultValue,
             rom_write_policy: RomWritePolicy::Ignore,
             symbol_table: SymbolTable::new(),
+            vector_resolver: None,
         }
     }
 
@@ -452,6 +458,26 @@ impl BusConfig {
         self.devices.push((id, device));
         self.regions.push(Region::Device { range, device_index });
         Ok(self)
+    }
+
+    /// Installs `resolver` as the `VectorResolver` to be used by the `Cpu` built from this
+    /// config (e.g. by a priority interrupt controller's `DeviceModule::instantiate`).
+    ///
+    /// Errors with [`BusConfigError::DuplicateVectorResolver`] if a resolver has already
+    /// been installed — a system config may install at most one.
+    pub fn vector_resolver(mut self, resolver: Box<dyn VectorResolver>) -> Result<Self, BusConfigError> {
+        if self.vector_resolver.is_some() {
+            return Err(BusConfigError::DuplicateVectorResolver);
+        }
+        self.vector_resolver = Some(resolver);
+        Ok(self)
+    }
+
+    /// Takes the installed `VectorResolver`, if any, leaving `None` in its place.
+    /// Called by `Config::build_devices` immediately before `.build()` consumes the
+    /// rest of this `BusConfig`.
+    pub fn take_vector_resolver(&mut self) -> Option<Box<dyn VectorResolver>> {
+        self.vector_resolver.take()
     }
 
     pub fn build(self) -> Bus {
@@ -1097,6 +1123,28 @@ mod tests {
         let mut allocator = DeviceIdAllocator::new();
         assert!(matches!(allocator.for_irq(0), Ok(DeviceId(0))));
         assert!(matches!(allocator.for_irq(0), Err(BusConfigError::DuplicateIrq(0))));
+    }
+
+    // --- vector resolver ---
+
+    use crate::emulator::cpu::vector::IdentityVectorResolver;
+
+    #[test]
+    fn vector_resolver_installs_and_round_trips_through_take() {
+        let mut config = Bus::config()
+            .vector_resolver(Box::new(IdentityVectorResolver))
+            .unwrap();
+        assert!(config.take_vector_resolver().is_some());
+        assert!(config.take_vector_resolver().is_none());
+    }
+
+    #[test]
+    fn vector_resolver_conflicts_when_already_installed() {
+        let result = Bus::config()
+            .vector_resolver(Box::new(IdentityVectorResolver))
+            .unwrap()
+            .vector_resolver(Box::new(IdentityVectorResolver));
+        assert!(matches!(result, Err(BusConfigError::DuplicateVectorResolver)));
     }
 
 }

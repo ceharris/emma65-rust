@@ -42,6 +42,8 @@ pub enum BusConfigError {
     UndefinedIrq { actual: u32, max: u32 },
     #[error("duplicate IRQ {0:?}")]
     DuplicateIrq(u32),
+    #[error("a VectorResolver has already been installed on this BusConfig")]
+    DuplicateVectorResolver,
 }
 
 /// An error returned by `CpuBuilder::build()`.
