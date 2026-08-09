@@ -61,7 +61,7 @@ mod tests {
         let bus_config = module.instantiate(BusConfig::new(), 0xFFFF, &attributes, &context(), id_allocator)
             .await.unwrap();
         let mut bus = bus_config.build();
-        bus.write(0xFFFF, 0x80 | (1 << 2)).unwrap(); // enable slot 2
+        bus.write(0xFFFF, !(1 << 2) & 0x7F).unwrap(); // disable all but slot 2
         assert_eq!(bus.read(0xFFFF).unwrap(), 0x80 | (1 << 2));
     }
 

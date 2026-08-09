@@ -40,12 +40,12 @@
 //! bits are left unchanged. This is the same encoding used by the VIA's IER
 //! ([`Via6522`](super::Via6522)).
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
+use crate::emulator::VectorResolver;
 use crate::emulator::bus::InterruptController;
 use crate::emulator::cpu::IRQ_VECTOR;
-use crate::emulator::VectorResolver;
 
 /// Base address of the PIC's 8-slot, 16-byte IRQ vector table.
 const VECTOR_TABLE_BASE: u16 = 0xFFE0;
@@ -58,6 +58,9 @@ const IER_ENABLE_MASK: u8 = 0x7F;
 
 /// Bit 7 of an IER write selects enable (`1`) vs. disable (`0`) for the selected slots.
 const IER_SET_FLAG: u8 = 0x80;
+
+/// Default state of the IER after reset
+const DEFAULT_IER_STATE: u8 = IER_ENABLE_MASK;
 
 /// A priority interrupt controller: an [`IoDevice`](super::IoDevice) exposing a single
 /// Interrupt Enable Register, paired with a [`VectorResolver`] implementation that ranks
@@ -81,7 +84,7 @@ pub struct PicFinch {
 impl PicFinch {
     /// Creates a new `PicFinch` with all slots disabled and no IER address assigned.
     pub fn new(name: &'static str) -> Self {
-        Self { name, address: 0, ier: Arc::new(AtomicU8::new(0)) }
+        Self { name, address: 0, ier: Arc::new(AtomicU8::new(DEFAULT_IER_STATE)) }
     }
 
     /// Sets the bus address of the IER register.
@@ -112,7 +115,7 @@ impl super::IoDevice for PicFinch {
     }
 
     fn reset(&mut self) {
-        self.ier.store(0, Ordering::Relaxed);
+        self.ier.store(DEFAULT_IER_STATE, Ordering::Relaxed);
     }
 
     fn name(&self) -> &str {
@@ -202,13 +205,14 @@ mod tests {
     // --- IER register ---
 
     #[test]
-    fn new_ier_reads_with_bit7_set_and_all_slots_disabled() {
-        assert_eq!(pic_finch().peek(IER_ADDR), 0x80);
+    fn new_ier_reads_with_bit7_set_and_all_slots_enabled() {
+        assert_eq!(pic_finch().peek(IER_ADDR), 0xFF);
     }
 
     #[test]
     fn write_with_bit7_set_enables_selected_slots() {
         let mut dev = pic_finch();
+        dev.write(IER_ADDR, 0x7F); // disable all
         dev.write(IER_ADDR, 0x85); // select slots 0, 2; enable
         assert_eq!(dev.peek(IER_ADDR), 0x85);
     }
@@ -216,7 +220,6 @@ mod tests {
     #[test]
     fn write_with_bit7_clear_disables_selected_slots() {
         let mut dev = pic_finch();
-        dev.write(IER_ADDR, 0xFF); // enable all
         dev.write(IER_ADDR, 0x05); // select slots 0, 2; disable
         assert_eq!(dev.peek(IER_ADDR), 0x80 | (0x7F & !0x05));
     }
@@ -224,17 +227,17 @@ mod tests {
     #[test]
     fn write_leaves_unselected_slots_unchanged() {
         let mut dev = pic_finch();
-        dev.write(IER_ADDR, 0x81); // enable slot 0
+        dev.write(IER_ADDR, 0x7E); // disable all but slot 0
         dev.write(IER_ADDR, 0x84); // enable slot 2, slot 0 untouched
         assert_eq!(dev.peek(IER_ADDR), 0x80 | 0x05);
     }
 
     #[test]
-    fn reset_disables_all_slots() {
+    fn reset_enables_all_slots() {
         let mut dev = pic_finch();
-        dev.write(IER_ADDR, 0xFF);
+        dev.write(IER_ADDR, 0x7F);
         dev.reset();
-        assert_eq!(dev.peek(IER_ADDR), 0x80);
+        assert_eq!(dev.peek(IER_ADDR), 0xFF);
     }
 
     // --- irq_mask ---
@@ -242,7 +245,7 @@ mod tests {
     #[test]
     fn irq_mask_reflects_enabled_low_slots() {
         let mut dev = pic_finch();
-        dev.write(IER_ADDR, 0x85); // enable slots 0, 2
+        dev.write(IER_ADDR, 0x7A); // disable all but slots 0, 2
         assert_eq!(dev.irq_mask() & 0x7F, 0x05);
     }
 
@@ -295,8 +298,9 @@ mod tests {
 
     #[test]
     fn resolve_ignores_disabled_low_source_even_if_active() {
-        let dev = pic_finch();
-        // slot 2 never enabled; only a high source is active alongside it
+        let mut dev = pic_finch();
+        dev.write(IER_ADDR, 0x04);
+        // slot 2 disabled; only a high source is active alongside it
         let ctrl = with_active(&[2, 40]);
         assert_eq!(dev.resolve(IRQ_VECTOR, &ctrl), VECTOR_TABLE_BASE + FOLD_SLOT * 2);
     }
@@ -316,7 +320,7 @@ mod tests {
     fn vector_resolver_irq_mask_tracks_device_state() {
         let mut dev = pic_finch();
         let resolver = dev.vector_resolver();
-        dev.write(IER_ADDR, 0x80 | (1 << 6)); // enable slot 6
+        dev.write(IER_ADDR, !(1 << 6) & 0x7F); // disable all but slot 6
         assert_eq!(resolver.irq_mask() & 0x7F, 1 << 6);
     }
 }
