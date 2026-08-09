@@ -257,6 +257,15 @@ impl Cpu {
         Ok(())
     }
 
+    /// Returns `true` if at least one currently-active IRQ source is recognized by the
+    /// installed [`VectorResolver`] (i.e. not masked out via
+    /// [`VectorResolver::irq_mask`]). Unlike [`InterruptController::irq_active`], which
+    /// reflects the raw physical IRQ line, this is what actually gates IRQ servicing and
+    /// WAI wake-up — a source can assert the line without being recognized here.
+    fn irq_recognized(&self) -> bool {
+        self.interrupts.active_sources_mask() & self.vector_resolver.irq_mask() != 0
+    }
+
     /// Fetches, decodes, and executes one instruction. Returns the step result.
     /// Skips a breakpoint at `skip_pc` if specified.
     pub fn step(&mut self, skip_pc: Option<u16>, check_breakpoints: bool) -> StepResult {
@@ -268,7 +277,7 @@ impl Cpu {
             // Tick devices and poll for interrupts; stay in WAI until one arrives.
             self.bus.tick_devices(1);
             self.interrupts.poll_devices(self.bus.device_interrupt_states());
-            if !self.interrupts.irq_active() && !self.interrupts.nmi_pending() {
+            if !self.irq_recognized() && !self.interrupts.nmi_pending() {
                 return StepResult::Waiting;
             }
             self.waiting = false;
@@ -316,7 +325,7 @@ impl Cpu {
                 self.service_interrupt(NMI_VECTOR, false);
             return self.map_interrupt_result(interrupt_result);
         }
-        if self.interrupts.irq_active() && !self.regs.p.contains(StatusRegister::I) {
+        if self.irq_recognized() && !self.regs.p.contains(StatusRegister::I) {
             let interrupt_result =
                 self.service_interrupt(IRQ_VECTOR, false);
             self.interrupts.consume_irq_pulses();
