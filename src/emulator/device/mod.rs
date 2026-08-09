@@ -158,6 +158,14 @@ pub trait IoDevice: Send {
     /// clear it here. The default returns `false` (no NMI capability).
     fn take_nmi(&mut self) -> bool { false }
 
+    /// Consumes a pending device-initiated CPU RESET request, returning `true` if one was pending.
+    ///
+    /// Called once per CPU step, alongside `take_nmi`. Implementations set an internal flag when
+    /// the device wants to reset the CPU (e.g. a watchdog timer or reset-button peripheral) and
+    /// clear it here. The default returns `false` (no reset capability); none of this crate's
+    /// built-in devices use it.
+    fn take_reset(&mut self) -> bool { false }
+
     /// Returns a human-readable name for this device, used in diagnostics and tracing.
     fn name(&self) -> &str { "unknown" }
 

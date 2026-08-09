@@ -7,9 +7,10 @@
 //! during CPU step execution. As such the [`poll_devices`](InterruptController::poll_devices)
 //! method, which is called for each instruction executed, must be especially
 //! efficient. This implementation uses a bit set (in a `u64`) to track devices that
-//! are currently asserting IRQ. `poll_devices` also latches any pending NMI edges
-//! reported by devices in the same pass, so the CPU only needs to make one call
-//! (and the bus only needs to make one pass over its devices) per instruction.
+//! are currently asserting IRQ. `poll_devices` also latches any pending NMI edges and
+//! device-initiated RESET requests reported by devices in the same pass, so the CPU only
+//! needs to make one call (and the bus only needs to make one pass over its devices) per
+//! instruction.
 //!
 //! To emulate the level-triggered nature of the CPU's IRQ signal, devices assert or
 //! release IRQ (based on their internal state) using [`assert_irq`](InterruptController::assert_irq)
@@ -50,6 +51,8 @@ pub struct DeviceInterruptState {
     pub irq_active: bool,
     /// `true` if the device has a pending NMI edge (drained via `IoDevice::take_nmi`).
     pub nmi: bool,
+    /// `true` if the device has a pending CPU reset request (drained via `IoDevice::take_reset`).
+    pub reset: bool,
 }
 
 /// Tracks the state of the IRQ line (level-triggered, multi-source) and NMI (edge-triggered).
@@ -148,9 +151,11 @@ impl InterruptController {
         self.reset_pending
     }
 
-    /// Syncs device IRQ and NMI state into the controller. Called by the CPU after each
-    /// instruction with each device's [`DeviceInterruptState`]: `irq_active` is synced into
-    /// the source bitmask, and `nmi` (if `true`) latches a pending NMI via [`signal_nmi`](Self::signal_nmi).
+    /// Syncs device IRQ, NMI, and RESET state into the controller. Called by the CPU after
+    /// each instruction with each device's [`DeviceInterruptState`]: `irq_active` is synced
+    /// into the source bitmask, `nmi` (if `true`) latches a pending NMI via
+    /// [`signal_nmi`](Self::signal_nmi), and `reset` (if `true`) latches a pending RESET via
+    /// [`signal_reset`](Self::signal_reset).
     pub fn poll_devices(&mut self, states: impl Iterator<Item = DeviceInterruptState>) {
         for state in states {
             if state.id.0 < MAX_IRQ_SOURCES {
@@ -163,6 +168,9 @@ impl InterruptController {
             }
             if state.nmi {
                 self.signal_nmi();
+            }
+            if state.reset {
+                self.signal_reset();
             }
         }
     }
@@ -272,14 +280,14 @@ mod tests {
     }
 
     /// Builds a `DeviceInterruptState` tersely for test iterators.
-    fn dis(id: u32, irq_active: bool, nmi: bool) -> DeviceInterruptState {
-        DeviceInterruptState { id: DeviceId(id), irq_active, nmi }
+    fn dis(id: u32, irq_active: bool, nmi: bool, reset: bool) -> DeviceInterruptState {
+        DeviceInterruptState { id: DeviceId(id), irq_active, nmi, reset }
     }
 
     #[test]
     fn poll_devices_asserts_active_sources() {
         let mut ctrl = InterruptController::new();
-        ctrl.poll_devices([dis(1, true, false), dis(2, false, false)].into_iter());
+        ctrl.poll_devices([dis(1, true, false, false), dis(2, false, false, false)].into_iter());
         assert!(ctrl.irq_active());
     }
 
@@ -287,31 +295,45 @@ mod tests {
     fn poll_devices_releases_inactive_sources() {
         let mut ctrl = InterruptController::new();
         ctrl.assert_irq(IrqSource(1));
-        ctrl.poll_devices([dis(1, false, false)].into_iter());
+        ctrl.poll_devices([dis(1, false, false, false)].into_iter());
         assert!(!ctrl.irq_active());
     }
 
     #[test]
     fn poll_devices_syncs_multiple_sources() {
         let mut ctrl = InterruptController::new();
-        ctrl.poll_devices([dis(1, true, false), dis(2, true, false)].into_iter());
+        ctrl.poll_devices([dis(1, true, false, false), dis(2, true, false, false)].into_iter());
         assert!(ctrl.irq_active());
-        ctrl.poll_devices([dis(1, false, false), dis(2, false, false)].into_iter());
+        ctrl.poll_devices([dis(1, false, false, false), dis(2, false, false, false)].into_iter());
         assert!(!ctrl.irq_active());
     }
 
     #[test]
     fn poll_devices_latches_nmi_from_device_state() {
         let mut ctrl = InterruptController::new();
-        ctrl.poll_devices([dis(1, false, true)].into_iter());
+        ctrl.poll_devices([dis(1, false, true, false)].into_iter());
         assert!(ctrl.nmi_pending());
     }
 
     #[test]
     fn poll_devices_does_not_latch_nmi_when_not_reported() {
         let mut ctrl = InterruptController::new();
-        ctrl.poll_devices([dis(1, true, false)].into_iter());
+        ctrl.poll_devices([dis(1, true, false, false)].into_iter());
         assert!(!ctrl.nmi_pending());
+    }
+
+    #[test]
+    fn poll_devices_latches_reset_from_device_state() {
+        let mut ctrl = InterruptController::new();
+        ctrl.poll_devices([dis(1, false, false, true)].into_iter());
+        assert!(ctrl.reset_pending());
+    }
+
+    #[test]
+    fn poll_devices_does_not_latch_reset_when_not_reported() {
+        let mut ctrl = InterruptController::new();
+        ctrl.poll_devices([dis(1, true, false, false)].into_iter());
+        assert!(!ctrl.reset_pending());
     }
 
     #[test]
@@ -369,7 +391,7 @@ mod tests {
     #[test]
     fn poll_devices_does_not_panic_on_non_irq_source() {
         let mut ctrl = InterruptController::new();
-        ctrl.poll_devices([dis(MAX_IRQ_SOURCES, true, false)].into_iter());
+        ctrl.poll_devices([dis(MAX_IRQ_SOURCES, true, false, false)].into_iter());
         assert!(!ctrl.irq_active());
     }
 
