@@ -228,18 +228,11 @@ impl Bus {
         }
     }
 
-    /// Returns the IRQ state of every device as `(DeviceId, irq_active)` pairs.
-    pub fn device_irq_states(&self) -> impl Iterator<Item = (DeviceId, bool)> + '_ {
-        self.devices.iter().map(|(id, device)| (*id, device.irq_active()))
-    }
-
-    /// Drains pending NMI edge events from all devices. Returns `true` if any device had one.
-    pub fn take_device_nmi(&mut self) -> bool {
-        let mut any = false;
-        for (_, device) in &mut self.devices {
-            any |= device.take_nmi();
-        }
-        any
+    /// Returns each device's current interrupt state, as `(DeviceId, irq_active, nmi)`
+    /// triples, in a single pass over the device map. `nmi` drains the device's pending
+    /// NMI edge (see [`IoDevice::take_nmi`]).
+    pub fn device_interrupt_states(&mut self) -> impl Iterator<Item = (DeviceId, bool, bool)> + '_ {
+        self.devices.iter_mut().map(|(id, device)| (*id, device.irq_active(), device.take_nmi()))
     }
 
     /// Replaces the ROM data for the region starting at `range.start` with `data`.
@@ -938,8 +931,7 @@ mod tests {
 
         bus.tick_devices(1);
         bus.reset_devices();
-        bus.device_irq_states().for_each(drop);
-        bus.take_device_nmi();
+        bus.device_interrupt_states().for_each(drop);
 
         assert_eq!(tick_count.load(Ordering::SeqCst), 1);
         assert_eq!(reset_count.load(Ordering::SeqCst), 1);
