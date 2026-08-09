@@ -109,6 +109,19 @@ impl<T> ProtocolManager<T> {
         !self.relay.is_empty()
     }
 
+    /// Returns the number of events currently buffered in the relay, ready
+    /// to be drained by [`poll_transport`](Self::poll_transport).
+    ///
+    /// Test-only: used by `Via6522`'s test module to confirm a hand-fed
+    /// relay has actually finished delivering N sent events before ticking,
+    /// rather than guessing at a delay — see `ChannelRelay::len`'s doc
+    /// comment for why the relay's own count, not just its inbound
+    /// channel's, is the signal that matters.
+    #[cfg(test)]
+    pub fn pending_len(&self) -> usize {
+        self.relay.len()
+    }
+
     /// Returns `true` if at least one client is currently connected.
     ///
     /// `Mc6840::tick()` calls this before encoding and broadcasting a live
