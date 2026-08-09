@@ -178,20 +178,18 @@ impl InterruptController {
         }
     }
 
-    /// Returns the currently-asserting IRQ sources in ascending `IrqSource` order (i.e.
-    /// priority order, highest first). Unlike [`take_nmi`](Self::take_nmi) and
-    /// [`take_reset`](Self::take_reset), this does not mutate state — a [`VectorResolver`]
-    /// only has `&self` access to the controller when resolving a vector address.
+    /// Returns a bitmask of currently-asserting IRQ sources: bit `n` set means `IrqSource(n)`
+    /// is asserting. Priority order matches bit order (lower bit = higher priority, per
+    /// `IrqSource`'s `Ord` impl), so a [`VectorResolver`] can mask this against its own
+    /// priority/enable mask and find the highest-priority active source directly via
+    /// `trailing_zeros()`, with no need to reconstruct a bitmask from an iterator. Unlike
+    /// [`take_nmi`](Self::take_nmi) and [`take_reset`](Self::take_reset), this does not mutate
+    /// state — a `VectorResolver` only has `&self` access to the controller when resolving a
+    /// vector address.
     ///
     /// [`VectorResolver`]: crate::emulator::cpu::VectorResolver
-    pub fn active_sources(&self) -> impl Iterator<Item = IrqSource> + '_ {
-        (0..MAX_IRQ_SOURCES).filter_map(|bit| {
-            if self.irq_sources & (1u64 << bit) != 0 {
-                Some(IrqSource(bit))
-            } else {
-                None
-            }
-        })
+    pub fn active_sources_mask(&self) -> u64 {
+        self.irq_sources
     }
 
     /// Validates and extracts the bit index for `source`.
@@ -415,30 +413,27 @@ mod tests {
     }
 
     #[test]
-    fn active_sources_is_empty_when_none_active() {
+    fn active_sources_mask_is_zero_when_none_active() {
         let ctrl = InterruptController::new();
-        assert_eq!(ctrl.active_sources().collect::<Vec<_>>(), vec![]);
+        assert_eq!(ctrl.active_sources_mask(), 0);
     }
 
     #[test]
-    fn active_sources_yields_multiple_sources_in_ascending_order() {
+    fn active_sources_mask_has_a_bit_set_per_active_source() {
         let mut ctrl = InterruptController::new();
         ctrl.assert_irq(IrqSource(5));
         ctrl.assert_irq(IrqSource(1));
         ctrl.assert_irq(IrqSource(3));
-        assert_eq!(
-            ctrl.active_sources().collect::<Vec<_>>(),
-            vec![IrqSource(1), IrqSource(3), IrqSource(5)]
-        );
+        assert_eq!(ctrl.active_sources_mask(), (1 << 1) | (1 << 3) | (1 << 5));
     }
 
     #[test]
-    fn active_sources_does_not_mutate_state() {
+    fn active_sources_mask_lowest_bit_is_highest_priority_source() {
         let mut ctrl = InterruptController::new();
-        ctrl.assert_irq(IrqSource(2));
-        let _ = ctrl.active_sources().collect::<Vec<_>>();
-        assert!(ctrl.irq_active());
-        assert_eq!(ctrl.active_sources().collect::<Vec<_>>(), vec![IrqSource(2)]);
+        ctrl.assert_irq(IrqSource(5));
+        ctrl.assert_irq(IrqSource(1));
+        ctrl.assert_irq(IrqSource(3));
+        assert_eq!(ctrl.active_sources_mask().trailing_zeros(), 1);
     }
 
     #[test]
