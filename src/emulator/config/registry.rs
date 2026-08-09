@@ -1,4 +1,4 @@
-use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrModule, Mc6840Module, Mc6850Module, PhoebeModule, R6551Module, RamModule, RomModule, Via6522Module, VireoModule};
+use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrModule, Mc6840Module, Mc6850Module, PhoebeModule, PicModule, R6551Module, RamModule, RomModule, Via6522Module, VireoModule};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::config::led_matrix::LedMatrixModule;
 use crate::emulator::transport::{ChannelRelay, Transport, TransportError, TransportReporter};
@@ -87,6 +87,7 @@ impl DeviceRegistry {
         r.register(Mc6840Module);
         r.register(Mc6850Module);
         r.register(PhoebeModule);
+        r.register(PicModule);
         r.register(Via6522Module);
         r.register(VireoModule);
         r
