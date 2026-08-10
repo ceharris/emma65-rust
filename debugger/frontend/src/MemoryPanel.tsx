@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {listen} from "@tauri-apps/api/event";
 import {invoke} from "@tauri-apps/api/core";
-import {open as openFileDialog} from "@tauri-apps/plugin-dialog";
+import {open as openFileDialog, save as saveFileDialog} from "@tauri-apps/plugin-dialog";
 import {ExecState} from "./DisassemblyPanel";
 import "./styles/memory.scss";
 
@@ -114,6 +114,22 @@ const FORMAT_LABELS: Record<NonNullable<LoadDialogState["format"]>, string> = {
   motorola_srec: "Motorola S-Record",
 };
 
+/** State for the save-memory dialog; null means closed. */
+interface SaveDialogState {
+  /** Controlled value of the start address input. */
+  startInput: string;
+  /** Validation error for the start address field; empty string means no error. */
+  startError: string;
+  /** Controlled value of the end address input. */
+  endInput: string;
+  /** Validation error for the end address field; empty string means no error. */
+  endError: string;
+  /** Path to the file to save. */
+  path: string;
+  /** Validation error for the path field; empty string means no error. */
+  pathError: string;
+}
+
 /** State for the fill-memory dialog; null means closed. */
 interface FillDialogState {
   /** Controlled value of the start address input. */
@@ -153,6 +169,8 @@ export default function MemoryPanel({ execState }: Props) {
   const [loadDialog, setLoadDialog] = useState<LoadDialogState | null>(null);
   /** Error message from a failed load operation; null when no error dialog is open. */
   const [loadErrorDialog, setLoadErrorDialog] = useState<string | null>(null);
+  /** Save-memory dialog state; null when closed. */
+  const [saveDialog, setSaveDialog] = useState<SaveDialogState | null>(null);
   /** Fill-memory dialog state; null when closed. */
   const [fillDialog, setFillDialog] = useState<FillDialogState | null>(null);
   /** Symbol names indexed by page offset (0–255); empty array means no symbols at that address. */
@@ -286,6 +304,21 @@ export default function MemoryPanel({ execState }: Props) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [execState, fillDialog, loadDialog, editDialog]);
+
+  /** Ctrl+S: open save-memory dialog. */
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (document.activeElement instanceof HTMLInputElement) return;
+      if (execState !== "stopped" || saveDialog || fillDialog || loadDialog || editDialog) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
+        setSaveDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: fmtAddr(endAddr), endError: "", path: "", pathError: "" });
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [execState, saveDialog, fillDialog, loadDialog, editDialog]);
 
   /** Wheel scrolling: one row per tick. */
   const handleWheel = useCallback(
@@ -453,6 +486,60 @@ export default function MemoryPanel({ execState }: Props) {
     return () => document.removeEventListener("keydown", handler);
   }, [loadErrorDialog]);
 
+  /** Opens the native save-file chooser; the OS dialog itself confirms overwrite of an existing file. */
+  const handleChooseSaveFile = useCallback(async () => {
+    const selected = await saveFileDialog({
+      filters: [{ name: "Memory Files", extensions: ["bin"] }],
+    });
+    if (typeof selected === "string") {
+      setSaveDialog((d) => d && { ...d, path: selected, pathError: "" });
+    }
+  }, []);
+
+  /** Validates inputs, reads memory via save_memory, shows an error dialog on failure. */
+  const commitSaveMemory = useCallback(async () => {
+    if (!saveDialog) return;
+
+    const start = parseAddress(saveDialog.startInput);
+    if (isNaN(start) || start < 0 || start > 0xffff) {
+      setSaveDialog((d) => d && { ...d, startError: "Enter a valid hex address (0–FFFF)" });
+      return;
+    }
+
+    const end = parseAddress(saveDialog.endInput);
+    if (isNaN(end) || end < 0 || end > 0xffff) {
+      setSaveDialog((d) => d && { ...d, endError: "Enter a valid hex address (0–FFFF)" });
+      return;
+    }
+    if (end < start) {
+      setSaveDialog((d) => d && { ...d, endError: "End address must be ≥ start address" });
+      return;
+    }
+
+    if (!saveDialog.path.trim()) {
+      setSaveDialog((d) => d && { ...d, pathError: "Enter a file path" });
+      return;
+    }
+
+    const path = saveDialog.path;
+    setSaveDialog(null);
+    try {
+      await invoke("save_memory", { start, end, path });
+    } catch (e) {
+      setLoadErrorDialog(String(e));
+    }
+  }, [saveDialog]);
+
+  /** Dismiss the save dialog on Escape while it is open. */
+  useEffect(() => {
+    if (!saveDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSaveDialog(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [saveDialog]);
+
   /** Validates inputs and invokes fill_memory; refreshes the view on success. */
   const commitFillMemory = useCallback(async () => {
     if (!fillDialog) return;
@@ -586,6 +673,17 @@ export default function MemoryPanel({ execState }: Props) {
             title="Load file into memory (Alt+F)"
           >
             Load
+          </button>
+          <button
+            className="mem-save-btn"
+            onClick={() => {
+              const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
+              setSaveDialog({ startInput: fmtAddr(pageAddr), startError: "", endInput: fmtAddr(endAddr), endError: "", path: "", pathError: "" });
+            }}
+            disabled={execState !== "stopped"}
+            title="Save memory range to file (Ctrl+S)"
+          >
+            Save
           </button>
           <button
             className="mem-fill-btn"
@@ -880,6 +978,106 @@ export default function MemoryPanel({ execState }: Props) {
                 onClick={() => setLoadErrorDialog(null)}
               >
                 Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {saveDialog && (
+        <div
+          className="mem-save-backdrop"
+          onClick={() => setSaveDialog(null)}
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <div className="mem-save-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="mem-save-title">Save Memory</div>
+
+            <div className="mem-save-field">
+              <label className="mem-save-label">Start Address</label>
+              <input
+                className={`mem-save-input${saveDialog.startError ? " invalid" : ""}`}
+                autoFocus
+                spellCheck={false}
+                placeholder="0000"
+                value={saveDialog.startInput}
+                onChange={(e) =>
+                  setSaveDialog((d) => d && { ...d, startInput: e.target.value, startError: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitSaveMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setSaveDialog(null); }
+                }}
+              />
+            </div>
+
+            {saveDialog.startError && (
+              <div className="mem-save-error">{saveDialog.startError}</div>
+            )}
+
+            <div className="mem-save-field">
+              <label className="mem-save-label">End Address</label>
+              <input
+                className={`mem-save-input${saveDialog.endError ? " invalid" : ""}`}
+                spellCheck={false}
+                placeholder="00FF"
+                value={saveDialog.endInput}
+                onChange={(e) =>
+                  setSaveDialog((d) => d && { ...d, endInput: e.target.value, endError: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitSaveMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setSaveDialog(null); }
+                }}
+              />
+            </div>
+
+            {saveDialog.endError && (
+              <div className="mem-save-error">{saveDialog.endError}</div>
+            )}
+
+            <div className="mem-save-path-row">
+              <input
+                className={`mem-save-path-input${saveDialog.pathError ? " invalid" : ""}`}
+                spellCheck={false}
+                placeholder="Path to file"
+                value={saveDialog.path}
+                onChange={(e) =>
+                  setSaveDialog((d) => d && { ...d, path: e.target.value, pathError: "" })
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") { e.preventDefault(); commitSaveMemory(); }
+                  if (e.key === "Escape") { e.preventDefault(); setSaveDialog(null); }
+                }}
+              />
+              <button
+                className="mem-save-folder-btn"
+                onClick={handleChooseSaveFile}
+                title="Choose file"
+              >
+                📁
+              </button>
+            </div>
+
+            {saveDialog.pathError && (
+              <div className="mem-save-error">{saveDialog.pathError}</div>
+            )}
+
+            <div className="mem-save-buttons">
+              <button
+                className="mem-save-btn-action mem-save-btn-cancel"
+                onClick={() => setSaveDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="mem-save-btn-action mem-save-btn-ok"
+                onClick={commitSaveMemory}
+              >
+                Save
               </button>
             </div>
           </div>
