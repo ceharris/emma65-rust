@@ -1,7 +1,7 @@
-//! Watchpoint panel support: loads and compiles
-//! `~/.emma/debugger/default/watchpoints.emw` at startup, evaluates it
-//! against live CPU state on demand, and lets the panel add/remove
-//! watchpoints, persisting each change back to the file.
+//! Watchpoint panel support: loads and compiles the active profile's
+//! `watchpoints.emw` at startup, evaluates it against live CPU state on
+//! demand, and lets the panel add/remove watchpoints, persisting each change
+//! back to the file.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -11,7 +11,7 @@ use emma65::watch::{WatchCompiler, WatchEvaluator};
 use tauri::State;
 
 use crate::CpuState;
-use crate::theme;
+use crate::profile::ProfileDirState;
 
 /// Tauri-managed state wrapping the debugger's own watchpoint evaluator.
 ///
@@ -67,17 +67,10 @@ pub struct WatchpointsSnapshot {
     pub variables: Vec<VariableRow>,
 }
 
-/// Loads and compiles `~/.emma/debugger/default/watchpoints.emw` against
-/// `symbol_table`, along with each watchpoint's enabled state. A missing file
-/// means zero watchpoints, not an error.
-pub fn load_watchpoints(symbol_table: &SymbolTable) -> Result<(WatchEvaluator, Vec<bool>), String> {
-    load_watchpoints_from(&theme::debugger_config_dir()?, symbol_table)
-}
-
 /// Loads and compiles `dir/watchpoints.emw` against `symbol_table`, along with
 /// each watchpoint's enabled state from `dir/watchpoints.enabled`. A missing
 /// `.emw` file means zero watchpoints, not an error.
-fn load_watchpoints_from(dir: &Path, symbol_table: &SymbolTable) -> Result<(WatchEvaluator, Vec<bool>), String> {
+pub fn load_watchpoints_from(dir: &Path, symbol_table: &SymbolTable) -> Result<(WatchEvaluator, Vec<bool>), String> {
     let path = dir.join("watchpoints.emw");
     let source = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -200,12 +193,6 @@ pub fn sync_cpu_evaluator(cpu: &mut Cpu, evaluator: &WatchEvaluator, enabled: &[
     Ok(())
 }
 
-/// Serializes `evaluator`'s watchpoints and `enabled` state back to
-/// `~/.emma/debugger/default/watchpoints.emw` and `watchpoints.enabled`.
-fn save_watchpoints(evaluator: &WatchEvaluator, enabled: &[bool]) -> Result<(), String> {
-    save_watchpoints_to(&theme::debugger_config_dir()?, evaluator, enabled)
-}
-
 /// Serializes `evaluator`'s watchpoints to `dir/watchpoints.emw`, one
 /// semicolon-terminated expression per line, and `enabled` to
 /// `dir/watchpoints.enabled`, one `1`/`0` line per watchpoint, both in
@@ -239,6 +226,7 @@ pub fn add_watchpoint(
     source: String,
     cpu_state: State<CpuState>,
     watch_state: State<WatchState>,
+    profile_dir: State<ProfileDirState>,
 ) -> Result<WatchpointsSnapshot, String> {
     let mut watch = watch_state.0.lock().unwrap();
     if watch.compile_error.is_some() {
@@ -254,7 +242,7 @@ pub fn add_watchpoint(
     watch.evaluator.add(watchpoint);
     watch.enabled.push(true);
     sync_cpu_evaluator(cpu, &watch.evaluator, &watch.enabled)?;
-    save_watchpoints(&watch.evaluator, &watch.enabled)?;
+    save_watchpoints_to(&profile_dir.0.lock().unwrap().clone(), &watch.evaluator, &watch.enabled)?;
     Ok(build_snapshot(Some(cpu), &mut watch))
 }
 
@@ -265,6 +253,7 @@ pub fn remove_watchpoint(
     index: usize,
     cpu_state: State<CpuState>,
     watch_state: State<WatchState>,
+    profile_dir: State<ProfileDirState>,
 ) -> Result<WatchpointsSnapshot, String> {
     let mut watch = watch_state.0.lock().unwrap();
     if watch.compile_error.is_some() {
@@ -279,7 +268,7 @@ pub fn remove_watchpoint(
     if let Some(cpu) = cpu_guard.as_mut() {
         sync_cpu_evaluator(cpu, &watch.evaluator, &watch.enabled)?;
     }
-    save_watchpoints(&watch.evaluator, &watch.enabled)?;
+    save_watchpoints_to(&profile_dir.0.lock().unwrap().clone(), &watch.evaluator, &watch.enabled)?;
     Ok(build_snapshot(cpu_guard.as_ref(), &mut watch))
 }
 
@@ -316,6 +305,7 @@ pub fn edit_watchpoint(
     source: String,
     cpu_state: State<CpuState>,
     watch_state: State<WatchState>,
+    profile_dir: State<ProfileDirState>,
 ) -> Result<WatchpointsSnapshot, String> {
     let mut watch = watch_state.0.lock().unwrap();
     if watch.compile_error.is_some() {
@@ -330,7 +320,7 @@ pub fn edit_watchpoint(
     sources[index] = source;
     watch.evaluator = recompile_sources(&sources, cpu.bus().symbol_table())?;
     sync_cpu_evaluator(cpu, &watch.evaluator, &watch.enabled)?;
-    save_watchpoints(&watch.evaluator, &watch.enabled)?;
+    save_watchpoints_to(&profile_dir.0.lock().unwrap().clone(), &watch.evaluator, &watch.enabled)?;
     Ok(build_snapshot(Some(cpu), &mut watch))
 }
 
@@ -345,6 +335,7 @@ pub fn toggle_watchpoint(
     index: usize,
     cpu_state: State<CpuState>,
     watch_state: State<WatchState>,
+    profile_dir: State<ProfileDirState>,
 ) -> Result<WatchpointsSnapshot, String> {
     let mut watch = watch_state.0.lock().unwrap();
     if watch.compile_error.is_some() {
@@ -358,7 +349,7 @@ pub fn toggle_watchpoint(
     if let Some(cpu) = cpu_guard.as_mut() {
         sync_cpu_evaluator(cpu, &watch.evaluator, &watch.enabled)?;
     }
-    save_watchpoints(&watch.evaluator, &watch.enabled)?;
+    save_watchpoints_to(&profile_dir.0.lock().unwrap().clone(), &watch.evaluator, &watch.enabled)?;
     Ok(build_snapshot(cpu_guard.as_ref(), &mut watch))
 }
 
