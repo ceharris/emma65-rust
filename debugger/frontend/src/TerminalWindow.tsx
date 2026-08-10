@@ -12,12 +12,18 @@ const XTERM_DARK_THEME: ITheme = {
   background: "#1e1e1e",
   foreground: "#d4d4d4",
   cursor: "#d4d4d4",
+  // xterm falls back to a default that isn't visible against every
+  // background it ships with, so this must be set explicitly — matches
+  // $dark-palette's bg-selected in global.scss.
+  selectionBackground: "#094771",
 };
 
 const XTERM_LIGHT_THEME: ITheme = {
   background: "#ffffff",
   foreground: "#1e1e1e",
   cursor: "#1e1e1e",
+  // See XTERM_DARK_THEME — matches $light-palette's bg-selected.
+  selectionBackground: "#cce4f7",
 };
 
 export default function TerminalWindow() {
