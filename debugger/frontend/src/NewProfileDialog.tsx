@@ -14,10 +14,12 @@ interface DialogState {
 }
 
 /**
- * Modal for File > New Profile / Ctrl+N. Opens on the `open-new-profile-dialog`
- * event, which both the native menu item (via `on_menu_event`) and the Ctrl+N
- * key binding (via the `open_new_profile_dialog` command) funnel through, so
- * the dialog opens the same way regardless of which window had focus.
+ * Modal for File > New Profile / Ctrl+N. This component is only mounted in
+ * the main window's `App.tsx`, so both open paths are scoped there: the
+ * native menu item's click reaches it via the `open-new-profile-dialog`
+ * Tauri event emitted from `on_menu_event`, and Ctrl+N is handled locally
+ * below rather than through the cross-window `APP_KEY_BINDINGS` array (which
+ * would also fire it from the Terminal/Trace windows).
  */
 export default function NewProfileDialog() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
@@ -27,6 +29,18 @@ export default function NewProfileDialog() {
       setDialog({ name: "", error: "", submitting: false });
     });
     return () => { unlistenPromise.then((f) => f()); };
+  }, []);
+
+  /** Ctrl+N: open the dialog, scoped to this (main) window only. */
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "n" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setDialog((d) => d ?? { name: "", error: "", submitting: false });
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, []);
 
   /** Dismiss the dialog on Escape while it is open. */

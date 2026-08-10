@@ -123,20 +123,12 @@ fn validate_profile_name(name: &str) -> Result<(), String> {
 }
 
 /// Emits `open-new-profile-dialog`, telling the main window's React layer to
-/// open the New Profile modal.
+/// open the New Profile modal. Called directly from the File > New Profile
+/// menu item's `on_menu_event` handler; the Ctrl+N shortcut is scoped to the
+/// main window and handled there in `NewProfileDialog.tsx` without going
+/// through Rust at all.
 pub(crate) fn emit_open_new_profile_dialog(app: &AppHandle) {
     let _ = app.emit("open-new-profile-dialog", ());
-}
-
-/// Tauri command wrapping `emit_open_new_profile_dialog`; the Ctrl+N key
-/// binding's invoke target (see `useAppKeyBindings.ts`). The File > New
-/// Profile menu item's click handler calls `emit_open_new_profile_dialog`
-/// directly instead, mirroring how `toggle_window_visibility` is shared
-/// between menu clicks and the `toggle_terminal_visibility`/
-/// `toggle_trace_visibility` commands.
-#[tauri::command]
-pub fn open_new_profile_dialog(app: AppHandle) {
-    emit_open_new_profile_dialog(&app);
 }
 
 /// Validates `name`, creates a new profile directory seeded from the default

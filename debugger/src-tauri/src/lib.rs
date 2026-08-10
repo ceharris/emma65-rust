@@ -346,7 +346,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             quit,
-            profile::open_new_profile_dialog,
             profile::create_profile,
             terminal::toggle_terminal_visibility,
             get_session_status,
