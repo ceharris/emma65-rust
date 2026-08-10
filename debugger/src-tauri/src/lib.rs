@@ -54,6 +54,11 @@ mod menu;
 /// Recently-used profile list backing the File > Open Recent submenu.
 mod recent;
 
+/// Shared test-only helpers (e.g. a `HOME` env var lock) used across modules'
+/// `#[cfg(test)]` blocks.
+#[cfg(test)]
+mod test_support;
+
 /// IRQ used by the debugger
 pub const DEBUGGER_IRQ: u32 = MAX_IRQ_SOURCES - 1;
 

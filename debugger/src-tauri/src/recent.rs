@@ -156,10 +156,7 @@ pub(crate) async fn open_recent_profile(app: AppHandle, path: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Serializes tests that mutate the process-global `HOME` env var, since
-    /// `cargo test` runs tests in parallel threads within one process.
-    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::test_support::HOME_ENV_LOCK;
 
     fn temp_home(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("emma65-recent-test-{name}-{:?}", std::thread::current().id()));
@@ -188,7 +185,7 @@ mod tests {
     fn display_label_shows_bare_name_for_profiles_under_root() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("display-root");
-        // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
 
         let path = home.join(".emma/debugger/profiles/finch");
@@ -200,7 +197,7 @@ mod tests {
     fn display_label_shows_tilde_relative_for_other_home_paths() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("display-home");
-        // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
 
         let path = home.join("projects/my-profile");
@@ -212,7 +209,7 @@ mod tests {
     fn display_label_shows_full_path_outside_home() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("display-outside");
-        // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
 
         let path = PathBuf::from("/srv/profiles/shared");

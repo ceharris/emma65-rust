@@ -213,10 +213,7 @@ pub async fn open_profile(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Serializes tests that mutate the process-global `HOME` env var, since
-    /// `cargo test` runs tests in parallel threads within one process.
-    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::test_support::HOME_ENV_LOCK;
 
     fn temp_home(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("emma65-profile-test-{name}-{:?}", std::thread::current().id()));
@@ -234,7 +231,7 @@ mod tests {
         fs::write(default_dir.join("emulator.toml"), "a").unwrap();
         fs::write(default_dir.join("subdir/nope.txt"), "b").unwrap();
 
-        // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
         let target = home.join(".emma/debugger/profiles/custom");
         fs::create_dir_all(&target).unwrap();
@@ -254,7 +251,7 @@ mod tests {
         fs::create_dir_all(&default_dir).unwrap();
         fs::write(default_dir.join("ui.toml"), "default-contents").unwrap();
 
-        // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
         let target = home.join(".emma/debugger/profiles/custom");
         fs::create_dir_all(&target).unwrap();
@@ -274,7 +271,7 @@ mod tests {
         fs::create_dir_all(&default_dir).unwrap();
         fs::write(default_dir.join("emulator.toml"), "config").unwrap();
 
-        // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
         let dir = ensure_profile_dir("custom").unwrap();
 
@@ -293,7 +290,7 @@ mod tests {
         let custom_dir = home.join(".emma/debugger/profiles/custom");
         fs::create_dir_all(&custom_dir).unwrap();
 
-        // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
         let dir = ensure_profile_dir("custom").unwrap();
 
@@ -305,7 +302,7 @@ mod tests {
     fn ensure_profile_dir_creates_default_without_seeding() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("ensure-default-profile");
-        // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
 
         let dir = ensure_profile_dir("default").unwrap();
