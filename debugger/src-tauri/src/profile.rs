@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 use clap::Parser;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow, Wry};
+use tauri_plugin_dialog::DialogExt;
 
 /// CLI arguments accepted by the `emma65-debugger` binary.
 #[derive(Parser)]
@@ -24,11 +25,17 @@ pub struct CliArgs {
 /// (theme, watchpoints) can resolve the right directory at call time.
 pub struct ProfileDirState(pub Mutex<PathBuf>);
 
+/// Returns `~/.emma/debugger`, the directory under which every named profile
+/// lives. Also the default location shown by the Open Profile picker.
+fn debugger_root_dir() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME environment variable is not set".to_string())?;
+    Ok(Path::new(&home).join(".emma/debugger"))
+}
+
 /// Returns `~/.emma/debugger/<name>`, the directory holding one profile's
 /// `emulator.toml`, `ui.toml`, and `watchpoints.emw`.
 pub fn profile_dir(name: &str) -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable is not set".to_string())?;
-    Ok(Path::new(&home).join(".emma/debugger").join(name))
+    Ok(debugger_root_dir()?.join(name))
 }
 
 /// Copies every *file* found directly in the default profile's directory
@@ -148,6 +155,39 @@ pub async fn create_profile(app: AppHandle, name: String) -> Result<(), String> 
         return Err(format!("A profile named \"{name}\" already exists"));
     }
     let dir = ensure_profile_dir(name)?;
+    crate::load_or_reload_session(&app, &dir).await;
+    Ok(())
+}
+
+/// Awaits the result of a native folder picker, defaulting to
+/// `~/.emma/debugger`, bridging its callback-based API to async/await via a
+/// oneshot channel (same pattern as `stop_active_run` in `lib.rs`). Returns
+/// `None` if the user cancels, or if the picked location can't be resolved
+/// to a local path.
+async fn pick_profile_directory(app: &AppHandle) -> Option<PathBuf> {
+    let default_dir = debugger_root_dir().ok()?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().set_title("Open Profile").set_directory(default_dir).pick_folder(move |picked| {
+        let _ = tx.send(picked);
+    });
+    rx.await.ok().flatten()?.into_path().ok()
+}
+
+/// Shows a native folder picker, defaulting to `~/.emma/debugger`; if the
+/// user selects a directory, fills in any files missing relative to the
+/// default profile (existing files in the selected directory are left
+/// untouched) and reloads the session against it. A no-op if the user
+/// cancels the picker.
+///
+/// Unlike `create_profile`, the selected directory is expected to already
+/// exist and may already hold some or all of a profile's files — this is how
+/// the user points the debugger at a profile outside the New Profile flow.
+#[tauri::command]
+pub async fn open_profile(app: AppHandle) -> Result<(), String> {
+    let Some(dir) = pick_profile_directory(&app).await else {
+        return Ok(());
+    };
+    copy_missing_files_from_default(&dir)?;
     crate::load_or_reload_session(&app, &dir).await;
     Ok(())
 }

@@ -23,6 +23,20 @@ export default function App() {
 
   useAppKeyBindings();
 
+  // Ctrl+O: open an existing profile. Handled here (not in the shared
+  // APP_KEY_BINDINGS array) since App.tsx only mounts in the main window and
+  // Open Profile — like New Profile's Ctrl+N — is a main-window-only action.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "o" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        invoke("open_profile").catch((err) => console.error("open_profile failed:", err));
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   useEffect(() => {
     const unlistenPromise = listen<SessionStatus>("session-status", (event) => {
       setStatus(event.payload);

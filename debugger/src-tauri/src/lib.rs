@@ -338,6 +338,11 @@ pub fn run() {
                 app.exit(0);
             } else if event.id() == menu::NEW_PROFILE_ID {
                 profile::emit_open_new_profile_dialog(app);
+            } else if event.id() == menu::OPEN_PROFILE_ID {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = profile::open_profile(app_handle).await;
+                });
             } else if event.id() == menu::TOGGLE_TERMINAL_ID {
                 let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);
             } else if event.id() == menu::TOGGLE_TRACE_ID {
@@ -347,6 +352,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             quit,
             profile::create_profile,
+            profile::open_profile,
             terminal::toggle_terminal_visibility,
             get_session_status,
             terminal::write_terminal,
@@ -407,10 +413,23 @@ pub fn run() {
 
             profile::set_all_window_titles(app, &profile_name);
 
+            // `app.set_menu` above attaches the same menu — accelerators included —
+            // to every window that doesn't already have its own explicit menu (see
+            // `App::set_menu`'s "set it on all windows that don't have one" doc
+            // comment), not just the main window. Left alone, that means every
+            // File-menu accelerator (e.g. Ctrl+N, Ctrl+O) fires natively from the
+            // Terminal/Trace windows too, independent of and in addition to any
+            // JS-level `APP_KEY_BINDINGS` scoping — so strip the menu back off
+            // these two immediately. Shortcuts meant to work from every window
+            // (quit, toggle-terminal, toggle-trace) still do, via their JS-level
+            // bindings; main-window-only ones (New Profile, Open Profile) now
+            // correctly don't.
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
+                let _ = terminal_window.remove_menu();
                 install_toggleable_window_lifecycle(&terminal_window, window_menu_state.terminal_item.clone());
             }
             if let Some(trace_window) = app.get_webview_window(trace::TRACE_WINDOW_LABEL) {
+                let _ = trace_window.remove_menu();
                 install_toggleable_window_lifecycle(&trace_window, window_menu_state.trace_item.clone());
             }
             app.manage(window_menu_state);
