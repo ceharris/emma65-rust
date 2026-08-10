@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::profile::ProfileDirState;
+use crate::profile;
 
 /// Selected debugger theme mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -56,21 +56,16 @@ pub fn get_theme(state: State<UiConfigState>) -> ThemeMode {
     state.0.lock().unwrap().theme
 }
 
-/// Updates the theme mode, persists it to `ui.toml`, and notifies all windows.
+/// Updates the theme mode, persists it to `~/.emma/debugger/config/ui.toml`,
+/// and notifies all windows.
 #[tauri::command]
-pub fn set_theme(
-    mode: ThemeMode,
-    state: State<UiConfigState>,
-    profile_dir: State<ProfileDirState>,
-    app: AppHandle,
-) -> Result<(), String> {
+pub fn set_theme(mode: ThemeMode, state: State<UiConfigState>, app: AppHandle) -> Result<(), String> {
     let config = {
         let mut guard = state.0.lock().unwrap();
         guard.theme = mode;
         guard.clone()
     };
-    let dir = profile_dir.0.lock().unwrap().clone();
-    save_ui_config_to(&dir, &config)?;
+    save_ui_config_to(&profile::config_dir()?, &config)?;
     let _ = app.emit("theme-changed", mode);
     Ok(())
 }

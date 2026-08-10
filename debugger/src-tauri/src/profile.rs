@@ -1,7 +1,7 @@
 //! Configuration profile selection: the `--profile` CLI flag, resolving a
-//! profile name to its directory under `~/.emma/debugger/`, seeding a
-//! newly-created profile from the default profile's files, and setting each
-//! window's title to reflect the active profile.
+//! profile name to its directory under `~/.emma/debugger/profiles/`, seeding
+//! a newly-created profile from the default profile's files, and setting
+//! each window's title to reflect the active profile.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,18 +22,33 @@ pub struct CliArgs {
 
 /// Tauri-managed state holding the directory of the currently active
 /// configuration profile, so commands that read or write profile files
-/// (theme, watchpoints) can resolve the right directory at call time.
+/// (watchpoints) can resolve the right directory at call time. UI
+/// preferences are not profile-scoped — see [`config_dir`].
 pub struct ProfileDirState(pub Mutex<PathBuf>);
 
-/// Returns `~/.emma/debugger`, the directory under which every named profile
-/// lives. Also the default location shown by the Open Profile picker.
-fn debugger_root_dir() -> Result<PathBuf, String> {
+/// Returns `~/.emma/debugger`, the root under which both `profiles/` and
+/// `config/` live.
+fn debugger_home_dir() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME environment variable is not set".to_string())?;
     Ok(Path::new(&home).join(".emma/debugger"))
 }
 
-/// Returns `~/.emma/debugger/<name>`, the directory holding one profile's
-/// `emulator.toml`, `ui.toml`, and `watchpoints.emw`.
+/// Returns `~/.emma/debugger/profiles`, the directory under which every
+/// named profile lives. Also the default location shown by the Open Profile
+/// picker. Kept separate from [`config_dir`] so browsing for a profile never
+/// surfaces non-profile entries like `config/`.
+fn debugger_root_dir() -> Result<PathBuf, String> {
+    Ok(debugger_home_dir()?.join("profiles"))
+}
+
+/// Returns `~/.emma/debugger/config`, the directory holding preferences that
+/// apply regardless of which profile is active — currently just `ui.toml`.
+pub fn config_dir() -> Result<PathBuf, String> {
+    Ok(debugger_home_dir()?.join("config"))
+}
+
+/// Returns `~/.emma/debugger/profiles/<name>`, the directory holding one
+/// profile's `emulator.toml` and `watchpoints.emw`.
 pub fn profile_dir(name: &str) -> Result<PathBuf, String> {
     Ok(debugger_root_dir()?.join(name))
 }
@@ -115,7 +130,7 @@ pub fn set_all_window_titles(app: &impl Manager<Wry>, profile: &str) {
 
 /// Rejects an empty name, `.`/`..`, or a name containing a path separator or
 /// NUL byte — the last three would otherwise let `profile_dir` resolve
-/// outside `~/.emma/debugger/`.
+/// outside `~/.emma/debugger/profiles/`.
 fn validate_profile_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("Profile name cannot be empty".to_string());
@@ -160,10 +175,10 @@ pub async fn create_profile(app: AppHandle, name: String) -> Result<(), String> 
 }
 
 /// Awaits the result of a native folder picker, defaulting to
-/// `~/.emma/debugger`, bridging its callback-based API to async/await via a
-/// oneshot channel (same pattern as `stop_active_run` in `lib.rs`). Returns
-/// `None` if the user cancels, or if the picked location can't be resolved
-/// to a local path.
+/// `~/.emma/debugger/profiles`, bridging its callback-based API to
+/// async/await via a oneshot channel (same pattern as `stop_active_run` in
+/// `lib.rs`). Returns `None` if the user cancels, or if the picked location
+/// can't be resolved to a local path.
 async fn pick_profile_directory(app: &AppHandle) -> Option<PathBuf> {
     let default_dir = debugger_root_dir().ok()?;
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -173,8 +188,8 @@ async fn pick_profile_directory(app: &AppHandle) -> Option<PathBuf> {
     rx.await.ok().flatten()?.into_path().ok()
 }
 
-/// Shows a native folder picker, defaulting to `~/.emma/debugger`; if the
-/// user selects a directory, fills in any files missing relative to the
+/// Shows a native folder picker, defaulting to `~/.emma/debugger/profiles`;
+/// if the user selects a directory, fills in any files missing relative to the
 /// default profile (existing files in the selected directory are left
 /// untouched) and reloads the session against it. A no-op if the user
 /// cancels the picker.
@@ -211,14 +226,14 @@ mod tests {
     fn copy_missing_files_from_default_copies_only_files_not_subdirectories() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("copy-basic");
-        let default_dir = home.join(".emma/debugger/default");
+        let default_dir = home.join(".emma/debugger/profiles/default");
         fs::create_dir_all(default_dir.join("subdir")).unwrap();
         fs::write(default_dir.join("emulator.toml"), "a").unwrap();
         fs::write(default_dir.join("subdir/nope.txt"), "b").unwrap();
 
         // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
         unsafe { std::env::set_var("HOME", &home) };
-        let target = home.join(".emma/debugger/custom");
+        let target = home.join(".emma/debugger/profiles/custom");
         fs::create_dir_all(&target).unwrap();
 
         copy_missing_files_from_default(&target).unwrap();
@@ -232,13 +247,13 @@ mod tests {
     fn copy_missing_files_from_default_does_not_overwrite_existing_files() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("copy-no-overwrite");
-        let default_dir = home.join(".emma/debugger/default");
+        let default_dir = home.join(".emma/debugger/profiles/default");
         fs::create_dir_all(&default_dir).unwrap();
         fs::write(default_dir.join("ui.toml"), "default-contents").unwrap();
 
         // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
         unsafe { std::env::set_var("HOME", &home) };
-        let target = home.join(".emma/debugger/custom");
+        let target = home.join(".emma/debugger/profiles/custom");
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("ui.toml"), "existing-contents").unwrap();
 
@@ -252,7 +267,7 @@ mod tests {
     fn ensure_profile_dir_creates_and_seeds_a_new_named_profile() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("ensure-new-profile");
-        let default_dir = home.join(".emma/debugger/default");
+        let default_dir = home.join(".emma/debugger/profiles/default");
         fs::create_dir_all(&default_dir).unwrap();
         fs::write(default_dir.join("emulator.toml"), "config").unwrap();
 
@@ -269,10 +284,10 @@ mod tests {
     fn ensure_profile_dir_does_not_reseed_an_existing_profile() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("ensure-existing-profile");
-        let default_dir = home.join(".emma/debugger/default");
+        let default_dir = home.join(".emma/debugger/profiles/default");
         fs::create_dir_all(&default_dir).unwrap();
         fs::write(default_dir.join("emulator.toml"), "default-config").unwrap();
-        let custom_dir = home.join(".emma/debugger/custom");
+        let custom_dir = home.join(".emma/debugger/profiles/custom");
         fs::create_dir_all(&custom_dir).unwrap();
 
         // SAFETY: HOME_ENV_LOCK excludes every other test in this module.
