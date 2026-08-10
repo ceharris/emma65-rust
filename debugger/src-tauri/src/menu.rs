@@ -21,7 +21,7 @@ pub struct WindowMenuState {
     pub terminal_item: CheckMenuItem<Wry>,
     /// The Window > Trace checkable item.
     pub trace_item: CheckMenuItem<Wry>,
-    /// The File > Quit item, compared by identity against incoming menu events
+    /// The File > Exit item, compared by identity against incoming menu events
     /// since `PredefinedMenuItem::quit` assigns its own id.
     pub quit_item: PredefinedMenuItem<Wry>,
 }
@@ -31,7 +31,11 @@ pub struct WindowMenuState {
 /// visibility. Checked state for Terminal/Trace is initialized from each
 /// window's current `is_visible()`.
 pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState)> {
-    let quit_item = PredefinedMenuItem::quit(app, None)?;
+    // Custom text ("Exit") overrides the platform default, which is "Quit"
+    // outside of Windows — the app's keyboard shortcut for this action is
+    // Ctrl+Q (see `useAppKeyBindings.ts`), so the menu item uses that label
+    // consistently across platforms.
+    let quit_item = PredefinedMenuItem::quit(app, Some("Exit"))?;
     let file_menu = Submenu::with_items(app, "File", true, &[&quit_item])?;
 
     // Placeholder: no items yet.
