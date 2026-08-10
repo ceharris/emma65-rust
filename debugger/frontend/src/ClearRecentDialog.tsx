@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import "./styles/profile.scss";
+import "./styles/modal.scss";
 
 /**
  * Confirmation modal for File > Open Recent > Clear Recent…. Only mounted in
@@ -49,19 +49,19 @@ export default function ClearRecentDialog() {
   if (!open) return null;
 
   return (
-    <div className="new-profile-backdrop" onClick={cancel}>
-      <div className="new-profile-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="new-profile-title">Clear Recent</div>
+    <div className="modal-backdrop" onClick={cancel}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-title">Clear Recent</div>
 
-        <div className="new-profile-message">
+        <div className="modal-message">
           Remove all profiles from the Open Recent list? This does not delete any profile files.
         </div>
 
-        <div className="new-profile-buttons">
-          <button className="new-profile-btn-action new-profile-btn-cancel" onClick={cancel} disabled={submitting}>
+        <div className="modal-buttons">
+          <button className="modal-btn-action modal-btn-cancel" onClick={cancel} disabled={submitting}>
             Cancel
           </button>
-          <button className="new-profile-btn-action new-profile-btn-ok" onClick={commit} disabled={submitting}>
+          <button className="modal-btn-action modal-btn-ok" onClick={commit} disabled={submitting}>
             Clear
           </button>
         </div>

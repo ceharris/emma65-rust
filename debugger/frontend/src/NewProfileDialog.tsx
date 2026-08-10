@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import "./styles/profile.scss";
+import "./styles/modal.scss";
 
 /** State for the New Profile dialog; null means closed. */
 interface DialogState {
@@ -73,14 +73,14 @@ export default function NewProfileDialog() {
   if (!dialog) return null;
 
   return (
-    <div className="new-profile-backdrop" onClick={() => setDialog(null)}>
-      <div className="new-profile-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="new-profile-title">New Profile</div>
+    <div className="modal-backdrop" onClick={() => setDialog(null)}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-title">New Profile</div>
 
-        <div className="new-profile-field">
-          <label className="new-profile-label">Name</label>
+        <div className="modal-field">
+          <label className="modal-label">Name</label>
           <input
-            className={`new-profile-input${dialog.error ? " invalid" : ""}`}
+            className={`modal-input${dialog.error ? " invalid" : ""}`}
             autoFocus
             spellCheck={false}
             placeholder="profile name"
@@ -95,18 +95,18 @@ export default function NewProfileDialog() {
           />
         </div>
 
-        {dialog.error && <div className="new-profile-error">{dialog.error}</div>}
+        {dialog.error && <div className="modal-error">{dialog.error}</div>}
 
-        <div className="new-profile-buttons">
+        <div className="modal-buttons">
           <button
-            className="new-profile-btn-action new-profile-btn-cancel"
+            className="modal-btn-action modal-btn-cancel"
             onClick={() => setDialog(null)}
             disabled={dialog.submitting}
           >
             Cancel
           </button>
           <button
-            className="new-profile-btn-action new-profile-btn-ok"
+            className="modal-btn-action modal-btn-ok"
             onClick={commit}
             disabled={dialog.submitting}
           >

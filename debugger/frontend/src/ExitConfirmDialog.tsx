@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import "./styles/profile.scss";
+import "./styles/modal.scss";
 
 /**
  * Confirmation modal for exiting the debugger: File > Exit, Ctrl+Q (bound
@@ -58,15 +58,15 @@ export default function ExitConfirmDialog() {
   if (!open) return null;
 
   return (
-    <div className="new-profile-backdrop" onClick={cancel}>
-      <div className="new-profile-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="new-profile-title">Exit</div>
+    <div className="modal-backdrop" onClick={cancel}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-title">Exit</div>
 
-        <div className="new-profile-message">
+        <div className="modal-message">
           Are you sure you want to exit the debugger?
         </div>
 
-        <label className="new-profile-checkbox-row">
+        <label className="modal-checkbox-row">
           <input
             type="checkbox"
             checked={dontAskAgain}
@@ -76,11 +76,11 @@ export default function ExitConfirmDialog() {
           Don't ask again
         </label>
 
-        <div className="new-profile-buttons">
-          <button className="new-profile-btn-action new-profile-btn-cancel" onClick={cancel} disabled={submitting}>
+        <div className="modal-buttons">
+          <button className="modal-btn-action modal-btn-cancel" onClick={cancel} disabled={submitting}>
             Cancel
           </button>
-          <button className="new-profile-btn-action new-profile-btn-ok" onClick={commit} disabled={submitting}>
+          <button className="modal-btn-action modal-btn-ok" onClick={commit} disabled={submitting}>
             Exit
           </button>
         </div>
