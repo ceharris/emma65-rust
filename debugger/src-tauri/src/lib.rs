@@ -137,10 +137,11 @@ async fn stop_active_run(app: &AppHandle) {
 /// transport in turn, unwinding the previous terminal bridge task via EOF —
 /// before building the new one.
 ///
-/// Updates `ProfileDirState`, the UI theme, and every window's title to match
-/// `profile_dir` regardless of whether the session itself loads successfully.
-/// Emits `session-status`, and on success `debugger-halted` with the freshly
-/// reset PC.
+/// Updates `ProfileDirState` and every window's title to match `profile_dir`
+/// regardless of whether the session itself loads successfully. UI
+/// preferences are not profile-scoped, so they're left untouched. Emits
+/// `session-status`, and on success `debugger-halted` with the freshly reset
+/// PC.
 pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) {
     stop_active_run(app).await;
 
@@ -154,11 +155,6 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
 
     let profile_name = profile_dir.file_name().and_then(|n| n.to_str()).unwrap_or("default").to_string();
     profile::set_all_window_titles(app, &profile_name);
-
-    let ui_config = theme::load_ui_config_from(profile_dir);
-    let theme_mode = ui_config.theme;
-    *app.state::<theme::UiConfigState>().0.lock().unwrap() = ui_config;
-    let _ = app.emit("theme-changed", theme_mode);
 
     match load_session(profile_dir).await {
         Ok((session, remote, ui_irq_source)) => {
@@ -290,6 +286,7 @@ pub fn run() {
     let cli = profile::CliArgs::parse();
     let profile_name = cli.profile;
     let profile_dir = profile::ensure_profile_dir(&profile_name).expect("Failed to prepare profile directory");
+    let config_dir = profile::config_dir().expect("Failed to resolve debugger config directory");
 
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
@@ -324,7 +321,7 @@ pub fn run() {
             cpu_stopped: false,
             cpu_waiting: false,
         })))
-        .manage(theme::UiConfigState(Mutex::new(theme::load_ui_config_from(&profile_dir))))
+        .manage(theme::UiConfigState(Mutex::new(theme::load_ui_config_from(&config_dir))))
         .manage(profile::ProfileDirState(Mutex::new(profile_dir.clone())))
         .manage(watchpoints::WatchState(Mutex::new(watchpoints::WatchData {
             evaluator: emma65::watch::WatchEvaluator::new(),

@@ -242,10 +242,11 @@ parameters and can be stored freely.
 ### `debugger` crate (`debugger/src-tauri/`)
 
 A Tauri 2 desktop app (`emma65-debugger`) that loads config from
-`~/.emma/debugger/default/emulator.toml`, builds an `EmulatorSession` with an injected
-`InternalPipeTransport` wired to its terminal window, and exposes the emulator to a
-React/TypeScript frontend (`debugger/frontend/`) via `#[tauri::command]`s. One module per
-UI panel:
+`~/.emma/debugger/profiles/default/emulator.toml`, builds an `EmulatorSession` with an
+injected `InternalPipeTransport` wired to its terminal window, and exposes the emulator to a
+React/TypeScript frontend (`debugger/frontend/`) via `#[tauri::command]`s. UI preferences
+(currently just the theme) are not profile-scoped and live in `~/.emma/debugger/config/ui.toml`
+instead. One module per UI panel:
 
 - **`registers`** — register snapshot/edit
 - **`cpu_bus`** — reset, IRQ assert/release, NMI trigger, cached bus-signal snapshot

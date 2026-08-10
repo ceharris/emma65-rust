@@ -51,11 +51,11 @@ development environment for 65C02 programs:
   PTY setup
 
 The debugger reads its emulator configuration from
-`~/.emma/debugger/default/emulator.toml` (the same TOML format described
-under [Running the Emulator](#running-the-emulator)) and its own UI
-preferences — including light/dark theme — from
-`~/.emma/debugger/default/ui.toml`; watchpoints are stored alongside them as
-`watchpoints.emw`.
+`~/.emma/debugger/profiles/default/emulator.toml` (the same TOML format
+described under [Running the Emulator](#running-the-emulator)); watchpoints
+are stored alongside it as `watchpoints.emw`. Its own UI preferences —
+including light/dark theme — are not specific to any profile, and are read
+from `~/.emma/debugger/config/ui.toml` instead.
 
 ### Watchpoint Expressions
 
