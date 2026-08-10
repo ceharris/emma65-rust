@@ -141,7 +141,7 @@ async fn stop_active_run(app: &AppHandle) {
 /// `profile_dir` regardless of whether the session itself loads successfully.
 /// Emits `session-status`, and on success `debugger-halted` with the freshly
 /// reset PC.
-async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) {
+pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) {
     stop_active_run(app).await;
 
     // Drop the previous session (if any) before building the new one, so its
@@ -336,6 +336,8 @@ pub fn run() {
             let state = app.state::<menu::WindowMenuState>();
             if event.id() == state.exit_item.id() {
                 app.exit(0);
+            } else if event.id() == menu::NEW_PROFILE_ID {
+                profile::emit_open_new_profile_dialog(app);
             } else if event.id() == menu::TOGGLE_TERMINAL_ID {
                 let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);
             } else if event.id() == menu::TOGGLE_TRACE_ID {
@@ -344,6 +346,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             quit,
+            profile::open_new_profile_dialog,
+            profile::create_profile,
             terminal::toggle_terminal_visibility,
             get_session_status,
             terminal::write_terminal,

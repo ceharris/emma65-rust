@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use clap::Parser;
-use tauri::{Manager, WebviewWindow, Wry};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow, Wry};
 
 /// CLI arguments accepted by the `emma65-debugger` binary.
 #[derive(Parser)]
@@ -104,6 +104,60 @@ pub fn set_all_window_titles(app: &impl Manager<Wry>, profile: &str) {
             let _ = set_window_title(&window, base, profile);
         }
     }
+}
+
+/// Rejects an empty name, `.`/`..`, or a name containing a path separator or
+/// NUL byte — the last three would otherwise let `profile_dir` resolve
+/// outside `~/.emma/debugger/`.
+fn validate_profile_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Profile name cannot be empty".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err("Profile name cannot be \".\" or \"..\"".to_string());
+    }
+    if name.contains(['/', '\\', '\0']) {
+        return Err("Profile name cannot contain path separators".to_string());
+    }
+    Ok(())
+}
+
+/// Emits `open-new-profile-dialog`, telling the main window's React layer to
+/// open the New Profile modal.
+pub(crate) fn emit_open_new_profile_dialog(app: &AppHandle) {
+    let _ = app.emit("open-new-profile-dialog", ());
+}
+
+/// Tauri command wrapping `emit_open_new_profile_dialog`; the Ctrl+N key
+/// binding's invoke target (see `useAppKeyBindings.ts`). The File > New
+/// Profile menu item's click handler calls `emit_open_new_profile_dialog`
+/// directly instead, mirroring how `toggle_window_visibility` is shared
+/// between menu clicks and the `toggle_terminal_visibility`/
+/// `toggle_trace_visibility` commands.
+#[tauri::command]
+pub fn open_new_profile_dialog(app: AppHandle) {
+    emit_open_new_profile_dialog(&app);
+}
+
+/// Validates `name`, creates a new profile directory seeded from the default
+/// profile, and reloads the session against it — the same effect as
+/// launching with `--profile <name>` for a not-yet-existing profile, but
+/// without restarting the app.
+///
+/// Rejects a name that already names an existing profile: New Profile is
+/// expected to create one, not silently switch to an existing one (that's
+/// what Open Profile / Open Recent are for).
+#[tauri::command]
+pub async fn create_profile(app: AppHandle, name: String) -> Result<(), String> {
+    let name = name.trim();
+    validate_profile_name(name)?;
+    let dir = profile_dir(name)?;
+    if dir.exists() {
+        return Err(format!("A profile named \"{name}\" already exists"));
+    }
+    let dir = ensure_profile_dir(name)?;
+    crate::load_or_reload_session(&app, &dir).await;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -208,5 +262,29 @@ mod tests {
 
         assert!(dir.exists());
         let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn validate_profile_name_accepts_legal_names() {
+        assert!(validate_profile_name("default").is_ok());
+        assert!(validate_profile_name("my-profile_2").is_ok());
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_empty_name() {
+        assert!(validate_profile_name("").is_err());
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_dot_and_dot_dot() {
+        assert!(validate_profile_name(".").is_err());
+        assert!(validate_profile_name("..").is_err());
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_path_separators_and_nul() {
+        assert!(validate_profile_name("a/b").is_err());
+        assert!(validate_profile_name("a\\b").is_err());
+        assert!(validate_profile_name("a\0b").is_err());
     }
 }

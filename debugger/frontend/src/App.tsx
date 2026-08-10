@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import CpuBusPanel from "./CpuBusPanel";
 import DisassemblyPanel, { ExecState } from "./DisassemblyPanel";
 import MemoryPanel from "./MemoryPanel";
+import NewProfileDialog from "./NewProfileDialog";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
 import StackPanel from "./StackPanel";
 import ThemeSelector from "./ThemeSelector";
@@ -66,35 +67,41 @@ export default function App() {
 
   if (status === null || !status.ok) {
     return (
-      <div className="app-splash">
-        {status === null ? (
-          <span className="status-pending">Initializing…</span>
-        ) : (
-          <span className="status-error">{status.message}</span>
-        )}
-      </div>
+      <>
+        <NewProfileDialog />
+        <div className="app-splash">
+          {status === null ? (
+            <span className="status-pending">Initializing…</span>
+          ) : (
+            <span className="status-error">{status.message}</span>
+          )}
+        </div>
+      </>
     );
   }
 
   return (
-    <div className="app-shell">
-      <header className="app-toolbar">
-        <ThemeSelector />
-      </header>
-      <div className="app-layout">
-        <div className="col col-left">
-          <MemoryPanel execState={execState} />
-          <WatchpointPanel execState={execState} />
-        </div>
-        <div className="col col-center">
-          <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
-        </div>
-        <div className="col col-right">
-          <RegisterPanel snapshot={lastSnapshot} execState={execState} onEdit={handleSnapshotUpdate} />
-          <StackPanel />
-          <CpuBusPanel execState={execState} onReset={handleSnapshotUpdate} />
+    <>
+      <NewProfileDialog />
+      <div className="app-shell">
+        <header className="app-toolbar">
+          <ThemeSelector />
+        </header>
+        <div className="app-layout">
+          <div className="col col-left">
+            <MemoryPanel execState={execState} />
+            <WatchpointPanel execState={execState} />
+          </div>
+          <div className="col col-center">
+            <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
+          </div>
+          <div className="col col-right">
+            <RegisterPanel snapshot={lastSnapshot} execState={execState} onEdit={handleSnapshotUpdate} />
+            <StackPanel />
+            <CpuBusPanel execState={execState} onReset={handleSnapshotUpdate} />
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
