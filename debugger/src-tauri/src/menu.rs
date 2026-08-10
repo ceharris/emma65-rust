@@ -19,6 +19,9 @@ pub(crate) const OPEN_PROFILE_ID: &str = "open-profile";
 /// Id prefix for entries in the File > Open Recent submenu; each item's full
 /// id is this prefix followed by the profile's absolute directory path.
 pub(crate) const OPEN_RECENT_ID_PREFIX: &str = "open-recent:";
+/// Menu item id for the "Clear Recent…" item at the bottom of the File >
+/// Open Recent submenu.
+pub(crate) const CLEAR_RECENT_ID: &str = "clear-recent";
 /// Menu item id for the File > Exit item.
 pub(crate) const EXIT_ID: &str = "exit";
 
@@ -91,8 +94,15 @@ fn window_is_visible(app: &tauri::App, label: &str) -> bool {
 }
 
 /// Replaces the File > Open Recent submenu's items with `entries` (each a
-/// display label paired with the profile's absolute directory path,
-/// MRU-ordered), disabling the submenu itself when `entries` is empty.
+/// display label paired with the profile's absolute directory path) followed
+/// by a separator and a "Clear Recent…" item, provided `has_recent` is true
+/// — the submenu (and, when there are no entries to show, just the "Clear
+/// Recent…" item on its own) is otherwise left empty and disabled.
+///
+/// `has_recent` is driven by whether the stored recent-profiles list is
+/// non-empty, not by whether `entries` is — the active profile is always
+/// filtered out of `entries` before this is called, so a list containing
+/// only the active profile still leaves something to clear.
 ///
 /// muda's `Submenu` supports mutating items after construction, so this
 /// updates the existing submenu in place rather than rebuilding the whole
@@ -101,6 +111,7 @@ pub(crate) fn rebuild_open_recent_submenu(
     app: &AppHandle,
     state: &RecentMenuState,
     entries: &[(String, PathBuf)],
+    has_recent: bool,
 ) -> tauri::Result<()> {
     let submenu = &state.0;
     let existing = submenu.items()?.len();
@@ -112,7 +123,14 @@ pub(crate) fn rebuild_open_recent_submenu(
         let item = MenuItem::with_id(app, id, label, true, None::<&str>)?;
         submenu.append(&item)?;
     }
-    submenu.set_enabled(!entries.is_empty())?;
+    if has_recent {
+        if !entries.is_empty() {
+            submenu.append(&PredefinedMenuItem::separator(app)?)?;
+        }
+        let clear_item = MenuItem::with_id(app, CLEAR_RECENT_ID, "Clear Recent…", true, None::<&str>)?;
+        submenu.append(&clear_item)?;
+    }
+    submenu.set_enabled(has_recent)?;
     Ok(())
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import ClearRecentDialog from "./ClearRecentDialog";
 import CpuBusPanel from "./CpuBusPanel";
 import DisassemblyPanel, { ExecState } from "./DisassemblyPanel";
 import MemoryPanel from "./MemoryPanel";
@@ -83,6 +84,7 @@ export default function App() {
     return (
       <>
         <NewProfileDialog />
+        <ClearRecentDialog />
         <div className="app-splash">
           {status === null ? (
             <span className="status-pending">Initializing…</span>
@@ -97,6 +99,7 @@ export default function App() {
   return (
     <>
       <NewProfileDialog />
+      <ClearRecentDialog />
       <div className="app-shell">
         <header className="app-toolbar">
           <ThemeSelector />

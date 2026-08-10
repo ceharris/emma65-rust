@@ -346,6 +346,8 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let _ = profile::open_profile(app_handle).await;
                 });
+            } else if event.id() == menu::CLEAR_RECENT_ID {
+                recent::emit_open_clear_recent_dialog(app);
             } else if let Some(path) = event.id().as_ref().strip_prefix(menu::OPEN_RECENT_ID_PREFIX) {
                 let app_handle = app.clone();
                 let path = std::path::PathBuf::from(path);
@@ -404,6 +406,7 @@ pub fn run() {
             watchpoints::remove_watchpoint,
             watchpoints::edit_watchpoint,
             watchpoints::toggle_watchpoint,
+            recent::clear_recent_profiles,
         ])
         .setup(move |app| {
             let (app_menu, window_menu_state, recent_menu_state) = menu::build_menu(app)?;

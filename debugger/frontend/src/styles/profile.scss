@@ -71,6 +71,12 @@
   color: var(--color-danger-strong);
 }
 
+.new-profile-message {
+  font-size: var(--font-size-btn);
+  color: var(--color-fg);
+  max-width: 320px;
+}
+
 .new-profile-buttons {
   display: flex;
   justify-content: flex-end;

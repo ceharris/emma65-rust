@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::menu;
 use crate::profile;
@@ -96,10 +96,42 @@ pub(crate) fn record_recent_profile(app: &AppHandle, profile_dir: &Path) {
     let mut entries: Vec<(String, PathBuf)> =
         paths.iter().filter(|p| p.as_path() != profile_dir).map(|p| (display_label(p), p.clone())).collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
+    rebuild_submenu(app, &entries, !paths.is_empty());
+}
+
+/// Empties the recent-profiles list, persists the empty list to
+/// `recent.toml`, and disables the File > Open Recent submenu (which drops
+/// the now-pointless "Clear Recent…" item along with any entries).
+///
+/// Invoked from the frontend confirmation dialog opened by
+/// `emit_open_clear_recent_dialog`, once the user clicks "Clear".
+#[tauri::command]
+pub async fn clear_recent_profiles(app: AppHandle) -> Result<(), String> {
+    {
+        let state = app.state::<RecentProfilesState>();
+        state.0.lock().unwrap().clear();
+    }
+    save_recent_to(&profile::config_dir()?, &[])?;
+    rebuild_submenu(&app, &[], false);
+    Ok(())
+}
+
+/// Rebuilds the File > Open Recent submenu from already-computed `entries`
+/// and `has_recent`, logging (rather than propagating) any menu-API failure
+/// — shared by every path that changes the recent-profiles list.
+fn rebuild_submenu(app: &AppHandle, entries: &[(String, PathBuf)], has_recent: bool) {
     let menu_state = app.state::<menu::RecentMenuState>();
-    if let Err(e) = menu::rebuild_open_recent_submenu(app, &menu_state, &entries) {
+    if let Err(e) = menu::rebuild_open_recent_submenu(app, &menu_state, entries, has_recent) {
         eprintln!("Failed to rebuild Open Recent submenu: {e}");
     }
+}
+
+/// Emits `open-clear-recent-dialog`, telling the main window's React layer
+/// to open the Clear Recent confirmation modal. Called directly from the
+/// File > Open Recent > Clear Recent… menu item's `on_menu_event` handler,
+/// mirroring `profile::emit_open_new_profile_dialog`.
+pub(crate) fn emit_open_clear_recent_dialog(app: &AppHandle) {
+    let _ = app.emit("open-clear-recent-dialog", ());
 }
 
 /// Activates the profile at `path`, selected from the File > Open Recent
