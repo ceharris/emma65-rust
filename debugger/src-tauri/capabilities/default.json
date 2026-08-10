@@ -6,6 +6,8 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "log:default"
+    "log:default",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-text"
   ]
 }

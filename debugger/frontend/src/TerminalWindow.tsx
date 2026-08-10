@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "@xterm/xterm/css/xterm.css";
 import { useAppKeyBindings, APP_KEY_BINDINGS } from "./useAppKeyBindings";
 import { resolveTheme, ThemeMode } from "./ThemeContext";
@@ -73,7 +74,28 @@ export default function TerminalWindow() {
     // Let app-wide shortcuts (e.g. Ctrl+Q) bypass xterm's own key handling —
     // otherwise xterm treats them as terminal control input (Ctrl+Q is XON)
     // and stops the keydown from ever reaching the window-level listener.
-    term.attachCustomKeyEventHandler((e) => !APP_KEY_BINDINGS.some((b) => b.matches(e)));
+    //
+    // Ctrl+Shift+C/V are handled here rather than via APP_KEY_BINDINGS because
+    // they need direct access to this xterm instance (selection, paste), not
+    // just a backend command to invoke.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === "keydown" && e.ctrlKey && e.shiftKey && e.code === "KeyC") {
+        const selection = term.getSelection();
+        if (selection) {
+          writeText(selection).catch((err) => console.error("copy to clipboard failed:", err));
+        }
+        return false;
+      }
+      if (e.type === "keydown" && e.ctrlKey && e.shiftKey && e.code === "KeyV") {
+        readText()
+          .then((text) => {
+            if (text) term.paste(text);
+          })
+          .catch((err) => console.error("paste from clipboard failed:", err));
+        return false;
+      }
+      return !APP_KEY_BINDINGS.some((b) => b.matches(e));
+    });
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
