@@ -413,10 +413,23 @@ pub fn run() {
 
             profile::set_all_window_titles(app, &profile_name);
 
+            // `app.set_menu` above attaches the same menu — accelerators included —
+            // to every window that doesn't already have its own explicit menu (see
+            // `App::set_menu`'s "set it on all windows that don't have one" doc
+            // comment), not just the main window. Left alone, that means every
+            // File-menu accelerator (e.g. Ctrl+N, Ctrl+O) fires natively from the
+            // Terminal/Trace windows too, independent of and in addition to any
+            // JS-level `APP_KEY_BINDINGS` scoping — so strip the menu back off
+            // these two immediately. Shortcuts meant to work from every window
+            // (quit, toggle-terminal, toggle-trace) still do, via their JS-level
+            // bindings; main-window-only ones (New Profile, Open Profile) now
+            // correctly don't.
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
+                let _ = terminal_window.remove_menu();
                 install_toggleable_window_lifecycle(&terminal_window, window_menu_state.terminal_item.clone());
             }
             if let Some(trace_window) = app.get_webview_window(trace::TRACE_WINDOW_LABEL) {
+                let _ = trace_window.remove_menu();
                 install_toggleable_window_lifecycle(&trace_window, window_menu_state.trace_item.clone());
             }
             app.manage(window_menu_state);
