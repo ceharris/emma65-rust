@@ -12,6 +12,10 @@ use emma65::disasm::Disassembler;
 use emma65::emulator::bus::MAX_IRQ_SOURCES;
 use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
 
+/// Label of the main debugger window, as assigned by the (unlabeled) first
+/// entry in `tauri.conf.json`'s `app.windows` list.
+pub const MAIN_WINDOW_LABEL: &str = "main";
+
 /// Configuration profile selection: the `--profile` CLI flag, profile
 /// directory resolution, default-file seeding, and window title updates.
 mod profile;
@@ -446,6 +450,20 @@ pub fn run() {
             }
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
+
+            // The Terminal and Trace windows stay alive (merely hidden) for the
+            // life of the process, so Tauri's default "exit when all windows are
+            // closed" behavior never fires from the main window alone — closing
+            // it via the window manager's close control left the process running
+            // in the background (issue #340). Exit explicitly instead.
+            if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                let app_for_close = app.handle().clone();
+                main_window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        app_for_close.exit(0);
+                    }
+                });
+            }
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
