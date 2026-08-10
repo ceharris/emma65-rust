@@ -119,8 +119,11 @@ pub fn set_window_title(window: &WebviewWindow, base: &str, profile: &str) -> Re
 /// reflect `profile`. Windows not yet created (e.g. during tests) are
 /// silently skipped.
 pub fn set_all_window_titles(app: &impl Manager<Wry>, profile: &str) {
-    const WINDOWS: [(&str, &str); 3] =
-        [("main", "Emma65 Debugger"), (crate::terminal::TERMINAL_WINDOW_LABEL, "Emma65 Terminal"), (crate::trace::TRACE_WINDOW_LABEL, "Emma65 Trace")];
+    const WINDOWS: [(&str, &str); 3] = [
+        (crate::MAIN_WINDOW_LABEL, "Emma65 Debugger"),
+        (crate::terminal::TERMINAL_WINDOW_LABEL, "Emma65 Terminal"),
+        (crate::trace::TRACE_WINDOW_LABEL, "Emma65 Trace"),
+    ];
     for (label, base) in WINDOWS {
         if let Some(window) = app.get_webview_window(label) {
             let _ = set_window_title(&window, base, profile);
