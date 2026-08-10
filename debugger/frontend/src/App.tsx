@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import ClearRecentDialog from "./ClearRecentDialog";
 import CpuBusPanel from "./CpuBusPanel";
 import DisassemblyPanel, { ExecState } from "./DisassemblyPanel";
+import ExitConfirmDialog from "./ExitConfirmDialog";
 import MemoryPanel from "./MemoryPanel";
 import NewProfileDialog from "./NewProfileDialog";
 import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
@@ -85,6 +86,7 @@ export default function App() {
       <>
         <NewProfileDialog />
         <ClearRecentDialog />
+        <ExitConfirmDialog />
         <div className="app-splash">
           {status === null ? (
             <span className="status-pending">Initializing…</span>
@@ -100,6 +102,7 @@ export default function App() {
     <>
       <NewProfileDialog />
       <ClearRecentDialog />
+      <ExitConfirmDialog />
       <div className="app-shell">
         <header className="app-toolbar">
           <ThemeSelector />

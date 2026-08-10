@@ -245,8 +245,8 @@ A Tauri 2 desktop app (`emma65-debugger`) that loads config from
 `~/.emma/debugger/profiles/default/emulator.toml`, builds an `EmulatorSession` with an
 injected `InternalPipeTransport` wired to its terminal window, and exposes the emulator to a
 React/TypeScript frontend (`debugger/frontend/`) via `#[tauri::command]`s. UI preferences
-(currently just the theme) are not profile-scoped and live in `~/.emma/debugger/config/ui.toml`
-instead. One module per UI panel:
+(theme, exit-confirmation skip) are not profile-scoped and live in
+`~/.emma/debugger/config/ui.toml` instead. One module per UI panel:
 
 - **`registers`** — register snapshot/edit
 - **`cpu_bus`** — reset, IRQ assert/release, NMI trigger, cached bus-signal snapshot
@@ -256,7 +256,8 @@ instead. One module per UI panel:
 - **`terminal`** — console byte-stream bridge and window visibility (toggleable window)
 - **`trace`** — live-recorded execution trace, windowed reads, window visibility (toggleable window)
 - **`watchpoints`** — loads/compiles `watchpoints.emw`, evaluates on demand, add/remove/edit/toggle with persistence
-- **`theme`** — light/dark theme preference
+- **`theme`** — light/dark theme preference; also owns `UiConfig`/`ui.toml` persistence used by
+  the exit-confirmation "Don't ask again" preference (set from `lib.rs`'s `confirm_exit`)
 - **`menu`** — native File/Edit/Window/Help menu bar and Window-menu checkbox sync
 - **`recent`** — recently-used profile list (`~/.emma/debugger/config/recent.toml`), recorded on every
   profile activation and shown in the File > Open Recent submenu

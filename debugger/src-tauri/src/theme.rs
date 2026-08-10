@@ -21,15 +21,19 @@ pub enum ThemeMode {
     Light,
 }
 
-/// Persisted debugger UI preferences.
-///
-/// Deliberately scoped to the theme alone — see issue #68 and the plan doc's
-/// "Deferred Items" section, which excludes broader session/settings persistence.
+/// Persisted debugger UI preferences that aren't scoped to any profile — see
+/// issue #68 for the original theme-only version and issue #349 for the
+/// exit-confirmation addition.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct UiConfig {
     /// The user's selected theme mode.
     #[serde(default)]
     pub theme: ThemeMode,
+    /// Skips the exit confirmation dialog (File > Exit, Ctrl+Q, or closing
+    /// the main window) when true. Set via that dialog's "Don't ask again"
+    /// checkbox; there is intentionally no UI to revert it — see issue #349.
+    #[serde(default)]
+    pub skip_exit_confirmation: bool,
 }
 
 /// Managed state wrapping the current [`UiConfig`].
@@ -70,6 +74,21 @@ pub fn set_theme(mode: ThemeMode, state: State<UiConfigState>, app: AppHandle) -
     Ok(())
 }
 
+/// Persists `skip` as the "Don't ask again" exit-confirmation preference.
+///
+/// Called from `lib::confirm_exit` once the user commits the exit
+/// confirmation dialog, regardless of the checkbox's state — an unchecked
+/// box still needs to overwrite a stale `true` left over from a manual edit
+/// of `ui.toml`.
+pub fn set_skip_exit_confirmation(skip: bool, state: &UiConfigState) -> Result<(), String> {
+    let config = {
+        let mut guard = state.0.lock().unwrap();
+        guard.skip_exit_confirmation = skip;
+        guard.clone()
+    };
+    save_ui_config_to(&profile::config_dir()?, &config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,7 +96,7 @@ mod tests {
     #[test]
     fn round_trips_all_theme_modes() {
         for mode in [ThemeMode::Auto, ThemeMode::Dark, ThemeMode::Light] {
-            let config = UiConfig { theme: mode };
+            let config = UiConfig { theme: mode, skip_exit_confirmation: false };
             let serialized = toml::to_string(&config).unwrap();
             let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
             assert_eq!(deserialized.theme, mode);
@@ -91,9 +110,23 @@ mod tests {
     }
 
     #[test]
+    fn defaults_skip_exit_confirmation_to_false_when_missing() {
+        let config: UiConfig = toml::from_str("").unwrap();
+        assert!(!config.skip_exit_confirmation);
+    }
+
+    #[test]
+    fn round_trips_skip_exit_confirmation() {
+        let config = UiConfig { theme: ThemeMode::Auto, skip_exit_confirmation: true };
+        let serialized = toml::to_string(&config).unwrap();
+        let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
+        assert!(deserialized.skip_exit_confirmation);
+    }
+
+    #[test]
     fn save_and_load_round_trip_via_tempdir() {
         let dir = std::env::temp_dir().join(format!("emma65-theme-test-{:?}", std::thread::current().id()));
-        let config = UiConfig { theme: ThemeMode::Light };
+        let config = UiConfig { theme: ThemeMode::Light, skip_exit_confirmation: false };
         save_ui_config_to(&dir, &config).unwrap();
         let loaded = load_ui_config_from(&dir);
         assert_eq!(loaded.theme, ThemeMode::Light);
