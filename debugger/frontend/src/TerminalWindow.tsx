@@ -86,6 +86,10 @@ export default function TerminalWindow() {
     // just a backend command to invoke.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && e.code === "KeyC") {
+        // Without preventDefault, the underlying textarea's native paste/copy
+        // key binding (e.g. GTK's own Ctrl+Shift+C/V editing commands) fires
+        // in addition to this handler, double-actioning the clipboard.
+        e.preventDefault();
         const selection = term.getSelection();
         if (selection) {
           writeText(selection).catch((err) => console.error("copy to clipboard failed:", err));
@@ -93,6 +97,7 @@ export default function TerminalWindow() {
         return false;
       }
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && e.code === "KeyV") {
+        e.preventDefault();
         readText()
           .then((text) => {
             if (text) term.paste(text);
