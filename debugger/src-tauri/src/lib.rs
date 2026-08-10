@@ -239,9 +239,44 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     }
 }
 
-/// Exits the application cleanly.
+/// Requests that the application exit: if the "Don't ask again" preference
+/// is already set, exits immediately; otherwise focuses the main window and
+/// opens the exit confirmation dialog there.
+///
+/// Shared by every exit trigger — File > Exit, Ctrl+Q (bound app-wide, so it
+/// can fire from the Terminal or Trace window too), and the main window's
+/// close control — so all three funnel through the same confirm-or-skip
+/// decision (issue #349).
+fn request_exit(app: &AppHandle) {
+    let skip = app.state::<theme::UiConfigState>().0.lock().unwrap().skip_exit_confirmation;
+    if skip {
+        app.exit(0);
+        return;
+    }
+    // The dialog only mounts in the main window's React tree, so bring it to
+    // the front in case the request came from Ctrl+Q in another window.
+    if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = main_window.set_focus();
+    }
+    let _ = app.emit("open-exit-confirm-dialog", ());
+}
+
+/// Exits the application cleanly. Invoked directly by Ctrl+Q; routes through
+/// `request_exit` like every other exit trigger so the confirmation dialog
+/// (or the "Don't ask again" skip) applies uniformly.
 #[tauri::command]
 fn quit(app: AppHandle) {
+    request_exit(&app);
+}
+
+/// Commits the exit confirmation dialog: persists the "Don't ask again"
+/// checkbox state and exits. Canceling the dialog never calls this — it just
+/// closes the dialog locally, leaving the preference and the process alone.
+#[tauri::command]
+fn confirm_exit(skip_confirmation: bool, state: State<theme::UiConfigState>, app: AppHandle) {
+    if let Err(e) = theme::set_skip_exit_confirmation(skip_confirmation, &state) {
+        eprintln!("Failed to save exit confirmation preference: {e}");
+    }
     app.exit(0);
 }
 
@@ -343,7 +378,7 @@ pub fn run() {
         .on_menu_event(|app, event| {
             let state = app.state::<menu::WindowMenuState>();
             if event.id() == state.exit_item.id() {
-                app.exit(0);
+                request_exit(app);
             } else if event.id() == menu::NEW_PROFILE_ID {
                 profile::emit_open_new_profile_dialog(app);
             } else if event.id() == menu::OPEN_PROFILE_ID {
@@ -367,6 +402,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             quit,
+            confirm_exit,
             profile::create_profile,
             profile::open_profile,
             terminal::toggle_terminal_visibility,
@@ -456,12 +492,18 @@ pub fn run() {
             // life of the process, so Tauri's default "exit when all windows are
             // closed" behavior never fires from the main window alone — closing
             // it via the window manager's close control left the process running
-            // in the background (issue #340). Exit explicitly instead.
+            // in the background (issue #340). Exit explicitly instead, routed
+            // through `request_exit` so the close control honors the exit
+            // confirmation dialog (issue #349) the same as File > Exit and
+            // Ctrl+Q. Always prevent the default close: the window must stay
+            // open unless/until `request_exit` (or the dialog it opens) decides
+            // to actually exit the process.
             if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let app_for_close = app.handle().clone();
                 main_window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } = event {
-                        app_for_close.exit(0);
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        request_exit(&app_for_close);
                     }
                 });
             }

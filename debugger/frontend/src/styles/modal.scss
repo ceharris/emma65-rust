@@ -1,4 +1,9 @@
-.new-profile-backdrop {
+// Shared centered-modal styling for confirmation/entry dialogs — currently
+// NewProfileDialog, ClearRecentDialog, and ExitConfirmDialog. Originally
+// written for (and named after) NewProfileDialog alone; renamed from
+// new-profile-* once a second and third dialog reused it (issue #349 review).
+
+.modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -8,7 +13,7 @@
   justify-content: center;
 }
 
-.new-profile-dialog {
+.modal-dialog {
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: 4px;
@@ -21,7 +26,7 @@
   font-family: var(--font-ui);
 }
 
-.new-profile-title {
+.modal-title {
   font-size: var(--font-size-btn);
   font-weight: bold;
   text-transform: uppercase;
@@ -29,19 +34,19 @@
   color: var(--color-accent);
 }
 
-.new-profile-field {
+.modal-field {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.new-profile-label {
+.modal-label {
   flex: 0 0 auto;
   color: var(--color-muted);
   font-size: var(--font-size-btn);
 }
 
-.new-profile-input {
+.modal-input {
   flex: 1;
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
@@ -66,24 +71,64 @@
   }
 }
 
-.new-profile-error {
+.modal-error {
   font-size: var(--font-size-btn);
   color: var(--color-danger-strong);
 }
 
-.new-profile-message {
+.modal-message {
   font-size: var(--font-size-btn);
   color: var(--color-fg);
   max-width: 320px;
 }
 
-.new-profile-buttons {
+.modal-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-btn);
+  color: var(--color-muted);
+  cursor: pointer;
+  user-select: none;
+
+  input[type="checkbox"] {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 2px;
+    background: var(--color-bg-alt);
+    cursor: pointer;
+    flex-shrink: 0;
+    position: relative;
+
+    &:checked {
+      background: var(--color-accent);
+      border-color: var(--color-accent);
+
+      &::after {
+        content: "";
+        position: absolute;
+        left: 2px;
+        top: 0px;
+        width: 4px;
+        height: 7px;
+        border: 2px solid var(--color-bg);
+        border-top: none;
+        border-left: none;
+        transform: rotate(45deg);
+      }
+    }
+  }
+}
+
+.modal-buttons {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.new-profile-btn-action {
+.modal-btn-action {
   background: var(--color-btn-bg);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg);
@@ -103,7 +148,7 @@
     cursor: default;
   }
 
-  &.new-profile-btn-ok {
+  &.modal-btn-ok {
     color: var(--color-accent);
   }
 }

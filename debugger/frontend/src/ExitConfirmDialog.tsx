@@ -4,18 +4,27 @@ import { invoke } from "@tauri-apps/api/core";
 import "./styles/modal.scss";
 
 /**
- * Confirmation modal for File > Open Recent > Clear Recent…. Only mounted in
- * the main window's `App.tsx` — Open Recent (like New Profile and Open
- * Profile) is a main-window-only menu item, opened via the
- * `open-clear-recent-dialog` Tauri event emitted from `on_menu_event`.
+ * Confirmation modal for exiting the debugger: File > Exit, Ctrl+Q (bound
+ * app-wide, so it can arrive here even when the Terminal or Trace window had
+ * focus), and closing the main window via the window manager. Only mounted
+ * in the main window's `App.tsx` — the backend's `request_exit` focuses this
+ * window before emitting `open-exit-confirm-dialog`, mirroring
+ * `NewProfileDialog`/`ClearRecentDialog`.
+ *
+ * Canceling never invokes the backend — the dialog just closes locally,
+ * leaving the "Don't ask again" preference and the process untouched.
+ * Committing always invokes `confirm_exit`, which persists the checkbox
+ * state and exits.
  */
-export default function ClearRecentDialog() {
+export default function ExitConfirmDialog() {
   const [open, setOpen] = useState(false);
+  const [dontAskAgain, setDontAskAgain] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const unlistenPromise = listen("open-clear-recent-dialog", () => {
+    const unlistenPromise = listen("open-exit-confirm-dialog", () => {
       setOpen(true);
+      setDontAskAgain(false);
       setSubmitting(false);
     });
     return () => { unlistenPromise.then((f) => f()); };
@@ -27,10 +36,10 @@ export default function ClearRecentDialog() {
     if (submitting) return;
     setSubmitting(true);
     try {
-      await invoke("clear_recent_profiles");
-      setOpen(false);
+      await invoke("confirm_exit", { skipConfirmation: dontAskAgain });
+      // No further UI update expected: a successful call exits the process.
     } catch (e) {
-      console.error("clear_recent_profiles failed:", e);
+      console.error("confirm_exit failed:", e);
       setSubmitting(false);
     }
   };
@@ -44,25 +53,35 @@ export default function ClearRecentDialog() {
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [open, submitting]);
+  }, [open, submitting, dontAskAgain]);
 
   if (!open) return null;
 
   return (
     <div className="modal-backdrop" onClick={cancel}>
       <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">Clear Recent</div>
+        <div className="modal-title">Exit</div>
 
         <div className="modal-message">
-          Remove all profiles from the Open Recent list? This does not delete any profile files.
+          Are you sure you want to exit the debugger?
         </div>
+
+        <label className="modal-checkbox-row">
+          <input
+            type="checkbox"
+            checked={dontAskAgain}
+            onChange={(e) => setDontAskAgain(e.target.checked)}
+            disabled={submitting}
+          />
+          Don't ask again
+        </label>
 
         <div className="modal-buttons">
           <button className="modal-btn-action modal-btn-cancel" onClick={cancel} disabled={submitting}>
             Cancel
           </button>
           <button className="modal-btn-action modal-btn-ok" onClick={commit} disabled={submitting}>
-            Clear
+            Exit
           </button>
         </div>
       </div>
