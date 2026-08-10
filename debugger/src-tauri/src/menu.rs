@@ -12,6 +12,8 @@ pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
 pub(crate) const TOGGLE_TRACE_ID: &str = "toggle-trace";
 /// Menu item id for the File > New Profile item.
 pub(crate) const NEW_PROFILE_ID: &str = "new-profile";
+/// Menu item id for the File > Open Profile item.
+pub(crate) const OPEN_PROFILE_ID: &str = "open-profile";
 /// Menu item id for the File > Exit item.
 pub(crate) const EXIT_ID: &str = "exit";
 
@@ -43,9 +45,11 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // window; Ctrl+Q keeps working everywhere (including the Terminal
     // window's xterm bypass) via the existing JS-level binding.
     let new_profile_item = MenuItem::with_id(app, NEW_PROFILE_ID, "New Profile", true, Some("CmdOrCtrl+N"))?;
+    let open_profile_item = MenuItem::with_id(app, OPEN_PROFILE_ID, "Open Profile", true, Some("CmdOrCtrl+O"))?;
     let exit_item = MenuItem::with_id(app, EXIT_ID, "Exit", true, Some("CmdOrCtrl+Q"))?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let file_menu = Submenu::with_items(app, "File", true, &[&new_profile_item, &separator, &exit_item])?;
+    let file_menu =
+        Submenu::with_items(app, "File", true, &[&new_profile_item, &open_profile_item, &separator, &exit_item])?;
 
     // Placeholder: no items yet.
     let edit_menu = Submenu::new(app, "Edit", true)?;

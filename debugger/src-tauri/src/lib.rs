@@ -338,6 +338,11 @@ pub fn run() {
                 app.exit(0);
             } else if event.id() == menu::NEW_PROFILE_ID {
                 profile::emit_open_new_profile_dialog(app);
+            } else if event.id() == menu::OPEN_PROFILE_ID {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = profile::open_profile(app_handle).await;
+                });
             } else if event.id() == menu::TOGGLE_TERMINAL_ID {
                 let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);
             } else if event.id() == menu::TOGGLE_TRACE_ID {
@@ -347,6 +352,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             quit,
             profile::create_profile,
+            profile::open_profile,
             terminal::toggle_terminal_visibility,
             get_session_status,
             terminal::write_terminal,
