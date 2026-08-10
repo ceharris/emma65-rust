@@ -54,11 +54,12 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
     // predefined types on Linux), so the item never appeared at all. The
-    // click is dispatched to the same `app.exit(0)` the "quit" command
-    // (bound to Ctrl+Q — see `useAppKeyBindings.ts`) already uses. The
-    // accelerator here is just the menu's own display/shortcut for the main
-    // window; Ctrl+Q keeps working everywhere (including the Terminal
-    // window's xterm bypass) via the existing JS-level binding.
+    // click is dispatched to the same `request_exit` the "quit" command
+    // (bound to Ctrl+Q — see `App.tsx`) already uses. Both the menu
+    // accelerator and the JS-level binding are main-window-only (issue
+    // #351): the menu is stripped from the Terminal/Trace windows in
+    // `run()`'s `setup`, and Ctrl+Q is handled locally in `App.tsx` rather
+    // than via the cross-window `APP_KEY_BINDINGS` array.
     let new_profile_item = MenuItem::with_id(app, NEW_PROFILE_ID, "New Profile", true, Some("CmdOrCtrl+N"))?;
     let open_profile_item = MenuItem::with_id(app, OPEN_PROFILE_ID, "Open Profile", true, Some("CmdOrCtrl+O"))?;
     let open_recent_submenu = Submenu::with_id(app, "open-recent", "Open Recent", false)?;

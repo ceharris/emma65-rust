@@ -25,14 +25,21 @@ export default function App() {
 
   useAppKeyBindings();
 
-  // Ctrl+O: open an existing profile. Handled here (not in the shared
-  // APP_KEY_BINDINGS array) since App.tsx only mounts in the main window and
-  // Open Profile — like New Profile's Ctrl+N — is a main-window-only action.
+  // Ctrl+O/Ctrl+Q: open an existing profile / quit the app. Handled here (not
+  // in the shared APP_KEY_BINDINGS array) since App.tsx only mounts in the
+  // main window and both actions — like New Profile's Ctrl+N — are
+  // main-window-only (issue #351: Ctrl+Q previously fired from every window,
+  // including as a surprise exit while typing in the Terminal window, where
+  // Ctrl+Q is conventionally XON).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "o" && (e.ctrlKey || e.metaKey)) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === "o") {
         e.preventDefault();
         invoke("open_profile").catch((err) => console.error("open_profile failed:", err));
+      } else if (e.key === "q") {
+        e.preventDefault();
+        invoke("quit").catch((err) => console.error("quit failed:", err));
       }
     };
     window.addEventListener("keydown", handler);

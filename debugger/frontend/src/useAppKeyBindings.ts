@@ -15,11 +15,10 @@ export interface AppKeyBinding {
  *
  * Exported so `TerminalWindow` can exclude these combos from xterm's own key
  * handling via `attachCustomKeyEventHandler` — xterm otherwise treats
- * Ctrl+letter combos as terminal control input (e.g. Ctrl+Q is XON) and
- * stops them from ever bubbling to the window-level listener below.
+ * Ctrl+Shift+letter combos as terminal control input and stops them from
+ * ever bubbling to the window-level listener below.
  */
 export const APP_KEY_BINDINGS: AppKeyBinding[] = [
-  { matches: (e) => e.key === "q" && (e.ctrlKey || e.metaKey), command: "quit" },
   { matches: (e) => e.ctrlKey && e.shiftKey && e.code === "Backquote", command: "toggle_terminal_visibility" },
   { matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyT", command: "toggle_trace_visibility" },
 ];
