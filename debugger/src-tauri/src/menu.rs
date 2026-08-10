@@ -36,8 +36,11 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // backend silently drops `Quit` (it isn't in its short list of supported
     // predefined types on Linux), so the item never appeared at all. The
     // click is dispatched to the same `app.exit(0)` the "quit" command
-    // (bound to Ctrl+Q — see `useAppKeyBindings.ts`) already uses.
-    let exit_item = MenuItem::with_id(app, EXIT_ID, "Exit", true, None::<&str>)?;
+    // (bound to Ctrl+Q — see `useAppKeyBindings.ts`) already uses. The
+    // accelerator here is just the menu's own display/shortcut for the main
+    // window; Ctrl+Q keeps working everywhere (including the Terminal
+    // window's xterm bypass) via the existing JS-level binding.
+    let exit_item = MenuItem::with_id(app, EXIT_ID, "Exit", true, Some("CmdOrCtrl+Q"))?;
     let file_menu = Submenu::with_items(app, "File", true, &[&exit_item])?;
 
     // Placeholder: no items yet.
