@@ -1,10 +1,10 @@
 use std::path::Path;
-use std::sync::atomic::AtomicU16;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use figment::{Figment, providers::{Env, Format, Toml}};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Listener, Manager, State, WebviewWindow};
 use tauri_plugin_log::{Target, TargetKind};
 use tokio::sync::oneshot;
 
@@ -103,6 +103,138 @@ async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPi
     Ok((session, remote, ui_irq_source))
 }
 
+/// Stops any free-running CPU (Run, Step Over, or Step Return) and waits for
+/// its recovery to finish, so a session reload never races the background
+/// task that would otherwise write the old CPU back into `CpuState` after the
+/// new session has already been installed. A no-op if the CPU is halted.
+async fn stop_active_run(app: &AppHandle) {
+    let wait_rx = {
+        let state = app.state::<disassembly::RunStopperState>();
+        let guard = state.0.lock().unwrap();
+        guard.as_ref().map(|stopper| {
+            let (tx, rx) = oneshot::channel::<()>();
+            app.once_any("debugger-run-stopped", move |_event| {
+                let _ = tx.send(());
+            });
+            stopper.stop();
+            rx
+        })
+    };
+    if let Some(rx) = wait_rx {
+        let _ = rx.await;
+    }
+}
+
+/// Loads (or reloads) the emulator session from `profile_dir`: builds a fresh
+/// `EmulatorSession`, replaces the console transport and its terminal bridge,
+/// and resets every panel's Tauri-managed state to match the new CPU.
+///
+/// Safe to call more than once — this generalizes what `setup()`'s async
+/// block used to do only at startup, so a later profile switch (New Profile,
+/// Open Profile, Open Recent) can call it again against a different profile
+/// directory without restarting the app. Stops any in-progress free-run
+/// first, then drops the previous session — which drops its console
+/// transport in turn, unwinding the previous terminal bridge task via EOF —
+/// before building the new one.
+///
+/// Updates `ProfileDirState`, the UI theme, and every window's title to match
+/// `profile_dir` regardless of whether the session itself loads successfully.
+/// Emits `session-status`, and on success `debugger-halted` with the freshly
+/// reset PC.
+async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) {
+    stop_active_run(app).await;
+
+    // Drop the previous session (if any) before building the new one, so its
+    // console transport unwinds (see InternalPipeTransport::drop) rather than
+    // leaking alongside the new session's.
+    *app.state::<CpuState>().0.lock().unwrap() = None;
+    *app.state::<terminal::TerminalTx>().0.lock().unwrap() = None;
+
+    *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
+
+    let profile_name = profile_dir.file_name().and_then(|n| n.to_str()).unwrap_or("default").to_string();
+    profile::set_all_window_titles(app, &profile_name);
+
+    let ui_config = theme::load_ui_config_from(profile_dir);
+    let theme_mode = ui_config.theme;
+    *app.state::<theme::UiConfigState>().0.lock().unwrap() = ui_config;
+    let _ = app.emit("theme-changed", theme_mode);
+
+    match load_session(profile_dir).await {
+        Ok((session, remote, ui_irq_source)) => {
+            let (remote_rx, remote_tx) = remote.into_split();
+            *app.state::<terminal::TerminalTx>().0.lock().unwrap() = Some(remote_tx);
+
+            let mut cpu = session.cpu;
+            let variant = cpu.variant();
+
+            if let Err(e) = cpu.reset() {
+                emit_status(app, SessionStatus {
+                    message: format!("CPU reset failed: {e}"),
+                    ok: false,
+                });
+                return;
+            }
+
+            let initial_pc = cpu.registers().pc;
+            let disasm = Disassembler::new(variant);
+            *app.state::<disassembly::DisassemblerState>().0.lock().unwrap() = Some(disasm);
+
+            // Independent of session readiness: a bad watchpoints.emw is
+            // reported inside the watchpoint panel, not via emit_status,
+            // so it never blocks or fails the rest of the debugger.
+            let symbol_table = cpu.bus().symbol_table().clone();
+            let watch_data = match watchpoints::load_watchpoints_from(profile_dir, &symbol_table) {
+                Ok((evaluator, enabled)) => watchpoints::WatchData { evaluator, compile_error: None, enabled },
+                Err(message) => {
+                    eprintln!("watchpoints.emw: {message}");
+                    watchpoints::WatchData {
+                        evaluator: emma65::watch::WatchEvaluator::new(),
+                        compile_error: Some(message),
+                        enabled: Vec::new(),
+                    }
+                }
+            };
+            // Install the loaded, enabled watchpoints into the CPU's own
+            // evaluator too, so they actually halt execution in step()/run() —
+            // not just show up in the panel's display snapshot.
+            if let Err(e) = watchpoints::sync_cpu_evaluator(&mut cpu, &watch_data.evaluator, &watch_data.enabled) {
+                eprintln!("Failed to install watchpoints for execution: {e}");
+            }
+            *app.state::<watchpoints::WatchState>().0.lock().unwrap() = watch_data;
+
+            // Reset the rest of the per-panel state that assumes one
+            // long-lived session, so nothing from the previous profile lingers.
+            *app.state::<disassembly::BreakpointState>().0.lock().unwrap() = std::collections::BTreeMap::new();
+            *app.state::<disassembly::SkipBreakpointPc>().0.lock().unwrap() = None;
+            *app.state::<disassembly::LiveSnapshotRx>().0.lock().unwrap() = None;
+            *app.state::<registers::ChangedFlagsState>().0.lock().unwrap() = 0;
+            app.state::<memory::MemoryViewAddr>().0.store(0, Ordering::Relaxed);
+
+            *app.state::<cpu_bus::CpuBusCache>().0.lock().unwrap() = cpu_bus::snapshot_cpu_bus(&cpu);
+            *app.state::<cpu_bus::UiIrqSourceState>().0.lock().unwrap() = Some(ui_irq_source);
+            *app.state::<CpuState>().0.lock().unwrap() = Some(cpu);
+
+            emit_status(app, SessionStatus {
+                message: "Emulator session ready".to_string(),
+                ok: true,
+            });
+
+            let bridge_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                terminal::run_terminal_bridge(remote_rx, bridge_handle).await;
+            });
+
+            // Emit the initial halted state so the frontend can render the
+            // disassembly view immediately.
+            let _ = app.emit("debugger-halted", initial_pc);
+        }
+        Err(message) => {
+            emit_status(app, SessionStatus { message, ok: false });
+        }
+    }
+}
+
 /// Exits the application cleanly.
 #[tauri::command]
 fn quit(app: AppHandle) {
@@ -174,8 +306,7 @@ pub fn run() {
         )
         .manage(SessionStatusState(Mutex::new(None)))
         .manage(terminal::TerminalReadyTx(Mutex::new(Some(ready_tx))))
-        // TerminalTx is registered after setup; commands are only called after the
-        // terminal window is open, so it will always be present by then.
+        .manage(terminal::TerminalTx(Mutex::new(None)))
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
         .manage(disassembly::DisassemblerState(Mutex::new(None)))
@@ -283,89 +414,24 @@ pub fn run() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match load_session(&profile_dir).await {
-                    Ok((session, remote, ui_irq_source)) => {
-                        let (remote_rx, remote_tx) = remote.into_split();
-
-                        // Register the tx side so write_terminal can use it.
-                        handle.manage(terminal::TerminalTx(Mutex::new(remote_tx)));
-
-                        let mut cpu = session.cpu;
-                        let variant = cpu.variant();
-
-                        if let Err(e) = cpu.reset() {
-                            emit_status(&handle, SessionStatus {
-                                message: format!("CPU reset failed: {e}"),
-                                ok: false,
-                            });
-                            return;
-                        }
-
-                        let initial_pc = cpu.registers().pc;
-                        let disasm = Disassembler::new(variant);
-                        *handle.state::<disassembly::DisassemblerState>().0.lock().unwrap() = Some(disasm);
-
-                        // Independent of session readiness: a bad watchpoints.emw is
-                        // reported inside the watchpoint panel, not via emit_status,
-                        // so it never blocks or fails the rest of the debugger.
-                        let symbol_table = cpu.bus().symbol_table().clone();
-                        let watch_data = match watchpoints::load_watchpoints_from(&profile_dir, &symbol_table) {
-                            Ok((evaluator, enabled)) => watchpoints::WatchData { evaluator, compile_error: None, enabled },
-                            Err(message) => {
-                                eprintln!("watchpoints.emw: {message}");
-                                watchpoints::WatchData {
-                                    evaluator: emma65::watch::WatchEvaluator::new(),
-                                    compile_error: Some(message),
-                                    enabled: Vec::new(),
-                                }
-                            }
-                        };
-                        // Install the loaded, enabled watchpoints into the CPU's own
-                        // evaluator too, so they actually halt execution in step()/run() —
-                        // not just show up in the panel's display snapshot.
-                        if let Err(e) = watchpoints::sync_cpu_evaluator(&mut cpu, &watch_data.evaluator, &watch_data.enabled) {
-                            eprintln!("Failed to install watchpoints for execution: {e}");
-                        }
-                        *handle.state::<watchpoints::WatchState>().0.lock().unwrap() = watch_data;
-
-                        *handle.state::<cpu_bus::CpuBusCache>().0.lock().unwrap() = cpu_bus::snapshot_cpu_bus(&cpu);
-                        *handle.state::<cpu_bus::UiIrqSourceState>().0.lock().unwrap() = Some(ui_irq_source);
-                        *handle.state::<CpuState>().0.lock().unwrap() = Some(cpu);
-
-                        emit_status(&handle, SessionStatus {
-                            message: "Emulator session ready".to_string(),
-                            ok: true,
-                        });
-
-                        // Briefly show the terminal window (created hidden at startup) so
-                        // its webview realizes and runs on webkit2gtk; hidden windows never
-                        // fire their JS there, so terminal_ready would otherwise never arrive.
-                        if let Err(e) = terminal::show_terminal_window(&handle) {
-                            eprintln!("Failed to show terminal window: {e}");
-                            return;
-                        }
-
-                        // Wait for the terminal window to signal it is ready.
-                        let _ = ready_rx.await;
-
-                        // Hide it again so the window stays hidden at launch as intended;
-                        // the user reveals it with Ctrl+Shift+` (see `toggle_terminal_visibility`).
-                        let _ = terminal::hide_terminal_window(&handle);
-
-                        // Start the terminal bridge.
-                        let bridge_handle = handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            terminal::run_terminal_bridge(remote_rx, bridge_handle).await;
-                        });
-
-                        // Emit the initial halted state so the frontend can render the
-                        // disassembly view immediately on first load.
-                        let _ = handle.emit("debugger-halted", initial_pc);
-                    }
-                    Err(message) => {
-                        emit_status(&handle, SessionStatus { message, ok: false });
-                    }
+                // Briefly show the terminal window (created hidden at startup) so
+                // its webview realizes and runs on webkit2gtk; hidden windows never
+                // fire their JS there, so terminal_ready would otherwise never arrive.
+                // Only needed once, here, at startup: the window stays realized
+                // (its JS keeps running while hidden) across any later session reload.
+                if let Err(e) = terminal::show_terminal_window(&handle) {
+                    eprintln!("Failed to show terminal window: {e}");
+                    return;
                 }
+
+                // Wait for the terminal window to signal it is ready.
+                let _ = ready_rx.await;
+
+                // Hide it again so the window stays hidden at launch as intended;
+                // the user reveals it with Ctrl+Shift+` (see `toggle_terminal_visibility`).
+                let _ = terminal::hide_terminal_window(&handle);
+
+                load_or_reload_session(&handle, &profile_dir).await;
             });
             Ok(())
         })

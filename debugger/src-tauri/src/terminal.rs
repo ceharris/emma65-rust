@@ -12,7 +12,10 @@ use tokio::sync::oneshot;
 pub const TERMINAL_WINDOW_LABEL: &str = "terminal";
 
 /// Holds the tx end of the remote pipe so `write_terminal` can send bytes to the console.
-pub struct TerminalTx(pub Mutex<File>);
+///
+/// `None` before the first session load completes, and briefly `None` again
+/// mid-reload while the previous session's transport is being torn down.
+pub struct TerminalTx(pub Mutex<Option<File>>);
 
 /// One-shot sender signaling that the terminal window is ready to receive output.
 pub struct TerminalReadyTx(pub Mutex<Option<oneshot::Sender<()>>>);
@@ -53,7 +56,8 @@ pub fn terminal_ready(state: State<TerminalReadyTx>) {
 /// Tauri command: send bytes typed in the terminal to the emulated console.
 #[tauri::command]
 pub fn write_terminal(bytes: Vec<u8>, state: State<TerminalTx>) -> Result<(), String> {
-    let mut tx = state.0.lock().unwrap();
+    let mut guard = state.0.lock().unwrap();
+    let tx = guard.as_mut().ok_or("Terminal not ready")?;
     tx.write_all(&bytes).map_err(|e| e.to_string())
 }
 
