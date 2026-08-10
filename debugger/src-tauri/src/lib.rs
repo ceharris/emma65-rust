@@ -192,7 +192,7 @@ pub fn run() {
         .manage(trace::TraceState(Mutex::new(trace::TraceData::new())))
         .on_menu_event(|app, event| {
             let state = app.state::<menu::WindowMenuState>();
-            if event.id() == state.quit_item.id() {
+            if event.id() == state.exit_item.id() {
                 app.exit(0);
             } else if event.id() == menu::TOGGLE_TERMINAL_ID {
                 let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);

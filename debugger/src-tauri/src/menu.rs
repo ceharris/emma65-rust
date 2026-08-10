@@ -1,6 +1,6 @@
 //! Native application menu bar: File/Edit/Window/Help.
 
-use tauri::menu::{CheckMenuItem, Menu, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, Wry};
 
 use crate::terminal::TERMINAL_WINDOW_LABEL;
@@ -10,9 +10,11 @@ use crate::trace::TRACE_WINDOW_LABEL;
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
 /// Menu item id for the Window > Trace checkable item.
 pub(crate) const TOGGLE_TRACE_ID: &str = "toggle-trace";
+/// Menu item id for the File > Exit item.
+pub(crate) const EXIT_ID: &str = "exit";
 
 /// The menu items whose state needs to stay in sync with actual window
-/// visibility, and (for Quit) whose click needs to be dispatched to app
+/// visibility, and (for Exit) whose click needs to be dispatched to app
 /// logic. Managed as app state so both the global `on_menu_event` handler
 /// and the `toggle_terminal_visibility`/`toggle_trace_visibility` commands
 /// can reach the same item instances.
@@ -21,9 +23,8 @@ pub struct WindowMenuState {
     pub terminal_item: CheckMenuItem<Wry>,
     /// The Window > Trace checkable item.
     pub trace_item: CheckMenuItem<Wry>,
-    /// The File > Exit item, compared by identity against incoming menu events
-    /// since `PredefinedMenuItem::quit` assigns its own id.
-    pub quit_item: PredefinedMenuItem<Wry>,
+    /// The File > Exit item.
+    pub exit_item: MenuItem<Wry>,
 }
 
 /// Builds the native app menu (File/Edit/Window/Help) and the menu-item
@@ -31,12 +32,13 @@ pub struct WindowMenuState {
 /// visibility. Checked state for Terminal/Trace is initialized from each
 /// window's current `is_visible()`.
 pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState)> {
-    // Custom text ("Exit") overrides the platform default, which is "Quit"
-    // outside of Windows — the app's keyboard shortcut for this action is
-    // Ctrl+Q (see `useAppKeyBindings.ts`), so the menu item uses that label
-    // consistently across platforms.
-    let quit_item = PredefinedMenuItem::quit(app, Some("Exit"))?;
-    let file_menu = Submenu::with_items(app, "File", true, &[&quit_item])?;
+    // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
+    // backend silently drops `Quit` (it isn't in its short list of supported
+    // predefined types on Linux), so the item never appeared at all. The
+    // click is dispatched to the same `app.exit(0)` the "quit" command
+    // (bound to Ctrl+Q — see `useAppKeyBindings.ts`) already uses.
+    let exit_item = MenuItem::with_id(app, EXIT_ID, "Exit", true, None::<&str>)?;
+    let file_menu = Submenu::with_items(app, "File", true, &[&exit_item])?;
 
     // Placeholder: no items yet.
     let edit_menu = Submenu::new(app, "Edit", true)?;
@@ -53,7 +55,7 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
 
     let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
 
-    Ok((menu, WindowMenuState { terminal_item, trace_item, quit_item }))
+    Ok((menu, WindowMenuState { terminal_item, trace_item, exit_item }))
 }
 
 fn window_is_visible(app: &tauri::App, label: &str) -> bool {
