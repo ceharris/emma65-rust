@@ -258,6 +258,8 @@ instead. One module per UI panel:
 - **`watchpoints`** — loads/compiles `watchpoints.emw`, evaluates on demand, add/remove/edit/toggle with persistence
 - **`theme`** — light/dark theme preference
 - **`menu`** — native File/Edit/Window/Help menu bar and Window-menu checkbox sync
+- **`recent`** — recently-used profile list (`~/.emma/debugger/config/recent.toml`), recorded on every
+  profile activation and shown in the File > Open Recent submenu
 
 Devices requiring a byte-stream peer (VIA, MC6840, ACIAs) still use their configured
 `Transport` independent of the debugger UI; only the console is special-cased to route

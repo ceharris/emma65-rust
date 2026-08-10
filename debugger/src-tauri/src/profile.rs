@@ -37,7 +37,7 @@ fn debugger_home_dir() -> Result<PathBuf, String> {
 /// named profile lives. Also the default location shown by the Open Profile
 /// picker. Kept separate from [`config_dir`] so browsing for a profile never
 /// surfaces non-profile entries like `config/`.
-fn debugger_root_dir() -> Result<PathBuf, String> {
+pub(crate) fn debugger_root_dir() -> Result<PathBuf, String> {
     Ok(debugger_home_dir()?.join("profiles"))
 }
 
