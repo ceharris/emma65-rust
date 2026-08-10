@@ -248,25 +248,24 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
 /// is already set, exits immediately; otherwise focuses the main window and
 /// opens the exit confirmation dialog there.
 ///
-/// Shared by every exit trigger — File > Exit, Ctrl+Q (bound app-wide, so it
-/// can fire from the Terminal or Trace window too), and the main window's
+/// Shared by every exit trigger — File > Exit, Ctrl+Q, and the main window's
 /// close control — so all three funnel through the same confirm-or-skip
-/// decision (issue #349).
+/// decision (issue #349). All three are main-window-only (issue #351), but
+/// the focus call is harmless if that ever changes.
 fn request_exit(app: &AppHandle) {
     let skip = app.state::<theme::UiConfigState>().0.lock().unwrap().skip_exit_confirmation;
     if skip {
         app.exit(0);
         return;
     }
-    // The dialog only mounts in the main window's React tree, so bring it to
-    // the front in case the request came from Ctrl+Q in another window.
     if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let _ = main_window.set_focus();
     }
     let _ = app.emit("open-exit-confirm-dialog", ());
 }
 
-/// Exits the application cleanly. Invoked directly by Ctrl+Q; routes through
+/// Exits the application cleanly. Invoked directly by Ctrl+Q (handled
+/// locally in `App.tsx`, main-window-only — see issue #351); routes through
 /// `request_exit` like every other exit trigger so the confirmation dialog
 /// (or the "Don't ask again" skip) applies uniformly.
 #[tauri::command]
@@ -475,13 +474,14 @@ pub fn run() {
             // to every window that doesn't already have its own explicit menu (see
             // `App::set_menu`'s "set it on all windows that don't have one" doc
             // comment), not just the main window. Left alone, that means every
-            // File-menu accelerator (e.g. Ctrl+N, Ctrl+O) fires natively from the
-            // Terminal/Trace windows too, independent of and in addition to any
-            // JS-level `APP_KEY_BINDINGS` scoping — so strip the menu back off
-            // these two immediately. Shortcuts meant to work from every window
-            // (quit, toggle-terminal, toggle-trace) still do, via their JS-level
-            // bindings; main-window-only ones (New Profile, Open Profile) now
-            // correctly don't.
+            // File-menu accelerator (e.g. Ctrl+N, Ctrl+O, Ctrl+Q) fires natively from
+            // the Terminal/Trace windows too, independent of and in addition to any
+            // JS-level scoping — so strip the menu back off these two immediately.
+            // Shortcuts meant to work from every window (toggle-terminal,
+            // toggle-trace) still do, via their shared `APP_KEY_BINDINGS` JS
+            // bindings; main-window-only ones (New Profile, Open Profile, Quit) now
+            // correctly don't, since each is handled locally in the main window's
+            // React tree instead.
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
                 let _ = terminal_window.remove_menu();
                 install_toggleable_window_lifecycle(&terminal_window, window_menu_state.terminal_item.clone());

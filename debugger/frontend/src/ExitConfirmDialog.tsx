@@ -4,11 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import "./styles/modal.scss";
 
 /**
- * Confirmation modal for exiting the debugger: File > Exit, Ctrl+Q (bound
- * app-wide, so it can arrive here even when the Terminal or Trace window had
- * focus), and closing the main window via the window manager. Only mounted
- * in the main window's `App.tsx` — the backend's `request_exit` focuses this
- * window before emitting `open-exit-confirm-dialog`, mirroring
+ * Confirmation modal for exiting the debugger: File > Exit, Ctrl+Q, and
+ * closing the main window via the window manager. All three are
+ * main-window-only (issue #351). Only mounted in the main window's
+ * `App.tsx` — the backend's `request_exit` focuses this window before
+ * emitting `open-exit-confirm-dialog`, mirroring
  * `NewProfileDialog`/`ClearRecentDialog`.
  *
  * Canceling never invokes the backend — the dialog just closes locally,
