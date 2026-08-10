@@ -87,7 +87,11 @@ pub(crate) fn record_recent_profile(app: &AppHandle, profile_dir: &Path) {
         eprintln!("Failed to save recent profiles: {e}");
     }
 
-    let entries: Vec<(String, PathBuf)> = paths.iter().map(|p| (display_label(p), p.clone())).collect();
+    let mut entries: Vec<(String, PathBuf)> = paths.iter().map(|p| (display_label(p), p.clone())).collect();
+    // The stored list stays MRU-ordered (that's what dedup/truncate above
+    // relies on), but the submenu itself reads better sorted by its visible
+    // label rather than by recency.
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
     let menu_state = app.state::<menu::RecentMenuState>();
     if let Err(e) = menu::rebuild_open_recent_submenu(app, &menu_state, &entries) {
         eprintln!("Failed to rebuild Open Recent submenu: {e}");
