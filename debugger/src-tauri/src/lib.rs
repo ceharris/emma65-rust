@@ -1,6 +1,8 @@
+use std::path::Path;
 use std::sync::atomic::AtomicU16;
 use std::sync::{Arc, Mutex};
 
+use clap::Parser;
 use figment::{Figment, providers::{Env, Format, Toml}};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_log::{Target, TargetKind};
@@ -9,6 +11,10 @@ use tokio::sync::oneshot;
 use emma65::disasm::Disassembler;
 use emma65::emulator::bus::MAX_IRQ_SOURCES;
 use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
+
+/// Configuration profile selection: the `--profile` CLI flag, profile
+/// directory resolution, default-file seeding, and window title updates.
+mod profile;
 
 /// Debugger UI theme selection: persisted preference and Tauri commands.
 mod theme;
@@ -59,12 +65,12 @@ pub struct SessionStatus {
 /// Holds the last emitted session status so late-connecting frontends can retrieve it.
 pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 
-/// Loads emulator config from `~/.emma/debugger/default/emulator.toml`,
-/// builds the session with an injected pipe transport for the console,
-/// and returns the session, the remote end of the pipe, and an `IrqSource`
-/// reserved for the debugger UI's own IRQ toggle control.
-async fn load_session() -> Result<(EmulatorSession, InternalPipeTransport, IrqSource), String> {
-    let config_path = theme::debugger_config_dir()?.join("emulator.toml");
+/// Loads emulator config from `profile_dir/emulator.toml`, builds the
+/// session with an injected pipe transport for the console, and returns the
+/// session, the remote end of the pipe, and an `IrqSource` reserved for the
+/// debugger UI's own IRQ toggle control.
+async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPipeTransport, IrqSource), String> {
+    let config_path = profile_dir.join("emulator.toml");
 
     let config: Config = Figment::new()
         .merge(Toml::file(&config_path))
@@ -149,6 +155,10 @@ fn emit_status(app: &AppHandle, status: SessionStatus) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let cli = profile::CliArgs::parse();
+    let profile_name = cli.profile;
+    let profile_dir = profile::ensure_profile_dir(&profile_name).expect("Failed to prepare profile directory");
+
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
     tauri::Builder::default()
@@ -183,7 +193,8 @@ pub fn run() {
             cpu_stopped: false,
             cpu_waiting: false,
         })))
-        .manage(theme::UiConfigState(Mutex::new(theme::load_ui_config())))
+        .manage(theme::UiConfigState(Mutex::new(theme::load_ui_config_from(&profile_dir))))
+        .manage(profile::ProfileDirState(Mutex::new(profile_dir.clone())))
         .manage(watchpoints::WatchState(Mutex::new(watchpoints::WatchData {
             evaluator: emma65::watch::WatchEvaluator::new(),
             compile_error: None,
@@ -245,7 +256,7 @@ pub fn run() {
             watchpoints::edit_watchpoint,
             watchpoints::toggle_watchpoint,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let (app_menu, window_menu_state) = menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
@@ -260,6 +271,8 @@ pub fn run() {
                 settings.set_property("gtk-menu-bar-accel", None::<&str>);
             }
 
+            profile::set_all_window_titles(app, &profile_name);
+
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
                 install_toggleable_window_lifecycle(&terminal_window, window_menu_state.terminal_item.clone());
             }
@@ -270,7 +283,7 @@ pub fn run() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match load_session().await {
+                match load_session(&profile_dir).await {
                     Ok((session, remote, ui_irq_source)) => {
                         let (remote_rx, remote_tx) = remote.into_split();
 
@@ -296,7 +309,7 @@ pub fn run() {
                         // reported inside the watchpoint panel, not via emit_status,
                         // so it never blocks or fails the rest of the debugger.
                         let symbol_table = cpu.bus().symbol_table().clone();
-                        let watch_data = match watchpoints::load_watchpoints(&symbol_table) {
+                        let watch_data = match watchpoints::load_watchpoints_from(&profile_dir, &symbol_table) {
                             Ok((evaluator, enabled)) => watchpoints::WatchData { evaluator, compile_error: None, enabled },
                             Err(message) => {
                                 eprintln!("watchpoints.emw: {message}");

@@ -1,10 +1,12 @@
 //! Debugger UI theme selection: persisted preference and Tauri commands.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, State};
+
+use crate::profile::ProfileDirState;
 
 /// Selected debugger theme mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -33,14 +35,8 @@ pub struct UiConfig {
 /// Managed state wrapping the current [`UiConfig`].
 pub struct UiConfigState(pub Mutex<UiConfig>);
 
-/// Returns `~/.emma/debugger/default/`, the directory holding per-profile config files.
-pub fn debugger_config_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable is not set".to_string())?;
-    Ok(Path::new(&home).join(".emma/debugger/default"))
-}
-
 /// Reads `ui.toml` from `dir`, falling back to defaults if missing or invalid.
-fn load_ui_config_from(dir: &Path) -> UiConfig {
+pub fn load_ui_config_from(dir: &Path) -> UiConfig {
     fs::read_to_string(dir.join("ui.toml"))
         .ok()
         .and_then(|contents| toml::from_str(&contents).ok())
@@ -54,15 +50,6 @@ fn save_ui_config_to(dir: &Path, config: &UiConfig) -> Result<(), String> {
     fs::write(dir.join("ui.toml"), contents).map_err(|e| format!("Failed to write UI config: {e}"))
 }
 
-/// Loads the persisted [`UiConfig`] from `~/.emma/debugger/default/ui.toml`,
-/// falling back to defaults if the file is missing, unreadable, or malformed.
-pub fn load_ui_config() -> UiConfig {
-    match debugger_config_dir() {
-        Ok(dir) => load_ui_config_from(&dir),
-        Err(_) => UiConfig::default(),
-    }
-}
-
 /// Returns the currently active theme mode.
 #[tauri::command]
 pub fn get_theme(state: State<UiConfigState>) -> ThemeMode {
@@ -71,13 +58,18 @@ pub fn get_theme(state: State<UiConfigState>) -> ThemeMode {
 
 /// Updates the theme mode, persists it to `ui.toml`, and notifies all windows.
 #[tauri::command]
-pub fn set_theme(mode: ThemeMode, state: State<UiConfigState>, app: AppHandle) -> Result<(), String> {
+pub fn set_theme(
+    mode: ThemeMode,
+    state: State<UiConfigState>,
+    profile_dir: State<ProfileDirState>,
+    app: AppHandle,
+) -> Result<(), String> {
     let config = {
         let mut guard = state.0.lock().unwrap();
         guard.theme = mode;
         guard.clone()
     };
-    let dir = debugger_config_dir()?;
+    let dir = profile_dir.0.lock().unwrap().clone();
     save_ui_config_to(&dir, &config)?;
     let _ = app.emit("theme-changed", mode);
     Ok(())
