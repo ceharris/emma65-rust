@@ -75,8 +75,22 @@ pub fn ensure_profile_dir(name: &str) -> Result<PathBuf, String> {
 
 /// Sets `window`'s title to `"{base} — {profile}"` (em dash separator), e.g.
 /// `Emma65 Debugger — default`.
+///
+/// On Linux, immediately follows with a `set_resizable(false)`/`set_resizable(true)`
+/// toggle — GTK/Wayland client-side decorations otherwise don't repaint the
+/// titlebar text for a window that's already mapped (same decoration-redraw
+/// quirk as tauri-apps/tauri#11856 / tauri-apps/tao#1046, worked around
+/// elsewhere in this crate for the hidden→shown terminal/trace windows via
+/// their `Focused` handler; this window is visible from startup, so there's
+/// no focus event to hook and the toggle must happen right here instead).
 pub fn set_window_title(window: &WebviewWindow, base: &str, profile: &str) -> Result<(), String> {
-    window.set_title(&format!("{base} — {profile}")).map_err(|e| e.to_string())
+    window.set_title(&format!("{base} — {profile}")).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window.set_resizable(false);
+        let _ = window.set_resizable(true);
+    }
+    Ok(())
 }
 
 /// Sets the title of every debugger window (main, terminal, trace) to
