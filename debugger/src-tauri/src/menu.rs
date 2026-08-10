@@ -10,6 +10,8 @@ use crate::trace::TRACE_WINDOW_LABEL;
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
 /// Menu item id for the Window > Trace checkable item.
 pub(crate) const TOGGLE_TRACE_ID: &str = "toggle-trace";
+/// Menu item id for the File > New Profile item.
+pub(crate) const NEW_PROFILE_ID: &str = "new-profile";
 /// Menu item id for the File > Exit item.
 pub(crate) const EXIT_ID: &str = "exit";
 
@@ -40,8 +42,10 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // accelerator here is just the menu's own display/shortcut for the main
     // window; Ctrl+Q keeps working everywhere (including the Terminal
     // window's xterm bypass) via the existing JS-level binding.
+    let new_profile_item = MenuItem::with_id(app, NEW_PROFILE_ID, "New Profile", true, Some("CmdOrCtrl+N"))?;
     let exit_item = MenuItem::with_id(app, EXIT_ID, "Exit", true, Some("CmdOrCtrl+Q"))?;
-    let file_menu = Submenu::with_items(app, "File", true, &[&exit_item])?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let file_menu = Submenu::with_items(app, "File", true, &[&new_profile_item, &separator, &exit_item])?;
 
     // Placeholder: no items yet.
     let edit_menu = Submenu::new(app, "Edit", true)?;

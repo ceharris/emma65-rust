@@ -1,0 +1,103 @@
+.new-profile-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.new-profile-dialog {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--font-ui);
+}
+
+.new-profile-title {
+  font-size: var(--font-size-btn);
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-accent);
+}
+
+.new-profile-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-profile-label {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: var(--font-size-btn);
+}
+
+.new-profile-input {
+  flex: 1;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  padding: 3px 6px;
+  border-radius: 3px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent);
+  }
+
+  &.invalid {
+    border-color: var(--color-danger-strong);
+  }
+
+  &:disabled {
+    background: var(--color-bg-alt);
+    color: var(--color-muted-2);
+  }
+}
+
+.new-profile-error {
+  font-size: var(--font-size-btn);
+  color: var(--color-danger-strong);
+}
+
+.new-profile-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.new-profile-btn-action {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 3px 12px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover:not(:disabled) {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &:disabled {
+    color: var(--color-muted-2);
+    cursor: default;
+  }
+
+  &.new-profile-btn-ok {
+    color: var(--color-accent);
+  }
+}
