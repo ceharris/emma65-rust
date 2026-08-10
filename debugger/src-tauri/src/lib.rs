@@ -47,6 +47,9 @@ mod trace;
 /// Native app menu bar (File/Edit/Window/Help) and Window-menu checkbox sync.
 mod menu;
 
+/// Recently-used profile list backing the File > Open Recent submenu.
+mod recent;
+
 /// IRQ used by the debugger
 pub const DEBUGGER_IRQ: u32 = MAX_IRQ_SOURCES - 1;
 
@@ -155,6 +158,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
 
     let profile_name = profile_dir.file_name().and_then(|n| n.to_str()).unwrap_or("default").to_string();
     profile::set_all_window_titles(app, &profile_name);
+    recent::record_recent_profile(app, profile_dir);
 
     match load_session(profile_dir).await {
         Ok((session, remote, ui_irq_source)) => {
@@ -287,6 +291,7 @@ pub fn run() {
     let profile_name = cli.profile;
     let profile_dir = profile::ensure_profile_dir(&profile_name).expect("Failed to prepare profile directory");
     let config_dir = profile::config_dir().expect("Failed to resolve debugger config directory");
+    let recent_profiles = recent::load_recent_from(&config_dir);
 
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
@@ -323,6 +328,7 @@ pub fn run() {
         })))
         .manage(theme::UiConfigState(Mutex::new(theme::load_ui_config_from(&config_dir))))
         .manage(profile::ProfileDirState(Mutex::new(profile_dir.clone())))
+        .manage(recent::RecentProfilesState(Mutex::new(recent_profiles)))
         .manage(watchpoints::WatchState(Mutex::new(watchpoints::WatchData {
             evaluator: emma65::watch::WatchEvaluator::new(),
             compile_error: None,
@@ -339,6 +345,12 @@ pub fn run() {
                 let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let _ = profile::open_profile(app_handle).await;
+                });
+            } else if let Some(path) = event.id().as_ref().strip_prefix(menu::OPEN_RECENT_ID_PREFIX) {
+                let app_handle = app.clone();
+                let path = std::path::PathBuf::from(path);
+                tauri::async_runtime::spawn(async move {
+                    recent::open_recent_profile(app_handle, path).await;
                 });
             } else if event.id() == menu::TOGGLE_TERMINAL_ID {
                 let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);
@@ -394,7 +406,7 @@ pub fn run() {
             watchpoints::toggle_watchpoint,
         ])
         .setup(move |app| {
-            let (app_menu, window_menu_state) = menu::build_menu(app)?;
+            let (app_menu, window_menu_state, recent_menu_state) = menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
             // GTK's default `gtk-menu-bar-accel` binds F10 to focus/open the menu
@@ -430,6 +442,7 @@ pub fn run() {
                 install_toggleable_window_lifecycle(&trace_window, window_menu_state.trace_item.clone());
             }
             app.manage(window_menu_state);
+            app.manage(recent_menu_state);
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
