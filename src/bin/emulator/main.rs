@@ -32,11 +32,24 @@ async fn main() -> ExitCode {
         std::process::exit(1);
     });
     let console_transport_slot = Arc::new(Mutex::new(Some((Box::new(transport) as Box<dyn Transport>, relay, reporter))));
+
+    let (log_sender, log_writer_handle) = match config.log_file.as_ref() {
+        Some(path) => {
+            let file = std::fs::File::create(path).unwrap_or_else(|e| {
+                eprintln!("error: failed to open log file {}: {e}", path.display());
+                std::process::exit(1);
+            });
+            let (sender, handle) = emma65::emulator::spawn_log_writer(file, 4096);
+            (Some(sender), Some(handle))
+        }
+        None => (None, None),
+    };
+
     let context = InstantiationContext {
         clock_hz: config.emulator.clock_speed_hz,
         error_sender: None,
         console_transport: Some(Arc::clone(&console_transport_slot)),
-        log_sender: None,
+        log_sender: log_sender.clone(),
     };
     let session = match config.emulator.build_with_context(&registry, context).await {
         Ok(s) => s,
@@ -47,6 +60,9 @@ async fn main() -> ExitCode {
     };
 
     let (mut cpu, mut error_receiver) = (session.cpu, session.error_receiver);
+    if let Some(sender) = log_sender {
+        cpu.set_log_sender(sender);
+    }
     if let Err(e) = cpu.reset() {
         eprintln!("reset error: {e}");
         std::process::exit(1);
@@ -125,6 +141,9 @@ async fn main() -> ExitCode {
     }
 
     if let Some(handle) = trace_writer_handle {
+        let _ = handle.join();
+    }
+    if let Some(handle) = log_writer_handle {
         let _ = handle.join();
     }
 
