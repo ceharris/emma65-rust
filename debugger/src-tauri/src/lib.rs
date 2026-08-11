@@ -176,6 +176,15 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
             let (remote_rx, remote_tx) = remote.into_split();
             *app.state::<terminal::TerminalTx>().0.lock().unwrap() = Some(remote_tx);
 
+            // No log file is wired up for the debugger yet (see the log foundation plan's
+            // follow-up), so this falls back through the `log` crate like any other
+            // unconfigured `LogSender` — still real delivery via the `tauri-plugin-log` sink,
+            // where before these events were simply dropped (nothing consumed `error_receiver`).
+            tauri::async_runtime::spawn(emma65::emulator::log_device_events(
+                session.error_receiver,
+                emma65::emulator::LogSender::default(),
+            ));
+
             let mut cpu = session.cpu;
             let variant = cpu.variant();
 

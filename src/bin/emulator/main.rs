@@ -6,11 +6,19 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::{AppConfig, apply_default_if_unconfigured};
 use emma65::emulator::cpu::StepResult;
-use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, Transport, TransportReporter};
+use emma65::emulator::{InstantiationContext, InternalPipeTransport, Transport, TransportReporter, log_device_event};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    env_logger::init();
+    // The console, when attached to this process's own stdio, puts the terminal into raw mode
+    // (see tty::enter_raw_mode), which disables OPOST — so a bare '\n' no longer returns the
+    // cursor to column 0. env_logger's default suffix is just '\n'; force '\r\n' so log lines
+    // (e.g. TRANSPORT connect/disconnect events, which arrive after raw mode is entered) still
+    // render as proper new lines. Harmless when raw mode isn't in effect: the terminal treats a
+    // leading '\r' before '\n' as a no-op cursor return.
+    let mut log_format = env_logger::fmt::ConfigurableFormat::default();
+    log_format.suffix("\r\n");
+    env_logger::Builder::from_default_env().format(move |buf, record| log_format.format(buf, record)).init();
     let mut config = AppConfig::load().unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
@@ -60,6 +68,10 @@ async fn main() -> ExitCode {
     };
 
     let (mut cpu, mut error_receiver) = (session.cpu, session.error_receiver);
+    // Cloned before `log_sender` is consumed below, so device events reaching the select loop
+    // still have a sender to log through even when no `--log-file` is configured (falling back
+    // through the `log` crate, same as every other unconfigured `LogSender`).
+    let log_sender_for_events = log_sender.clone().unwrap_or_default();
     if let Some(sender) = log_sender {
         cpu.set_log_sender(sender);
     }
@@ -105,28 +117,11 @@ async fn main() -> ExitCode {
     let mut exit_code = ExitCode::SUCCESS;
     loop {
         tokio::select! {
-            event = error_receiver.recv(), if events_open => match event {
-                Some(DeviceEvent::TransportError { device, error}) =>
-                    eprintln!("device {}: transport error: {}", device.0, error),
-                Some(DeviceEvent::TransportDisconnected { device, peer, reason}) =>
-                    match peer {
-                        Some(peer) => eprintln!("device {} disconnected: {} ({})", device.0, reason, peer),
-                        None => eprintln!("device {} disconnected: {}", device.0, reason),
-                    },
-                Some(DeviceEvent::TransportConnected { device, peer }) =>
-                    match peer {
-                        Some(peer) => println!("device {} connected: {}", device.0, peer),
-                        None => println!("device {} connected", device.0),
-                    },
-                Some(DeviceEvent::DeviceInfo { device, message}) =>
-                    eprintln!("device {}: {}", device.0, message),
-                Some(DeviceEvent::RejectedWrite { device, address }) =>
-                    eprintln!("device rejected write {}: at address {}", device.0, address),
-                Some(DeviceEvent::OutboundBytesDropped { device, count }) =>
-                    eprintln!("device {}: {} outbound bytes dropped", device.0, count),
-                Some(DeviceEvent::InboundEventsDropped { device, count }) =>
-                    eprintln!("device {}: {} inbound events dropped", device.0, count),
-                None => events_open = false,      // all senders dropped
+            event = error_receiver.recv(), if events_open => {
+                match &event {
+                    Some(event) => log_device_event(&log_sender_for_events, event),
+                    None => events_open = false,      // all senders dropped
+                }
             },
 
             result = &mut cpu_done_rx => {

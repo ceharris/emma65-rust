@@ -30,6 +30,8 @@ pub use self::vireo::Vireo;
 use std::fmt::{Display, Formatter, Result};
 use tokio::sync::mpsc;
 
+use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
+
 /// Uniquely identifies a device registered on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub u32);
@@ -117,6 +119,43 @@ pub type ErrorReceiver = mpsc::UnboundedReceiver<DeviceEvent>;
 /// Creates a new `(ErrorSender, ErrorReceiver)` pair for device event reporting.
 pub fn device_event_channel() -> (ErrorSender, ErrorReceiver) {
     mpsc::unbounded_channel()
+}
+
+/// Logs `event` through `sender` under `LogCategory::Transport`, at a severity appropriate to
+/// its kind. This is a second, always-available path to the user alongside whatever host-specific
+/// reaction a caller's `ErrorReceiver` consumption loop performs (e.g. the CLI's own
+/// connect/disconnect messages) — a host with no such loop of its own (e.g. the debugger, today)
+/// still gets these messages via the log facility instead of losing them entirely.
+pub fn log_device_event(sender: &LogSender, event: &DeviceEvent) {
+    match event {
+        DeviceEvent::TransportConnected { device, peer: Some(peer) } =>
+            log_msg!(sender, LogLevel::Info, LogCategory::Transport, "{device} connected: {peer}"),
+        DeviceEvent::TransportConnected { device, peer: None } =>
+            log_msg!(sender, LogLevel::Info, LogCategory::Transport, "{device} connected"),
+        DeviceEvent::TransportDisconnected { device, peer: Some(peer), reason } =>
+            log_msg!(sender, LogLevel::Warn, LogCategory::Transport, "{device} disconnected: {reason} ({peer})"),
+        DeviceEvent::TransportDisconnected { device, peer: None, reason } =>
+            log_msg!(sender, LogLevel::Warn, LogCategory::Transport, "{device} disconnected: {reason}"),
+        DeviceEvent::TransportError { device, error } =>
+            log_msg!(sender, LogLevel::Error, LogCategory::Transport, "{device} transport error: {error}"),
+        DeviceEvent::DeviceInfo { device, message } =>
+            log_msg!(sender, LogLevel::Info, LogCategory::Transport, "{device}: {message}"),
+        DeviceEvent::RejectedWrite { device, address } =>
+            log_msg!(sender, LogLevel::Warn, LogCategory::Transport, "{device} rejected write at 0x{address:04x}"),
+        DeviceEvent::OutboundBytesDropped { device, count } =>
+            log_msg!(sender, LogLevel::Warn, LogCategory::Transport, "{device} dropped {count} outbound bytes"),
+        DeviceEvent::InboundEventsDropped { device, count } =>
+            log_msg!(sender, LogLevel::Warn, LogCategory::Transport, "{device} dropped {count} inbound events"),
+    }
+}
+
+/// Drains `receiver`, logging every event through `sender` via [`log_device_event`], until every
+/// `ErrorSender` clone for this channel has been dropped. Intended to be spawned as a background
+/// task by a host that has no other use for its `ErrorReceiver` (see [`log_device_event`]).
+pub async fn log_device_events(mut receiver: ErrorReceiver, sender: LogSender) {
+    while let Some(event) = receiver.recv().await {
+        log_device_event(&sender, &event);
+    }
 }
 
 /// A device that can be mapped into the bus address space.
@@ -213,6 +252,50 @@ mod tests {
             let ev2 = receiver.recv().await.unwrap();
             assert!(matches!(ev2, DeviceEvent::DeviceInfo { .. }));
         });
+    }
+
+    #[test]
+    fn log_device_event_reports_transport_error_at_error_level() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let device = DeviceId(0xc000);
+
+        log_device_event(&sender, &DeviceEvent::TransportError {
+            device,
+            error: crate::emulator::TransportError::Disconnected,
+        });
+
+        let received = rx.recv().unwrap();
+        assert_eq!(received.level, LogLevel::Error);
+        assert_eq!(received.category, LogCategory::Transport);
+        assert_eq!(received.message, format!("{device} transport error: disconnected"));
+    }
+
+    #[test]
+    fn log_device_event_reports_connected_with_and_without_peer() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let device = DeviceId(0xc000);
+
+        log_device_event(&sender, &DeviceEvent::TransportConnected { device, peer: Some("client-1".to_string()) });
+        log_device_event(&sender, &DeviceEvent::TransportConnected { device, peer: None });
+
+        assert_eq!(rx.recv().unwrap().message, format!("{device} connected: client-1"));
+        assert_eq!(rx.recv().unwrap().message, format!("{device} connected"));
+    }
+
+    #[tokio::test]
+    async fn log_device_events_drains_until_every_sender_is_dropped() {
+        let (event_tx, event_rx) = device_event_channel();
+        let (log_tx, log_rx) = crate::emulator::logging::test_channel_sender(4);
+        let device = DeviceId(1);
+
+        event_tx.send(DeviceEvent::DeviceInfo { device, message: "hello".to_string() }).unwrap();
+        drop(event_tx);
+
+        log_device_events(event_rx, log_tx).await;
+
+        let received = log_rx.recv().unwrap();
+        assert_eq!(received.message, format!("{device}: hello"));
+        assert!(log_rx.try_recv().is_err());
     }
 
 }
