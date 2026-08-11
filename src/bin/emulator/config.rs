@@ -28,6 +28,10 @@ pub struct AppConfig {
     /// Path to write a binary CPU execution trace to.
     #[clap(long = "trace-file")]
     pub trace_file: Option<emma65::emulator::ExpandedPathBuf>,
+
+    /// Path to write structured device/CPU log messages to.
+    #[clap(long = "log-file")]
+    pub log_file: Option<emma65::emulator::ExpandedPathBuf>,
 }
 
 impl AppConfig {

@@ -118,6 +118,7 @@ impl Config {
             clock_hz: self.clock_speed_hz,
             error_sender: Some(error_sender),
             console_transport: None,
+            log_sender: None,
         };
         self.build_devices(registry, context, error_receiver).await
     }

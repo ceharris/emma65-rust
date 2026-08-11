@@ -70,6 +70,9 @@ impl DeviceModule for Via6522Module {
                 };
                 dev.attach_transport(transport, tagged_relay);
             }
+            if let Some(sender) = &context.log_sender {
+                dev.set_log_sender(sender.clone());
+            }
             dev
         };
 

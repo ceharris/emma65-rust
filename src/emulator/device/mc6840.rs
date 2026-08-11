@@ -58,8 +58,7 @@
 use super::protocol::manager::ProtocolManager;
 use super::protocol::ptm::PtmProtocolMessage;
 use super::protocol::{ProtocolMessageEncoding, ptm};
-use crate::emulator::{ChannelRelay, IoDevice, Transport, TransportEvent};
-use log::debug;
+use crate::emulator::{ChannelRelay, IoDevice, LogCategory, LogLevel, LogSender, Transport, TransportEvent, log_msg};
 
 const T1: usize = 0;
 const T2: usize = 1;
@@ -600,6 +599,8 @@ pub struct Mc6840 {
     timers: [Timer; 3],
     cr1_enabled: bool,
     reset_active: bool,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl Mc6840 {
@@ -620,6 +621,7 @@ impl Mc6840 {
             ],
             cr1_enabled: false,
             reset_active: false,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -627,6 +629,11 @@ impl Mc6840 {
     pub fn with_address(mut self, address: u16) -> Self {
         self.address = address;
         self
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     /// Sets the protocol format to use in communication with peripherals
@@ -827,10 +834,12 @@ impl IoDevice for Mc6840 {
     fn reset(&mut self) {
         let address = self.address;
         let protocol_manager = std::mem::take(&mut self.protocol_manager);
+        let log_sender = self.log_sender.clone();
         *self = Self::new(self.name);
         self.address = address;
         self.protocol_manager = protocol_manager;
-        debug!("{} @0x{:04x} reset", self.name(), self.address);
+        self.log_sender = log_sender;
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
         self.internal_reset();
         self.send_state_to_all(self.current_state());
     }
@@ -864,6 +873,17 @@ mod tests {
 
     fn device() -> Mc6840 {
         Mc6840::new("mc6840")
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device().with_address(0xC000);
+        device.set_log_sender(sender);
+        device.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, "mc6840 @0xc000 reset");
     }
 
     #[test]

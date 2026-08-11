@@ -2,7 +2,7 @@ use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrMod
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::config::led_matrix::LedMatrixModule;
 use crate::emulator::transport::{ChannelRelay, Transport, TransportError, TransportReporter};
-use crate::emulator::{BusConfig, DeviceEvent, DeviceId, ErrorSender};
+use crate::emulator::{BusConfig, DeviceEvent, DeviceId, ErrorSender, LogSender};
 use figment::value::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -31,6 +31,10 @@ pub struct InstantiationContext {
     /// constructing one from a `TransportSpec`. The slot's contents are taken
     /// (consumed) on first use, leaving `None` in its place.
     pub console_transport: Option<TransportSlot>,
+    /// Shared sender for diagnostic messages (e.g. device `reset()`), cloned into any device
+    /// module that calls `set_log_sender`. `None` means no file sink is configured; devices keep
+    /// their own default `log`-crate-backed sender in that case.
+    pub log_sender: Option<LogSender>,
 }
 
 impl InstantiationContext {
@@ -174,7 +178,7 @@ mod tests {
     async fn instantiate_unknown_device_type() {
         let registry = DeviceRegistry::default();
         let bus_config = BusConfig::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let attributes: HashMap<String, Value> = HashMap::new();
         let err = registry.instantiate("foobar", bus_config, 0x55aa, &attributes, &context, id_allocator)
@@ -186,7 +190,7 @@ mod tests {
     async fn instantiate_routes_to_correct_module() {
         let mut registry = DeviceRegistry::default();
         let attributes: HashMap<String, Value> = HashMap::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         registry.register(MockModule::from_name("alpha"));
         registry.register(MockModule::from_name("beta"));
@@ -204,7 +208,7 @@ mod tests {
         let attributes: HashMap<String, Value> = HashMap::new();
         registry.register(MockModule::from_name_and_tag("alpha", "alpha1"));
         registry.register(MockModule::from_name_and_tag("alpha", "alpha2"));
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context, id_allocator)
             .await.err().unwrap();
@@ -214,7 +218,7 @@ mod tests {
     #[tokio::test]
     async fn with_builtins_has_ram_module() {
         let registry = DeviceRegistry::with_builtins();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let mut attributes: HashMap<String, Value> = HashMap::new();
         attributes.insert("size".to_string(), Value::from(65536));

@@ -46,6 +46,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use crate::emulator::VectorResolver;
 use crate::emulator::bus::InterruptController;
 use crate::emulator::cpu::IRQ_VECTOR;
+use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 
 /// Base address of the PIC's 8-slot, 16-byte IRQ vector table.
 const VECTOR_TABLE_BASE: u16 = 0xFFE0;
@@ -79,18 +80,25 @@ pub struct PicFinch {
     /// Enable state of slots 0..6, one bit per slot (bit 7 unused; always reads as 1).
     /// Shared with any [`PicFinchVectorResolver`] handed out via [`PicFinch::vector_resolver`].
     ier: Arc<AtomicU8>,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl PicFinch {
     /// Creates a new `PicFinch` with all slots disabled and no IER address assigned.
     pub fn new(name: &'static str) -> Self {
-        Self { name, address: 0, ier: Arc::new(AtomicU8::new(DEFAULT_IER_STATE)) }
+        Self { name, address: 0, ier: Arc::new(AtomicU8::new(DEFAULT_IER_STATE)), log_sender: LogSender::default() }
     }
 
     /// Sets the bus address of the IER register.
     pub fn with_address(mut self, address: u16) -> Self {
         self.address = address;
         self
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     /// Returns a [`VectorResolver`] that shares this `PicFinch`'s IER state, suitable for
@@ -116,6 +124,7 @@ impl super::IoDevice for PicFinch {
 
     fn reset(&mut self) {
         self.ier.store(DEFAULT_IER_STATE, Ordering::Relaxed);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
     }
 
     fn name(&self) -> &str {
@@ -238,6 +247,17 @@ mod tests {
         dev.write(IER_ADDR, 0x7F);
         dev.reset();
         assert_eq!(dev.peek(IER_ADDR), 0xFF);
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut dev = pic_finch();
+        dev.set_log_sender(sender);
+        dev.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, format!("pic @0x{IER_ADDR:04x} reset"));
     }
 
     // --- irq_mask ---

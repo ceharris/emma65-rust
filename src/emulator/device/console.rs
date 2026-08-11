@@ -48,7 +48,7 @@
 use super::ring::Ring;
 use crate::emulator::device::IoDevice;
 use crate::emulator::transport::{Transport, TransportRelay};
-use log::debug;
+use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 
 pub use super::ring::RING_CAPACITY;
 
@@ -66,6 +66,8 @@ pub struct Console {
     ring: Ring<u8>,
     latch: u8,
     interrupt_flag: bool,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl Console {
@@ -81,6 +83,7 @@ impl Console {
             ring: Ring::new(0u8),
             latch: 0,
             interrupt_flag: false,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -99,6 +102,11 @@ impl Console {
     /// Sets the break key to recognize when reading from the transport
     pub fn set_break_key(&mut self, break_key: u8) {
         self.break_key = Some(break_key);
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
 }
@@ -184,7 +192,7 @@ impl IoDevice for Console {
         self.ring.clear();
         self.latch = 0;
         self.interrupt_flag = false;
-        debug!("{} @0x{:04x} reset", self.name(), self.address)
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
     }
 
     fn irq_active(&self) -> bool { self.interrupt_flag }
@@ -521,6 +529,17 @@ mod tests {
         console.latch = 0xff;
         console.reset();
         assert_eq!(console.latch, 0, "reset must clear the latch");
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut console = device().with_address(0xF000);
+        console.set_log_sender(sender);
+        console.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, format!("{DEVICE_NAME} @0xf000 reset"));
     }
 
 }

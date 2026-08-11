@@ -16,7 +16,7 @@ fn attrs(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
 }
 
 fn ctx() -> InstantiationContext {
-    InstantiationContext { clock_hz: None, error_sender: None, console_transport: None }
+    InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None }
 }
 
 fn config_with_devices(devices: Option<Vec<&str>>) -> Config {

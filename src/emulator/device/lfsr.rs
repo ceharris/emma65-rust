@@ -1,6 +1,6 @@
 //! 16-bit Galois LFSR pseudo-random number generator device.
 
-use log::debug;
+use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 
 /// Default Galois tap mask: x¹⁶ + x¹⁴ + x¹³ + x¹¹ + 1 (maximal-length, 65535-state cycle).
 const DEFAULT_TAPS: u16 = 0xB400;
@@ -33,6 +33,8 @@ pub struct Lfsr16 {
     latch: u16,
     /// When `true`, `tick()` drives advances; when `false`, LOW reads drive advances.
     continuous: bool,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl Lfsr16 {
@@ -46,6 +48,7 @@ impl Lfsr16 {
             seed_buf: 0,
             latch: 0,
             continuous: true,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -65,6 +68,11 @@ impl Lfsr16 {
     pub fn with_continuous(mut self, continuous: bool) -> Self {
         self.continuous = continuous;
         self
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     /// Advances the LFSR by one step using the Galois feedback rule.
@@ -123,7 +131,7 @@ impl super::IoDevice for Lfsr16 {
         self.state = DEFAULT_STATE;
         self.latch = 0;
         self.seed_buf = 0;
-        debug!("{} @0x{:04x} reset", self.name(), self.address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
     }
 
     fn name(&self) -> &str {
@@ -224,5 +232,16 @@ mod tests {
         // Next LOW read: advance to 0x5A00
         assert_eq!(dev.read(BASE), 0x00);
         assert_eq!(dev.read(BASE + 1), 0x5A);
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut dev = step_device();
+        dev.set_log_sender(sender);
+        dev.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, format!("lfsr @0x{BASE:04x} reset"));
     }
 }

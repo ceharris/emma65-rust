@@ -66,8 +66,7 @@ use super::protocol::manager::ProtocolManager;
 use super::protocol::via::ViaProtocolMessage;
 use super::protocol::{ProtocolMessageEncoding, via};
 use super::IoDevice;
-use crate::emulator::{ChannelRelay, Transport, TransportEvent};
-use log::debug;
+use crate::emulator::{ChannelRelay, LogCategory, LogLevel, LogSender, Transport, TransportEvent, log_msg};
 use std::time::Duration;
 
 // --- IFR/IER bit masks ---
@@ -186,7 +185,8 @@ pub struct Via6522 {
     /// CB2 input/output line state.
     cb2: bool,
 
-
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl Via6522 {
@@ -204,6 +204,7 @@ impl Via6522 {
             sr: 0, sr_count: 0, sr_shifting_out: false, sr_t2_restart: false, sr_external: false,
             acr: 0, pcr: 0, ifr: 0, ier: 0,
             ca1: false, ca2: false, cb1: false, cb2: false,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -211,6 +212,11 @@ impl Via6522 {
     pub fn with_address(mut self, address: u16) -> Self {
         self.address = address;
         self
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     /// Sets the protocol format to use in communication with peripherals
@@ -1055,9 +1061,11 @@ impl IoDevice for Via6522 {
         let t2_latch_hi = self.t2_latch_hi;
         let t2_counter = self.t2_counter;
         let sr = self.sr;
+        let log_sender = self.log_sender.clone();
         *self = Self::new(self.name);
         self.address = address;
         self.protocol_manager = protocol_manager;
+        self.log_sender = log_sender;
         // restore state under peripheral control
         self.input_b = input_b;
         self.input_a = input_a;
@@ -1072,7 +1080,7 @@ impl IoDevice for Via6522 {
         self.t2_latch_hi = t2_latch_hi;
         self.t2_counter = t2_counter;
         self.sr = sr;
-        debug!("{} @0x{:04x} reset", self.name(), address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), address);
         let current_state = self.current_state();
         self.send_state_to_all(current_state);
     }
@@ -1107,6 +1115,17 @@ mod tests {
 
     fn device() -> Via6522 {
         Via6522::new(DEVICE_NAME)
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device().with_address(0xC000);
+        device.set_log_sender(sender);
+        device.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, "via/6522 @0xc000 reset");
     }
 
     /// Blocks until `condition` returns `true`, polling with a yield loop

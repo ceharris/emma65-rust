@@ -13,9 +13,8 @@ pub mod vector;
 use crate::emulator::bus::{Bus, BusOp, InterruptController};
 use crate::emulator::error::{BusError, CpuBuildError, ExecError};
 use crate::emulator::exec::ClockSpeed;
-use crate::emulator::{TraceCallback, TraceKind, TraceRecord};
+use crate::emulator::{LogCategory, LogLevel, LogSender, TraceCallback, TraceKind, TraceRecord, log_msg};
 use crate::watch::{Operand, WatchContext, WatchError, WatchEvaluator};
-use log::debug;
 use opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
 use status::StatusRegister;
 use std::collections::HashSet;
@@ -116,7 +115,9 @@ pub struct Cpu {
     /// Defaults to [`IdentityVectorResolver`] unless a custom resolver was
     /// supplied via [`CpuBuilder::vector_resolver`].
     vector_resolver: Box<dyn VectorResolver>,
-
+    /// Sender for structured diagnostic messages (e.g. `reset()`). Defaults to a
+    /// `log`-crate-backed sender unless overridden via [`CpuBuilder::log_sender`].
+    log_sender: LogSender,
 }
 
 impl Cpu {
@@ -229,6 +230,11 @@ impl Cpu {
         self.trace_callback = callback;
     }
 
+    /// Installs a sender for structured diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
+    }
+
     /// Flushes the trace callback, if one is installed, making every record
     /// emitted so far visible to an independent reader of the trace stream.
     /// No-op when tracing is off. Callers that drive execution in batches
@@ -251,9 +257,10 @@ impl Cpu {
         self.regs.s = 0xFF;
         self.regs.p = StatusRegister::UNUSED | StatusRegister::I;
         self.cycles = 0;
+        self.log_sender.set_cycles(0);
         self.waiting = false;
         self.stopped = false;
-        debug!("6502 CPU reset");
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Cpu, "6502 CPU reset");
         Ok(())
     }
 
@@ -956,6 +963,7 @@ impl Cpu {
     /// execution) produced them.
     fn finish_cycle(&mut self, cycles: u8) {
         self.cycles += cycles as u64;
+        self.log_sender.set_cycles(self.cycles);
         self.bus.tick_devices(cycles as u32);
         self.interrupts.poll_devices(self.bus.device_interrupt_states());
     }
@@ -1172,6 +1180,7 @@ pub struct CpuBuilder {
     clock_speed: ClockSpeed,
     bus: Option<Bus>,
     vector_resolver: Option<Box<dyn VectorResolver>>,
+    log_sender: LogSender,
 }
 
 impl CpuBuilder {
@@ -1183,6 +1192,7 @@ impl CpuBuilder {
             clock_speed: ClockSpeed::unlimited(),
             bus: None,
             vector_resolver: None,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -1213,6 +1223,13 @@ impl CpuBuilder {
         self
     }
 
+    /// Installs a sender for structured diagnostic messages (e.g. `reset()`). If not called,
+    /// `build()` installs a `log`-crate-backed default.
+    pub fn log_sender(mut self, sender: LogSender) -> Self {
+        self.log_sender = sender;
+        self
+    }
+
     /// Consumes the builder and returns a `Cpu`, or an error if required fields are missing.
     pub fn build(self) -> Result<Cpu, CpuBuildError> {
         let bus = self.bus.ok_or(CpuBuildError::NoBus)?;
@@ -1234,6 +1251,7 @@ impl CpuBuilder {
             trace_state: TraceState::new(),
             trace_callback: None,
             vector_resolver: self.vector_resolver.unwrap_or_else(|| Box::new(IdentityVectorResolver)),
+            log_sender: self.log_sender,
         })
     }
 }
@@ -1274,6 +1292,22 @@ mod tests {
         assert_eq!(cpu.regs.pc, 0x0400);
         assert!(cpu.regs.p.contains(StatusRegister::I));
         assert_eq!(cpu.regs.s, 0xFF);
+    }
+
+    #[test]
+    fn reset_logs_with_zero_cycles() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut bus = Bus::config().ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0).unwrap().build();
+        bus.write(RESET_VECTOR, 0x00).unwrap();
+        bus.write(RESET_VECTOR + 1, 0x04).unwrap();
+        let mut cpu = Cpu::builder(CpuVariant::Wdc65C02).bus(bus).log_sender(sender).build().unwrap();
+
+        cpu.reset().unwrap();
+
+        let received = rx.recv().unwrap();
+        assert_eq!(received.cycles, 0);
+        assert_eq!(received.category, LogCategory::Cpu);
+        assert_eq!(received.message, "6502 CPU reset");
     }
 
     // --- addressing modes ---

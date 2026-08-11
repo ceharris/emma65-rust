@@ -31,7 +31,7 @@ use std::collections::VecDeque;
 
 use crate::emulator::device::IoDevice;
 use crate::emulator::transport::{Transport, TransportRelay};
-use log::debug;
+use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 
 /// Motorola MC6850 Asynchronous Communications Interface Adapter (ACIA).
 pub struct Mc6850 {
@@ -52,6 +52,8 @@ pub struct Mc6850 {
     tdre: bool,
     overrun: bool,
     tx_pending: bool,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 /// Control register bit masks.
@@ -76,6 +78,7 @@ impl Mc6850 {
             tdre: true,
             overrun: false,
             tx_pending: false,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -89,6 +92,11 @@ impl Mc6850 {
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: TransportRelay) {
         self.transport = Some(transport);
         self.relay = Some(relay);
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     fn status(&self) -> u8 {
@@ -181,11 +189,13 @@ impl IoDevice for Mc6850 {
         let address = self.address;
         let transport = std::mem::take(&mut self.transport);
         let relay = std::mem::take(&mut self.relay);
+        let log_sender = self.log_sender.clone();
         *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
         self.relay = relay;
-        debug!("{} @0x{:04x} reset", self.name(), self.address);
+        self.log_sender = log_sender;
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
     }
 
     fn irq_active(&self) -> bool {
@@ -425,6 +435,17 @@ mod tests {
         device.reset();
         assert!(device.tdre, "TRDE must be set after reset");
         assert!(!device.rdrf, "RDRF must be clear after reset");
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device().with_address(0xC000);
+        device.set_log_sender(sender);
+        device.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, "acia/6850 @0xc000 reset");
     }
 
 }

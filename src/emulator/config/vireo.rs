@@ -69,6 +69,9 @@ impl DeviceModule for VireoModule {
             if let Some(sender) = &context.error_sender {
                 dev.set_error_sender(sender.clone(), device_id);
             }
+            if let Some(sender) = &context.log_sender {
+                dev.set_log_sender(sender.clone());
+            }
             dev
         };
 

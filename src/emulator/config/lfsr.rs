@@ -83,7 +83,7 @@ impl DeviceModule for LfsrModule {
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16,
-                         attributes: &HashMap<String, Value>, _context: &InstantiationContext,
+                         attributes: &HashMap<String, Value>, context: &InstantiationContext,
                          id_allocator: Arc<Mutex<DeviceIdAllocator>>)
             -> Result<BusConfig, DeviceModuleError> {
 
@@ -97,10 +97,13 @@ impl DeviceModule for LfsrModule {
         let continuous = !matches!(config.mode, Some(AdvanceMode::Step));
 
         let device_id = id_allocator.lock().unwrap().next_available();
-        let device = Lfsr16::new(self.name())
+        let mut device = Lfsr16::new(self.name())
             .with_address(address)
             .with_taps(taps)
             .with_continuous(continuous);
+        if let Some(sender) = &context.log_sender {
+            device.set_log_sender(sender.clone());
+        }
 
         bus_config.device(
             AddressRange::new(address, address + (BUS_SIZE - 1)),

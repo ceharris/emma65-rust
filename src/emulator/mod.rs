@@ -7,9 +7,12 @@ pub mod error;
 pub mod exec;
 pub mod transport;
 pub mod config;
+mod logging;
 mod session;
 
 pub use cpu::trace::{BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, OverflowPolicy, TraceCallback, TraceKind, TraceRecord, spawn_trace_writer};
+pub use logging::{LogCategory, LogLevel, LogRecord, LogSender, spawn_log_writer};
+pub(crate) use logging::log_msg;
 pub use cpu::vector::{IdentityVectorResolver, VectorResolver};
 pub use bus::{AddressRange, Bus, BusConfig, BusOp, InterruptController, IrqSource, RomWritePolicy, SymbolTable, UnmappedPolicy};
 pub use config::{BuildError, Config, CpuVariantSpec, DeviceModule, DeviceModuleError, DeviceRegistry, DeviceSpec, ExpandedPathBuf, InstantiationContext, RamModule, RomModule, TransportSlot, TransportSpec, TransportSpecFormat};

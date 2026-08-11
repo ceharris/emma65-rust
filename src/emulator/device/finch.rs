@@ -83,7 +83,7 @@
 use crate::emulator::AddressRange;
 use crate::emulator::bus::RomWritePolicy;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use log::debug;
+use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 
 const NUM_SLOTS: usize = 16;
 const SLOT_BITS: usize = 4;
@@ -119,6 +119,8 @@ pub struct Finch {
     control_register: u8,
     /// Memory storage
     data: Vec<u8>,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl Finch {
@@ -142,6 +144,7 @@ impl Finch {
             bank_registers: [0; NUM_SLOTS],
             control_register: 0,
             data: Vec::new(),
+            log_sender: LogSender::default(),
         }
     }
 
@@ -174,6 +177,11 @@ impl Finch {
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
         self.error_sender = Some(sender);
         self.device_id = Some(id);
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     fn report_rejected_write(&self, address: u16) {
@@ -252,7 +260,7 @@ impl IoDevice for Finch {
 
     fn reset(&mut self) {
         self.control_register &= !MMUE_MASK;
-        debug!("{} @0x{:04x} reset", self.name(), self.control_register_address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.control_register_address);
     }
 
     fn name(&self) -> &str { self.name }
@@ -341,6 +349,17 @@ mod tests {
         assert_ne!(device.control_register & MMUE_MASK, 0);
         device.reset();
         assert_eq!(device.control_register & MMUE_MASK, 0);
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device();
+        device.set_log_sender(sender);
+        device.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, format!("{DEVICE_NAME} @0x{CTRL_REGISTER_ADDRESS:04x} reset"));
     }
 
     #[test]

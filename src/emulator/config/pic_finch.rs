@@ -25,12 +25,15 @@ impl DeviceModule for PicFinchModule {
     }
 
     async fn instantiate(&self, bus_config: BusConfig, address: u16,
-                         _attributes: &HashMap<String, Value>, _context: &InstantiationContext,
+                         _attributes: &HashMap<String, Value>, context: &InstantiationContext,
                          id_allocator: Arc<Mutex<DeviceIdAllocator>>)
             -> Result<BusConfig, DeviceModuleError> {
 
         let device_id = id_allocator.lock().unwrap().next_available();
-        let device = PicFinch::new(self.name()).with_address(address);
+        let mut device = PicFinch::new(self.name()).with_address(address);
+        if let Some(sender) = &context.log_sender {
+            device.set_log_sender(sender.clone());
+        }
         let resolver = device.vector_resolver();
 
         let bus_config = bus_config.device(
@@ -50,7 +53,7 @@ mod tests {
     use crate::emulator::{Cpu, CpuVariant, IrqSource};
 
     fn context() -> InstantiationContext {
-        InstantiationContext { clock_hz: None, error_sender: None, console_transport: None }
+        InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None }
     }
 
     #[tokio::test]

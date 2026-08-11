@@ -220,8 +220,7 @@
 //! adapter immediately sends a dump of all registers via a sequence of SEND_REGISTER messages.
 //! The virtual display should respond by sending the appropriate IFR value.
 //!
-use crate::emulator::{AddressRange, ChannelRelay, IoDevice, Transport, TransportEvent};
-use log::debug;
+use crate::emulator::{AddressRange, ChannelRelay, IoDevice, LogCategory, LogLevel, LogSender, Transport, TransportEvent, log_msg};
 
 const IFR_IRQ:   u8 = 0b1000_0000;
 const IFR_READY: u8 = 0b0100_0000;
@@ -255,6 +254,8 @@ pub struct LedMatrix {
     cmd_data: u8,
     connection_tag: Option<u8>,
     blit_bytes_remaining: u32,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl LedMatrix {
@@ -275,6 +276,7 @@ impl LedMatrix {
             cmd_data: 0,
             connection_tag: None,
             blit_bytes_remaining: 0,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -282,6 +284,11 @@ impl LedMatrix {
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: ChannelRelay<TransportEvent>) {
         self.transport = Some(transport);
         self.relay = Some(relay);
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     fn write_ifr(&mut self, value: u8) {
@@ -448,7 +455,7 @@ impl IoDevice for LedMatrix {
 
     fn reset(&mut self) {
         self.blit_bytes_remaining = 0;
-        debug!("{} @0x{:04x} reset", self.name(), self.address_range.start);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address_range.start);
     }
 
     fn irq_active(&self) -> bool {
@@ -770,6 +777,17 @@ mod tests {
         assert!(device.irq_active());
         device.ifr = IFR_FILL;
         assert!(device.irq_active());
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device();
+        device.set_log_sender(sender);
+        device.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, format!("{DEVICE_NAME} @0x{DEVICE_ADDRESS:04x} reset"));
     }
 
 }
