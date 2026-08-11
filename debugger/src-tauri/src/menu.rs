@@ -80,33 +80,34 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // Placeholder: no items yet.
     let edit_menu = Submenu::new(app, "Edit", true)?;
 
-    // The `None::<&str>` accelerator argument here means these items don't get a
-    // *functional* native key binding — that's deliberately handled in JS instead
-    // (`useAppKeyBindings.ts`), since these shortcuts must work from any debugger
-    // window, not just the main window that owns this menu. The shortcut text below
-    // is baked into the label purely for display (issue #377); a real accelerator
-    // would double-fire alongside the JS handler on the main window.
+    // These get real native accelerators (issue #377), same as the File-menu items
+    // above, so the shortcut text renders with native styling instead of being baked
+    // into the label. The accelerator only ever fires while the main window (the only
+    // one carrying this menu) has focus; `on_menu_event` in `lib.rs` handles the click.
+    // These same combos also work from the Terminal/Trace/Log windows via the JS-level
+    // listener in `useAppKeyBindings.ts` — that listener skips them specifically for the
+    // main window, so the native accelerator and the JS invoke don't both fire there.
     let terminal_visible = window_is_visible(app, TERMINAL_WINDOW_LABEL);
     let terminal_item = CheckMenuItem::with_id(
         app,
         TOGGLE_TERMINAL_ID,
-        "Terminal (Ctrl+Shift+`)",
+        "Terminal",
         true,
         terminal_visible,
-        None::<&str>,
+        Some("Ctrl+Shift+`"),
     )?;
     let trace_visible = window_is_visible(app, TRACE_WINDOW_LABEL);
     let trace_item = CheckMenuItem::with_id(
         app,
         TOGGLE_TRACE_ID,
-        "Trace (Ctrl+Shift+T)",
+        "Trace",
         true,
         trace_visible,
-        None::<&str>,
+        Some("Ctrl+Shift+T"),
     )?;
     let log_visible = window_is_visible(app, LOG_WINDOW_LABEL);
     let log_item =
-        CheckMenuItem::with_id(app, TOGGLE_LOG_ID, "Log (Ctrl+Shift+L)", true, log_visible, None::<&str>)?;
+        CheckMenuItem::with_id(app, TOGGLE_LOG_ID, "Log", true, log_visible, Some("Ctrl+Shift+L"))?;
     let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item, &trace_item, &log_item])?;
 
     let about_item = PredefinedMenuItem::about(app, None, None)?;
