@@ -2,16 +2,11 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import ClearRecentDialog from "./ClearRecentDialog";
-import CpuBusPanel from "./CpuBusPanel";
-import DisassemblyPanel from "./DisassemblyPanel";
 import ExitConfirmDialog from "./ExitConfirmDialog";
 import { ExecutionProvider } from "./ExecutionContext";
-import MemoryPanel from "./MemoryPanel";
+import DockLayout from "./layout/DockLayout";
 import NewProfileDialog from "./NewProfileDialog";
-import RegisterPanel from "./RegisterPanel";
-import StackPanel from "./StackPanel";
 import ThemeSelector from "./ThemeSelector";
-import WatchpointPanel from "./WatchpointPanel";
 import { useAppKeyBindings } from "./useAppKeyBindings";
 
 interface SessionStatus {
@@ -86,20 +81,7 @@ export default function App() {
           <ThemeSelector />
         </header>
         <ExecutionProvider>
-          <div className="app-layout">
-            <div className="col col-left">
-              <MemoryPanel />
-              <WatchpointPanel />
-            </div>
-            <div className="col col-center">
-              <DisassemblyPanel />
-            </div>
-            <div className="col col-right">
-              <RegisterPanel />
-              <StackPanel />
-              <CpuBusPanel />
-            </div>
-          </div>
+          <DockLayout />
         </ExecutionProvider>
       </div>
     </>

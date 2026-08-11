@@ -553,7 +553,6 @@ export default function DisassemblyPanel() {
     <div className="disassembly-panel">
       <div className="disassembly-header">
         <div className="disassembly-toolbar">
-          <span className="panel-title">Disassembly</span>
           <input
             className="disasm-addr-input"
             value={addrInputValue}

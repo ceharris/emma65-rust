@@ -329,7 +329,6 @@ export default function RegisterPanel() {
 
   return (
     <div className="register-panel">
-      <div className="panel-title">Registers</div>
       {snap === null ? (
         <span className="registers-empty">Waiting…</span>
       ) : (

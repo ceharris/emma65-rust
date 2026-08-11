@@ -1,0 +1,41 @@
+// dockview theme hooks driven from the app's existing --color-* custom
+// properties (confirmed feasible in issue #379's spike) rather than adopting
+// a shipped dockview theme wholesale. Deliberately maps only the variables
+// used by the main-window shell's default layout, not dockview's full set.
+
+.dock-layout {
+  flex: 1 1 auto;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.dockview-theme-emma65 {
+  --dv-group-view-background-color: var(--color-bg);
+  --dv-tabs-and-actions-container-background-color: var(--color-bg-alt);
+  --dv-tabs-and-actions-container-font-size: var(--font-size-btn);
+  --dv-tab-font-size: var(--font-size-btn);
+
+  --dv-activegroup-visiblepanel-tab-background-color: var(--color-bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--color-accent);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--color-bg-alt);
+  --dv-activegroup-hiddenpanel-tab-color: var(--color-muted);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-bg);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--color-muted);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-bg-alt);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-muted-2);
+
+  --dv-tab-divider-color: var(--color-border);
+  --dv-separator-border: 1px solid var(--color-border);
+  --dv-icon-hover-background-color: var(--color-bg-hover);
+  --dv-drag-over-background-color: var(--color-bg-selected);
+  --dv-drag-over-border-color: var(--color-accent);
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: var(--color-accent);
+  --dv-floating-titlebar-background-color: var(--color-bg-alt);
+  --dv-context-menu-background-color: var(--color-bg-alt);
+  --dv-context-menu-color: var(--color-fg);
+
+  height: 100%;
+  width: 100%;
+  font-family: var(--font-ui);
+}

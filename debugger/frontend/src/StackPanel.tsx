@@ -141,7 +141,6 @@ export default function StackPanel() {
   return (
     <div className="stack-panel">
       <div className="stack-header">
-        <span className="panel-title">Stack</span>
         <RadixButton radix={dataRadix} onCycle={cycleDataRadix} />
         <button
           className="align-btn"

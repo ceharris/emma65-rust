@@ -1,10 +1,7 @@
 .memory-panel {
   display: flex;
   flex-direction: column;
-  // Never shrinks: always renders its full header + 16 rows. WatchpointPanel
-  // (flex: 1 1 auto in watchpoints.scss) absorbs whatever vertical space is
-  // left in col-left and scrolls internally instead.
-  flex: 0 0 auto;
+  height: 100%;
   overflow: hidden;
 }
 

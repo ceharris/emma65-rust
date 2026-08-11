@@ -1,13 +1,7 @@
 .watchpoint-panel {
   display: flex;
   flex-direction: column;
-  // Absorbs whatever vertical space MemoryPanel (flex: 0 0 auto, always its
-  // full 16 rows) doesn't use, and scrolls internally (.watchpoint-body)
-  // rather than pushing MemoryPanel's last row out of view. min-height: 0
-  // overrides the flex item's default content-based automatic minimum size,
-  // which would otherwise stop it from shrinking below its full row count.
-  flex: 1 1 auto;
-  min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 
