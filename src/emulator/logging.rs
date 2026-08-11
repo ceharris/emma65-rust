@@ -5,8 +5,8 @@
 
 use std::fmt::Write as _;
 use std::io::{BufWriter, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Severity of a logged message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +140,7 @@ impl LogSender {
                 }
             }
             Sink::LogCrate => {
-                log::log!(level.into(), "[{category}] cycles={cycles} {message}");
+                log::log!(level.into(), "{cycles} [{category}] {message}");
             }
         }
     }
