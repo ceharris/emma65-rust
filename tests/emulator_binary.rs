@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
 use tempfile::NamedTempFile;
 
 // ---------------------------------------------------------------------------
@@ -152,6 +154,45 @@ fn run_with_unknown_device_type() {
         stderr.contains("bogus"),
         "expected device type name in stderr, got: {stderr}"
     );
+}
+
+/// The bundled default config's VIA/PTM/ACIA devices need `~/.emma/sock` and
+/// `~/.emma/dev` to already exist (`UnixListener::bind`/`PtyTransport::open`
+/// don't create parent directories) — ensure both so this test doesn't
+/// depend on the host already having run the debugger or emulator before.
+fn ensure_emma_transport_dirs() {
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        let _ = std::fs::create_dir_all(home.join(".emma/sock"));
+        let _ = std::fs::create_dir_all(home.join(".emma/dev"));
+    }
+}
+
+#[test]
+fn run_with_no_args_uses_bundled_default_and_keeps_running() {
+    ensure_emma_transport_dirs();
+    let mut child = std::process::Command::new(emulator_bin())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    match child.try_wait().unwrap() {
+        None => {
+            // Still running, as expected for TaliForth's idle loop — kill it.
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Some(status) => {
+            let mut stderr = String::new();
+            use std::io::Read;
+            let _ = child.stderr.take().unwrap().read_to_string(&mut stderr);
+            panic!("expected the bundled default to keep running, but it exited with {status}: {stderr}");
+        }
+    }
 }
 
 #[test]

@@ -2,6 +2,7 @@
 mod transport;
 mod device;
 mod path;
+pub mod default;
 mod console;
 mod finch;
 mod lfsr;

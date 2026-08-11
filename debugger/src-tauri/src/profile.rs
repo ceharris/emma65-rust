@@ -81,14 +81,18 @@ pub fn copy_missing_files_from_default(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Resolves the directory for profile `name`, creating it — seeded from the
-/// default profile's files — if it doesn't exist yet. The default profile
-/// itself is never auto-seeded, since there's nowhere to seed it from.
+/// Resolves the directory for profile `name`, creating it if it doesn't
+/// exist yet. A new `default` profile is seeded from the bundled default
+/// configuration (ROM image, VICE labels, and `emulator.toml`); any other
+/// new profile is seeded from the `default` profile's files.
 pub fn ensure_profile_dir(name: &str) -> Result<PathBuf, String> {
     let dir = profile_dir(name)?;
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create profile directory {}: {e}", dir.display()))?;
-        if name != "default" {
+        if name == "default" {
+            emma65::emulator::config::default::materialize_default_config(&dir)
+                .map_err(|e| format!("Failed to seed default profile: {e}"))?;
+        } else {
             copy_missing_files_from_default(&dir)?;
         }
     }
@@ -299,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn ensure_profile_dir_creates_default_without_seeding() {
+    fn ensure_profile_dir_seeds_a_new_default_profile_from_the_bundled_default() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let home = temp_home("ensure-default-profile");
         // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
@@ -307,7 +311,25 @@ mod tests {
 
         let dir = ensure_profile_dir("default").unwrap();
 
-        assert!(dir.exists());
+        assert!(dir.join("emulator.toml").exists());
+        assert!(dir.join("program.bin").exists());
+        assert!(dir.join("program.lbl").exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn ensure_profile_dir_composes_named_profile_seeding_with_a_freshly_seeded_default() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let home = temp_home("ensure-default-then-named");
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
+        unsafe { std::env::set_var("HOME", &home) };
+
+        ensure_profile_dir("default").unwrap();
+        let dir = ensure_profile_dir("custom").unwrap();
+
+        assert!(dir.join("emulator.toml").exists());
+        assert!(dir.join("program.bin").exists());
+        assert!(dir.join("program.lbl").exists());
         let _ = fs::remove_dir_all(&home);
     }
 
