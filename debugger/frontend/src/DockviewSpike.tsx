@@ -50,6 +50,23 @@ const components = {
 
 const DEFAULT_LAYOUT_PANEL_IDS = ["stack", "other", "terminal"];
 
+/**
+ * Adds the default set of panels to an empty (or just-cleared) dockview.
+ *
+ * Finding (spike question 6): dockview's default tabs are closable via the
+ * built-in "x", and closing one removes it from the layout entirely — there
+ * is no built-in "reopen a closed panel" affordance, and the empty result
+ * persists just like any other layout change. A real Phase 3/4 integration
+ * needs its own restore mechanism (e.g. a Window-menu "Reveal <panel>"
+ * action per closed panel, or disabling the close button on panels that
+ * must always exist) — dockview does not provide one out of the box.
+ */
+function addDefaultPanels(api: DockviewReadyEvent["api"]) {
+  for (const id of DEFAULT_LAYOUT_PANEL_IDS) {
+    api.addPanel({ id, component: id, title: id });
+  }
+}
+
 export default function DockviewSpike() {
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
 
@@ -67,9 +84,7 @@ export default function DockviewSpike() {
           console.error("[spike] fromJSON failed, falling back to default layout:", e);
         }
       }
-      for (const id of DEFAULT_LAYOUT_PANEL_IDS) {
-        event.api.addPanel({ id, component: id, title: id });
-      }
+      addDefaultPanels(event.api);
     });
 
     event.api.onDidLayoutChange(() => {
@@ -77,6 +92,13 @@ export default function DockviewSpike() {
         console.error("[spike] set_spike_layout failed:", e)
       );
     });
+  }, []);
+
+  const resetLayout = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    api.clear();
+    addDefaultPanels(api);
   }, []);
 
   const detach = useCallback(() => {
@@ -92,6 +114,7 @@ export default function DockviewSpike() {
       <div style={{ display: "flex", gap: 8, padding: 8, flex: "0 0 auto" }}>
         <button onClick={detach}>Detach Stack (Q4/Q5)</button>
         <button onClick={reattach}>Reattach Stack</button>
+        <button onClick={resetLayout}>Reset Layout</button>
         <span style={{ opacity: 0.7, fontSize: "0.8rem", alignSelf: "center" }}>
           Rearrange/resize panels, then restart the app to check layout persistence (Q6).
         </span>
