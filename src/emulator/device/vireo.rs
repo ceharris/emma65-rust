@@ -60,7 +60,7 @@
 use crate::emulator::AddressRange;
 use crate::emulator::bus::RomWritePolicy;
 use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
-use log::debug;
+use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 
 pub const RAM_SIZE: usize = 128*1024;
 
@@ -104,6 +104,8 @@ pub struct Vireo {
     rom_data: Vec<u8>,
     /// RAM storage
     ram_data: Vec<u8>,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl Vireo {
@@ -128,6 +130,7 @@ impl Vireo {
             segment: 0,
             rom_data: Vec::new(),
             ram_data: Vec::new(),
+            log_sender: LogSender::default(),
         }
     }
 
@@ -162,6 +165,11 @@ impl Vireo {
     pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
         self.error_sender = Some(sender);
         self.device_id = Some(id);
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     fn report_rejected_write(&self, address: u16) {
@@ -257,7 +265,7 @@ impl IoDevice for Vireo {
 
     fn reset(&mut self) {
         self.set_control_register(CTRL_WINDOW_INHIBIT);
-        debug!("{} @0x{:04x} reset", self.name(), self.control_register_address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.control_register_address);
     }
 
     fn name(&self) -> &str { self.name }
@@ -602,6 +610,17 @@ mod tests {
         assert!(!device.ram_only);
         assert!(!device.map_upper);
         assert_eq!(device.segment, 0);
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device();
+        device.set_log_sender(sender);
+        device.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, format!("{DEVICE_NAME} @0x{CTRL_REGISTER_ADDRESS:04x} reset"));
     }
 
 }

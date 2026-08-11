@@ -47,7 +47,7 @@ use std::collections::VecDeque;
 
 use crate::emulator::device::IoDevice;
 use crate::emulator::transport::{Transport, TransportRelay};
-use log::debug;
+use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 
 /// Rockwell R6551 ACIA (Asynchronous Communications Interface Adapter).
 pub struct R6551 {
@@ -75,6 +75,8 @@ pub struct R6551 {
     tx_cycles_remaining: u32,
     clock_hz: u64,
     overrun_enabled: bool,
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 const DEFAULT_CLOCK_HZ: u64 = 1_000_000;
@@ -109,6 +111,7 @@ impl R6551 {
             tx_cycles_remaining: 0,
             clock_hz: DEFAULT_CLOCK_HZ,
             overrun_enabled: false,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -158,6 +161,11 @@ impl R6551 {
     pub fn attach_transport(&mut self, transport: Box<dyn Transport>, relay: TransportRelay) {
         self.transport = Some(transport);
         self.relay = Some(relay);
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     fn status(&self) -> u8 {
@@ -318,6 +326,7 @@ impl IoDevice for R6551 {
         let clock_hz = self.clock_hz;
         let tdre_bug_compatible = self.tdre_bug_compatible;
         let overrun_enabled = self.overrun_enabled;
+        let log_sender = self.log_sender.clone();
         *self = Self::new(self.name);
         self.address = address;
         self.transport = transport;
@@ -325,7 +334,8 @@ impl IoDevice for R6551 {
         self.clock_hz = clock_hz;
         self.tdre_bug_compatible = tdre_bug_compatible;
         self.overrun_enabled = overrun_enabled;
-        debug!("{} @0x{:04x} reset", self.name(), self.address);
+        self.log_sender = log_sender;
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
     }
 
     fn irq_active(&self) -> bool {
@@ -678,6 +688,17 @@ mod tests {
         assert_eq!(device.clock_hz, 1_843_200, "clock_hz must be preserved after reset");
         assert!(device.tdre_bug_compatible, "tdre_bug_compatible must be preserved after reset");
         assert!(device.overrun_enabled, "overrun_enabled must be preserved after reset");
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device().with_address(0xC000);
+        device.set_log_sender(sender);
+        device.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, format!("{DEVICE_NAME} @0xc000 reset"));
     }
 
 }
