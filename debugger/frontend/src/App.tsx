@@ -46,6 +46,24 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  // Phase 0 spike only (issue #379): Ctrl+Shift+D opens the throwaway
+  // dockview spike window. Not added to APP_KEY_BINDINGS since it's
+  // main-window-only and has no native menu accelerator to double-fire
+  // against. Remove this block along with the rest of the spike code once
+  // the write-up lands.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.code === "KeyD") {
+        e.preventDefault();
+        invoke("toggle_dockview_spike_window").catch((err) =>
+          console.error("toggle_dockview_spike_window failed:", err)
+        );
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   useEffect(() => {
     const unlistenPromise = listen<SessionStatus>("session-status", (event) => {
       setStatus(event.payload);

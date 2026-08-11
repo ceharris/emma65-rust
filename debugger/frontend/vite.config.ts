@@ -28,6 +28,10 @@ export default defineConfig({
         terminal: resolve(__dirname, "terminal.html"),
         trace: resolve(__dirname, "trace.html"),
         log: resolve(__dirname, "log.html"),
+        // Phase 0 spike (issue #379) — throwaway, removed with the rest of
+        // the spike code once the write-up lands.
+        spike: resolve(__dirname, "spike.html"),
+        stackDetached: resolve(__dirname, "stack-detached.html"),
       },
     },
   },

@@ -1,0 +1,35 @@
+// Phase 0 spike only (issue #379). Proves dockview's theme hooks can be
+// driven from the app's existing --color-* custom properties (spike
+// question 1) instead of adopting a shipped dockview theme wholesale — a
+// custom `DockviewTheme` object just needs a `className` and CSS custom
+// properties (`--dv-*`) under it. Deliberately maps only the variables
+// visible in this spike's layout, not dockview's full set.
+
+.dockview-theme-emma65 {
+  --dv-group-view-background-color: var(--color-bg);
+  --dv-tabs-and-actions-container-background-color: var(--color-bg-alt);
+  --dv-tabs-and-actions-container-font-size: var(--font-size-btn);
+  --dv-tab-font-size: var(--font-size-btn);
+
+  --dv-activegroup-visiblepanel-tab-background-color: var(--color-bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--color-accent);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--color-bg-alt);
+  --dv-activegroup-hiddenpanel-tab-color: var(--color-muted);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-bg);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--color-muted);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-bg-alt);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-muted-2);
+
+  --dv-tab-divider-color: var(--color-border);
+  --dv-separator-border: 1px solid var(--color-border);
+  --dv-icon-hover-background-color: var(--color-bg-hover);
+  --dv-drag-over-background-color: var(--color-bg-selected);
+  --dv-drag-over-border-color: var(--color-accent);
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: var(--color-accent);
+  --dv-floating-titlebar-background-color: var(--color-bg-alt);
+  --dv-context-menu-background-color: var(--color-bg-alt);
+  --dv-context-menu-color: var(--color-fg);
+
+  font-family: var(--font-ui);
+}

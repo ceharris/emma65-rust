@@ -64,6 +64,10 @@ mod recent;
 #[cfg(test)]
 mod test_support;
 
+/// Phase 0 dockview spike (issue #379) — throwaway prototype code, see the
+/// module doc comment for scope. Slated for deletion once the write-up lands.
+mod spike;
+
 /// IRQ used by the debugger
 pub const DEBUGGER_IRQ: u32 = MAX_IRQ_SOURCES - 1;
 
@@ -418,6 +422,7 @@ pub fn run() {
         })))
         .manage(trace::TraceState(Mutex::new(trace::TraceData::new())))
         .manage(logging::LogState(Mutex::new(std::collections::VecDeque::new())))
+        .manage(spike::SpikeTickTarget(Mutex::new(spike::DOCKVIEW_SPIKE_WINDOW_LABEL.to_string())))
         .on_menu_event(|app, event| {
             let state = app.state::<menu::WindowMenuState>();
             if event.id() == state.exit_item.id() {
@@ -498,6 +503,11 @@ pub fn run() {
             watchpoints::edit_watchpoint,
             watchpoints::toggle_watchpoint,
             recent::clear_recent_profiles,
+            spike::toggle_dockview_spike_window,
+            spike::detach_stack_panel,
+            spike::reattach_stack_panel,
+            spike::get_spike_layout,
+            spike::set_spike_layout,
         ])
         .setup(move |app| {
             let (app_menu, window_menu_state, recent_menu_state) = menu::build_menu(app)?;
@@ -548,6 +558,10 @@ pub fn run() {
             }
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
+
+            // Phase 0 spike (issue #379) — throwaway, deleted with the rest
+            // of the spike code once the write-up lands.
+            tauri::async_runtime::spawn(spike::run_spike_ticker(app.handle().clone()));
 
             // The Terminal and Trace windows stay alive (merely hidden) for the
             // life of the process, so Tauri's default "exit when all windows are

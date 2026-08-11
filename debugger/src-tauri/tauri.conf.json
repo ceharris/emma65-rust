@@ -46,6 +46,16 @@
         "resizable": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "label": "dockview-spike",
+        "title": "Dockview Spike (Phase 0, issue #379)",
+        "url": "spike.html",
+        "width": 1000,
+        "height": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {
