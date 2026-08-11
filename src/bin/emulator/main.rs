@@ -41,6 +41,11 @@ async fn main() -> ExitCode {
     });
     let console_transport_slot = Arc::new(Mutex::new(Some((Box::new(transport) as Box<dyn Transport>, relay, reporter))));
 
+    // Always one concrete `LogSender`, cloned into `context`, the CPU, and the event-logging
+    // loop below, so every clone shares the same underlying cycle-count `Arc` (see
+    // `LogSender::set_cycles`) — without a single shared instance, each of those independently
+    // defaulted senders would carry its own always-zero counter, even on the `log`-crate
+    // fallback path used when no `--log-file` is configured.
     let (log_sender, log_writer_handle) = match config.log_file.as_ref() {
         Some(path) => {
             let file = std::fs::File::create(path).unwrap_or_else(|e| {
@@ -48,16 +53,16 @@ async fn main() -> ExitCode {
                 std::process::exit(1);
             });
             let (sender, handle) = emma65::emulator::spawn_log_writer(file, 4096);
-            (Some(sender), Some(handle))
+            (sender, Some(handle))
         }
-        None => (None, None),
+        None => (emma65::emulator::LogSender::default(), None),
     };
 
     let context = InstantiationContext {
         clock_hz: config.emulator.clock_speed_hz,
         error_sender: None,
         console_transport: Some(Arc::clone(&console_transport_slot)),
-        log_sender: log_sender.clone(),
+        log_sender: Some(log_sender.clone()),
     };
     let session = match config.emulator.build_with_context(&registry, context).await {
         Ok(s) => s,
@@ -68,13 +73,8 @@ async fn main() -> ExitCode {
     };
 
     let (mut cpu, mut error_receiver) = (session.cpu, session.error_receiver);
-    // Cloned before `log_sender` is consumed below, so device events reaching the select loop
-    // still have a sender to log through even when no `--log-file` is configured (falling back
-    // through the `log` crate, same as every other unconfigured `LogSender`).
-    let log_sender_for_events = log_sender.clone().unwrap_or_default();
-    if let Some(sender) = log_sender {
-        cpu.set_log_sender(sender);
-    }
+    let log_sender_for_events = log_sender.clone();
+    cpu.set_log_sender(log_sender);
     if let Err(e) = cpu.reset() {
         eprintln!("reset error: {e}");
         std::process::exit(1);
