@@ -87,6 +87,14 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // These same combos also work from the Terminal/Trace/Log windows via the JS-level
     // listener in `useAppKeyBindings.ts` — that listener skips them specifically for the
     // main window, so the native accelerator and the JS invoke don't both fire there.
+    // "Ctrl+~" rather than "Ctrl+Shift+`": on GTK, Shift is a *consumed* modifier for
+    // the backtick/grave key (it's what selects the "~" level, same as Shift+1 selects
+    // "!"), so registering the accelerator as unshifted grave + a Shift requirement
+    // never matches the actual key-press GTK reports — the press arrives as plain
+    // Ctrl+asciitilde, with Shift already folded into the resolved character. Letters
+    // don't have this problem since GTK canonicalizes their shifted form to the
+    // uppercase keyval, which is exactly how Trace/Log's accelerators are registered
+    // below. See https://docs.gtk.org/gtk3/class.AccelGroup.html on consumed modifiers.
     let terminal_visible = window_is_visible(app, TERMINAL_WINDOW_LABEL);
     let terminal_item = CheckMenuItem::with_id(
         app,
@@ -94,7 +102,7 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         "Terminal",
         true,
         terminal_visible,
-        Some("Ctrl+Shift+`"),
+        Some("Ctrl+~"),
     )?;
     let trace_visible = window_is_visible(app, TRACE_WINDOW_LABEL);
     let trace_item = CheckMenuItem::with_id(
