@@ -598,6 +598,9 @@ mod tests {
         fn peek(&self, address: u16) -> u8 {
             self.data[(address - self.address) as usize]
         }
+        fn identity_address(&self) -> u16 {
+            self.address
+        }
     }
 
     fn ram_bus(start: u16, end: u16) -> Bus {
@@ -844,6 +847,9 @@ mod tests {
         fn claims(&self, _addr: u16) -> bool {
             self.claims
         }
+        fn identity_address(&self) -> u16 {
+            0
+        }
     }
 
     #[test]
@@ -944,6 +950,9 @@ mod tests {
             self.take_reset_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             false
         }
+        fn identity_address(&self) -> u16 {
+            0
+        }
     }
 
     #[test]
@@ -1007,6 +1016,9 @@ mod tests {
         fn claims(&self, _addr: u16) -> bool {
             self.claims_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.claims_result
+        }
+        fn identity_address(&self) -> u16 {
+            0
         }
     }
 

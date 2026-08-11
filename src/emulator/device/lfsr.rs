@@ -131,11 +131,15 @@ impl super::IoDevice for Lfsr16 {
         self.state = DEFAULT_STATE;
         self.latch = 0;
         self.seed_buf = 0;
-        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
     }
 
     fn name(&self) -> &str {
         self.name
+    }
+
+    fn identity_address(&self) -> u16 {
+        self.address
     }
 }
 
@@ -242,6 +246,6 @@ mod tests {
         dev.reset();
         let received = rx.recv().unwrap();
         assert_eq!(received.category, LogCategory::Device);
-        assert_eq!(received.message, format!("lfsr @0x{BASE:04x} reset"));
+        assert_eq!(received.message, format!("lfsr@0x{BASE:04x} reset"));
     }
 }

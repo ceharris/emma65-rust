@@ -121,6 +121,10 @@ impl IoDevice for FeedbackRegister {
     fn name(&self) -> &str {
         "feedback_register"
     }
+
+    fn identity_address(&self) -> u16 {
+        0xBFFC
+    }
 }
 
 /// Loads the Klaus Dormann interrupt test ROM, runs it to completion, and verifies the success PC.

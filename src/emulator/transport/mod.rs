@@ -82,7 +82,7 @@ pub struct TransportReporter {
     /// injection path, where the transport must be constructed before its
     /// device (and its name) exists. Every reporting method is a silent
     /// no-op until this is set.
-    device_name: Arc<OnceLock<&'static str>>,
+    device_name: Arc<OnceLock<String>>,
     error_sender: Option<ErrorSender>,
     outbound_drops: Arc<AtomicU64>,
     inbound_drops: Arc<AtomicU64>,
@@ -107,21 +107,21 @@ impl TransportReporter {
         }
     }
 
-    /// Binds the device's name (as returned by [`IoDevice::name`](crate::emulator::IoDevice::name))
-    /// once the caller determines it. Every existing `Clone` of this reporter —
-    /// including ones already handed to background tasks that started before
-    /// the name was known — observes the bound name from that point on,
-    /// since it lives behind the same `Arc` as the counters/`ErrorSender`.
+    /// Binds the device's identity (as returned by
+    /// [`IoDevice::identity`](crate::emulator::IoDevice::identity)) once the caller determines
+    /// it. Every existing `Clone` of this reporter — including ones already handed to background
+    /// tasks that started before the identity was known — observes the bound identity from that
+    /// point on, since it lives behind the same `Arc` as the counters/`ErrorSender`.
     /// Exactly-once, enforced by the underlying `OnceLock`; later calls are
     /// silently ignored.
-    pub(crate) fn bind(&self, name: &'static str) {
-        let _ = self.device_name.set(name);
+    pub(crate) fn bind(&self, identity: impl Into<String>) {
+        let _ = self.device_name.set(identity.into());
     }
 
     /// Reports a hard transport error. Currently only ever called with
     /// `TransportError::Io`.
     pub fn report_error(&self, error: TransportError) {
-        let Some(&device) = self.device_name.get() else { return };
+        let Some(device) = self.device_name.get().cloned() else { return };
         let Some(sender) = &self.error_sender else { return };
         let _ = sender.send(DeviceEvent::TransportError { device, error });
     }
@@ -141,24 +141,24 @@ impl TransportReporter {
     /// `InboundEventsDropped` for any nonzero count. Called from the existing
     /// outbound-pump/ingress tokio tasks on a `tokio::time::interval`.
     pub fn report_counts(&self) {
-        let Some(&device) = self.device_name.get() else { return };
+        let Some(device) = self.device_name.get() else { return };
         let Some(sender) = &self.error_sender else { return };
 
         let outbound = self.outbound_drops.swap(0, Ordering::Relaxed);
         if outbound > 0 {
-            let _ = sender.send(DeviceEvent::OutboundBytesDropped { device, count: outbound });
+            let _ = sender.send(DeviceEvent::OutboundBytesDropped { device: device.clone(), count: outbound });
         }
 
         let inbound = self.inbound_drops.swap(0, Ordering::Relaxed);
         if inbound > 0 {
-            let _ = sender.send(DeviceEvent::InboundEventsDropped { device, count: inbound });
+            let _ = sender.send(DeviceEvent::InboundEventsDropped { device: device.clone(), count: inbound });
         }
     }
 
     /// Reports a connect edge. `peer` is `None` for point-to-point
     /// transports and `Some(name)` per-client for multipoint ones.
     pub fn report_connected(&self, peer: Option<String>) {
-        let Some(&device) = self.device_name.get() else { return };
+        let Some(device) = self.device_name.get().cloned() else { return };
         let Some(sender) = &self.error_sender else { return };
         let _ = sender.send(DeviceEvent::TransportConnected { device, peer });
     }
@@ -166,7 +166,7 @@ impl TransportReporter {
     /// Reports a disconnect edge; see [`report_connected`](Self::report_connected)
     /// for `peer`.
     pub fn report_disconnected(&self, peer: Option<String>, reason: String) {
-        let Some(&device) = self.device_name.get() else { return };
+        let Some(device) = self.device_name.get().cloned() else { return };
         let Some(sender) = &self.error_sender else { return };
         let _ = sender.send(DeviceEvent::TransportDisconnected { device, peer, reason });
     }

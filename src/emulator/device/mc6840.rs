@@ -839,7 +839,7 @@ impl IoDevice for Mc6840 {
         self.address = address;
         self.protocol_manager = protocol_manager;
         self.log_sender = log_sender;
-        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
         self.internal_reset();
         self.send_state_to_all(self.current_state());
     }
@@ -849,6 +849,8 @@ impl IoDevice for Mc6840 {
     }
 
     fn name(&self) -> &str { self.name }
+
+    fn identity_address(&self) -> u16 { self.address }
 
     fn shutdown(&mut self) {
         if let Some(pm) = self.protocol_manager.as_mut() {
@@ -883,7 +885,7 @@ mod tests {
         device.reset();
         let received = rx.recv().unwrap();
         assert_eq!(received.category, LogCategory::Device);
-        assert_eq!(received.message, "mc6840 @0xc000 reset");
+        assert_eq!(received.message, "mc6840@0xc000 reset");
     }
 
     #[test]

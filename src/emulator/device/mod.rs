@@ -40,9 +40,9 @@ pub struct DeviceId(pub u32);
 pub enum DeviceEvent {
     /// A transport connection was established for the given device.
     TransportConnected {
-        /// The name of the device that gained a transport connection, as
-        /// returned by [`IoDevice::name`].
-        device: &'static str,
+        /// The identity of the device that gained a transport connection, as
+        /// returned by [`IoDevice::identity`].
+        device: String,
         /// Identifies which peer connected, for transports that accept more
         /// than one concurrent client (e.g. TCP/Unix socket). `None` for
         /// point-to-point transports, which have only one peer to
@@ -51,9 +51,9 @@ pub enum DeviceEvent {
     },
     /// A transport connection was lost.
     TransportDisconnected {
-        /// The name of the device that lost its transport, as returned by
-        /// [`IoDevice::name`].
-        device: &'static str,
+        /// The identity of the device that lost its transport, as returned
+        /// by [`IoDevice::identity`].
+        device: String,
         /// Identifies which peer disconnected; see
         /// [`TransportConnected`](DeviceEvent::TransportConnected)'s `peer`.
         peer: Option<String>,
@@ -62,25 +62,25 @@ pub enum DeviceEvent {
     },
     /// A transport error occurred during IO.
     TransportError {
-        /// The name of the device that encountered the error, as returned
-        /// by [`IoDevice::name`].
-        device: &'static str,
+        /// The identity of the device that encountered the error, as
+        /// returned by [`IoDevice::identity`].
+        device: String,
         /// The error that occurred.
         error: crate::emulator::transport::TransportError,
     },
     /// An informational message from the device.
     DeviceInfo {
-        /// The name of the device emitting the message, as returned by
-        /// [`IoDevice::name`].
-        device: &'static str,
+        /// The identity of the device emitting the message, as returned by
+        /// [`IoDevice::identity`].
+        device: String,
         /// The message text.
         message: String,
     },
     /// A report of an attempted write to a read-only register/location in a device
     RejectedWrite {
-        /// The name of the device that rejected the write, as returned by
-        /// [`IoDevice::name`].
-        device: &'static str,
+        /// The identity of the device that rejected the write, as returned
+        /// by [`IoDevice::identity`].
+        device: String,
         /// The address of the attempted write.
         address: u16,
     },
@@ -89,9 +89,9 @@ pub enum DeviceEvent {
     /// behavior); the expected remediation is to resize the ring and
     /// restart.
     OutboundBytesDropped {
-        /// The name of the device whose outbound ring overflowed, as
-        /// returned by [`IoDevice::name`].
-        device: &'static str,
+        /// The identity of the device whose outbound ring overflowed, as
+        /// returned by [`IoDevice::identity`].
+        device: String,
         /// Number of bytes dropped since the last report.
         count: u64,
     },
@@ -99,9 +99,9 @@ pub enum DeviceEvent {
     /// channel, for multipoint transports only. Purely diagnostic; see
     /// [`OutboundBytesDropped`](DeviceEvent::OutboundBytesDropped).
     InboundEventsDropped {
-        /// The name of the device whose inbound ingress channel
-        /// overflowed, as returned by [`IoDevice::name`].
-        device: &'static str,
+        /// The identity of the device whose inbound ingress channel
+        /// overflowed, as returned by [`IoDevice::identity`].
+        device: String,
         /// Number of events dropped since the last report.
         count: u64,
     },
@@ -211,6 +211,21 @@ pub trait IoDevice: Send {
     /// Returns a human-readable name for this device, used in diagnostics and tracing.
     fn name(&self) -> &str { "unknown" }
 
+    /// Returns the address that best distinguishes this device instance from other instances of
+    /// the same type — typically its mapped base address. Devices that span the whole bus (e.g.
+    /// `Finch`, `Phoebe`, `Vireo`) return their control register address instead. Used by the
+    /// default `identity()` implementation.
+    fn identity_address(&self) -> u16;
+
+    /// Returns a unique, human-readable identity for this device instance (e.g.
+    /// "via/6522@0xff80"), combining `name()` and `identity_address()`. Unlike `name()` alone,
+    /// this disambiguates multiple instances of the same device type at different addresses; use
+    /// it wherever a device needs to be identified to a human (logs, `DeviceEvent`). Devices with
+    /// more exotic identity requirements may override this directly instead of `identity_address()`.
+    fn identity(&self) -> String {
+        format!("{}@{:#06x}", self.name(), self.identity_address())
+    }
+
     /// Signals any transport owned by this device to begin shutdown.
     ///
     /// Called by `Bus::drop` on every device before Rust's normal field-drop
@@ -233,10 +248,10 @@ mod tests {
     #[test]
     fn send_events_receive_from_other_thread() {
         let (sender, mut receiver) = device_event_channel();
-        let name = "test-device";
+        let name = "test-device".to_string();
 
         let handle = thread::spawn(move || {
-            sender.send(DeviceEvent::TransportConnected { device: name, peer: None }).unwrap();
+            sender.send(DeviceEvent::TransportConnected { device: name.clone(), peer: None }).unwrap();
             sender.send(DeviceEvent::DeviceInfo {
                 device: name,
                 message: "hello".to_string(),
@@ -258,10 +273,10 @@ mod tests {
     #[test]
     fn log_device_event_reports_transport_error_at_error_level() {
         let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
-        let device = "test-device";
+        let device = "test-device".to_string();
 
         log_device_event(&sender, &DeviceEvent::TransportError {
-            device,
+            device: device.clone(),
             error: crate::emulator::TransportError::Disconnected,
         });
 
@@ -274,10 +289,10 @@ mod tests {
     #[test]
     fn log_device_event_reports_connected_with_and_without_peer() {
         let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
-        let device = "test-device";
+        let device = "test-device".to_string();
 
-        log_device_event(&sender, &DeviceEvent::TransportConnected { device, peer: Some("client-1".to_string()) });
-        log_device_event(&sender, &DeviceEvent::TransportConnected { device, peer: None });
+        log_device_event(&sender, &DeviceEvent::TransportConnected { device: device.clone(), peer: Some("client-1".to_string()) });
+        log_device_event(&sender, &DeviceEvent::TransportConnected { device: device.clone(), peer: None });
 
         assert_eq!(rx.recv().unwrap().message, format!("{device} connected: client-1"));
         assert_eq!(rx.recv().unwrap().message, format!("{device} connected"));
@@ -287,9 +302,9 @@ mod tests {
     async fn log_device_events_drains_until_every_sender_is_dropped() {
         let (event_tx, event_rx) = device_event_channel();
         let (log_tx, log_rx) = crate::emulator::logging::test_channel_sender(4);
-        let device = "test-device";
+        let device = "test-device".to_string();
 
-        event_tx.send(DeviceEvent::DeviceInfo { device, message: "hello".to_string() }).unwrap();
+        event_tx.send(DeviceEvent::DeviceInfo { device: device.clone(), message: "hello".to_string() }).unwrap();
         drop(event_tx);
 
         log_device_events(event_rx, log_tx).await;
