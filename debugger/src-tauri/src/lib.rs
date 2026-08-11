@@ -20,8 +20,9 @@ pub const MAIN_WINDOW_LABEL: &str = "main";
 /// directory resolution, default-file seeding, and window title updates.
 mod profile;
 
-/// Debugger UI theme selection: persisted preference and Tauri commands.
-mod theme;
+/// Debugger UI preferences (theme, exit confirmation, file dialog directory):
+/// persisted state and Tauri commands.
+mod preferences;
 
 /// Watchpoint panel: loads/compiles `watchpoints.emw`, evaluates it on demand,
 /// and supports adding/removing watchpoints with persistence back to the file.
@@ -253,7 +254,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
 /// decision (issue #349). All three are main-window-only (issue #351), but
 /// the focus call is harmless if that ever changes.
 fn request_exit(app: &AppHandle) {
-    let skip = app.state::<theme::UiConfigState>().0.lock().unwrap().skip_exit_confirmation;
+    let skip = app.state::<preferences::UiConfigState>().0.lock().unwrap().skip_exit_confirmation;
     if skip {
         app.exit(0);
         return;
@@ -277,8 +278,8 @@ fn quit(app: AppHandle) {
 /// checkbox state and exits. Canceling the dialog never calls this — it just
 /// closes the dialog locally, leaving the preference and the process alone.
 #[tauri::command]
-fn confirm_exit(skip_confirmation: bool, state: State<theme::UiConfigState>, app: AppHandle) {
-    if let Err(e) = theme::set_skip_exit_confirmation(skip_confirmation, &state) {
+fn confirm_exit(skip_confirmation: bool, state: State<preferences::UiConfigState>, app: AppHandle) {
+    if let Err(e) = preferences::set_skip_exit_confirmation(skip_confirmation, &state) {
         eprintln!("Failed to save exit confirmation preference: {e}");
     }
     app.exit(0);
@@ -370,7 +371,7 @@ pub fn run() {
             cpu_stopped: false,
             cpu_waiting: false,
         })))
-        .manage(theme::UiConfigState(Mutex::new(theme::load_ui_config_from(&config_dir))))
+        .manage(preferences::UiConfigState(Mutex::new(preferences::load_ui_config_from(&config_dir))))
         .manage(profile::ProfileDirState(Mutex::new(profile_dir.clone())))
         .manage(recent::RecentProfilesState(Mutex::new(recent_profiles)))
         .manage(watchpoints::WatchState(Mutex::new(watchpoints::WatchData {
@@ -445,8 +446,10 @@ pub fn run() {
             cpu_bus::get_cpu_bus_state,
             resolve_symbol,
             memory::get_symbols_for_range,
-            theme::get_theme,
-            theme::set_theme,
+            preferences::get_theme,
+            preferences::set_theme,
+            preferences::get_last_file_dialog_dir,
+            preferences::set_last_file_dialog_dir,
             watchpoints::get_watchpoints,
             watchpoints::add_watchpoint,
             watchpoints::remove_watchpoint,
