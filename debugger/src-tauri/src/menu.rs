@@ -80,13 +80,33 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // Placeholder: no items yet.
     let edit_menu = Submenu::new(app, "Edit", true)?;
 
+    // The `None::<&str>` accelerator argument here means these items don't get a
+    // *functional* native key binding — that's deliberately handled in JS instead
+    // (`useAppKeyBindings.ts`), since these shortcuts must work from any debugger
+    // window, not just the main window that owns this menu. The shortcut text below
+    // is baked into the label purely for display (issue #377); a real accelerator
+    // would double-fire alongside the JS handler on the main window.
     let terminal_visible = window_is_visible(app, TERMINAL_WINDOW_LABEL);
-    let terminal_item =
-        CheckMenuItem::with_id(app, TOGGLE_TERMINAL_ID, "Terminal", true, terminal_visible, None::<&str>)?;
+    let terminal_item = CheckMenuItem::with_id(
+        app,
+        TOGGLE_TERMINAL_ID,
+        "Terminal (Ctrl+Shift+`)",
+        true,
+        terminal_visible,
+        None::<&str>,
+    )?;
     let trace_visible = window_is_visible(app, TRACE_WINDOW_LABEL);
-    let trace_item = CheckMenuItem::with_id(app, TOGGLE_TRACE_ID, "Trace", true, trace_visible, None::<&str>)?;
+    let trace_item = CheckMenuItem::with_id(
+        app,
+        TOGGLE_TRACE_ID,
+        "Trace (Ctrl+Shift+T)",
+        true,
+        trace_visible,
+        None::<&str>,
+    )?;
     let log_visible = window_is_visible(app, LOG_WINDOW_LABEL);
-    let log_item = CheckMenuItem::with_id(app, TOGGLE_LOG_ID, "Log", true, log_visible, None::<&str>)?;
+    let log_item =
+        CheckMenuItem::with_id(app, TOGGLE_LOG_ID, "Log (Ctrl+Shift+L)", true, log_visible, None::<&str>)?;
     let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item, &trace_item, &log_item])?;
 
     let about_item = PredefinedMenuItem::about(app, None, None)?;
