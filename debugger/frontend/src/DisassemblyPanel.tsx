@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {listen} from "@tauri-apps/api/event";
 import {invoke} from "@tauri-apps/api/core";
+import {useExecutionContext} from "./ExecutionContext";
 import "./styles/disassembly.scss";
 
 interface DisassembledRow {
@@ -55,16 +56,6 @@ interface RegisterSnapshot {
 /** CPU execution state, used by CpuBusPanel to display the Run/Stop/Step indicator. */
 export type ExecState = "stopped" | "stepping" | "running";
 
-interface Props {
-  /** Called with the post-step register snapshot so RegisterPanel can update immediately. */
-  onStep: (snap: RegisterSnapshot) => void;
-  /** Called whenever the execution state changes. */
-  onExecStateChange: (state: ExecState) => void;
-  /** True once the CPU has halted on STP; disables the execution controls. Does
-   * NOT cover WAI — WAI can be resumed via NMI/IRQ, so controls stay enabled. */
-  cpuStopped: boolean;
-}
-
 /** Rows to pre-fetch beyond the visible window so scrolling has buffer. */
 const FETCH_ROWS = 48;
 /** When PC index reaches within this many rows of the bottom, extend the list. */
@@ -118,7 +109,8 @@ function intervalToSlider(ms: number): number {
   return SLIDER_STEPS;
 }
 
-export default function DisassemblyPanel({ onStep, onExecStateChange, cpuStopped }: Props) {
+export default function DisassemblyPanel() {
+  const { onStep, onExecStateChange, cpuStopped } = useExecutionContext();
   const [rows, setRows] = useState<DisassembledRow[]>([]);
   const [currentPc, setCurrentPc] = useState<number | null>(null);
   const [addrInputValue, setAddrInputValue] = useState<string>("");

@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import ClearRecentDialog from "./ClearRecentDialog";
 import CpuBusPanel from "./CpuBusPanel";
-import DisassemblyPanel, { ExecState } from "./DisassemblyPanel";
+import DisassemblyPanel from "./DisassemblyPanel";
 import ExitConfirmDialog from "./ExitConfirmDialog";
+import { ExecutionProvider } from "./ExecutionContext";
 import MemoryPanel from "./MemoryPanel";
 import NewProfileDialog from "./NewProfileDialog";
-import RegisterPanel, { RegisterSnapshot } from "./RegisterPanel";
+import RegisterPanel from "./RegisterPanel";
 import StackPanel from "./StackPanel";
 import ThemeSelector from "./ThemeSelector";
 import WatchpointPanel from "./WatchpointPanel";
@@ -20,8 +21,6 @@ interface SessionStatus {
 
 export default function App() {
   const [status, setStatus] = useState<SessionStatus | null>(null);
-  const [lastSnapshot, setLastSnapshot] = useState<RegisterSnapshot | null>(null);
-  const [execState, setExecState] = useState<ExecState>("stopped");
 
   useAppKeyBindings();
 
@@ -60,34 +59,6 @@ export default function App() {
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
-  const handleStep = useCallback((snap: RegisterSnapshot) => {
-    setLastSnapshot(snap);
-  }, []);
-
-  useEffect(() => {
-    const unlistenTick = listen("debugger-running-tick", () => {
-      invoke<RegisterSnapshot>("get_registers")
-        .then((snap) => setLastSnapshot(snap))
-        .catch(() => {});
-    });
-    return () => { unlistenTick.then((f) => f()); };
-  }, []);
-
-  const handleExecStateChange = useCallback((state: ExecState) => {
-    setExecState(state);
-  }, []);
-
-  // Shared by Reset (CpuBusPanel) and register edits (RegisterPanel) — both
-  // just need lastSnapshot to reflect the command's returned snapshot.
-  const handleSnapshotUpdate = useCallback((snap: RegisterSnapshot) => {
-    setLastSnapshot(snap);
-  }, []);
-
-  // True once the CPU has halted on STP; cleared again on Reset. WAI does NOT
-  // set this — unlike STP, WAI can be resumed by triggering NMI or asserting
-  // IRQ, so Run/Step/Auto-Step stay enabled to let the user continue from there.
-  const cpuStopped = Boolean(lastSnapshot?.cpu_stopped);
-
   if (status === null || !status.ok) {
     return (
       <>
@@ -114,20 +85,22 @@ export default function App() {
         <header className="app-toolbar">
           <ThemeSelector />
         </header>
-        <div className="app-layout">
-          <div className="col col-left">
-            <MemoryPanel execState={execState} />
-            <WatchpointPanel execState={execState} />
+        <ExecutionProvider>
+          <div className="app-layout">
+            <div className="col col-left">
+              <MemoryPanel />
+              <WatchpointPanel />
+            </div>
+            <div className="col col-center">
+              <DisassemblyPanel />
+            </div>
+            <div className="col col-right">
+              <RegisterPanel />
+              <StackPanel />
+              <CpuBusPanel />
+            </div>
           </div>
-          <div className="col col-center">
-            <DisassemblyPanel onStep={handleStep} onExecStateChange={handleExecStateChange} cpuStopped={cpuStopped} />
-          </div>
-          <div className="col col-right">
-            <RegisterPanel snapshot={lastSnapshot} execState={execState} onEdit={handleSnapshotUpdate} />
-            <StackPanel />
-            <CpuBusPanel execState={execState} onReset={handleSnapshotUpdate} />
-          </div>
-        </div>
+        </ExecutionProvider>
       </div>
     </>
   );

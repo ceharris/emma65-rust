@@ -2,7 +2,7 @@ import {useCallback, useEffect, useRef, useState} from "react";
 import {listen} from "@tauri-apps/api/event";
 import {invoke} from "@tauri-apps/api/core";
 import {open as openFileDialog, save as saveFileDialog} from "@tauri-apps/plugin-dialog";
-import {ExecState} from "./DisassemblyPanel";
+import {useExecutionContext} from "./ExecutionContext";
 import "./styles/memory.scss";
 
 /** Number of bytes per display row. */
@@ -148,12 +148,8 @@ interface FillDialogState {
   allowRomOverwrite: boolean;
 }
 
-interface Props {
-  /** Current CPU execution state; used to guard double-click and key shortcuts when running. */
-  execState: ExecState;
-}
-
-export default function MemoryPanel({ execState }: Props) {
+export default function MemoryPanel() {
+  const { execState } = useExecutionContext();
   /** Paragraph-aligned start address of the currently displayed 256-byte page. */
   const [pageAddr, setPageAddr] = useState<number>(0x0000);
   /** Ref mirrors pageAddr so event listeners always see the current value. */
