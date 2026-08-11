@@ -1,7 +1,7 @@
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::{Mc6840, ProtocolMessageEncoding};
-use crate::emulator::{AddressRange, BusConfig, TransportRelay};
+use crate::emulator::{AddressRange, BusConfig, IoDevice, TransportRelay};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
 use serde::Deserialize;
@@ -59,7 +59,7 @@ impl DeviceModule for Mc6840Module {
             }
             if let Some(transport_spec) = transport_spec {
                 let (transport, relay) = transport_spec
-                    .to_transport_with_reporter(context.transport_reporter(self.name()), context.pipe_exit_reporter(self.name())).await
+                    .to_transport_with_reporter(context.transport_reporter(dev.identity()), context.pipe_exit_reporter(dev.identity())).await
                     .map_err(DeviceModuleError::Transport)?;
                 let tagged_relay = match relay {
                     TransportRelay::Tagged(relay) => relay,

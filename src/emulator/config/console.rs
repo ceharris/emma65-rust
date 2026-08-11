@@ -8,7 +8,7 @@ use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::Console;
 use crate::emulator::transport::TransportRelay;
-use crate::emulator::{AddressRange, BusConfig};
+use crate::emulator::{AddressRange, BusConfig, IoDevice};
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 2;
@@ -60,7 +60,7 @@ impl DeviceModule for ConsoleModule {
             let mut dev = Console::new(self.name()).with_address(address);
             if let Some(transport_spec) = transport_spec {
                 let (transport, relay) = transport_spec
-                    .to_transport_with_reporter(context.transport_reporter(self.name()), context.pipe_exit_reporter(self.name())).await
+                    .to_transport_with_reporter(context.transport_reporter(dev.identity()), context.pipe_exit_reporter(dev.identity())).await
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport, relay);
             } else if let Some((transport, relay, reporter)) = context.console_transport.as_ref()
@@ -70,8 +70,8 @@ impl DeviceModule for ConsoleModule {
                 // injection path builds its transport ahead of
                 // `DeviceModule::instantiate`); bind it now so every clone
                 // already handed to the transport's background machinery
-                // starts reporting under the right name.
-                reporter.bind(self.name());
+                // starts reporting under the right identity.
+                reporter.bind(dev.identity());
                 dev.attach_transport(transport, TransportRelay::Byte(relay));
             }
             if let Some(break_key) = config.break_key {

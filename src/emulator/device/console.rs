@@ -192,12 +192,14 @@ impl IoDevice for Console {
         self.ring.clear();
         self.latch = 0;
         self.interrupt_flag = false;
-        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
     }
 
     fn irq_active(&self) -> bool { self.interrupt_flag }
 
     fn name(&self) -> &str { self.name }
+
+    fn identity_address(&self) -> u16 { self.address }
 
     fn shutdown(&mut self) {
         if let Some(transport) = self.transport.as_mut() {
@@ -539,7 +541,7 @@ mod tests {
         console.reset();
         let received = rx.recv().unwrap();
         assert_eq!(received.category, LogCategory::Device);
-        assert_eq!(received.message, format!("{DEVICE_NAME} @0xf000 reset"));
+        assert_eq!(received.message, format!("{DEVICE_NAME}@0xf000 reset"));
     }
 
 }

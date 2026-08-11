@@ -183,7 +183,7 @@ impl Finch {
     fn report_rejected_write(&self, address: u16) {
         if let Some(sender) = &self.error_sender {
             use crate::emulator::device::DeviceEvent;
-            let _ = sender.send(DeviceEvent::RejectedWrite { device: self.name, address });
+            let _ = sender.send(DeviceEvent::RejectedWrite { device: self.identity(), address });
         }
     }
 
@@ -256,10 +256,12 @@ impl IoDevice for Finch {
 
     fn reset(&mut self) {
         self.control_register &= !MMUE_MASK;
-        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.control_register_address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
     }
 
     fn name(&self) -> &str { self.name }
+
+    fn identity_address(&self) -> u16 { self.control_register_address }
 
 }
 
@@ -355,7 +357,7 @@ mod tests {
         device.reset();
         let received = rx.recv().unwrap();
         assert_eq!(received.category, LogCategory::Device);
-        assert_eq!(received.message, format!("{DEVICE_NAME} @0x{CTRL_REGISTER_ADDRESS:04x} reset"));
+        assert_eq!(received.message, format!("{DEVICE_NAME}@0x{CTRL_REGISTER_ADDRESS:04x} reset"));
     }
 
     #[test]

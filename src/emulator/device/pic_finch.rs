@@ -124,11 +124,15 @@ impl super::IoDevice for PicFinch {
 
     fn reset(&mut self) {
         self.ier.store(DEFAULT_IER_STATE, Ordering::Relaxed);
-        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
     }
 
     fn name(&self) -> &str {
         self.name
+    }
+
+    fn identity_address(&self) -> u16 {
+        self.address
     }
 }
 
@@ -257,7 +261,7 @@ mod tests {
         dev.reset();
         let received = rx.recv().unwrap();
         assert_eq!(received.category, LogCategory::Device);
-        assert_eq!(received.message, format!("pic @0x{IER_ADDR:04x} reset"));
+        assert_eq!(received.message, format!("pic@0x{IER_ADDR:04x} reset"));
     }
 
     // --- irq_mask ---

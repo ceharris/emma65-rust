@@ -335,7 +335,7 @@ impl IoDevice for R6551 {
         self.tdre_bug_compatible = tdre_bug_compatible;
         self.overrun_enabled = overrun_enabled;
         self.log_sender = log_sender;
-        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), self.address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
     }
 
     fn irq_active(&self) -> bool {
@@ -344,6 +344,10 @@ impl IoDevice for R6551 {
 
     fn name(&self) -> &str {
         self.name
+    }
+
+    fn identity_address(&self) -> u16 {
+        self.address
     }
 
     fn shutdown(&mut self) {
@@ -698,7 +702,7 @@ mod tests {
         device.reset();
         let received = rx.recv().unwrap();
         assert_eq!(received.category, LogCategory::Device);
-        assert_eq!(received.message, format!("{DEVICE_NAME} @0xc000 reset"));
+        assert_eq!(received.message, format!("{DEVICE_NAME}@0xc000 reset"));
     }
 
 }

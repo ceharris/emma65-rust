@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::R6551;
-use crate::emulator::{AddressRange, BusConfig};
+use crate::emulator::{AddressRange, BusConfig, IoDevice};
 
 // Size of the device on the bus (in contiguous bytes of address space)
 const BUS_SIZE: u16 = 4;
@@ -66,7 +66,7 @@ impl DeviceModule for R6551Module {
             }
             if let Some(spec) = transport_spec {
                 let (transport, relay) = spec
-                    .to_transport_with_reporter(context.transport_reporter(self.name()), context.pipe_exit_reporter(self.name())).await
+                    .to_transport_with_reporter(context.transport_reporter(dev.identity()), context.pipe_exit_reporter(dev.identity())).await
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport, relay);
             }

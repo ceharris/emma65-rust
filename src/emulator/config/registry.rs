@@ -39,28 +39,30 @@ pub struct InstantiationContext {
 
 impl InstantiationContext {
     /// Returns a callback suitable for [`TransportSpec::to_transport_with_reporter`](super::TransportSpec::to_transport_with_reporter) that
-    /// reports child-process exit as a [`DeviceEvent::TransportError`] for the device named `name`.
-    pub fn pipe_exit_reporter(&self, name: &'static str) -> impl FnOnce(std::io::Error) + Send + 'static {
+    /// reports child-process exit as a [`DeviceEvent::TransportError`] for the device identified
+    /// by `identity` (as returned by [`IoDevice::identity`](crate::emulator::IoDevice::identity)).
+    pub fn pipe_exit_reporter(&self, identity: impl Into<String>) -> impl FnOnce(std::io::Error) + Send + 'static {
         let sender = self.error_sender.clone();
+        let device = identity.into();
         move |e: std::io::Error| {
             if let Some(sender) = sender {
                 let _ = sender.send(DeviceEvent::TransportError {
-                    device: name,
+                    device,
                     error: TransportError::Io(e),
                 });
             }
         }
     }
 
-    /// Returns a [`TransportReporter`] bound to `name` (as returned by
-    /// [`IoDevice::name`](crate::emulator::IoDevice::name)), backed by this
+    /// Returns a [`TransportReporter`] bound to `identity` (as returned by
+    /// [`IoDevice::identity`](crate::emulator::IoDevice::identity)), backed by this
     /// context's `error_sender` (a silent no-op reporter if none is
     /// configured) — the reporter a `DeviceModule::instantiate` passes into
     /// transport construction so connect/disconnect/error events actually
     /// reach the host.
-    pub fn transport_reporter(&self, name: &'static str) -> TransportReporter {
+    pub fn transport_reporter(&self, identity: impl Into<String>) -> TransportReporter {
         let reporter = TransportReporter::pending(self.error_sender.clone());
-        reporter.bind(name);
+        reporter.bind(identity);
         reporter
     }
 }

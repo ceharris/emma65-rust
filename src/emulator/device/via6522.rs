@@ -1080,7 +1080,7 @@ impl IoDevice for Via6522 {
         self.t2_latch_hi = t2_latch_hi;
         self.t2_counter = t2_counter;
         self.sr = sr;
-        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} @0x{:04x} reset", self.name(), address);
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
         let current_state = self.current_state();
         self.send_state_to_all(current_state);
     }
@@ -1090,7 +1090,11 @@ impl IoDevice for Via6522 {
     }
 
     fn name(&self) -> &str {
-        "via/6522"
+        self.name
+    }
+
+    fn identity_address(&self) -> u16 {
+        self.address
     }
 
     fn shutdown(&mut self) {
@@ -1125,7 +1129,7 @@ mod tests {
         device.reset();
         let received = rx.recv().unwrap();
         assert_eq!(received.category, LogCategory::Device);
-        assert_eq!(received.message, "via/6522 @0xc000 reset");
+        assert_eq!(received.message, format!("{DEVICE_NAME}@0xc000 reset"));
     }
 
     /// Blocks until `condition` returns `true`, polling with a yield loop
