@@ -60,7 +60,7 @@ impl DeviceModule for ConsoleModule {
             let mut dev = Console::new(self.name()).with_address(address);
             if let Some(transport_spec) = transport_spec {
                 let (transport, relay) = transport_spec
-                    .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
+                    .to_transport_with_reporter(context.transport_reporter(device_id), context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport, relay);
             } else if let Some((transport, relay, reporter)) = context.console_transport.as_ref()
