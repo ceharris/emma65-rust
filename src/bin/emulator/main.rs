@@ -10,7 +10,15 @@ use emma65::emulator::{InstantiationContext, InternalPipeTransport, Transport, T
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    env_logger::init();
+    // The console, when attached to this process's own stdio, puts the terminal into raw mode
+    // (see tty::enter_raw_mode), which disables OPOST — so a bare '\n' no longer returns the
+    // cursor to column 0. env_logger's default suffix is just '\n'; force '\r\n' so log lines
+    // (e.g. TRANSPORT connect/disconnect events, which arrive after raw mode is entered) still
+    // render as proper new lines. Harmless when raw mode isn't in effect: the terminal treats a
+    // leading '\r' before '\n' as a no-op cursor return.
+    let mut log_format = env_logger::fmt::ConfigurableFormat::default();
+    log_format.suffix("\r\n");
+    env_logger::Builder::from_default_env().format(move |buf, record| log_format.format(buf, record)).init();
     let mut config = AppConfig::load().unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
