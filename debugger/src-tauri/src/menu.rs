@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, Wry};
 
+use crate::logging::LOG_WINDOW_LABEL;
 use crate::terminal::TERMINAL_WINDOW_LABEL;
 use crate::trace::TRACE_WINDOW_LABEL;
 
@@ -12,6 +13,8 @@ use crate::trace::TRACE_WINDOW_LABEL;
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
 /// Menu item id for the Window > Trace checkable item.
 pub(crate) const TOGGLE_TRACE_ID: &str = "toggle-trace";
+/// Menu item id for the Window > Log checkable item.
+pub(crate) const TOGGLE_LOG_ID: &str = "toggle-log";
 /// Menu item id for the File > New Profile item.
 pub(crate) const NEW_PROFILE_ID: &str = "new-profile";
 /// Menu item id for the File > Open Profile item.
@@ -35,6 +38,8 @@ pub struct WindowMenuState {
     pub terminal_item: CheckMenuItem<Wry>,
     /// The Window > Trace checkable item.
     pub trace_item: CheckMenuItem<Wry>,
+    /// The Window > Log checkable item.
+    pub log_item: CheckMenuItem<Wry>,
     /// The File > Exit item.
     pub exit_item: MenuItem<Wry>,
 }
@@ -80,14 +85,16 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         CheckMenuItem::with_id(app, TOGGLE_TERMINAL_ID, "Terminal", true, terminal_visible, None::<&str>)?;
     let trace_visible = window_is_visible(app, TRACE_WINDOW_LABEL);
     let trace_item = CheckMenuItem::with_id(app, TOGGLE_TRACE_ID, "Trace", true, trace_visible, None::<&str>)?;
-    let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item, &trace_item])?;
+    let log_visible = window_is_visible(app, LOG_WINDOW_LABEL);
+    let log_item = CheckMenuItem::with_id(app, TOGGLE_LOG_ID, "Log", true, log_visible, None::<&str>)?;
+    let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item, &trace_item, &log_item])?;
 
     let about_item = PredefinedMenuItem::about(app, None, None)?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&about_item])?;
 
     let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
 
-    Ok((menu, WindowMenuState { terminal_item, trace_item, exit_item }, RecentMenuState(open_recent_submenu)))
+    Ok((menu, WindowMenuState { terminal_item, trace_item, log_item, exit_item }, RecentMenuState(open_recent_submenu)))
 }
 
 fn window_is_visible(app: &tauri::App, label: &str) -> bool {

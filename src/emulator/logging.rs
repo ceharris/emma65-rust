@@ -162,6 +162,16 @@ impl LogSender {
     }
 }
 
+/// Builds the `Sink::File`-backed plumbing (bounded channel + drop counter) shared by
+/// `spawn_log_writer`, `spawn_log_collector`, and the test-only `test_channel_sender`: a
+/// `Sink` ready to hand to a `LogSender`, and the `Receiver` half a background thread (or a
+/// test) drains.
+fn bounded_file_sink(capacity: usize) -> (Sink, crossbeam_channel::Receiver<LogRecord>) {
+    let (tx, rx) = crossbeam_channel::bounded::<LogRecord>(capacity);
+    let dropped = Arc::new(AtomicU64::new(0));
+    (Sink::File { tx, dropped }, rx)
+}
+
 /// Spawns a background thread draining a bounded channel of `capacity`, formatting each record
 /// and writing+flushing it to `writer` immediately (messages through this facility are expected
 /// to be infrequent, so a per-line flush is not a throughput concern, and lets a UI tailing the
@@ -169,8 +179,7 @@ impl LogSender {
 /// handle; once every `LogSender` clone is dropped, the channel disconnects, the thread drains
 /// what's left and exits, and `join()` returns.
 pub fn spawn_log_writer<W: Write + Send + 'static>(writer: W, capacity: usize) -> (LogSender, std::thread::JoinHandle<()>) {
-    let (tx, rx) = crossbeam_channel::bounded::<LogRecord>(capacity);
-    let dropped = Arc::new(AtomicU64::new(0));
+    let (sink, rx) = bounded_file_sink(capacity);
     let handle = std::thread::spawn(move || {
         let mut writer = BufWriter::new(writer);
         let mut line = String::new();
@@ -181,7 +190,26 @@ pub fn spawn_log_writer<W: Write + Send + 'static>(writer: W, capacity: usize) -
             let _ = writer.flush();
         }
     });
-    (LogSender { sink: Sink::File { tx, dropped }, cycles: Default::default() }, handle)
+    (LogSender { sink, cycles: Default::default() }, handle)
+}
+
+/// Spawns a background thread draining a bounded channel of `capacity` and invoking `on_record`
+/// for each record, so a host (e.g. the debugger) can consume structured `LogRecord`s directly
+/// instead of only a formatted-text file. Returns a producer handle (backed by `Sink::File`,
+/// same never-blocks/drop-and-count-on-full semantics as `spawn_log_writer`) and a join handle;
+/// once every `LogSender` clone is dropped, the channel disconnects, the thread drains what's
+/// left (calling `on_record` for each) and exits, and `join()` returns.
+pub fn spawn_log_collector<F>(capacity: usize, mut on_record: F) -> (LogSender, std::thread::JoinHandle<()>)
+where
+    F: FnMut(LogRecord) + Send + 'static,
+{
+    let (sink, rx) = bounded_file_sink(capacity);
+    let handle = std::thread::spawn(move || {
+        while let Ok(rec) = rx.recv() {
+            on_record(rec);
+        }
+    });
+    (LogSender { sink, cycles: Default::default() }, handle)
 }
 
 /// Formats `$fmt, $args...` and logs it through `$sender` at `$level`/`$category` — the same
@@ -197,9 +225,8 @@ pub(crate) use log_msg;
 /// `reset()` tests) to assert on the `LogRecord`s a call site emits, without a writer thread.
 #[cfg(test)]
 pub(crate) fn test_channel_sender(capacity: usize) -> (LogSender, crossbeam_channel::Receiver<LogRecord>) {
-    let (tx, rx) = crossbeam_channel::bounded(capacity);
-    let dropped = Arc::new(AtomicU64::new(0));
-    (LogSender { sink: Sink::File { tx, dropped }, cycles: Default::default() }, rx)
+    let (sink, rx) = bounded_file_sink(capacity);
+    (LogSender { sink, cycles: Default::default() }, rx)
 }
 
 #[cfg(test)]
@@ -297,6 +324,24 @@ mod tests {
         assert!(contents.contains("WARN"));
         assert!(contents.contains("shutting down"));
         assert!(contents.ends_with('\n'));
+    }
+
+    #[test]
+    fn spawn_log_collector_invokes_callback_and_closes_on_drop() {
+        let (tx, rx) = std::sync::mpsc::channel::<LogRecord>();
+        let (sender, handle) = spawn_log_collector(8, move |rec| {
+            let _ = tx.send(rec);
+        });
+
+        sender.log(LogLevel::Info, LogCategory::Cpu, "collected");
+        drop(sender);
+        handle.join().unwrap();
+
+        let received: Vec<LogRecord> = rx.try_iter().collect();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].message, "collected");
+        assert_eq!(received[0].level, LogLevel::Info);
+        assert_eq!(received[0].category, LogCategory::Cpu);
     }
 
     #[test]
