@@ -193,6 +193,15 @@ macro_rules! log_msg {
 }
 pub(crate) use log_msg;
 
+/// Builds a `LogSender`/`Receiver` pair for tests elsewhere in this crate (e.g. `Cpu` and device
+/// `reset()` tests) to assert on the `LogRecord`s a call site emits, without a writer thread.
+#[cfg(test)]
+pub(crate) fn test_channel_sender(capacity: usize) -> (LogSender, crossbeam_channel::Receiver<LogRecord>) {
+    let (tx, rx) = crossbeam_channel::bounded(capacity);
+    let dropped = Arc::new(AtomicU64::new(0));
+    (LogSender { sink: Sink::File { tx, dropped }, cycles: Default::default() }, rx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,9 +274,7 @@ mod tests {
 
     #[test]
     fn set_cycles_stamps_subsequent_records() {
-        let (tx, rx) = crossbeam_channel::bounded::<LogRecord>(4);
-        let dropped = Arc::new(AtomicU64::new(0));
-        let sender = LogSender { sink: Sink::File { tx, dropped }, cycles: Default::default() };
+        let (sender, rx) = test_channel_sender(4);
 
         sender.set_cycles(1000);
         sender.log(LogLevel::Info, LogCategory::Cpu, "tick");
@@ -294,9 +301,7 @@ mod tests {
 
     #[test]
     fn log_msg_macro_formats_and_logs() {
-        let (tx, rx) = crossbeam_channel::bounded::<LogRecord>(4);
-        let dropped = Arc::new(AtomicU64::new(0));
-        let sender = LogSender { sink: Sink::File { tx, dropped }, cycles: Default::default() };
+        let (sender, rx) = test_channel_sender(4);
 
         log_msg!(sender, LogLevel::Error, LogCategory::Transport, "conn {} failed: {}", 3, "timeout");
 
