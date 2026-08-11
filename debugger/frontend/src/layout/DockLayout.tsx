@@ -17,6 +17,15 @@ const EMMA65_DOCK_THEME_BASE: Omit<DockviewTheme, "colorScheme"> = {
   className: "dockview-theme-emma65",
 };
 
+// MemoryPanel always renders a fixed 16-row page (mouse wheel pages through
+// memory rather than scrolling the list), so unlike the other stacked
+// panels it can't shrink and scroll internally — dockview's default 50/50
+// "below" split leaves it too short, clipping the last several rows behind
+// the Watchpoints panel underneath. ~30px header (font-size-btn buttons +
+// padding + border) + 16 rows at font-size-mono/line-height 1.6 (~22px each)
+// + body padding, plus headroom for cross-platform font-metric variance.
+const MEMORY_PANEL_DEFAULT_HEIGHT = 420;
+
 /**
  * Hardcoded default arrangement mirroring today's 3-column layout as
  * **splits, not tabs** — nothing is hidden behind a tab today, and the
@@ -42,6 +51,10 @@ function addDefaultLayout(api: DockviewReadyEvent["api"]) {
   add("watchpoints", { position: { referencePanel: "memory", direction: "below" } });
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
   add("cpu-bus", { position: { referencePanel: "stack", direction: "below" } });
+
+  // Reserve Memory's full page height directly rather than sizing
+  // Watchpoints (dockview gives the sibling whichever space is left over).
+  api.getPanel("memory")?.api.setSize({ height: MEMORY_PANEL_DEFAULT_HEIGHT });
 }
 
 /** Hosts the six main-window panels (Register/Disassembly/Memory/Stack/Watchpoint/CpuBus) in a dockview grid. */
