@@ -12,8 +12,8 @@
 .dockview-theme-emma65 {
   --dv-group-view-background-color: var(--color-bg);
   --dv-tabs-and-actions-container-background-color: var(--color-bg-alt);
-  --dv-tabs-and-actions-container-font-size: var(--font-size-btn);
-  --dv-tab-font-size: var(--font-size-btn);
+  --dv-tabs-and-actions-container-font-size: var(--font-size-tab);
+  --dv-tab-font-size: var(--font-size-tab);
 
   --dv-activegroup-visiblepanel-tab-background-color: var(--color-bg);
   --dv-activegroup-visiblepanel-tab-color: var(--color-accent);
@@ -46,5 +46,17 @@
   // any panel element that doesn't redeclare it.
   .dv-tabs-and-actions-container {
     font-family: var(--font-ui);
+  }
+
+  // Revives the old .panel-title look (bold, uppercase, letter-spaced) for
+  // tab labels, sized down from that header's --font-size-btn to
+  // --font-size-tab since a tab bar can hold several titles side by side
+  // where a full-width panel header only ever held one. Active/inactive
+  // color already comes from the --dv-*group-*panel-tab-color vars above —
+  // left alone here so that state distinction still reads correctly.
+  .dv-default-tab-content {
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
 }
