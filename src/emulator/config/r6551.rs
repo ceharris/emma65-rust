@@ -70,6 +70,9 @@ impl DeviceModule for R6551Module {
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport, relay);
             }
+            if let Some(sender) = &context.log_sender {
+                dev.set_log_sender(sender.clone());
+            }
             dev
         };
 

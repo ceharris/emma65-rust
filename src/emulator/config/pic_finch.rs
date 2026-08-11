@@ -50,7 +50,7 @@ mod tests {
     use crate::emulator::{Cpu, CpuVariant, IrqSource};
 
     fn context() -> InstantiationContext {
-        InstantiationContext { clock_hz: None, error_sender: None, console_transport: None }
+        InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None }
     }
 
     #[tokio::test]

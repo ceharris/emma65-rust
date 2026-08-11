@@ -36,6 +36,7 @@ async fn main() -> ExitCode {
         clock_hz: config.emulator.clock_speed_hz,
         error_sender: None,
         console_transport: Some(Arc::clone(&console_transport_slot)),
+        log_sender: None,
     };
     let session = match config.emulator.build_with_context(&registry, context).await {
         Ok(s) => s,

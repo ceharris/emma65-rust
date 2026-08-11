@@ -77,6 +77,9 @@ impl DeviceModule for ConsoleModule {
             if let Some(break_key) = config.break_key {
                 dev.set_break_key(break_key);
             }
+            if let Some(sender) = &context.log_sender {
+                dev.set_log_sender(sender.clone());
+            }
             dev
         };
 
@@ -113,6 +116,7 @@ mod tests {
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
+            log_sender: None,
             console_transport: Some(slot),
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
@@ -131,6 +135,7 @@ mod tests {
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
+            log_sender: None,
             console_transport: Some(Arc::clone(&slot)),
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
@@ -154,6 +159,7 @@ mod tests {
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
+            log_sender: None,
             console_transport: Some(Arc::clone(&slot)),
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
@@ -171,6 +177,7 @@ mod tests {
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
+            log_sender: None,
             console_transport: Some(Arc::new(Mutex::new(Some((
                 Box::new(local) as Box<dyn Transport>, relay, reporter.clone(),
             ))))),
@@ -195,6 +202,7 @@ mod tests {
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
+            log_sender: None,
             console_transport: None,
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));

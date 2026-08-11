@@ -103,6 +103,7 @@ async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPi
         clock_hz: config.clock_speed_hz,
         error_sender: None,
         console_transport: Some(transport_slot),
+        log_sender: None,
     };
 
     let registry = DeviceRegistry::with_builtins();
