@@ -134,7 +134,7 @@ pub fn log_device_event(sender: &LogSender, event: &DeviceEvent) {
         DeviceEvent::TransportConnected { device, peer: None } =>
             log_msg!(sender, LogLevel::Info, LogCategory::Transport, "{device} connected"),
         DeviceEvent::TransportDisconnected { device, peer: Some(peer), reason } =>
-            log_msg!(sender, LogLevel::Warn, LogCategory::Transport, "{device} disconnected: {reason} ({peer})"),
+            log_msg!(sender, LogLevel::Warn, LogCategory::Transport, "{device} disconnected: {peer} ({reason})"),
         DeviceEvent::TransportDisconnected { device, peer: None, reason } =>
             log_msg!(sender, LogLevel::Warn, LogCategory::Transport, "{device} disconnected: {reason}"),
         DeviceEvent::TransportError { device, error } =>
