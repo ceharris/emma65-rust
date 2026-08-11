@@ -12,8 +12,19 @@
   font-size: var(--font-size-mono);
 }
 
+// Two side-by-side register tables (data registers, address registers +
+// flags) instead of one long stacked list.
+.reg-groups {
+  display: flex;
+  align-items: flex-start;
+
+  .reg-table:not(:first-child) {
+    border-left: 1px solid var(--color-border);
+    padding-left: 10px;
+  }
+}
+
 .reg-table {
-  width: 100%;
   border-collapse: collapse;
   font-size: var(--font-size-mono);
   padding: 4px 0;
@@ -45,10 +56,6 @@
     margin-left: 8px;
     color: var(--color-string);
     font-size: var(--font-size-mono);
-  }
-
-  .reg-separator {
-    height: 6px;
   }
 
   .reg-flags {
