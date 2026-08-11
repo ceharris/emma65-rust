@@ -58,8 +58,8 @@ impl std::fmt::Display for LogCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             LogCategory::Cpu => "CPU",
-            LogCategory::Device => "DEVICE",
-            LogCategory::Transport => "TRANSPORT",
+            LogCategory::Device => "Device",
+            LogCategory::Transport => "Transport",
         };
         f.write_str(s)
     }
@@ -253,7 +253,7 @@ mod tests {
         assert!(fields.next().unwrap().ends_with('Z'));
         assert_eq!(fields.next().unwrap(), "42");
         assert_eq!(fields.next().unwrap(), "INFO");
-        assert_eq!(fields.next().unwrap(), "DEVICE");
+        assert_eq!(fields.next().unwrap(), "Device");
         assert_eq!(fields.next().unwrap(), "via@0xc000 reset");
         assert!(out.ends_with('\n'));
     }

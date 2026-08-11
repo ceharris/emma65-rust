@@ -35,7 +35,7 @@ pub struct LogRecordDto {
     pub cycles: u64,
     /// Severity of the message ("INFO" | "WARN" | "ERROR").
     pub level: String,
-    /// Broad source of the message ("CPU" | "DEVICE" | "TRANSPORT").
+    /// Broad source of the message ("CPU" | "Device" | "Transport").
     pub category: String,
     /// Free-text message.
     pub message: String,
