@@ -59,7 +59,7 @@ impl DeviceModule for Via6522Module {
             }
             if let Some(transport_spec) = transport_spec {
                 let (transport, relay) = transport_spec
-                    .to_transport_with_reporter(context.transport_reporter(device_id), context.pipe_exit_reporter(device_id)).await
+                    .to_transport_with_reporter(context.transport_reporter(self.name()), context.pipe_exit_reporter(self.name())).await
                     .map_err(DeviceModuleError::Transport)?;
                 let tagged_relay = match relay {
                     TransportRelay::Tagged(relay) => relay,

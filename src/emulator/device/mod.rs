@@ -27,7 +27,6 @@ pub use self::via6522::Via6522;
 pub use protocol::via::{ViaAsciiProtocolDecoder, ViaAsciiProtocolEncoder, ViaBinaryProtocolDecoder, ViaBinaryProtocolEncoder, ViaProtocolMessage};
 pub use self::vireo::Vireo;
 
-use std::fmt::{Display, Formatter, Result};
 use tokio::sync::mpsc;
 
 use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
@@ -36,20 +35,14 @@ use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub u32);
 
-impl Display for DeviceId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let DeviceId(addr) = self;
-        write!(f, "@{:04x}", addr)
-    }
-}
-
 /// Asynchronous event emitted by a device to notify the host application of transport state changes.
 #[derive(Debug)]
 pub enum DeviceEvent {
     /// A transport connection was established for the given device.
     TransportConnected {
-        /// The device that gained a transport connection.
-        device: DeviceId,
+        /// The name of the device that gained a transport connection, as
+        /// returned by [`IoDevice::name`].
+        device: &'static str,
         /// Identifies which peer connected, for transports that accept more
         /// than one concurrent client (e.g. TCP/Unix socket). `None` for
         /// point-to-point transports, which have only one peer to
@@ -58,8 +51,9 @@ pub enum DeviceEvent {
     },
     /// A transport connection was lost.
     TransportDisconnected {
-        /// The device that lost its transport.
-        device: DeviceId,
+        /// The name of the device that lost its transport, as returned by
+        /// [`IoDevice::name`].
+        device: &'static str,
         /// Identifies which peer disconnected; see
         /// [`TransportConnected`](DeviceEvent::TransportConnected)'s `peer`.
         peer: Option<String>,
@@ -68,21 +62,26 @@ pub enum DeviceEvent {
     },
     /// A transport error occurred during IO.
     TransportError {
-        /// The device that encountered the error.
-        device: DeviceId,
+        /// The name of the device that encountered the error, as returned
+        /// by [`IoDevice::name`].
+        device: &'static str,
         /// The error that occurred.
         error: crate::emulator::transport::TransportError,
     },
     /// An informational message from the device.
     DeviceInfo {
-        /// The device emitting the message.
-        device: DeviceId,
+        /// The name of the device emitting the message, as returned by
+        /// [`IoDevice::name`].
+        device: &'static str,
         /// The message text.
         message: String,
     },
     /// A report of an attempted write to a read-only register/location in a device
     RejectedWrite {
-        device: DeviceId,
+        /// The name of the device that rejected the write, as returned by
+        /// [`IoDevice::name`].
+        device: &'static str,
+        /// The address of the attempted write.
         address: u16,
     },
     /// Diagnostic count of outbound bytes dropped due to a full outbound
@@ -90,8 +89,9 @@ pub enum DeviceEvent {
     /// behavior); the expected remediation is to resize the ring and
     /// restart.
     OutboundBytesDropped {
-        /// The device whose outbound ring overflowed.
-        device: DeviceId,
+        /// The name of the device whose outbound ring overflowed, as
+        /// returned by [`IoDevice::name`].
+        device: &'static str,
         /// Number of bytes dropped since the last report.
         count: u64,
     },
@@ -99,8 +99,9 @@ pub enum DeviceEvent {
     /// channel, for multipoint transports only. Purely diagnostic; see
     /// [`OutboundBytesDropped`](DeviceEvent::OutboundBytesDropped).
     InboundEventsDropped {
-        /// The device whose inbound ingress channel overflowed.
-        device: DeviceId,
+        /// The name of the device whose inbound ingress channel
+        /// overflowed, as returned by [`IoDevice::name`].
+        device: &'static str,
         /// Number of events dropped since the last report.
         count: u64,
     },
@@ -232,12 +233,12 @@ mod tests {
     #[test]
     fn send_events_receive_from_other_thread() {
         let (sender, mut receiver) = device_event_channel();
-        let id = DeviceId(1);
+        let name = "test-device";
 
         let handle = thread::spawn(move || {
-            sender.send(DeviceEvent::TransportConnected { device: id, peer: None }).unwrap();
+            sender.send(DeviceEvent::TransportConnected { device: name, peer: None }).unwrap();
             sender.send(DeviceEvent::DeviceInfo {
-                device: id,
+                device: name,
                 message: "hello".to_string(),
             }).unwrap();
         });
@@ -257,7 +258,7 @@ mod tests {
     #[test]
     fn log_device_event_reports_transport_error_at_error_level() {
         let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
-        let device = DeviceId(0xc000);
+        let device = "test-device";
 
         log_device_event(&sender, &DeviceEvent::TransportError {
             device,
@@ -273,7 +274,7 @@ mod tests {
     #[test]
     fn log_device_event_reports_connected_with_and_without_peer() {
         let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
-        let device = DeviceId(0xc000);
+        let device = "test-device";
 
         log_device_event(&sender, &DeviceEvent::TransportConnected { device, peer: Some("client-1".to_string()) });
         log_device_event(&sender, &DeviceEvent::TransportConnected { device, peer: None });
@@ -286,7 +287,7 @@ mod tests {
     async fn log_device_events_drains_until_every_sender_is_dropped() {
         let (event_tx, event_rx) = device_event_channel();
         let (log_tx, log_rx) = crate::emulator::logging::test_channel_sender(4);
-        let device = DeviceId(1);
+        let device = "test-device";
 
         event_tx.send(DeviceEvent::DeviceInfo { device, message: "hello".to_string() }).unwrap();
         drop(event_tx);
