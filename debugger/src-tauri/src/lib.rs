@@ -506,6 +506,8 @@ pub fn run() {
             spike::toggle_dockview_spike_window,
             spike::detach_stack_panel,
             spike::reattach_stack_panel,
+            spike::detach_stack_panel_static,
+            spike::reattach_stack_panel_static,
             spike::get_spike_layout,
             spike::set_spike_layout,
         ])
@@ -555,6 +557,12 @@ pub fn run() {
             if let Some(log_window) = app.get_webview_window(logging::LOG_WINDOW_LABEL) {
                 let _ = log_window.remove_menu();
                 install_toggleable_window_lifecycle(&log_window, window_menu_state.log_item.clone());
+            }
+            // Phase 0 spike (issue #379) A/B comparison window — same
+            // accelerator-collision fix, no toggleable lifecycle wiring since
+            // it's thrown away with the rest of the spike code.
+            if let Some(stack_static_window) = app.get_webview_window(spike::STACK_DETACHED_STATIC_WINDOW_LABEL) {
+                let _ = stack_static_window.remove_menu();
             }
             app.manage(window_menu_state);
             app.manage(recent_menu_state);

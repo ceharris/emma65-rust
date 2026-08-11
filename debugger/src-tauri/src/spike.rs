@@ -20,6 +20,15 @@ pub const DOCKVIEW_SPIKE_WINDOW_LABEL: &str = "dockview-spike";
 /// `TERMINAL_DETACHED_WINDOW_LABEL` design.
 pub const STACK_DETACHED_WINDOW_LABEL: &str = "stack-detached";
 
+/// Window label for the A/B comparison target: statically declared in
+/// `tauri.conf.json` (built once, hidden, like Terminal/Trace/Log today) and
+/// merely shown/hidden on each detach cycle instead of rebuilt. Added to test
+/// whether the app-wide freeze observed on every `detach_stack_panel` call is
+/// caused specifically by `WebviewWindowBuilder::build()` — if this path
+/// doesn't freeze the app, that's a concrete steer for Phase 6 to reconsider
+/// its "dynamically build every cycle" design.
+pub const STACK_DETACHED_STATIC_WINDOW_LABEL: &str = "stack-detached-static";
+
 /// Shared `emit_to` target for the spike ticker, flipped by detach/reattach —
 /// prototypes Phase 6's `TerminalTargetWindow` mechanism (spike question 5).
 pub struct SpikeTickTarget(pub Mutex<String>);
@@ -68,6 +77,28 @@ pub fn detach_stack_panel(app: AppHandle, target: State<SpikeTickTarget>) -> Res
 pub fn reattach_stack_panel(app: AppHandle, target: State<SpikeTickTarget>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(STACK_DETACHED_WINDOW_LABEL) {
         window.destroy().map_err(|e| e.to_string())?;
+    }
+    *target.0.lock().unwrap() = DOCKVIEW_SPIKE_WINDOW_LABEL.to_string();
+    Ok(())
+}
+
+/// Shows the statically declared detached-Stack window (A/B comparison path
+/// — see `STACK_DETACHED_STATIC_WINDOW_LABEL`).
+#[tauri::command]
+pub fn detach_stack_panel_static(app: AppHandle, target: State<SpikeTickTarget>) -> Result<(), String> {
+    app.get_webview_window(STACK_DETACHED_STATIC_WINDOW_LABEL)
+        .ok_or("stack-detached-static window not found")?
+        .show()
+        .map_err(|e| e.to_string())?;
+    *target.0.lock().unwrap() = STACK_DETACHED_STATIC_WINDOW_LABEL.to_string();
+    Ok(())
+}
+
+/// Hides the statically declared detached-Stack window (A/B comparison path).
+#[tauri::command]
+pub fn reattach_stack_panel_static(app: AppHandle, target: State<SpikeTickTarget>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(STACK_DETACHED_STATIC_WINDOW_LABEL) {
+        window.hide().map_err(|e| e.to_string())?;
     }
     *target.0.lock().unwrap() = DOCKVIEW_SPIKE_WINDOW_LABEL.to_string();
     Ok(())

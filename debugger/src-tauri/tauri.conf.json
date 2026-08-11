@@ -56,6 +56,16 @@
         "resizable": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "label": "stack-detached-static",
+        "title": "Stack (detached spike, static A/B)",
+        "url": "stack-detached.html",
+        "width": 300,
+        "height": 420,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {

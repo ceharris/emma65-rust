@@ -109,34 +109,41 @@ export default function DockviewSpike() {
   // `detach_stack_panel`'s `await` only guarantees the window exists, not
   // that its JS has run yet; same handshake-timing risk the plan flags for
   // Phase 6's real `terminal_ready`-style concern, just not resolved here.
-  const detach = useCallback(() => {
-    invoke("detach_stack_panel")
+  const detach = useCallback((command: string) => {
+    invoke(command)
       .then(() => {
         const panel = apiRef.current?.getPanel("stack");
         if (panel) apiRef.current?.removePanel(panel);
       })
-      .catch((e) => console.error("[spike] detach_stack_panel failed:", e));
+      .catch((e) => console.error(`[spike] ${command} failed:`, e));
   }, []);
 
   // Reverse order from detach: re-add the docked panel (and its ticker
-  // listener) before the backend destroys the detached window and flips the
-  // `emit_to` target back, for the same reason.
-  const reattach = useCallback(() => {
+  // listener) before the backend destroys/hides the detached window and
+  // flips the `emit_to` target back, for the same reason.
+  const reattach = useCallback((command: string) => {
     if (!apiRef.current?.getPanel("stack")) {
       apiRef.current?.addPanel({ id: "stack", component: "stack", title: "stack" });
     }
-    invoke("reattach_stack_panel").catch((e) => console.error("[spike] reattach_stack_panel failed:", e));
+    invoke(command).catch((e) => console.error(`[spike] ${command} failed:`, e));
   }, []);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}>
       <SpikeThemeSync onChange={setResolvedTheme} />
-      <div style={{ display: "flex", gap: 8, padding: 8, flex: "0 0 auto" }}>
-        <button onClick={detach}>Detach Stack (Q4/Q5)</button>
-        <button onClick={reattach}>Reattach Stack</button>
+      <div style={{ display: "flex", gap: 8, padding: 8, flex: "0 0 auto", flexWrap: "wrap" }}>
+        <button onClick={() => detach("detach_stack_panel")}>Detach Stack (dynamic window)</button>
+        <button onClick={() => reattach("reattach_stack_panel")}>Reattach Stack (dynamic window)</button>
+        <span style={{ opacity: 0.5 }}>|</span>
+        <button onClick={() => detach("detach_stack_panel_static")}>Detach Stack (static A/B)</button>
+        <button onClick={() => reattach("reattach_stack_panel_static")}>Reattach Stack (static A/B)</button>
+        <span style={{ opacity: 0.5 }}>|</span>
         <button onClick={resetLayout}>Reset Layout</button>
         <span style={{ opacity: 0.7, fontSize: "0.8rem", alignSelf: "center" }}>
-          Rearrange/resize panels, then restart the app to check layout persistence (Q6).
+          Rearrange/resize panels, then restart the app to check layout persistence (Q6). The
+          "static A/B" pair tests whether the app-wide freeze on detach is specific to dynamic
+          window creation (WebviewWindowBuilder) vs. a pre-declared hidden window shown/hidden
+          like Terminal/Trace/Log.
         </span>
       </div>
       <div style={{ flex: "1 1 auto", minHeight: 0 }}>
