@@ -128,6 +128,30 @@ pub async fn load_memory(
     Ok(())
 }
 
+/// Reads the inclusive address range [`start`, `end`] via `Bus::peek_range` and writes it
+/// verbatim to the file at `path`.
+///
+/// Reads have no side effects, but the CPU must still be halted (`cpu_state` populated)
+/// because `peek_range` needs direct bus access, which is unavailable while the CPU is
+/// free-running in its background thread.
+#[tauri::command]
+pub async fn save_memory(
+    start: u16,
+    end: u16,
+    path: String,
+    cpu_state: State<'_, CpuState>,
+) -> Result<(), String> {
+    let len = end.checked_sub(start).ok_or("End address must be >= start address")? as usize + 1;
+    let mut buf = vec![0u8; len];
+    {
+        let guard = cpu_state.0.lock().unwrap();
+        let cpu = guard.as_ref().ok_or("CPU not ready")?;
+        cpu.bus().peek_range(start, &mut buf).map_err(|e| e.to_string())?;
+    }
+    tokio::fs::write(&path, &buf).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Fills every address in the inclusive range [`start`, `end`] with `value`.
 ///
 /// Uses `Bus::patch` when `patch` is true (bypasses ROM write protection),

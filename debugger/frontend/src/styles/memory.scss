@@ -154,6 +154,27 @@
   }
 }
 
+.mem-save-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover:not(:disabled) {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &:disabled {
+    color: var(--color-muted-2);
+    cursor: default;
+  }
+}
+
 .mem-load-backdrop {
   position: fixed;
   inset: 0;
@@ -357,6 +378,142 @@
   }
 
   &.mem-load-btn-ok {
+    color: var(--color-accent);
+  }
+}
+
+.mem-save-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mem-save-dialog {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+  min-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--font-ui);
+}
+
+.mem-save-title {
+  font-size: var(--font-size-btn);
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-accent);
+}
+
+.mem-save-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mem-save-label {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: var(--font-size-btn);
+}
+
+.mem-save-input {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  padding: 3px 6px;
+  border-radius: 3px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent);
+  }
+
+  &.invalid {
+    border-color: var(--color-danger-strong);
+  }
+}
+
+.mem-save-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mem-save-path-input {
+  flex: 1;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  padding: 3px 6px;
+  border-radius: 3px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent);
+  }
+
+  &.invalid {
+    border-color: var(--color-danger-strong);
+  }
+}
+
+.mem-save-folder-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: 0.9rem;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1.4;
+
+  &:hover {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+}
+
+.mem-save-error {
+  font-size: var(--font-size-btn);
+  color: var(--color-danger-strong);
+}
+
+.mem-save-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mem-save-btn-action {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 3px 12px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &.mem-save-btn-ok {
     color: var(--color-accent);
   }
 }

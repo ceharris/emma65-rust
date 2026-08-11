@@ -433,6 +433,7 @@ pub fn run() {
             memory::get_memory,
             memory::write_memory,
             memory::load_memory,
+            memory::save_memory,
             memory::fill_memory,
             stack::get_stack,
             disassembly::toggle_breakpoint,
