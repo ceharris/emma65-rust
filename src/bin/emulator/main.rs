@@ -8,8 +8,6 @@ use crate::config::{AppConfig, apply_default_if_unconfigured};
 use emma65::emulator::cpu::StepResult;
 use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, Transport, TransportReporter};
 
-const DEFAULT_ROM: &[u8] = include_bytes!("default.bin");
-
 #[tokio::main]
 async fn main() -> ExitCode {
     env_logger::init();
@@ -17,8 +15,8 @@ async fn main() -> ExitCode {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
-    // Hold the temp file reference until after build so the ROM image isn't deleted too early.
-    let _default_rom_file = apply_default_if_unconfigured(&mut config, DEFAULT_ROM);
+    // Hold the tempdir reference until after build so the default config's files aren't deleted too early.
+    let _default_config_dir = apply_default_if_unconfigured(&mut config);
     let registry = emma65::emulator::DeviceRegistry::with_builtins();
 
     // Always offer stdin/stdout to the console via the context. If the console has no

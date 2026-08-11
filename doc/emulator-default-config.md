@@ -2,117 +2,83 @@
 
 ## Context
 
-When the emulator binary is launched with no device configuration (no TOML file, no `--device` flags, no env vars), `Config::build()` succeeds but produces a CPU with an empty bus — every read returns `0xFF` and the machine spins pointlessly. The goal is to embed a ~32 KB ROM image and a matching default memory layout directly in the binary, so an unconfigured launch does something useful.
+When the emulator binary is launched with no device configuration (no TOML file, no `--device`
+flags, no env vars), `Config::build()` succeeds but produces a CPU with an empty bus — every read
+returns `0xFF` and the machine spins pointlessly. The debugger has a parallel gap: if
+`~/.emma/debugger/profiles/default/emulator.toml` doesn't exist, it still starts but builds a
+session with an empty bus too — the debugger looks alive but is non-functional.
+
+The default device layout — 32K RAM, the TaliForth ROM, a VIA, a PTM, two ACIAs, an LFSR, and a
+console — is defined once, as a checked-in TOML template plus its bundled ROM image and VICE
+labels file, and shared by both consumers via a single materialization function. See
+`doc/emulator-default-config-bundling-plan.md` for the implementation plan this design followed.
 
 ---
 
-## Approach
+## Bundled resources: `src/emulator/config/default/`
 
-Inject the default after `AppConfig::load()` in `main.rs`, before `config.emulator.build(&registry)`. If `devices` is `None` or an empty vec after all config sources are merged, write the embedded ROM bytes to a `NamedTempFile` and populate `config.emulator.devices` with a default RAM + ROM layout. `Config::build()` then runs as normal against that layout. The tempfile can be dropped after `build()` returns because the bytes are already in memory.
+- **`program.bin`** — the TaliForth ROM image (32 768 bytes), mapped at `0x8000`–`0xFFFF`.
+- **`program.lbl`** — a VICE-format label file for `program.bin`, loaded into the bus's symbol
+  table.
+- **`emulator.toml.template`** — the default device layout, as plain text (never parsed as TOML by
+  this crate directly). Two placeholder tokens, `{{ROM_IMAGE}}` and `{{LABELS}}`, are substituted
+  with materialized file paths before the template is written out as a real `emulator.toml`.
 
-The library (`src/emulator/`) is not touched. All changes are in `src/bin/emulator/`.
+All three are embedded in the library binary via `include_bytes!`/`include_str!`, so both the
+`emma65` binary and the `emma65-debugger` crate (which depends on the library, not the binary
+crate) can reach them.
 
----
-
-## Memory layout for the default configuration
-
-| Device  | Address range     | Size   | Notes |
-|---------|-------------------|--------|-------|
-| RAM     | `0x0000`–`0x7FFF` | 32 KB  | zero-filled |
-| ROM     | `0x8000`–`0xFFFF` | 32 KB  | embedded image |
-| Console | `0xFFF8`–`0xFFF9` | 2 B    | overlaps ROM; most-specific-wins; PTY symlink at `$HOME/.emma/dev/ttyS0` |
-
-The console's 2-byte region is smaller than the ROM's 32 KB region, so the bus's most-specific-wins rule gives the console priority at those two addresses without an `AmbiguousOverlap` error.
-
-The reset vector in the TaliForth ROM is `0xF000` (confirmed from the binary). CPU variant is set to `Wdc6502` (TaliForth uses `STP`). Clock speed remains whatever was configured (or the existing default: unlimited).
-
----
-
-## Files to create / modify
-
-### New: `src/bin/emulator/default.bin`
-
-Copy `taliforth-emma65.bin` (32 768 bytes, already in the project root) to `src/bin/emulator/default.bin`. This is the ROM mapped at `0x8000`–`0xFFFF`.
-
-### Modified: `Cargo.toml`
-
-Move `tempfile` from `[dev-dependencies]` to `[dependencies]` (it is already in the build graph as a dev dep; this just makes it available to the binary at runtime).
-
-### Modified: `src/bin/emulator/main.rs`
-
-Add `const DEFAULT_ROM: &[u8] = include_bytes!("default.bin");` at the top.
-
-After `AppConfig::load()` and before `config.emulator.build(&registry)`, insert:
+## `emulator::config::default::materialize_default_config`
 
 ```rust
-let _default_rom_file = apply_default_if_unconfigured(&mut config);
+pub fn materialize_default_config(dest: &Path) -> Result<PathBuf, MaterializeError>
 ```
 
-The returned `Option<NamedTempFile>` is kept alive until after `build()` returns (the tempfile must not be dropped while `build()` is reading it).
+Creates `dest` if missing, writes `dest/program.bin` and `dest/program.lbl`, renders the template
+(substituting the `image=`/`labels=` paths just written) into `dest/emulator.toml`, and returns
+that path.
 
-Print a notice to stderr when the default is used:
-```
-eprintln!("notice: no devices configured; using built-in default configuration");
-```
+**Path rendering:** neither `ExpandedPathBuf` nor the config loader resolves relative
+`image=`/`labels=` paths against the TOML file's own directory, so the rendered `emulator.toml`
+references `program.bin`/`program.lbl` by absolute path — except that a path falling under `$HOME`
+is written with `~/`-shorthand instead (matching how a hand-written config would reference
+`~/.emma/...` paths, and correctly expanded back on load by `ExpandedPathBuf`). This rendering is
+isolated in `path::portable_path`, the one seam that would need to change if directory-relative
+resolution is added later.
 
-### Modified: `src/bin/emulator/config.rs`
+## Consumers
 
-Add the helper:
+**`emma65` binary** (`src/bin/emulator/config.rs::apply_default_if_unconfigured`) — if no devices
+are configured after CLI/env/`--config` merging, materializes the default into a fresh
+`tempfile::TempDir`, loads its `emulator.toml` through the same `Figment`/`Toml::file()` path used
+for a user-supplied `--config`, and merges the result into the running `Config` — preserving any
+`cpu-variant`/`clock-speed-hz` already set, taking `devices` unconditionally from the default. The
+`TempDir` is kept alive (as `_default_config_dir` in `main.rs`) until `Config::build()` completes.
 
-```rust
-/// If no devices are configured, writes the embedded default ROM to a tempfile,
-/// populates `config.emulator.devices` with the default layout, and returns the
-/// tempfile handle (must be kept alive until `Config::build()` completes).
-pub fn apply_default_if_unconfigured(config: &mut AppConfig) -> Option<tempfile::NamedTempFile> {
-    if config.emulator.devices.as_ref().map_or(true, |d| d.is_empty()) {
-        let f = tempfile::Builder::new()
-            .suffix(".bin")
-            .tempfile()
-            .expect("failed to create tempfile for default ROM");
-        std::fs::write(f.path(), crate::DEFAULT_ROM)
-            .expect("failed to write default ROM to tempfile");
-        let rom_path = f.path().to_path_buf();
-        config.emulator.cpu_variant_spec.get_or_insert(CpuVariantSpec::Wdc6502);
-        let home = std::env::var("HOME").expect("HOME not set");
-        let pty_symlink = std::path::Path::new(&home).join(".emma/dev/ttyS0");
-        config.emulator.devices = Some(vec![
-            "ram@0x0000,size=32768,fill=0".parse().unwrap(),
-            format!("rom@0x8000,size=32768,image={}", rom_path.display())
-                .parse()
-                .unwrap(),
-            format!("console@0xfff8,transport=pty:{}", pty_symlink.display())
-                .parse()
-                .unwrap(),
-        ]);
-        Some(f)
-    } else {
-        None
-    }
-}
-```
+**`emma65-debugger`** (`debugger/src-tauri/src/profile.rs::ensure_profile_dir`) — the first time
+the `default` profile directory is created, materializes the bundled default directly into
+`~/.emma/debugger/profiles/default/` (a persistent directory, not a tempdir). Any other new named
+profile is still seeded by copying files from `default` (`copy_missing_files_from_default`), which
+now includes `program.bin`/`program.lbl` along with `emulator.toml`.
 
 ---
 
 ## Verification
 
 ```bash
-cargo build --bin emma65          # embeds the new default.bin; should compile cleanly
-cargo clippy                      # no new warnings
+cargo build --workspace                 # program.bin/program.lbl embed cleanly, both crates compile
+cargo test --workspace                  # full suite
+cargo clippy                             # no new warnings, covers debugger crate too
 
-# Run with no config — should start using TaliForth default
+# Run with no config — should start using the bundled TaliForth default
 target/debug/emma65
 
 # Run with explicit config — default must NOT apply
 target/debug/emma65 --cpu-variant WDC65C02 \
     --device ram@0x0000,size=32768,fill=0 \
     --device rom@0x8000,size=32768,image=<path>
-
-cargo test --test emulator_binary   # existing subprocess tests still pass
-cargo test                          # full suite
 ```
 
-Add one new test to `tests/emulator_binary.rs`:
-
-| Test | Setup | Expected |
-|---|---|---|
-| `run_with_no_config_uses_default` | Invoke binary with zero arguments | exits non-zero (TaliForth runs indefinitely; the test kills after timeout) or check stderr contains "built-in default configuration" notice |
+`tests/emulator_binary.rs::run_with_no_args_uses_bundled_default_and_keeps_running` spawns the
+binary with zero arguments and asserts the process is still running after a short delay (TaliForth
+idles indefinitely rather than exiting).

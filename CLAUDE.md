@@ -38,7 +38,7 @@ src/
   lib.rs                  — exposes pub mod emulator, pub mod watch
   bin/
     emulator/
-      main.rs              — emma65 binary entry point; embeds default.bin ROM
+      main.rs              — emma65 binary entry point
       config.rs             — AppConfig, CliArgs, apply_default_if_unconfigured
       tty.rs                — terminal/PTY helpers for the CLI console
     tracer/
@@ -107,11 +107,18 @@ builds the `BusConfig`, constructs `Cpu`, and returns `EmulatorSession`.
 - Size: bytes or `K`/`k` suffix
 - Transport: `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`, `pty:SYMLINK`
 
-The binary applies a built-in default when no devices are configured: 32K RAM at
-`0x0000`, the embedded TaliForth ROM at `0x8000`, a VIA and a PTM on Unix-socket
-transports, an ACIA on `~/.emma/dev/ttyS0`, a second ACIA on `~/.emma/dev/ttyS1`,
-an LFSR, and a console wired to the process's own stdin/stdout — WDC65C02 at
-1.8432 MHz. See `apply_default_if_unconfigured` in `src/bin/emulator/config.rs`.
+**`emulator::config::default` module (`src/emulator/config/default/`)** — bundles the default
+device layout as a checked-in template (`emulator.toml.template`) plus the TaliForth ROM
+(`program.bin`) and its VICE labels (`program.lbl`), embedded via `include_bytes!`/`include_str!`.
+`materialize_default_config(dest)` writes all three (rendered, with `image=`/`labels=` paths
+filled in) into `dest`, returning the path to the written `emulator.toml`. This is the single
+source of truth for the default layout: 32K RAM at `0x0000`, the TaliForth ROM at `0x8000`, a VIA
+and a PTM on Unix-socket transports, an ACIA on `~/.emma/dev/ttyS0`, a second ACIA on
+`~/.emma/dev/ttyS1`, an LFSR, and a console — WDC65C02 at 1.8432 MHz. The `emma65` binary
+materializes it into a tempdir when no devices are configured (`apply_default_if_unconfigured` in
+`src/bin/emulator/config.rs`, loaded through the normal `Toml::file()` path); the debugger
+materializes it into `~/.emma/debugger/profiles/default/` the first time that profile directory
+is created (see `profile::ensure_profile_dir` below).
 
 ---
 
@@ -261,6 +268,9 @@ React/TypeScript frontend (`debugger/frontend/`) via `#[tauri::command]`s. UI pr
 - **`menu`** — native File/Edit/Window/Help menu bar and Window-menu checkbox sync
 - **`recent`** — recently-used profile list (`~/.emma/debugger/config/recent.toml`), recorded on every
   profile activation and shown in the File > Open Recent submenu
+- **`profile`** — `--profile` CLI flag, profile directory resolution, `ensure_profile_dir` (seeds a
+  new `default` profile from the bundled `emulator::config::default` template; seeds any other new
+  profile by copying files from `default`), New/Open Profile commands, window-title sync
 
 Devices requiring a byte-stream peer (VIA, MC6840, ACIAs) still use their configured
 `Transport` independent of the debugger UI; only the console is special-cased to route

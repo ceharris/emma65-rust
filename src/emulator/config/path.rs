@@ -83,6 +83,23 @@ fn expand(s: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Renders an absolute `path` for a materialized config value: `~/`-shorthand
+/// if under `$HOME` (which [`ExpandedPathBuf`] expands back on load), otherwise
+/// the absolute path unchanged. The seam for future directory-relative
+/// resolution: nothing in the config-loading path (this type, `loader::load_image`,
+/// `symbol::load_vice_labels`) resolves a relative path against the TOML file's
+/// own directory yet, so a materialized reference can't be relative even when
+/// the resource is a sibling of the config file — when that lands, this is the
+/// one place that needs to change.
+pub(crate) fn portable_path(path: &Path) -> String {
+    if let Ok(home) = std::env::var("HOME")
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", rest.display());
+    }
+    path.display().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +141,17 @@ mod tests {
     fn deref_to_path() {
         let p = ExpandedPathBuf::new("/etc/hosts");
         assert_eq!(p.file_name().unwrap(), "hosts");
+    }
+
+    #[test]
+    fn portable_path_under_home_uses_tilde_shorthand() {
+        unsafe { std::env::set_var("HOME", "/home/user") };
+        assert_eq!(portable_path(Path::new("/home/user/foo/bar")), "~/foo/bar");
+    }
+
+    #[test]
+    fn portable_path_outside_home_is_unchanged() {
+        unsafe { std::env::set_var("HOME", "/home/user") };
+        assert_eq!(portable_path(Path::new("/opt/other/bar")), "/opt/other/bar");
     }
 }

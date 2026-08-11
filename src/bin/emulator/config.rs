@@ -1,5 +1,4 @@
 use clap::Parser;
-use emma65::emulator::CpuVariantSpec;
 use figment::{Figment, providers::{Env, Format, Serialized, Toml}};
 use serde::{Deserialize, Serialize};
 
@@ -48,36 +47,26 @@ impl AppConfig {
 
 }
 
-const DEFAULT_CLOCK_SPEED: u64 = 1_843_200;
-const DEFAULT_CPU_VARIANT: CpuVariantSpec = CpuVariantSpec::Wdc6502;
-
-/// If no devices are configured, writes the embedded default ROM to a tempfile,
-/// populates `config.emulator.devices` with the default RAM + ROM + console layout,
-/// and returns the tempfile handle (must be kept alive until `Config::build()` completes).
-pub fn apply_default_if_unconfigured(config: &mut AppConfig, default_rom: &[u8]) -> Option<tempfile::NamedTempFile> {
+/// If no devices are configured, materializes the bundled default
+/// configuration (ROM image, VICE labels, and `emulator.toml`) into a fresh
+/// tempdir, loads it through the same `Figment`/`Toml::file()` path used for
+/// a user-supplied `--config`, and merges its devices into `config` —
+/// preserving any `cpu_variant_spec`/`clock_speed_hz` already set from
+/// CLI/env/`--config`. Returns the tempdir handle (must be kept alive until
+/// `Config::build()` completes).
+pub fn apply_default_if_unconfigured(config: &mut AppConfig) -> Option<tempfile::TempDir> {
     if config.emulator.devices.as_ref().is_none_or(|d| d.is_empty()) {
-        let f = tempfile::Builder::new()
-            .suffix(".bin")
-            .tempfile()
-            .expect("failed to create tempfile for default ROM");
-        std::fs::write(f.path(), default_rom)
-            .expect("failed to write default ROM to tempfile");
-        let rom_path = f.path().to_path_buf();
-        config.emulator.cpu_variant_spec.get_or_insert(DEFAULT_CPU_VARIANT);
-        config.emulator.clock_speed_hz.get_or_insert(DEFAULT_CLOCK_SPEED);
-        config.emulator.devices = Some(vec![
-            "ram@0x0000,size=32768,fill=0".parse().unwrap(),
-            format!("rom@0x8000,size=32768,image={}", rom_path.display())
-                .parse()
-                .unwrap(),
-            "via/6522@0xff80,transport=unix:~/.emma/sock/via6522".parse().unwrap(),
-            "ptm/6840@0xff90,transport=unix:~/.emma/sock/mc6840".parse().unwrap(),
-            "acia/6551@0xfff0,transport=pty:~/.emma/dev/ttyS0".parse().unwrap(),
-            "acia/6850@0xfff4,transport=pty:~/.emma/dev/ttyS1".parse().unwrap(),
-            "lfsr@0xfff6,mode=step".parse().unwrap(),
-            "console@0xfff8,break=0x3".parse().unwrap(),
-        ]);
-        Some(f)
+        let dir = tempfile::tempdir().expect("failed to create tempdir for default config");
+        let toml_path = emma65::emulator::config::default::materialize_default_config(dir.path())
+            .expect("failed to materialize default config");
+        let default: emma65::emulator::Config = Figment::new()
+            .merge(Toml::file(&toml_path))
+            .extract()
+            .expect("bundled default config failed to parse");
+        config.emulator.cpu_variant_spec = config.emulator.cpu_variant_spec.take().or(default.cpu_variant_spec);
+        config.emulator.clock_speed_hz = config.emulator.clock_speed_hz.take().or(default.clock_speed_hz);
+        config.emulator.devices = default.devices;
+        Some(dir)
     } else {
         None
     }
