@@ -417,16 +417,18 @@ export default function MemoryPanel({ execState }: Props) {
     }
   }, []);
 
-  /** Opens the native file chooser for a symbol file; defaults to the directory of the load file. */
+  /** Opens the native file chooser for a symbol file; defaults to the directory of the load file, falling back to the last remembered file chooser directory. */
   const handleChooseSymbolFile = useCallback(async () => {
-    const dir = loadDialog?.path.trim().replace(/\/[^/]*$/, "") || undefined;
+    const loadFileDir = loadDialog?.path.trim().replace(/\/[^/]*$/, "") || undefined;
+    const defaultPath = loadFileDir ?? (await invoke<string | null>("get_last_file_dialog_dir")) ?? undefined;
     const selected = await openFileDialog({
       multiple: false,
       filters: [{ name: "Symbol Files", extensions: ["lbl", "sym", "map", "txt"] }],
-      defaultPath: dir,
+      defaultPath,
     });
     if (typeof selected === "string") {
       setLoadDialog((d) => d && { ...d, symbolPath: selected });
+      invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
     }
   }, [loadDialog]);
 
