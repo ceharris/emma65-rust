@@ -399,9 +399,11 @@ export default function MemoryPanel({ execState }: Props) {
 
   /** Opens the native file chooser and fills the path + auto-selects format. */
   const handleChooseFile = useCallback(async () => {
+    const defaultPath = await invoke<string | null>("get_last_file_dialog_dir");
     const selected = await openFileDialog({
       multiple: false,
       filters: [{ name: "Memory Files", extensions: ["bin", "rom", "hex", "ihx", "ihex", "s19", "srec"] }],
+      defaultPath: defaultPath ?? undefined,
     });
     if (typeof selected === "string") {
       setLoadDialog((d) => d && {
@@ -411,6 +413,7 @@ export default function MemoryPanel({ execState }: Props) {
         format: formatFromPath(selected),
         formatError: "",
       });
+      invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
     }
   }, []);
 
@@ -487,11 +490,14 @@ export default function MemoryPanel({ execState }: Props) {
 
   /** Opens the native save-file chooser; the OS dialog itself confirms overwrite of an existing file. */
   const handleChooseSaveFile = useCallback(async () => {
+    const defaultPath = await invoke<string | null>("get_last_file_dialog_dir");
     const selected = await saveFileDialog({
       filters: [{ name: "Memory Files", extensions: ["bin"] }],
+      defaultPath: defaultPath ?? undefined,
     });
     if (typeof selected === "string") {
       setSaveDialog((d) => d && { ...d, path: selected, pathError: "" });
+      invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
     }
   }, []);
 

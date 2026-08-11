@@ -215,8 +215,13 @@ export default function TracePanel() {
   }, [fetchTail]);
 
   const handleRecord = useCallback(async () => {
-    const path = await save({ filters: [{ name: "Trace Files", extensions: ["trace"] }] });
+    const defaultPath = await invoke<string | null>("get_last_file_dialog_dir");
+    const path = await save({
+      filters: [{ name: "Trace Files", extensions: ["trace"] }],
+      defaultPath: defaultPath ?? undefined,
+    });
     if (!path) return;
+    invoke("set_last_file_dialog_dir", { path }).catch(() => {});
     try {
       await invoke("record_trace", { path });
       setRecording(true);
