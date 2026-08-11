@@ -36,6 +36,16 @@
         "resizable": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "label": "log",
+        "title": "Emma65 Log",
+        "url": "log.html",
+        "width": 1000,
+        "height": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {

@@ -1,0 +1,100 @@
+.log-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.log-log-area {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.log-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+
+  th {
+    text-align: left;
+    font-family: var(--font-ui);
+    font-size: var(--font-size-btn);
+    font-weight: bold;
+    color: var(--color-muted);
+    background-color: var(--color-bg-alt);
+    border-bottom: 1px solid var(--color-border);
+    padding: 2px 7px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  // Column widths (below) are sized for content plus this padding — cells
+  // use box-sizing: border-box, so padding eats into the fixed column width
+  // rather than adding to it.
+  td {
+    padding: 0 7px;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-mono);
+    white-space: nowrap;
+  }
+}
+
+.col-timestamp {
+  width: 13ch;
+}
+
+.col-cycles {
+  width: 12ch;
+}
+
+.col-level {
+  width: 7ch;
+}
+
+.col-category {
+  width: 11ch;
+}
+
+.log-timestamp {
+  color: var(--color-muted);
+}
+
+.log-cycles {
+  text-align: right;
+  color: var(--color-number);
+}
+
+.log-level {
+  font-weight: bold;
+}
+
+.log-level-info {
+  color: var(--color-info);
+}
+
+.log-level-warn {
+  color: var(--color-warning);
+}
+
+.log-level-error {
+  color: var(--color-error);
+}
+
+.log-category {
+  color: var(--color-directive);
+}
+
+.log-message {
+  white-space: normal;
+  word-break: break-word;
+  color: var(--color-fg);
+}
+
+.log-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--color-muted-2);
+}

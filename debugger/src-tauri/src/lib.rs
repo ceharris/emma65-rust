@@ -49,6 +49,10 @@ mod terminal;
 /// Trace window: live-recorded execution trace, windowed reads, and window visibility.
 mod trace;
 
+/// Log window: in-memory ring buffer of structured log records pushed live to the
+/// frontend, and window visibility.
+mod logging;
+
 /// Native app menu bar (File/Edit/Window/Help) and Window-menu checkbox sync.
 mod menu;
 
@@ -82,7 +86,11 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// session with an injected pipe transport for the console, and returns the
 /// session, the remote end of the pipe, and an `IrqSource` reserved for the
 /// debugger UI's own IRQ toggle control.
-async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPipeTransport, IrqSource, LogSender), String> {
+///
+/// Takes `log_sender` rather than constructing its own: the caller (`load_or_reload_session`)
+/// needs to build it before this runs, since doing so requires an `AppHandle` (via
+/// `spawn_log_collector`'s callback) that this function doesn't have.
+async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, IrqSource), String> {
     let config_path = profile_dir.join("emulator.toml");
 
     let config: Config = Figment::new()
@@ -100,12 +108,11 @@ async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPi
 
     let transport_slot: TransportSlot = Arc::new(Mutex::new(Some((Box::new(local) as Box<dyn Transport>, relay, reporter))));
 
-    // One concrete `LogSender`, shared by every device, the CPU, and the event-logging loop
-    // spawned in `load_or_reload_session` below, so every clone shares the same underlying
-    // cycle-count `Arc` (see `LogSender::set_cycles`) instead of each independently-defaulted
-    // sender carrying its own always-zero counter (see #372/#371).
-    let log_sender = LogSender::default();
-
+    // `log_sender` (built by the caller, see this function's doc comment) is shared by every
+    // device, the CPU, and the event-logging loop spawned in `load_or_reload_session` below, so
+    // every clone shares the same underlying cycle-count `Arc` (see `LogSender::set_cycles`)
+    // instead of each independently-defaulted sender carrying its own always-zero counter (see
+    // #372/#371).
     let context = InstantiationContext {
         clock_hz: config.clock_speed_hz,
         error_sender: None,
@@ -122,7 +129,7 @@ async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPi
         .map_err(|e| format!("Failed to build emulator session: {e}"))?;
 
     let ui_irq_source = IrqSource::from(device_id);
-    Ok((session, remote, ui_irq_source, log_sender))
+    Ok((session, remote, ui_irq_source))
 }
 
 /// Stops any free-running CPU (Run, Step Over, or Step Return) and waits for
@@ -179,16 +186,27 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     profile::set_all_window_titles(app, &profile_name);
     recent::record_recent_profile(app, profile_dir);
 
-    match load_session(profile_dir).await {
-        Ok((session, remote, ui_irq_source, log_sender)) => {
+    // One `LogSender`/collector pair per session load, backed by a background thread that
+    // forwards every `LogRecord` into the Log window's ring buffer + `log-record` event (see
+    // `logging::push_record`). Cloned into `load_session` (shared with the CPU and every
+    // device) and into the event-logging loop below, so every clone shares the same underlying
+    // cycle-count `Arc` (see `LogSender::set_cycles`), same reasoning as #372/#371.
+    let app_for_log = app.clone();
+    let (log_sender, _log_collector_handle) =
+        emma65::emulator::spawn_log_collector(logging::LOG_CHANNEL_CAPACITY, move |record| {
+            logging::push_record(&app_for_log, record);
+        });
+
+    match load_session(profile_dir, log_sender.clone()).await {
+        Ok((session, remote, ui_irq_source)) => {
             let (remote_rx, remote_tx) = remote.into_split();
             *app.state::<terminal::TerminalTx>().0.lock().unwrap() = Some(remote_tx);
 
-            // No log file is wired up for the debugger yet (see the log foundation plan's
-            // follow-up), so this falls back through the `log` crate like any other
-            // unconfigured `LogSender` — still real delivery via the `tauri-plugin-log` sink.
-            // Shares `log_sender` with the CPU and every device (see `load_session`) so cycle
-            // counts on these events aren't stuck at zero.
+            // Structured device/transport events now flow into the Log window via the
+            // `log_sender`/collector built above, in addition to the `tauri-plugin-log` sink any
+            // unconfigured `LogSender` would otherwise fall back through. Shares `log_sender`
+            // with the CPU and every device (see `load_session`) so cycle counts on these events
+            // aren't stuck at zero.
             tauri::async_runtime::spawn(emma65::emulator::log_device_events(
                 session.error_receiver,
                 log_sender,
@@ -399,6 +417,7 @@ pub fn run() {
             enabled: Vec::new(),
         })))
         .manage(trace::TraceState(Mutex::new(trace::TraceData::new())))
+        .manage(logging::LogState(Mutex::new(std::collections::VecDeque::new())))
         .on_menu_event(|app, event| {
             let state = app.state::<menu::WindowMenuState>();
             if event.id() == state.exit_item.id() {
@@ -422,6 +441,8 @@ pub fn run() {
                 let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);
             } else if event.id() == menu::TOGGLE_TRACE_ID {
                 let _ = menu::toggle_window_visibility(app, trace::TRACE_WINDOW_LABEL, &state.trace_item);
+            } else if event.id() == menu::TOGGLE_LOG_ID {
+                let _ = menu::toggle_window_visibility(app, logging::LOG_WINDOW_LABEL, &state.log_item);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -438,6 +459,8 @@ pub fn run() {
             trace::get_trace_window,
             trace::get_trace_status,
             trace::toggle_trace_visibility,
+            logging::get_log_records,
+            logging::toggle_log_visibility,
             disassembly::run_cpu,
             disassembly::stop_cpu,
             disassembly::step_into,
@@ -512,6 +535,16 @@ pub fn run() {
             if let Some(trace_window) = app.get_webview_window(trace::TRACE_WINDOW_LABEL) {
                 let _ = trace_window.remove_menu();
                 install_toggleable_window_lifecycle(&trace_window, window_menu_state.trace_item.clone());
+            }
+            // No need for Terminal's "briefly show then hide" WebKitGTK realize workaround below
+            // — that exists only because Terminal needs a `terminal_ready` JS handshake to
+            // complete before anything can be written to it. The Log window doesn't need JS
+            // running while hidden: history is hydrated via `get_log_records` in a `useEffect` on
+            // mount (same as Trace's `get_trace_status` pattern), so it works correctly the first
+            // time it's actually shown, same as Trace today.
+            if let Some(log_window) = app.get_webview_window(logging::LOG_WINDOW_LABEL) {
+                let _ = log_window.remove_menu();
+                install_toggleable_window_lifecycle(&log_window, window_menu_state.log_item.clone());
             }
             app.manage(window_menu_state);
             app.manage(recent_menu_state);

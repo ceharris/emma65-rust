@@ -29,3 +29,6 @@ gtk = "0.18"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

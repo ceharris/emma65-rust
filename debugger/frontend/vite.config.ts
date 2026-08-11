@@ -27,6 +27,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         terminal: resolve(__dirname, "terminal.html"),
         trace: resolve(__dirname, "trace.html"),
+        log: resolve(__dirname, "log.html"),
       },
     },
   },

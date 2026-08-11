@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Permissions for all debugger windows","local":true,"windows":["main","terminal","trace"],"permissions":["core:default","dialog:default","log:default","clipboard-manager:allow-write-text","clipboard-manager:allow-read-text"]}}
+{"default":{"identifier":"default","description":"Permissions for all debugger windows","local":true,"windows":["main","terminal","trace","log"],"permissions":["core:default","dialog:default","log:default","clipboard-manager:allow-write-text","clipboard-manager:allow-read-text"]}}
