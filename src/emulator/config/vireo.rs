@@ -67,7 +67,7 @@ impl DeviceModule for VireoModule {
                 dev.set_write_policy(write_policy.to_rom_write_policy());
             }
             if let Some(sender) = &context.error_sender {
-                dev.set_error_sender(sender.clone(), device_id);
+                dev.set_error_sender(sender.clone());
             }
             if let Some(sender) = &context.log_sender {
                 dev.set_log_sender(sender.clone());

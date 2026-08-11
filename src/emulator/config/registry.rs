@@ -2,7 +2,7 @@ use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrMod
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::config::led_matrix::LedMatrixModule;
 use crate::emulator::transport::{ChannelRelay, Transport, TransportError, TransportReporter};
-use crate::emulator::{BusConfig, DeviceEvent, DeviceId, ErrorSender, LogSender};
+use crate::emulator::{BusConfig, DeviceEvent, ErrorSender, LogSender};
 use figment::value::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -39,27 +39,28 @@ pub struct InstantiationContext {
 
 impl InstantiationContext {
     /// Returns a callback suitable for [`TransportSpec::to_transport_with_reporter`](super::TransportSpec::to_transport_with_reporter) that
-    /// reports child-process exit as a [`DeviceEvent::TransportError`] for the given device.
-    pub fn pipe_exit_reporter(&self, device_id: DeviceId) -> impl FnOnce(std::io::Error) + Send + 'static {
+    /// reports child-process exit as a [`DeviceEvent::TransportError`] for the device named `name`.
+    pub fn pipe_exit_reporter(&self, name: &'static str) -> impl FnOnce(std::io::Error) + Send + 'static {
         let sender = self.error_sender.clone();
         move |e: std::io::Error| {
             if let Some(sender) = sender {
                 let _ = sender.send(DeviceEvent::TransportError {
-                    device: device_id,
+                    device: name,
                     error: TransportError::Io(e),
                 });
             }
         }
     }
 
-    /// Returns a [`TransportReporter`] bound to `device_id`, backed by this
+    /// Returns a [`TransportReporter`] bound to `name` (as returned by
+    /// [`IoDevice::name`](crate::emulator::IoDevice::name)), backed by this
     /// context's `error_sender` (a silent no-op reporter if none is
     /// configured) — the reporter a `DeviceModule::instantiate` passes into
     /// transport construction so connect/disconnect/error events actually
     /// reach the host.
-    pub fn transport_reporter(&self, device_id: DeviceId) -> TransportReporter {
+    pub fn transport_reporter(&self, name: &'static str) -> TransportReporter {
         let reporter = TransportReporter::pending(self.error_sender.clone());
-        reporter.bind(device_id);
+        reporter.bind(name);
         reporter
     }
 }
@@ -190,11 +191,11 @@ mod tests {
         let (sender, mut receiver) = crate::emulator::device_event_channel();
         let context = InstantiationContext { clock_hz: None, error_sender: Some(sender), console_transport: None, log_sender: None };
 
-        let reporter = context.transport_reporter(DeviceId(5));
+        let reporter = context.transport_reporter("test-device");
         reporter.report_connected(None);
 
         match receiver.try_recv() {
-            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, DeviceId(5)),
+            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, "test-device"),
             other => panic!("expected TransportConnected, got {other:?}"),
         }
     }
@@ -203,7 +204,7 @@ mod tests {
     fn transport_reporter_is_a_silent_no_op_when_no_error_sender_is_configured() {
         let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
 
-        let reporter = context.transport_reporter(DeviceId(5));
+        let reporter = context.transport_reporter("test-device");
         // Must not panic with no error sender configured.
         reporter.report_connected(None);
     }

@@ -38,7 +38,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::emulator::{DeviceEvent, DeviceId, ErrorSender};
+use crate::emulator::{DeviceEvent, ErrorSender};
 use crossbeam_channel::{Receiver, Select, Sender, TrySendError, bounded};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::{Mutex, OnceLock};
@@ -80,20 +80,19 @@ pub enum TransportError {
 pub struct TransportReporter {
     /// Bound lazily for the [`TransportSlot`](crate::emulator::TransportSlot)
     /// injection path, where the transport must be constructed before its
-    /// device (and `DeviceId`) exists. Every reporting method is a silent
+    /// device (and its name) exists. Every reporting method is a silent
     /// no-op until this is set.
-    device_id: Arc<OnceLock<DeviceId>>,
+    device_name: Arc<OnceLock<&'static str>>,
     error_sender: Option<ErrorSender>,
     outbound_drops: Arc<AtomicU64>,
     inbound_drops: Arc<AtomicU64>,
 }
 
 impl TransportReporter {
-    /// Constructs a reporter whose `DeviceId` isn't known yet — for the
+    /// Constructs a reporter whose device name isn't known yet — for the
     /// [`TransportSlot`](crate::emulator::TransportSlot) injection path,
-    /// where the transport must be built before the device (and its
-    /// `DeviceId`) exists. Every reporting call before `bind` is a silent
-    /// no-op.
+    /// where the transport must be built before the device that will own it
+    /// exists. Every reporting call before `bind` is a silent no-op.
     ///
     /// `pub` (rather than `pub(crate)`) so the two call sites that build an
     /// `InternalPipeTransport` directly for that injection path —
@@ -101,27 +100,28 @@ impl TransportReporter {
     /// outside this crate — can construct one too.
     pub fn pending(error_sender: Option<ErrorSender>) -> Self {
         Self {
-            device_id: Arc::new(OnceLock::new()),
+            device_name: Arc::new(OnceLock::new()),
             error_sender,
             outbound_drops: Arc::new(AtomicU64::new(0)),
             inbound_drops: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// Binds the `DeviceId` once the caller determines it. Every
-    /// existing `Clone` of this reporter — including ones already handed to
-    /// background tasks that started before the ID was known — observes the
-    /// bound ID from that point on, since it lives behind the same `Arc` as
-    /// the counters/`ErrorSender`. Exactly-once, enforced by the underlying
-    /// `OnceLock`; later calls are silently ignored.
-    pub(crate) fn bind(&self, device_id: DeviceId) {
-        let _ = self.device_id.set(device_id);
+    /// Binds the device's name (as returned by [`IoDevice::name`](crate::emulator::IoDevice::name))
+    /// once the caller determines it. Every existing `Clone` of this reporter —
+    /// including ones already handed to background tasks that started before
+    /// the name was known — observes the bound name from that point on,
+    /// since it lives behind the same `Arc` as the counters/`ErrorSender`.
+    /// Exactly-once, enforced by the underlying `OnceLock`; later calls are
+    /// silently ignored.
+    pub(crate) fn bind(&self, name: &'static str) {
+        let _ = self.device_name.set(name);
     }
 
     /// Reports a hard transport error. Currently only ever called with
     /// `TransportError::Io`.
     pub fn report_error(&self, error: TransportError) {
-        let Some(&device) = self.device_id.get() else { return };
+        let Some(&device) = self.device_name.get() else { return };
         let Some(sender) = &self.error_sender else { return };
         let _ = sender.send(DeviceEvent::TransportError { device, error });
     }
@@ -141,7 +141,7 @@ impl TransportReporter {
     /// `InboundEventsDropped` for any nonzero count. Called from the existing
     /// outbound-pump/ingress tokio tasks on a `tokio::time::interval`.
     pub fn report_counts(&self) {
-        let Some(&device) = self.device_id.get() else { return };
+        let Some(&device) = self.device_name.get() else { return };
         let Some(sender) = &self.error_sender else { return };
 
         let outbound = self.outbound_drops.swap(0, Ordering::Relaxed);
@@ -158,7 +158,7 @@ impl TransportReporter {
     /// Reports a connect edge. `peer` is `None` for point-to-point
     /// transports and `Some(name)` per-client for multipoint ones.
     pub fn report_connected(&self, peer: Option<String>) {
-        let Some(&device) = self.device_id.get() else { return };
+        let Some(&device) = self.device_name.get() else { return };
         let Some(sender) = &self.error_sender else { return };
         let _ = sender.send(DeviceEvent::TransportConnected { device, peer });
     }
@@ -166,7 +166,7 @@ impl TransportReporter {
     /// Reports a disconnect edge; see [`report_connected`](Self::report_connected)
     /// for `peer`.
     pub fn report_disconnected(&self, peer: Option<String>, reason: String) {
-        let Some(&device) = self.device_id.get() else { return };
+        let Some(&device) = self.device_name.get() else { return };
         let Some(sender) = &self.error_sender else { return };
         let _ = sender.send(DeviceEvent::TransportDisconnected { device, peer, reason });
     }
@@ -196,12 +196,12 @@ mod transport_reporter_tests {
         let reporter = TransportReporter::pending(Some(sender));
         let clone = reporter.clone();
 
-        clone.bind(DeviceId(7));
+        clone.bind("test-device-7");
         reporter.report_connected(Some("peer".to_string()));
 
         match receiver.try_recv() {
             Ok(DeviceEvent::TransportConnected { device, peer }) => {
-                assert_eq!(device, DeviceId(7));
+                assert_eq!(device, "test-device-7");
                 assert_eq!(peer, Some("peer".to_string()));
             }
             other => panic!("unexpected event: {other:?}"),
@@ -212,13 +212,13 @@ mod transport_reporter_tests {
     fn report_error_sends_transport_error() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(1));
+        reporter.bind("test-device-1");
 
         reporter.report_error(TransportError::Disconnected);
 
         match receiver.try_recv() {
             Ok(DeviceEvent::TransportError { device, error: TransportError::Disconnected }) => {
-                assert_eq!(device, DeviceId(1));
+                assert_eq!(device, "test-device-1");
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -228,7 +228,7 @@ mod transport_reporter_tests {
     fn report_counts_emits_only_nonzero_counters_and_resets_them() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(2));
+        reporter.bind("test-device-2");
 
         reporter.note_outbound_drop();
         reporter.note_outbound_drop();
@@ -236,7 +236,7 @@ mod transport_reporter_tests {
 
         match receiver.try_recv() {
             Ok(DeviceEvent::OutboundBytesDropped { device, count }) => {
-                assert_eq!(device, DeviceId(2));
+                assert_eq!(device, "test-device-2");
                 assert_eq!(count, 2);
             }
             other => panic!("unexpected event: {other:?}"),
@@ -253,7 +253,7 @@ mod transport_reporter_tests {
     fn clones_share_counters_and_error_sender() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(3));
+        reporter.bind("test-device-3");
         let clone = reporter.clone();
 
         clone.note_inbound_drop();
@@ -261,7 +261,7 @@ mod transport_reporter_tests {
 
         match receiver.try_recv() {
             Ok(DeviceEvent::InboundEventsDropped { device, count }) => {
-                assert_eq!(device, DeviceId(3));
+                assert_eq!(device, "test-device-3");
                 assert_eq!(count, 1);
             }
             other => panic!("unexpected event: {other:?}"),
@@ -271,7 +271,7 @@ mod transport_reporter_tests {
     #[test]
     fn no_error_sender_is_a_silent_no_op() {
         let reporter = TransportReporter::pending(None);
-        reporter.bind(DeviceId(4));
+        reporter.bind("test-device-4");
         // Must not panic even with no sender to report through.
         reporter.report_error(TransportError::Disconnected);
         reporter.report_connected(None);

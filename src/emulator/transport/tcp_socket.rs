@@ -101,7 +101,7 @@ impl ClientListener for TcpListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::{DeviceEvent, DeviceId, device_event_channel};
+    use crate::emulator::{DeviceEvent, device_event_channel};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
@@ -186,7 +186,7 @@ mod tests {
     async fn send_while_no_client_does_not_count_as_a_drop() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(103));
+        reporter.bind("test-device-103");
         let (mut transport, relay) = TcpSocketTransport::listen("127.0.0.1:0".parse().unwrap(), reporter.clone()).await.unwrap();
 
         assert!(!transport.is_connected());
@@ -296,7 +296,7 @@ mod tests {
     async fn outbound_overflow_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(99));
+        reporter.bind("test-device-99");
         let (mut transport, relay) = TcpSocketTransport::listen_with_capacity("127.0.0.1:0".parse().unwrap(), reporter.clone(), 1).await.unwrap();
         let addr = transport.local_addr();
 
@@ -315,7 +315,7 @@ mod tests {
 
         match receiver.try_recv() {
             Ok(DeviceEvent::OutboundBytesDropped { device, count }) => {
-                assert_eq!(device, DeviceId(99));
+                assert_eq!(device, "test-device-99");
                 assert!(count >= 1);
             }
             other => panic!("unexpected event: {other:?}"),
@@ -328,7 +328,7 @@ mod tests {
     async fn inbound_overflow_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(100));
+        reporter.bind("test-device-100");
         let (transport, relay) = TcpSocketTransport::listen_with_capacity("127.0.0.1:0".parse().unwrap(), reporter.clone(), 1).await.unwrap();
         let addr = transport.local_addr();
 
@@ -346,7 +346,7 @@ mod tests {
 
         match receiver.try_recv() {
             Ok(DeviceEvent::InboundEventsDropped { device, count }) => {
-                assert_eq!(device, DeviceId(100));
+                assert_eq!(device, "test-device-100");
                 assert!(count >= 1);
             }
             other => panic!("unexpected event: {other:?}"),
@@ -359,7 +359,7 @@ mod tests {
     async fn client_connect_disconnect_reports_peer_events() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(102));
+        reporter.bind("test-device-102");
         let (transport, relay) = TcpSocketTransport::listen("127.0.0.1:0".parse().unwrap(), reporter).await.unwrap();
         let addr = transport.local_addr();
 
@@ -368,7 +368,7 @@ mod tests {
 
         let peer = match receiver.try_recv() {
             Ok(DeviceEvent::TransportConnected { device, peer: Some(peer) }) => {
-                assert_eq!(device, DeviceId(102));
+                assert_eq!(device, "test-device-102");
                 assert!(!peer.is_empty());
                 peer
             }
@@ -380,7 +380,7 @@ mod tests {
 
         match receiver.try_recv() {
             Ok(DeviceEvent::TransportDisconnected { device, peer: Some(disconnected_peer), .. }) => {
-                assert_eq!(device, DeviceId(102));
+                assert_eq!(device, "test-device-102");
                 assert_eq!(disconnected_peer, peer);
             }
             other => panic!("unexpected event: {other:?}"),

@@ -34,7 +34,7 @@
 //!
 use crate::emulator::AddressRange;
 use crate::emulator::bus::RomWritePolicy;
-use crate::emulator::device::{DeviceId, ErrorSender, IoDevice};
+use crate::emulator::device::{ErrorSender, IoDevice};
 use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
 
 const NUM_BANKS: u8 = 4;
@@ -62,8 +62,6 @@ pub struct Phoebe {
     write_policy: Option<RomWritePolicy>,
     /// Destination for error events.
     error_sender: Option<ErrorSender>,
-    /// Device identity for error events.
-    device_id: Option<DeviceId>,
     /// Address region that corresponds to ROM
     rom_range: AddressRange,
     /// Address region that corresponds to the bank-switching window
@@ -88,7 +86,6 @@ impl Phoebe {
             control_register_address,
             write_policy: None,
             error_sender: None,
-            device_id: None,
             rom_range: AddressRange::new(ROM_START, ROM_END),
             window_range: AddressRange::new(WINDOW_START, WINDOW_END),
             selected_bank: 0,
@@ -126,9 +123,8 @@ impl Phoebe {
     }
 
     /// Sets the error sender for event reporting.
-    pub fn set_error_sender(&mut self, sender: ErrorSender, id: DeviceId) {
+    pub fn set_error_sender(&mut self, sender: ErrorSender) {
         self.error_sender = Some(sender);
-        self.device_id = Some(id);
     }
 
     /// Installs a log sender for diagnostic messages (e.g. `reset()`).
@@ -137,9 +133,9 @@ impl Phoebe {
     }
 
     fn report_rejected_write(&self, address: u16) {
-        if let (Some(sender), Some(id)) = (&self.error_sender, self.device_id) {
+        if let Some(sender) = &self.error_sender {
             use crate::emulator::device::DeviceEvent;
-            let _ = sender.send(DeviceEvent::RejectedWrite { device: id, address });
+            let _ = sender.send(DeviceEvent::RejectedWrite { device: self.name, address });
         }
     }
 
@@ -336,10 +332,9 @@ mod tests {
 
     #[tokio::test]
     async fn write_rom_reports_rejected_write_when_policy_is_error() {
-        let device_id = DeviceId(0);
         let mut device = device();
         let (tx, mut rx) = mpsc::unbounded_channel::<DeviceEvent>();
-        device.set_error_sender(tx, device_id);
+        device.set_error_sender(tx);
         device.set_write_policy(RomWritePolicy::Error);
 
         device.write(0xFFFF, 0);

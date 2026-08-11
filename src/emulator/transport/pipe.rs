@@ -248,7 +248,7 @@ async fn drain_outbound(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::{DeviceEvent, DeviceId, device_event_channel};
+    use crate::emulator::{DeviceEvent, device_event_channel};
     use std::sync::Mutex;
 
     /// Shuts `transport` down (stopping the background Tokio task) and drops
@@ -348,7 +348,7 @@ mod tests {
     async fn outbound_overflow_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(99));
+        reporter.bind("test-device-99");
         let (mut transport, relay) = PipeTransport::spawn_with_capacity(
             &["cat".to_string()],
             reporter.clone(),
@@ -367,7 +367,7 @@ mod tests {
 
         match receiver.try_recv() {
             Ok(DeviceEvent::OutboundBytesDropped { device, count }) => {
-                assert_eq!(device, DeviceId(99));
+                assert_eq!(device, "test-device-99");
                 assert!(count >= 1);
             }
             other => panic!("unexpected event: {other:?}"),

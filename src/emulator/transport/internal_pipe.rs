@@ -447,7 +447,7 @@ fn set_nonblocking(file: &File) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::{DeviceEvent, DeviceId, device_event_channel};
+    use crate::emulator::{DeviceEvent, device_event_channel};
     use std::time::Duration;
 
     fn pair() -> ((InternalPipeTransport, ChannelRelay<u8>), InternalPipeTransport) {
@@ -566,7 +566,7 @@ mod tests {
     fn outbound_full_pipe_increments_drop_counter_and_is_reported() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(99));
+        reporter.bind("test-device-99");
         let ((mut local, relay), _remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
         assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
 
@@ -579,7 +579,7 @@ mod tests {
 
         match receiver.try_recv() {
             Ok(DeviceEvent::OutboundBytesDropped { device, count }) => {
-                assert_eq!(device, DeviceId(99));
+                assert_eq!(device, "test-device-99");
                 assert!(count >= 1);
             }
             other => panic!("unexpected event: {other:?}"),

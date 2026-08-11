@@ -60,18 +60,18 @@ impl DeviceModule for ConsoleModule {
             let mut dev = Console::new(self.name()).with_address(address);
             if let Some(transport_spec) = transport_spec {
                 let (transport, relay) = transport_spec
-                    .to_transport_with_reporter(context.transport_reporter(device_id), context.pipe_exit_reporter(device_id)).await
+                    .to_transport_with_reporter(context.transport_reporter(self.name()), context.pipe_exit_reporter(self.name())).await
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport, relay);
             } else if let Some((transport, relay, reporter)) = context.console_transport.as_ref()
                     .and_then(|slot| slot.lock().ok()?.take()) {
                 // The reporter was constructed via `TransportReporter::pending`
-                // before this device's id existed (the `TransportSlot`
+                // before this device existed (the `TransportSlot`
                 // injection path builds its transport ahead of
                 // `DeviceModule::instantiate`); bind it now so every clone
                 // already handed to the transport's background machinery
-                // starts reporting under the right id.
-                reporter.bind(device_id);
+                // starts reporting under the right name.
+                reporter.bind(self.name());
                 dev.attach_transport(transport, TransportRelay::Byte(relay));
             }
             if let Some(break_key) = config.break_key {
@@ -100,7 +100,7 @@ mod tests {
 
     /// Builds a `TransportSlot` the same way `main.rs`/`load_session` do: a
     /// real relay-backed `InternalPipeTransport` pair, plus an unbound
-    /// `TransportReporter` (device id assigned later, by `instantiate`).
+    /// `TransportReporter` (device name bound later, by `instantiate`).
     /// Returns the slot, the reporter (cloned, so the caller can exercise it
     /// after `instantiate` binds the original), and the pair's remote end.
     fn injected_slot() -> (TransportSlot, TransportReporter, InternalPipeTransport) {
@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn injected_transport_reporter_is_bound_to_allocated_device_id() {
+    async fn injected_transport_reporter_is_bound_to_device_name() {
         let (error_sender, mut error_receiver) = crate::emulator::device_event_channel();
         let reporter = TransportReporter::pending(Some(error_sender));
         let ((local, relay), _remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
@@ -186,7 +186,7 @@ mod tests {
         let _bus_config = ConsoleModule.instantiate(
             BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
 
-        // Before `instantiate` runs, this reporter is unbound (no `DeviceId` exists yet at
+        // Before `instantiate` runs, this reporter is unbound (the device doesn't exist yet at
         // construction) so every reporting call is a silent no-op; `instantiate` must call
         // `bind` on the copy it pulls out of the slot for this clone to start reporting too.
         reporter.report_connected(Some("test-peer".to_string()));

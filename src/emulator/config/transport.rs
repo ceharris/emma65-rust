@@ -155,7 +155,7 @@ impl TryFrom<TransportSpecFormat> for TransportSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::{DeviceEvent, DeviceId, device_event_channel};
+    use crate::emulator::{DeviceEvent, device_event_channel};
     use std::net::Ipv6Addr;
     use std::path::PathBuf;
     use tokio::net::UnixStream;
@@ -172,13 +172,13 @@ mod tests {
     async fn to_transport_with_reporter_forwards_caller_reporter_for_pipe_spec() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(42));
+        reporter.bind("test-device-42");
 
         let spec = TransportSpec::Pipe { command: vec!["cat".to_string()] };
         let (mut transport, relay) = spec.to_transport_with_reporter(reporter, |_| {}).await.unwrap();
 
         match receiver.try_recv() {
-            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, DeviceId(42)),
+            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, "test-device-42"),
             other => panic!("expected TransportConnected, got {other:?}"),
         }
 
@@ -192,7 +192,7 @@ mod tests {
     async fn to_transport_with_reporter_forwards_caller_reporter_for_unix_spec() {
         let (sender, mut receiver) = device_event_channel();
         let reporter = TransportReporter::pending(Some(sender));
-        reporter.bind(DeviceId(7));
+        reporter.bind("test-device-7");
 
         let path = tmp_socket_path("forwards_caller_reporter");
         let spec = TransportSpec::Unix { path: ExpandedPathBuf::new(path.to_str().unwrap()) };
@@ -202,7 +202,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         match receiver.try_recv() {
-            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, DeviceId(7)),
+            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, "test-device-7"),
             other => panic!("expected TransportConnected, got {other:?}"),
         }
 
