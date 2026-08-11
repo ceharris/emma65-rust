@@ -129,7 +129,7 @@ export default function LogPanel() {
           <thead>
             <tr>
               <th>Timestamp</th>
-              <th>Cycles</th>
+              <th>Cycle#</th>
               <th>Level</th>
               <th>Category</th>
               <th>Message</th>

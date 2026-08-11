@@ -65,7 +65,11 @@ pub struct LogState(pub Mutex<VecDeque<LogRecordDto>>);
 /// Called from the `spawn_log_collector` callback in `lib.rs`, so it runs on the collector's
 /// background thread — `AppHandle::state()`/`emit_to` are thread-safe, same as
 /// `terminal::run_terminal_bridge`'s `app.emit_to` call from its own task.
-pub fn push_record(app: &AppHandle, record: LogRecord) {
+///
+/// Generic over `R: tauri::Runtime` (rather than the concrete `AppHandle` alias) solely so the
+/// test below can exercise it against `tauri::test::MockRuntime`; every production call site
+/// still passes a plain `&AppHandle` (= `AppHandle<Wry>`), inferred automatically.
+pub fn push_record<R: tauri::Runtime>(app: &AppHandle<R>, record: LogRecord) {
     let dto = LogRecordDto::from(record);
 
     let state = app.state::<LogState>();
@@ -91,4 +95,57 @@ pub fn get_log_records(state: State<LogState>) -> Vec<LogRecordDto> {
 #[tauri::command]
 pub fn toggle_log_visibility(app: AppHandle, window_menu: State<crate::menu::WindowMenuState>) -> Result<(), String> {
     crate::menu::toggle_window_visibility(&app, LOG_WINDOW_LABEL, &window_menu.log_item)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime};
+
+    use emma65::emulator::{LogCategory, LogLevel};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::{Listener, WebviewWindowBuilder};
+
+    /// Builds a mocked app + real `log` window, calls `push_record` from a genuine background
+    /// thread (mirroring `spawn_log_collector`'s callback), then asserts both that the ring
+    /// buffer state was updated and that the `log-record` event was actually emitted and
+    /// received by a listener on the window.
+    #[test]
+    fn push_record_from_background_thread_updates_state_and_emits_event() {
+        let app = mock_builder()
+            .manage(LogState(Mutex::new(VecDeque::new())))
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app");
+
+        let window = WebviewWindowBuilder::new(&app, LOG_WINDOW_LABEL, Default::default())
+            .build()
+            .expect("failed to build log window");
+
+        let (tx, rx) = mpsc::channel();
+        window.listen("log-record", move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+        let app_handle = app.handle().clone();
+        std::thread::spawn(move || {
+            push_record(&app_handle, LogRecord {
+                timestamp: SystemTime::now(),
+                cycles: 42,
+                level: LogLevel::Info,
+                category: LogCategory::Cpu,
+                message: "background thread test message".into(),
+            });
+        })
+        .join()
+        .expect("push_record thread panicked");
+
+        let state = app.state::<LogState>();
+        assert_eq!(state.0.lock().unwrap().len(), 1, "push_record did not append to LogState");
+
+        let payload = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("log-record event was never received by the window listener");
+        assert!(payload.contains("background thread test message"));
+    }
 }
