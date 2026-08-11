@@ -58,9 +58,17 @@
     font-size: var(--font-size-mono);
   }
 
+  // Spans both columns (colSpan={2} in RegisterPanel.tsx) rather than
+  // sitting in the narrower value column alone — 8 letter-spaced flag
+  // characters don't fit the value column's width once the register table
+  // is only half the panel's width (two side-by-side column pairs).
+  // padding-left re-creates the name-column indent so it still lines up
+  // under PC/S/P's values above it.
   .reg-flags {
     letter-spacing: 0.08em;
     font-size: var(--font-size-mono);
+    padding-left: calc(3ch + 18px);
+    white-space: nowrap;
   }
 }
 

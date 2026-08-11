@@ -385,8 +385,7 @@ export default function RegisterPanel() {
                 <td className="reg-value">{renderRegisterValue("p", formatDataRadix(snap.p, addrRadix, 8), addrRadix, 8, true)}</td>
               </tr>
               <tr>
-                <td className="reg-name" />
-                <td className="reg-flags">
+                <td className="reg-flags" colSpan={2}>
                   {renderFlags(snap.p, snap.changed_flags)}
                 </td>
               </tr>
