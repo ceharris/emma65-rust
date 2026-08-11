@@ -51,6 +51,17 @@ impl InstantiationContext {
             }
         }
     }
+
+    /// Returns a [`TransportReporter`] bound to `device_id`, backed by this
+    /// context's `error_sender` (a silent no-op reporter if none is
+    /// configured) — the reporter a `DeviceModule::instantiate` passes into
+    /// transport construction so connect/disconnect/error events actually
+    /// reach the host.
+    pub fn transport_reporter(&self, device_id: DeviceId) -> TransportReporter {
+        let reporter = TransportReporter::pending(self.error_sender.clone());
+        reporter.bind(device_id);
+        reporter
+    }
 }
 
 type InstantiateFn = Box<
@@ -172,6 +183,29 @@ mod tests {
                 -> Result<BusConfig, DeviceModuleError> {
             Err(DeviceModuleError::Config(self.tag.unwrap_or(self.name).to_string()))
         }
+    }
+
+    #[test]
+    fn transport_reporter_is_bound_and_reports_through_error_sender() {
+        let (sender, mut receiver) = crate::emulator::device_event_channel();
+        let context = InstantiationContext { clock_hz: None, error_sender: Some(sender), console_transport: None, log_sender: None };
+
+        let reporter = context.transport_reporter(DeviceId(5));
+        reporter.report_connected(None);
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, DeviceId(5)),
+            other => panic!("expected TransportConnected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transport_reporter_is_a_silent_no_op_when_no_error_sender_is_configured() {
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
+
+        let reporter = context.transport_reporter(DeviceId(5));
+        // Must not panic with no error sender configured.
+        reporter.report_connected(None);
     }
 
     #[tokio::test]

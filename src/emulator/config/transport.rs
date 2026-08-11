@@ -28,11 +28,13 @@ pub enum TransportSpec {
 impl TransportSpec {
     const DEFAULT_BIND_IP_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
-    /// Creates the transport and its paired relay, calling `on_child_exit` if the child
-    /// process spawned by a [`Pipe`](TransportSpec::Pipe) variant exits for any reason.
-    /// For all other variants the callback is never invoked.
+    /// Creates the transport and its paired relay, reporting connect/disconnect/error
+    /// events on `reporter` and calling `on_child_exit` if the child process spawned by
+    /// a [`Pipe`](TransportSpec::Pipe) variant exits for any reason. For all other
+    /// variants the callback is never invoked.
     pub async fn to_transport_with_reporter<F>(
         &self,
+        reporter: TransportReporter,
         on_child_exit: F,
     ) -> Result<(Box<dyn Transport>, TransportRelay), TransportError>
     where
@@ -40,64 +42,31 @@ impl TransportSpec {
     {
         match self {
             TransportSpec::Pipe { command } => {
-                // See the Pty arm below for why a pending reporter is used
-                // here: this call site isn't wired to thread a per-device
-                // TransportReporter through yet (checklist item 9.2 of the
-                // transport relay redesign plan). The relay, unlike earlier
-                // in this plan's implementation, is now returned rather than
-                // leaked — callers that don't yet drain it (checklist item
-                // 9.2 not done for them) are responsible for their own
-                // `std::mem::forget` until they do.
-                let reporter = TransportReporter::pending(None);
                 let (transport, relay) = PipeTransport::spawn(command, reporter, on_child_exit).await
                     .map_err(TransportError::Io)?;
                 Ok((Box::new(transport), TransportRelay::Byte(relay)))
             }
-            other => other.to_transport().await,
+            other => other.to_transport(reporter).await,
         }
     }
 
-    /// Creates the transport and its paired relay. For [`Pipe`](TransportSpec::Pipe)
-    /// variants, child process exit is silently ignored; use
+    /// Creates the transport and its paired relay, reporting connect/disconnect/error
+    /// events on `reporter`. For [`Pipe`](TransportSpec::Pipe) variants, child process
+    /// exit is silently ignored; use
     /// [`to_transport_with_reporter`](Self::to_transport_with_reporter) to surface exit
     /// events as emulator errors.
-    pub async fn to_transport(&self) -> Result<(Box<dyn Transport>, TransportRelay), TransportError> {
+    async fn to_transport(&self, reporter: TransportReporter) -> Result<(Box<dyn Transport>, TransportRelay), TransportError> {
         match self {
             TransportSpec::Tcp { port, address} => {
-                // See the Pty arm below for why a pending reporter is used
-                // here: this call site isn't wired to thread a per-device
-                // TransportReporter through yet (checklist item 9.2 of the
-                // transport relay redesign plan).
                 let addr = SocketAddr::new(*address, *port);
-                let reporter = TransportReporter::pending(None);
                 let (transport, relay) = TcpSocketTransport::listen(addr, reporter).await?;
                 Ok((Box::new(transport), TransportRelay::Tagged(relay)))
             }
             TransportSpec::Unix { path } => {
-                // See the Pty arm below for why a pending reporter is used
-                // here: this call site isn't wired to thread a per-device
-                // TransportReporter through yet (checklist item 9.2 of the
-                // transport relay redesign plan).
-                let reporter = TransportReporter::pending(None);
                 let (transport, relay) = UnixSocketTransport::listen(path, reporter).await?;
                 Ok((Box::new(transport), TransportRelay::Tagged(relay)))
             }
             TransportSpec::Pty { path} => {
-                // TransportSpec::to_transport is shared, device-agnostic
-                // construction machinery (used by every DeviceModule, not
-                // just Console) that isn't wired to thread a per-device
-                // TransportReporter through yet — that lands at checklist
-                // item 9.2 of the transport relay redesign plan. Until then:
-                // a reporter that will never be bound to a DeviceId (so it
-                // silently reports nothing). Callers that don't yet drain
-                // the returned relay are responsible for leaking it
-                // (`std::mem::forget`) themselves — `ChannelRelay::drop`
-                // joins its relay thread, which only exits once every
-                // `Sender` feeding it is gone (or, for a `spawn`-constructed
-                // relay, once its internal stop signal fires), a condition
-                // this generic call site has no way to satisfy on its own
-                // for a caller that never drains.
-                let reporter = TransportReporter::pending(None);
                 let (transport, relay) = if let Some(path) = path {
                     PtyTransport::open(Some(path), reporter)
                 } else {
@@ -106,11 +75,6 @@ impl TransportSpec {
                 Ok((Box::new(transport), TransportRelay::Byte(relay)))
             }
             TransportSpec::Pipe { command } => {
-                // See the Pty arm above for why a pending reporter is used
-                // here: this call site isn't wired to thread a per-device
-                // TransportReporter through yet (checklist item 9.2 of the
-                // transport relay redesign plan).
-                let reporter = TransportReporter::pending(None);
                 let (transport, relay) = PipeTransport::spawn(command, reporter, |_| {}).await
                     .map_err(TransportError::Io)?;
                 Ok((Box::new(transport), TransportRelay::Byte(relay)))
@@ -191,7 +155,61 @@ impl TryFrom<TransportSpecFormat> for TransportSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::emulator::{DeviceEvent, DeviceId, device_event_channel};
     use std::net::Ipv6Addr;
+    use std::path::PathBuf;
+    use tokio::net::UnixStream;
+
+    fn tmp_socket_path(name: &str) -> PathBuf {
+        PathBuf::from(format!("/tmp/emma65_test_transport_spec_{}.sock", name))
+    }
+
+    /// Regression coverage for the bug this issue fixes: `to_transport_with_reporter`
+    /// used to always construct its own `TransportReporter::pending(None)` internally,
+    /// discarding whatever reporter the caller passed in, so connect/disconnect/error
+    /// events could never reach a real `ErrorSender` no matter what the caller supplied.
+    #[tokio::test]
+    async fn to_transport_with_reporter_forwards_caller_reporter_for_pipe_spec() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(42));
+
+        let spec = TransportSpec::Pipe { command: vec!["cat".to_string()] };
+        let (mut transport, relay) = spec.to_transport_with_reporter(reporter, |_| {}).await.unwrap();
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, DeviceId(42)),
+            other => panic!("expected TransportConnected, got {other:?}"),
+        }
+
+        transport.shutdown();
+        drop((transport, relay));
+    }
+
+    /// Same regression, for a delegated (non-`Pipe`) variant — exercises the
+    /// `to_transport_with_reporter` -> `to_transport` delegation path.
+    #[tokio::test]
+    async fn to_transport_with_reporter_forwards_caller_reporter_for_unix_spec() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind(DeviceId(7));
+
+        let path = tmp_socket_path("forwards_caller_reporter");
+        let spec = TransportSpec::Unix { path: ExpandedPathBuf::new(path.to_str().unwrap()) };
+        let (mut transport, relay) = spec.to_transport_with_reporter(reporter, |_| {}).await.unwrap();
+
+        let _client = UnixStream::connect(&path).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        match receiver.try_recv() {
+            Ok(DeviceEvent::TransportConnected { device, .. }) => assert_eq!(device, DeviceId(7)),
+            other => panic!("expected TransportConnected, got {other:?}"),
+        }
+
+        transport.shutdown();
+        drop((transport, relay));
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     #[should_panic(expected = "Transport spec expected")]

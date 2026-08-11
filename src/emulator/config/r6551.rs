@@ -66,7 +66,7 @@ impl DeviceModule for R6551Module {
             }
             if let Some(spec) = transport_spec {
                 let (transport, relay) = spec
-                    .to_transport_with_reporter(context.pipe_exit_reporter(device_id)).await
+                    .to_transport_with_reporter(context.transport_reporter(device_id), context.pipe_exit_reporter(device_id)).await
                     .map_err(DeviceModuleError::Transport)?;
                 dev.attach_transport(transport, relay);
             }
