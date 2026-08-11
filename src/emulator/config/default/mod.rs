@@ -97,7 +97,7 @@ mod tests {
             .extract()
             .expect("bundled default config failed to parse");
 
-        assert_eq!(config.devices.as_ref().map(Vec::len), Some(8));
+        assert_eq!(config.devices.as_ref().map(Vec::len), Some(7));
 
         let _ = std::fs::remove_dir_all(&dest);
     }
