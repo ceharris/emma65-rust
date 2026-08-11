@@ -37,5 +37,14 @@
 
   height: 100%;
   width: 100%;
-  font-family: var(--font-ui);
+
+  // Scoped to the tab bar, not the whole subtree: panel content inherits
+  // body's monospace default (crucial for register/memory/disassembly
+  // alignment) and only explicitly opts into --font-ui for its own buttons
+  // and labels, same as it did before dockview. A theme-root-level
+  // font-family here would silently override that inherited default for
+  // any panel element that doesn't redeclare it.
+  .dv-tabs-and-actions-container {
+    font-family: var(--font-ui);
+  }
 }
