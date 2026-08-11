@@ -21,7 +21,7 @@ pub use cpu::status::StatusRegister;
 pub use cpu::variant::{CpuVariant, InvalidOpcodePolicy};
 pub use cpu::{map_flag_name, map_register_name, Cpu, CpuBuilder, Registers};
 pub use cpu::StepResult;
-pub use device::{device_event_channel, DeviceEvent, DeviceId, ErrorReceiver, ErrorSender, IoDevice};
+pub use device::{device_event_channel, log_device_event, log_device_events, DeviceEvent, DeviceId, ErrorReceiver, ErrorSender, IoDevice};
 pub use device::{PtmAsciiProtocolDecoder, PtmAsciiProtocolEncoder, PtmBinaryProtocolDecoder, PtmBinaryProtocolEncoder, PtmProtocolMessage};
 pub use device::{ViaAsciiProtocolDecoder, ViaAsciiProtocolEncoder, ViaBinaryProtocolDecoder, ViaBinaryProtocolEncoder, ViaProtocolMessage};
 pub use error::{BusConfigError, BusError, CpuBuildError, ExecError};
