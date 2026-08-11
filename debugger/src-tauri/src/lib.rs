@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use emma65::disasm::Disassembler;
 use emma65::emulator::bus::MAX_IRQ_SOURCES;
-use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, Transport, TransportReporter, TransportSlot};
+use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, LogSender, Transport, TransportReporter, TransportSlot};
 
 /// Label of the main debugger window, as assigned by the (unlabeled) first
 /// entry in `tauri.conf.json`'s `app.windows` list.
@@ -82,7 +82,7 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// session with an injected pipe transport for the console, and returns the
 /// session, the remote end of the pipe, and an `IrqSource` reserved for the
 /// debugger UI's own IRQ toggle control.
-async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPipeTransport, IrqSource), String> {
+async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPipeTransport, IrqSource, LogSender), String> {
     let config_path = profile_dir.join("emulator.toml");
 
     let config: Config = Figment::new()
@@ -99,22 +99,30 @@ async fn load_session(profile_dir: &Path) -> Result<(EmulatorSession, InternalPi
         .map_err(|e| format!("Failed to create console transport: {e}"))?;
 
     let transport_slot: TransportSlot = Arc::new(Mutex::new(Some((Box::new(local) as Box<dyn Transport>, relay, reporter))));
+
+    // One concrete `LogSender`, shared by every device, the CPU, and the event-logging loop
+    // spawned in `load_or_reload_session` below, so every clone shares the same underlying
+    // cycle-count `Arc` (see `LogSender::set_cycles`) instead of each independently-defaulted
+    // sender carrying its own always-zero counter (see #372/#371).
+    let log_sender = LogSender::default();
+
     let context = InstantiationContext {
         clock_hz: config.clock_speed_hz,
         error_sender: None,
         console_transport: Some(transport_slot),
-        log_sender: None,
+        log_sender: Some(log_sender.clone()),
     };
 
     let registry = DeviceRegistry::with_builtins();
     let mut session = config.build_with_context(&registry, context).await
         .map_err(|e| format!("Failed to build emulator session: {e}"))?;
+    session.cpu.set_log_sender(log_sender.clone());
 
     let device_id = session.id_allocator.for_irq(DEBUGGER_IRQ)
         .map_err(|e| format!("Failed to build emulator session: {e}"))?;
 
     let ui_irq_source = IrqSource::from(device_id);
-    Ok((session, remote, ui_irq_source))
+    Ok((session, remote, ui_irq_source, log_sender))
 }
 
 /// Stops any free-running CPU (Run, Step Over, or Step Return) and waits for
@@ -172,17 +180,18 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     recent::record_recent_profile(app, profile_dir);
 
     match load_session(profile_dir).await {
-        Ok((session, remote, ui_irq_source)) => {
+        Ok((session, remote, ui_irq_source, log_sender)) => {
             let (remote_rx, remote_tx) = remote.into_split();
             *app.state::<terminal::TerminalTx>().0.lock().unwrap() = Some(remote_tx);
 
             // No log file is wired up for the debugger yet (see the log foundation plan's
             // follow-up), so this falls back through the `log` crate like any other
-            // unconfigured `LogSender` — still real delivery via the `tauri-plugin-log` sink,
-            // where before these events were simply dropped (nothing consumed `error_receiver`).
+            // unconfigured `LogSender` — still real delivery via the `tauri-plugin-log` sink.
+            // Shares `log_sender` with the CPU and every device (see `load_session`) so cycle
+            // counts on these events aren't stuck at zero.
             tauri::async_runtime::spawn(emma65::emulator::log_device_events(
                 session.error_receiver,
-                emma65::emulator::LogSender::default(),
+                log_sender,
             ));
 
             let mut cpu = session.cpu;
