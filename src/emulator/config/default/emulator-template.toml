@@ -24,11 +24,6 @@ address = 0xff80
 transport = "unix:~/.emma/sock/via6522"
 
 [[devices]]
-type = "ptm/6840"
-address = 0xff90
-transport = "unix:~/.emma/sock/mc6840"
-
-[[devices]]
 type = "acia/6551"
 address = 0xfff0
 transport = "pty:~/.emma/dev/ttyS0"
