@@ -103,11 +103,28 @@ export default function DockviewSpike() {
     addDefaultPanels(api);
   }, []);
 
+  // Order matters for spike question 5 (no lost `spike-tick` events): the
+  // new window must be fully built — its `SpikeTicker` listener registered
+  // — before the docked panel that's been receiving ticks is torn down.
+  // `detach_stack_panel`'s `await` only guarantees the window exists, not
+  // that its JS has run yet; same handshake-timing risk the plan flags for
+  // Phase 6's real `terminal_ready`-style concern, just not resolved here.
   const detach = useCallback(() => {
-    invoke("detach_stack_panel").catch((e) => console.error("[spike] detach_stack_panel failed:", e));
+    invoke("detach_stack_panel")
+      .then(() => {
+        const panel = apiRef.current?.getPanel("stack");
+        if (panel) apiRef.current?.removePanel(panel);
+      })
+      .catch((e) => console.error("[spike] detach_stack_panel failed:", e));
   }, []);
 
+  // Reverse order from detach: re-add the docked panel (and its ticker
+  // listener) before the backend destroys the detached window and flips the
+  // `emit_to` target back, for the same reason.
   const reattach = useCallback(() => {
+    if (!apiRef.current?.getPanel("stack")) {
+      apiRef.current?.addPanel({ id: "stack", component: "stack", title: "stack" });
+    }
     invoke("reattach_stack_panel").catch((e) => console.error("[spike] reattach_stack_panel failed:", e));
   }, []);
 
