@@ -61,7 +61,7 @@ pub fn write_terminal(bytes: Vec<u8>, state: State<TerminalTx>) -> Result<(), St
     tx.write_all(&bytes).map_err(|e| e.to_string())
 }
 
-/// Toggles the terminal window's visibility. Bound to Ctrl+Shift+` in both the
+/// Toggles the terminal window's visibility. Bound to Ctrl+Shift+T in both the
 /// main and terminal windows (see `useAppKeyBindings.ts`), so the frontend
 /// doesn't need to track visibility state itself. Delegates to the shared
 /// helper in `menu.rs` so the Window-menu checkbox stays in sync regardless

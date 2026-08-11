@@ -87,14 +87,19 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // These same combos also work from the Terminal/Trace/Log windows via the JS-level
     // listener in `useAppKeyBindings.ts` — that listener skips them specifically for the
     // main window, so the native accelerator and the JS invoke don't both fire there.
-    // "Ctrl+~" rather than "Ctrl+Shift+`": on GTK, Shift is a *consumed* modifier for
-    // the backtick/grave key (it's what selects the "~" level, same as Shift+1 selects
-    // "!"), so registering the accelerator as unshifted grave + a Shift requirement
-    // never matches the actual key-press GTK reports — the press arrives as plain
-    // Ctrl+asciitilde, with Shift already folded into the resolved character. Letters
-    // don't have this problem since GTK canonicalizes their shifted form to the
-    // uppercase keyval, which is exactly how Trace/Log's accelerators are registered
-    // below. See https://docs.gtk.org/gtk3/class.AccelGroup.html on consumed modifiers.
+    //
+    // Terminal is Ctrl+Shift+T rather than the VS Code-style Ctrl+Shift+` originally
+    // wanted (issue #377): on GTK, Shift is a *consumed* modifier for punctuation keys
+    // like backtick or digits — it's what selects the shifted symbol (backtick+Shift is
+    // "~", 1+Shift is "!") — so registering the accelerator as the unshifted symbol plus
+    // a Shift requirement never matches the actual key-press GTK reports, which arrives
+    // as the already-shifted character with Shift folded in. Tauri's menu API only
+    // accepts a physical-key accelerator string and always builds it from the unshifted
+    // symbol, so there's no accelerator string that works around this for punctuation
+    // keys. Letters don't have the problem, since GTK canonicalizes a shifted letter to
+    // its uppercase keyval, which is exactly how muda registers it — hence Trace/Log
+    // below, and Terminal's fallback to a letter. See
+    // https://docs.gtk.org/gtk3/class.AccelGroup.html on consumed modifiers.
     let terminal_visible = window_is_visible(app, TERMINAL_WINDOW_LABEL);
     let terminal_item = CheckMenuItem::with_id(
         app,
@@ -102,7 +107,7 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         "Terminal",
         true,
         terminal_visible,
-        Some("Ctrl+~"),
+        Some("Ctrl+Shift+T"),
     )?;
     let trace_visible = window_is_visible(app, TRACE_WINDOW_LABEL);
     let trace_item = CheckMenuItem::with_id(
@@ -111,7 +116,7 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         "Trace",
         true,
         trace_visible,
-        Some("Ctrl+Shift+T"),
+        Some("Ctrl+Shift+Y"),
     )?;
     let log_visible = window_is_visible(app, LOG_WINDOW_LABEL);
     let log_item =
@@ -176,7 +181,7 @@ pub(crate) fn rebuild_open_recent_submenu(
 ///
 /// Used by the Window-menu item's own click handler and by the
 /// `toggle_terminal_visibility`/`toggle_trace_visibility` commands (bound to
-/// Ctrl+Shift+`` `/Ctrl+Shift+T), so every path that can show or hide one of
+/// Ctrl+Shift+T/Ctrl+Shift+Y), so every path that can show or hide one of
 /// these windows keeps the menu checkbox consistent.
 pub fn toggle_window_visibility(app: &AppHandle, label: &str, check_item: &CheckMenuItem<Wry>) -> Result<(), String> {
     let window = app.get_webview_window(label).ok_or_else(|| format!("{label} window not found"))?;

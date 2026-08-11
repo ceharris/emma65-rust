@@ -585,7 +585,7 @@ pub fn run() {
                 let _ = ready_rx.await;
 
                 // Hide it again so the window stays hidden at launch as intended;
-                // the user reveals it with Ctrl+Shift+` (see `toggle_terminal_visibility`).
+                // the user reveals it with Ctrl+Shift+T (see `toggle_terminal_visibility`).
                 let _ = terminal::hide_terminal_window(&handle);
 
                 load_or_reload_session(&handle, &profile_dir).await;

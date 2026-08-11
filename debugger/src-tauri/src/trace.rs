@@ -289,7 +289,7 @@ pub fn get_trace_status(trace_state: State<TraceState>) -> TraceStatus {
     TraceStatus { recording: state.recording, path: state.path.as_ref().map(|p| p.display().to_string()) }
 }
 
-/// Toggles the trace window's visibility. Bound to Ctrl+Shift+T (see
+/// Toggles the trace window's visibility. Bound to Ctrl+Shift+Y (see
 /// `useAppKeyBindings.ts`), mirroring `terminal::toggle_terminal_visibility`.
 /// Delegates to the shared helper in `menu.rs` so the Window-menu checkbox
 /// stays in sync regardless of which path toggled the window.

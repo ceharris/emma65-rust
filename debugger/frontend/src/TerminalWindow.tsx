@@ -77,7 +77,7 @@ export default function TerminalWindow() {
     });
     termRef.current = term;
 
-    // Let app-wide shortcuts (e.g. Ctrl+Shift+`/Ctrl+Shift+T) bypass xterm's
+    // Let app-wide shortcuts (e.g. Ctrl+Shift+T/Ctrl+Shift+Y) bypass xterm's
     // own key handling — otherwise xterm treats them as terminal control
     // input and stops the keydown from ever reaching the window-level
     // listener. Ctrl+Q is deliberately NOT one of these (issue #351): it's

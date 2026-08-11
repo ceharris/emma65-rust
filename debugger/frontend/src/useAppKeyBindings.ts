@@ -22,9 +22,10 @@ export interface AppKeyBinding {
 /**
  * Key bindings effective in every debugger window (main + terminal).
  *
- * `Backquote` (rather than checking `e.key` for "`") is used for the terminal
- * toggle since `e.key` reports the shifted character (e.g. "~" on a US
- * layout) when Shift is held, but `e.code` is layout- and shift-independent.
+ * Terminal was originally Ctrl+Shift+` (VS Code's terminal-toggle shortcut),
+ * but GTK can't deliver a working native menu accelerator for Shift+backtick
+ * (see the long comment in `menu.rs`), so it was moved to the letter-based
+ * Ctrl+Shift+T, bumping the previous Trace binding to Ctrl+Shift+Y.
  *
  * Exported so `TerminalWindow` can exclude these combos from xterm's own key
  * handling via `attachCustomKeyEventHandler` — xterm otherwise treats
@@ -33,12 +34,12 @@ export interface AppKeyBinding {
  */
 export const APP_KEY_BINDINGS: AppKeyBinding[] = [
   {
-    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "Backquote",
+    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyT",
     command: "toggle_terminal_visibility",
     hasMainWindowAccelerator: true,
   },
   {
-    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyT",
+    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyY",
     command: "toggle_trace_visibility",
     hasMainWindowAccelerator: true,
   },
