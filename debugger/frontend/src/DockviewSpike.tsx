@@ -1,21 +1,22 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DockviewReact, DockviewReadyEvent, DockviewTheme, IDockviewPanelProps } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import "./styles/spike.scss";
 import SpikeStackPanel from "./SpikeStackPanel";
 import SpikeMountLog from "./SpikeMountLog";
+import SpikeThemeSync from "./SpikeThemeSync";
 import SpikeXtermPanel from "./SpikeXtermPanel";
 
 /**
- * Phase 0 spike only (issue #379). Custom theme object proving out spike
+ * Phase 0 spike only (issue #379). Base theme object proving out spike
  * question 1 — see `styles/spike.scss` for the `--dv-*` mapping onto the
- * app's existing `--color-*` palette.
+ * app's existing `--color-*` palette. `colorScheme` is overridden per-render
+ * with the debugger's actual resolved theme (see `SpikeThemeSync`).
  */
-const EMMA65_SPIKE_THEME: DockviewTheme = {
+const EMMA65_SPIKE_THEME_BASE: Omit<DockviewTheme, "colorScheme"> = {
   name: "emma65Spike",
   className: "dockview-theme-emma65",
-  colorScheme: "dark",
 };
 
 const StackTab: React.FC<IDockviewPanelProps> = () => (
@@ -69,6 +70,7 @@ function addDefaultPanels(api: DockviewReadyEvent["api"]) {
 
 export default function DockviewSpike() {
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
+  const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api;
@@ -111,6 +113,7 @@ export default function DockviewSpike() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}>
+      <SpikeThemeSync onChange={setResolvedTheme} />
       <div style={{ display: "flex", gap: 8, padding: 8, flex: "0 0 auto" }}>
         <button onClick={detach}>Detach Stack (Q4/Q5)</button>
         <button onClick={reattach}>Reattach Stack</button>
@@ -120,7 +123,11 @@ export default function DockviewSpike() {
         </span>
       </div>
       <div style={{ flex: "1 1 auto", minHeight: 0 }}>
-        <DockviewReact components={components} onReady={onReady} theme={EMMA65_SPIKE_THEME} />
+        <DockviewReact
+          components={components}
+          onReady={onReady}
+          theme={{ ...EMMA65_SPIKE_THEME_BASE, colorScheme: resolvedTheme }}
+        />
       </div>
     </div>
   );
