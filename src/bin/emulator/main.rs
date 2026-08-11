@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::{AppConfig, apply_default_if_unconfigured};
 use emma65::emulator::cpu::StepResult;
-use emma65::emulator::{DeviceEvent, InstantiationContext, InternalPipeTransport, Transport, TransportReporter, log_device_event};
+use emma65::emulator::{InstantiationContext, InternalPipeTransport, Transport, TransportReporter, log_device_event};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -110,30 +110,8 @@ async fn main() -> ExitCode {
     loop {
         tokio::select! {
             event = error_receiver.recv(), if events_open => {
-                if let Some(event) = &event {
-                    log_device_event(&log_sender_for_events, event);
-                }
-                match event {
-                    Some(DeviceEvent::TransportError { device, error}) =>
-                        eprintln!("device {}: transport error: {}", device.0, error),
-                    Some(DeviceEvent::TransportDisconnected { device, peer, reason}) =>
-                        match peer {
-                            Some(peer) => eprintln!("device {} disconnected: {} ({})", device.0, reason, peer),
-                            None => eprintln!("device {} disconnected: {}", device.0, reason),
-                        },
-                    Some(DeviceEvent::TransportConnected { device, peer }) =>
-                        match peer {
-                            Some(peer) => println!("device {} connected: {}", device.0, peer),
-                            None => println!("device {} connected", device.0),
-                        },
-                    Some(DeviceEvent::DeviceInfo { device, message}) =>
-                        eprintln!("device {}: {}", device.0, message),
-                    Some(DeviceEvent::RejectedWrite { device, address }) =>
-                        eprintln!("device rejected write {}: at address {}", device.0, address),
-                    Some(DeviceEvent::OutboundBytesDropped { device, count }) =>
-                        eprintln!("device {}: {} outbound bytes dropped", device.0, count),
-                    Some(DeviceEvent::InboundEventsDropped { device, count }) =>
-                        eprintln!("device {}: {} inbound events dropped", device.0, count),
+                match &event {
+                    Some(event) => log_device_event(&log_sender_for_events, event),
                     None => events_open = false,      // all senders dropped
                 }
             },
