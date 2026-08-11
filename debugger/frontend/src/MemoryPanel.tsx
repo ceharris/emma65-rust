@@ -312,8 +312,7 @@ export default function MemoryPanel({ execState }: Props) {
       if (execState !== "stopped" || saveDialog || fillDialog || loadDialog || editDialog) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
-        setSaveDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: fmtAddr(endAddr), endError: "", path: "", pathError: "" });
+        setSaveDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: "FFFF", endError: "", path: "", pathError: "" });
       }
     };
     window.addEventListener("keydown", handler);
@@ -676,10 +675,9 @@ export default function MemoryPanel({ execState }: Props) {
           </button>
           <button
             className="mem-save-btn"
-            onClick={() => {
-              const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
-              setSaveDialog({ startInput: fmtAddr(pageAddr), startError: "", endInput: fmtAddr(endAddr), endError: "", path: "", pathError: "" });
-            }}
+            onClick={() =>
+              setSaveDialog({ startInput: fmtAddr(pageAddr), startError: "", endInput: "FFFF", endError: "", path: "", pathError: "" })
+            }
             disabled={execState !== "stopped"}
             title="Save memory range to file (Ctrl+S)"
           >
