@@ -9,7 +9,7 @@ use super::path::portable_path;
 
 const ROM_IMAGE: &[u8] = include_bytes!("program.bin");
 const LABELS: &[u8] = include_bytes!("program.lbl");
-const TEMPLATE: &str = include_str!("emulator.toml.template");
+const TEMPLATE: &str = include_str!("emulator-template.toml");
 
 /// An error that occurred while materializing the bundled default
 /// configuration, naming the file that could not be written.

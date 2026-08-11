@@ -20,7 +20,7 @@ labels file, and shared by both consumers via a single materialization function.
 - **`program.bin`** — the TaliForth ROM image (32 768 bytes), mapped at `0x8000`–`0xFFFF`.
 - **`program.lbl`** — a VICE-format label file for `program.bin`, loaded into the bus's symbol
   table.
-- **`emulator.toml.template`** — the default device layout, as plain text (never parsed as TOML by
+- **`emulator-template.toml`** — the default device layout, as plain text (never parsed as TOML by
   this crate directly). Two placeholder tokens, `{{ROM_IMAGE}}` and `{{LABELS}}`, are substituted
   with materialized file paths before the template is written out as a real `emulator.toml`.
 

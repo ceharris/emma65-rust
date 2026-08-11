@@ -108,7 +108,7 @@ builds the `BusConfig`, constructs `Cpu`, and returns `EmulatorSession`.
 - Transport: `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`, `pty:SYMLINK`
 
 **`emulator::config::default` module (`src/emulator/config/default/`)** — bundles the default
-device layout as a checked-in template (`emulator.toml.template`) plus the TaliForth ROM
+device layout as a checked-in template (`emulator-template.toml`) plus the TaliForth ROM
 (`program.bin`) and its VICE labels (`program.lbl`), embedded via `include_bytes!`/`include_str!`.
 `materialize_default_config(dest)` writes all three (rendered, with `image=`/`labels=` paths
 filled in) into `dest`, returning the path to the written `emulator.toml`. This is the single

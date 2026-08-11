@@ -16,7 +16,7 @@ The fix is to define the default device layout once, as an actual TOML file chec
 
 Move `src/bin/emulator/default.bin` → `src/emulator/config/default/program.bin` (unchanged bytes) so it lives in the library crate, reachable by both the `emma65` binary and `emma65-debugger` (which depends on the library, not the binary crate). Add the (separately supplied) `program.lbl` alongside it, plus a new template file.
 
-**`src/emulator/config/default/emulator.toml.template`** — a plain-text template (never parsed as TOML by this crate; only the *materialized* copy is), with two placeholder tokens substituted via `str::replace` before being written out:
+**`../src/emulator/config/default/emulator-template.toml`** — a plain-text template (never parsed as TOML by this crate; only the *materialized* copy is), with two placeholder tokens substituted via `str::replace` before being written out:
 
 ```toml
 # Bundled default configuration for emma65. This is a TEMPLATE: {{ROM_IMAGE}}
@@ -79,7 +79,7 @@ Field names verified against existing module attribute structs (e.g. `ConsoleAtt
 ```rust
 const ROM_IMAGE: &[u8] = include_bytes!("program.bin");
 const LABELS: &[u8] = include_bytes!("program.lbl");
-const TEMPLATE: &str = include_str!("emulator.toml.template");
+const TEMPLATE: &str = include_str!("emulator-template.toml");
 
 /// Writes the bundled default ROM image, VICE labels file, and a rendered
 /// `emulator.toml` into `dest` (created if missing). Returns the path to
