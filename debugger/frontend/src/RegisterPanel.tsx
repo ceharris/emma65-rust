@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ExecState } from "./DisassemblyPanel";
+import { useExecutionContext } from "./ExecutionContext";
 import { ADDR_RADIX_CYCLE, DataRadix, formatDataRadix, RadixButton, useDataRadix, useRadixCycle } from "./RadixControl";
 import "./styles/registers.scss";
 
@@ -136,19 +136,8 @@ function FlagDisplay({ p, changed }: { p: number; changed: number }) {
 
 // --- component ---
 
-interface Props {
-  /**
-   * When provided (after a step_into call), the panel renders this snapshot
-   * immediately without a round-trip to get_registers.
-   */
-  snapshot: RegisterSnapshot | null;
-  /** Current CPU execution state; register editing is only allowed while stopped. */
-  execState: ExecState;
-  /** Called with the post-edit register snapshot so other panels can update. */
-  onEdit: (snap: RegisterSnapshot) => void;
-}
-
-export default function RegisterPanel({ snapshot: snapFromParent, execState, onEdit }: Props) {
+export default function RegisterPanel() {
+  const { lastSnapshot: snapFromParent, execState, onEdit } = useExecutionContext();
   const [snap, setSnap] = useState<RegisterSnapshot | null>(null);
   const [dataRadix, cycleDataRadix] = useDataRadix("hex");
   const [addrRadix, cycleAddrRadix] = useRadixCycle(ADDR_RADIX_CYCLE, "hex");

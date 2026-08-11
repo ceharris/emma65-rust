@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { ExecState } from "./DisassemblyPanel";
+import { useExecutionContext } from "./ExecutionContext";
 import { formatDataRadix, RadixButton, useDataRadix } from "./RadixControl";
 import "./styles/watchpoints.scss";
 
@@ -42,12 +42,8 @@ interface EditDialogState {
   error: string;
 }
 
-interface Props {
-  /** Current CPU execution state; add/remove are only allowed while stopped. */
-  execState: ExecState;
-}
-
-export default function WatchpointPanel({ execState }: Props) {
+export default function WatchpointPanel() {
+  const { execState } = useExecutionContext();
   const panelRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<WatchpointsSnapshot | null>(null);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);

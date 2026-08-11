@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./DisassemblyPanel";
+import { useExecutionContext } from "./ExecutionContext";
 import { RegisterSnapshot } from "./RegisterPanel";
 import "./styles/cpu-bus.scss";
 
@@ -18,13 +19,6 @@ interface CpuBusState {
   cpu_waiting: boolean;
 }
 
-interface Props {
-  /** Current CPU execution state, derived from DisassemblyPanel. */
-  execState: ExecState;
-  /** Called with the post-reset register snapshot so other panels can update. */
-  onReset: (snap: RegisterSnapshot) => void;
-}
-
 /** Splits "1.8432 MHz" into ["1.8432", "MHz"] so the value and unit can be styled separately. */
 function splitSpeed(speed: string): [string, string] {
   const idx = speed.lastIndexOf(" ");
@@ -36,7 +30,8 @@ function formatCycles(n: number): string {
   return n.toLocaleString();
 }
 
-export default function CpuBusPanel({ execState, onReset }: Props) {
+export default function CpuBusPanel() {
+  const { execState, onReset } = useExecutionContext();
   const [cpuBus, setCpuBus] = useState<CpuBusState | null>(null);
   // Local toggle state for the IRQ button, independent of the aggregate
   // cpuBus.irq_active indicator (which reflects all IRQ sources, including devices).
