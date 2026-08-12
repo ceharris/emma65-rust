@@ -16,7 +16,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "../styles/dock-layout.scss";
 import {useTheme} from "../ThemeContext";
 import {MainPanelId, PANEL_TITLES, panelComponents} from "./panelRegistry";
-import {RUN_CONTROLS_HEIGHT, RUN_CONTROLS_MIN_HEIGHT, RUN_CONTROLS_MIN_WIDTH, RUN_CONTROLS_WIDTH} from "../RunControlsPanel";
+import {RUN_CONTROLS_MIN_HEIGHT, RUN_CONTROLS_MIN_WIDTH} from "../RunControlsPanel";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
 // panels — onDidLayoutChange fires on every intermediate frame of a drag.
@@ -76,16 +76,13 @@ type PanelPosition = DockedPanelPosition | FloatingPanelPosition;
 type FloatingBounds = { x: number; y: number; width: number; height: number } | { position: AnchorPosition; width: number; height: number };
 
 /**
- * Default floating position/size for the Run Controls panel (issue #395)
- * when it has no remembered position — first run, or after a restore whose
- * persisted layout predates this panel. Dockview's `FloatingGroupService`
- * clamps on-screen at runtime, so an imperfect guess self-corrects.
+ * Default *docked* position (issue #402): the bottom of Disassembly's own
+ * column, rather than a `DEFAULT_PANEL_POSITION` entry, because that map has
+ * no per-entry way to also carry `RUN_CONTROLS_MIN_HEIGHT` as an
+ * `initialHeight` — without it a "below" split would default to a 50/50
+ * split, giving this single-row toolbar half of Disassembly's column.
  */
-// Wider than the 7-buttons-only 300px that was confirmed correct earlier —
-// the Auto-Step speed slider/input/unit now live inline on this same row
-// instead of a separate (removed) collapsible drawer, adding real content
-// width, not just chrome.
-const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: RUN_CONTROLS_WIDTH, height: RUN_CONTROLS_HEIGHT };
+const RUN_CONTROLS_DEFAULT_POSITION: AddPanelPositionOptions = { referencePanel: "disassembly", direction: "below" };
 
 /**
  * Records the "terminal" panel's current group/index into `positionRef`
@@ -122,9 +119,10 @@ function positionForReattach(api: DockviewReadyEvent["api"], remembered: DockedP
  * and Trace are absent: they're the two structural roots `addDefaultLayout`
  * adds first (Memory with no position at all, Trace via an
  * `AbsolutePosition` split), so `resolveRevealPosition` special-cases both
- * instead. Run Controls (issue #395) is also absent — it's floating, not
- * docked, so it falls back to `RUN_CONTROLS_DEFAULT_BOUNDS` instead of an
- * entry here.
+ * instead. Run Controls (issue #395/#402) is also absent — its default needs
+ * a fixed `initialHeight` alongside its position, which this map has no
+ * per-entry way to carry, so `resolveRevealPosition` special-cases it too,
+ * via `RUN_CONTROLS_DEFAULT_POSITION`.
  */
 const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: MainPanelId; direction?: "right" | "below" }>> = {
   disassembly: { referencePanel: "memory", direction: "right" },
@@ -190,11 +188,12 @@ function recordPanelPositions(api: DockviewReadyEvent["api"], ref: React.Mutable
  * Resolves where to re-add a panel that a View menu click (issue #393) found
  * missing from the dock: its last recorded position if that group/window
  * still exists, else Trace's usual full-width bottom-group split (for
- * "trace" itself), the floating default (for "run-controls"), or the
- * corresponding `DEFAULT_PANEL_POSITION` entry (for anything else, provided
- * its reference panel is actually present — otherwise dockview has no cell
- * to split relative to, so the panel is added as a new group instead, which
- * is what an absent `position` produces).
+ * "trace" itself), the bottom-of-Disassembly's-column default (for
+ * "run-controls"), or the corresponding `DEFAULT_PANEL_POSITION` entry (for
+ * anything else, provided its reference panel is actually present —
+ * otherwise dockview has no cell to split relative to, so the panel is
+ * added as a new group instead, which is what an absent `position`
+ * produces).
  */
 function resolveRevealPosition(
   api: DockviewReadyEvent["api"],
@@ -215,7 +214,7 @@ function resolveRevealPosition(
     return { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT };
   }
   if (id === "run-controls") {
-    return { floating: RUN_CONTROLS_DEFAULT_BOUNDS };
+    return { position: RUN_CONTROLS_DEFAULT_POSITION, initialHeight: RUN_CONTROLS_MIN_HEIGHT };
   }
   const fallback = DEFAULT_PANEL_POSITION[id];
   if (fallback && api.getPanel(fallback.referencePanel)) {
@@ -295,12 +294,13 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
   add("cpu-bus", { position: { referencePanel: "stack", direction: "below" } });
 
-  // Floating, not docked — see RUN_CONTROLS_DEFAULT_BOUNDS.
+  // Bottom of Disassembly's column (issue #402) — see RUN_CONTROLS_DEFAULT_POSITION.
   api.addPanel({
     id: "run-controls",
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
-    floating: RUN_CONTROLS_DEFAULT_BOUNDS,
+    position: RUN_CONTROLS_DEFAULT_POSITION,
+    initialHeight: RUN_CONTROLS_MIN_HEIGHT,
     minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
     minimumWidth: RUN_CONTROLS_MIN_WIDTH,
   });
@@ -398,25 +398,29 @@ function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached
 }
 
 /**
- * Adds the "run-controls" floating panel (issue #395) if a just-restored
- * layout is missing it — i.e. it was persisted before this panel existed.
- * Same backfill pattern as `addMissingBottomPanels`, reusing
- * `resolveRevealPosition` so a restored old layout's remembered floating
- * bounds (if any survived in `panel_positions`) are honored, falling back to
- * `RUN_CONTROLS_DEFAULT_BOUNDS` otherwise. Returns whether it was added, so
- * the caller knows whether to re-persist.
+ * Adds the "run-controls" panel (issue #395/#402) if a just-restored layout
+ * is missing it — i.e. it was persisted before this panel existed. Same
+ * backfill pattern as `addMissingBottomPanels`, reusing
+ * `resolveRevealPosition` so a restored old layout's remembered position
+ * (docked or floating, if it survived in `panel_positions`) is honored,
+ * falling back to `RUN_CONTROLS_DEFAULT_POSITION` otherwise. Returns whether
+ * it was added, so the caller knows whether to re-persist.
  */
 function addMissingRunControlsPanel(api: DockviewReadyEvent["api"], lastPositions: Partial<Record<MainPanelId, PanelPosition>>): boolean {
   if (api.getPanel("run-controls")) return false;
-  const { floating } = resolveRevealPosition(api, "run-controls", lastPositions);
-  api.addPanel({
-    id: "run-controls",
+  const { position, initialHeight, floating } = resolveRevealPosition(api, "run-controls", lastPositions);
+  const base = {
+    id: "run-controls" as const,
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
-    floating: floating ?? RUN_CONTROLS_DEFAULT_BOUNDS,
     minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
     minimumWidth: RUN_CONTROLS_MIN_WIDTH,
-  });
+  };
+  if (floating) {
+    api.addPanel({ ...base, floating });
+  } else {
+    api.addPanel({ ...base, position, initialHeight });
+  }
   return true;
 }
 
