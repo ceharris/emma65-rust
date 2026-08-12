@@ -16,6 +16,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "../styles/dock-layout.scss";
 import { useTheme } from "../ThemeContext";
 import { MainPanelId, PANEL_TITLES, panelComponents } from "./panelRegistry";
+import { RUN_CONTROLS_COLLAPSED_HEIGHT } from "../RunControlsPanel";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
 // panels — onDidLayoutChange fires on every intermediate frame of a drag.
@@ -80,7 +81,7 @@ type FloatingBounds = { x: number; y: number; width: number; height: number } | 
  * persisted layout predates this panel. Dockview's `FloatingGroupService`
  * clamps on-screen at runtime, so an imperfect guess self-corrects.
  */
-const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: 300, height: 132 };
+const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: 300, height: RUN_CONTROLS_COLLAPSED_HEIGHT };
 
 /**
  * Records the "terminal" panel's current group/index into `positionRef`

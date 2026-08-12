@@ -45,7 +45,7 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   stack: () => <StackPanel />,
   watchpoints: () => <WatchpointPanel />,
   "cpu-bus": () => <CpuBusPanel />,
-  "run-controls": () => <RunControlsPanel />,
+  "run-controls": (props) => <RunControlsPanel {...props} />,
   trace: () => <TracePanel />,
   log: () => <LogPanel />,
   terminal: () => <TerminalPanel />,

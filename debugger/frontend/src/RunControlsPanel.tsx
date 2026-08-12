@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import type { IDockviewPanelProps } from "dockview-react";
 import { useExecutionContext } from "./ExecutionContext";
 import { SLIDER_STEPS, intervalToSlider, useRunControlsContext } from "./RunControlsContext";
 import "./styles/run-controls.scss";
@@ -8,11 +9,21 @@ const INTERVAL_MIN = 0;
 const INTERVAL_MAX = 1000;
 
 /**
+ * Floating-window height (px) that fits just the button row plus dockview's
+ * own floating-titlebar/tab-bar chrome — the collapsed default (see
+ * `DockLayout.tsx`'s `RUN_CONTROLS_DEFAULT_BOUNDS`) and the toggle target
+ * whenever the Auto-Step drawer closes.
+ */
+export const RUN_CONTROLS_COLLAPSED_HEIGHT = 100;
+/** Floating-window height (px) that also fits the Auto-Step speed row. */
+const RUN_CONTROLS_EXPANDED_HEIGHT = 135;
+
+/**
  * Floating panel hosting the Run/Stop/Step Into/Step Over/Step Return buttons
  * and a collapsible Auto-Step drawer (toggle + speed slider), replacing the
  * toolbar that used to live in Disassembly's header.
  */
-export default function RunControlsPanel() {
+export default function RunControlsPanel({ api, containerApi }: IDockviewPanelProps) {
   const { cpuStopped } = useExecutionContext();
   const {
     stepping, isAutoStepping, isFreeRunning, intervalMs, intervalInputValue,
@@ -20,6 +31,38 @@ export default function RunControlsPanel() {
     handleSliderChange, handleIntervalInputChange, handleIntervalInputBlur, handleIntervalInputKeyDown,
   } = useRunControlsContext();
   const [autoStepExpanded, setAutoStepExpanded] = useState(false);
+
+  // Dockview never auto-resizes a floating group to fit its content, so
+  // leaving the window sized for the expanded drawer permanently left a
+  // large blank gap below the button row whenever it was collapsed. The
+  // only documented way to resize an *already*-floating group without
+  // recreating (and so losing the state of) its React content is to
+  // re-float it in place: `addFloatingGroup` reuses the same underlying
+  // group/panel when passed a group that's already floating, it just tears
+  // down and rebuilds the floating window chrome around it. Only fires while
+  // actually floating — a user who's dragged the panel into the dock
+  // shouldn't have it yanked back out just from toggling this, and a docked
+  // group's size is the surrounding split layout's business, not ours.
+  // Deliberately *not* run on mount/restore: that would silently override a
+  // size the user picked by hand-dragging the window's own resize handles,
+  // undoing the cross-restart size persistence every other dock panel gets.
+  const toggleAutoStepDrawer = useCallback(() => {
+    setAutoStepExpanded((prev) => {
+      const next = !prev;
+      if (api.group.api.location.type === "floating") {
+        const box = api.group.api.boundingBox;
+        if (box) {
+          containerApi.addFloatingGroup(api.group, {
+            x: box.left,
+            y: box.top,
+            width: box.width,
+            height: next ? RUN_CONTROLS_EXPANDED_HEIGHT : RUN_CONTROLS_COLLAPSED_HEIGHT,
+          });
+        }
+      }
+      return next;
+    });
+  }, [api, containerApi]);
 
   return (
     <div className="run-controls-panel">
@@ -77,7 +120,7 @@ export default function RunControlsPanel() {
           </button>
           <button
             className="exec-btn disclosure-btn"
-            onClick={() => setAutoStepExpanded((prev) => !prev)}
+            onClick={toggleAutoStepDrawer}
             title={autoStepExpanded ? "Hide Auto-Step speed" : "Show Auto-Step speed"}
           >
             <i className={`codicon codicon-chevron-${autoStepExpanded ? "up" : "down"}`} />

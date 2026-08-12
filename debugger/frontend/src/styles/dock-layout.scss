@@ -41,13 +41,24 @@
   --dv-drag-over-border-color: var(--color-accent);
   --dv-sash-color: transparent;
   --dv-active-sash-color: var(--color-accent);
-  --dv-floating-titlebar-background-color: var(--color-bg-alt);
+  // A distinct blue-tinted "engaged" shade (already used for the auto-step
+  // toggle's active state and drag-over highlights) rather than the
+  // --color-bg-alt every docked tab bar already uses — issue #395 follow-up:
+  // with the same background as everything around it, the floating window
+  // (and its drag handle specifically) was easy to lose track of among the
+  // docked panels.
+  --dv-floating-titlebar-background-color: var(--color-bg-active);
   // Same seam problem the tab-bar border-bottom below fixes, on the drag
   // handle dockview renders above a floating group's tab bar (issue #395):
-  // without a divider, it shares the tab bar's --color-bg-alt with nothing
-  // to distinguish "drag the window" from "click a tab", so the handle was
+  // without a divider, it shares the tab bar's background with nothing to
+  // distinguish "drag the window" from "click a tab", so the handle was
   // invisible and undiscoverable.
-  --dv-floating-titlebar-border-bottom: 1px solid var(--color-border);
+  --dv-floating-titlebar-border-bottom: 1px solid var(--color-border-strong);
+  // Unset in this theme until now — border defaulted to `none` and shadow to
+  // nothing, so a floating window had no visual separation at all from
+  // whatever docked panel happened to sit behind it (issue #395 follow-up).
+  --dv-floating-border: 1px solid var(--color-border-strong);
+  --dv-floating-box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
   --dv-context-menu-background-color: var(--color-bg-alt);
   --dv-context-menu-color: var(--color-fg);
 
@@ -67,6 +78,31 @@
   .dv-tabs-and-actions-container {
     font-family: var(--font-ui);
     border-bottom: 1px solid var(--color-border);
+  }
+
+  // Dockview's floating drag handle is otherwise a plain, contentless strip
+  // (per its own doc comment) — a grip glyph (codicon's dedicated "gripper"
+  // icon, matching the affordance VS Code's own floating debug toolbar uses)
+  // makes its purpose legible at a glance instead of relying on the grab
+  // cursor alone to be discovered on hover. Left-aligned rather than
+  // centered: dockview always renders this bar the full width of the
+  // floating window, above its tab row, so there's no "beside the controls"
+  // position available to put it in — left-aligned at least echoes a
+  // drag-handle-then-controls reading order within that constraint.
+  .dv-floating-titlebar {
+    position: relative;
+
+    &::before {
+      content: "\eb04"; // codicon-gripper
+      font-family: "codicon";
+      position: absolute;
+      left: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 0.85rem;
+      color: var(--color-muted);
+      pointer-events: none;
+    }
   }
 
   // Revives the old .panel-title look (bold, uppercase, letter-spaced) for
