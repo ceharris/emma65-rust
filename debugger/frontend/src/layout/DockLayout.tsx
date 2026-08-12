@@ -9,6 +9,7 @@ import {
   DockviewReact,
   DockviewReadyEvent,
   DockviewTheme,
+  FloatingGroupOptions,
   IDockviewHeaderActionsProps,
   SerializedDockview,
 } from "dockview-react";
@@ -83,6 +84,19 @@ type FloatingBounds = { x: number; y: number; width: number; height: number } | 
  * split, giving this single-row toolbar half of Disassembly's column.
  */
 const RUN_CONTROLS_DEFAULT_POSITION: AddPanelPositionOptions = { referencePanel: "disassembly", direction: "below" };
+
+/**
+ * Bounds used by the Run Controls tab's explicit "Float" action (issue
+ * #404) — the same size manually confirmed via UAT when this panel
+ * defaulted to floating (issue #395). Wider/taller than
+ * `RUN_CONTROLS_MIN_WIDTH`/`RUN_CONTROLS_MIN_HEIGHT`: those describe the
+ * docked *content* minimum, whereas a floating group additionally needs
+ * room for dockview's own floating-titlebar/tab-bar chrome. An explicit
+ * action rather than a drag gesture because this app's dockview grid fills
+ * the entire window with no empty margin to drop into — there's nowhere
+ * drag-and-drop could resolve to "no valid dock target" and float instead.
+ */
+const RUN_CONTROLS_FLOAT_BOUNDS: FloatingGroupOptions = { x: 460, y: 40, width: RUN_CONTROLS_MIN_WIDTH, height: 100 };
 
 /**
  * Records the "terminal" panel's current group/index into `positionRef`
@@ -483,30 +497,52 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
 }
 
 /**
- * Builds the `rightHeaderActionsComponent` dockview renders once per group,
- * closing over `positionRef` so the Detach button can remember where
- * Terminal was before closing it (see `closeTerminalPanel`) — dockview gives
- * this component no way to receive extra props of its own, only the
- * per-group `IDockviewHeaderActionsProps` it defines. Groups whose active
- * panel isn't "terminal" render nothing. Clicking Detach calls the
- * `detach_terminal` command (shows the detached window, retargets the
- * console bridge, persists the flag — see `terminal.rs`) and only then
- * closes the dock panel, deliberately after the new window/target is fully
- * in place (issue #385's `emit_to`-retarget race mitigation).
+ * Builds the `rightHeaderActionsComponent` dockview renders once per group
+ * — dockview supports only one such component for the whole component, so
+ * every panel needing a header action shares this one, branching on
+ * `activePanel.id`; groups whose active panel needs no action render
+ * nothing.
+ *
+ * Terminal's Detach button closes over `positionRef` so it can remember
+ * where Terminal was before closing it (see `closeTerminalPanel`). Clicking
+ * it calls the `detach_terminal` command (shows the detached window,
+ * retargets the console bridge, persists the flag — see `terminal.rs`) and
+ * only then closes the dock panel, deliberately after the new window/target
+ * is fully in place (issue #385's `emit_to`-retarget race mitigation).
+ *
+ * Run Controls' Float button (issue #404) is a plain dockview-only
+ * operation — `containerApi.addFloatingGroup` moves the panel into a new
+ * floating group in place, no Tauri command involved. It's needed as an
+ * explicit action because this app's dockview grid fills the entire window
+ * with no empty margin to drop a dragged tab into — there's nowhere for
+ * dockview's own drag-to-float gesture (which floats on a drop with no
+ * valid dock target) to actually resolve to "float" in this layout. Hidden
+ * once the panel is already floating, since floating an already-floating
+ * panel does nothing useful.
  */
-function makeTerminalTabActions(positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
-  return function TerminalTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
-    if (activePanel?.id !== "terminal") return null;
-    const handleDetach = () => {
-      invoke("detach_terminal")
-        .then(() => closeTerminalPanel(containerApi, positionRef))
-        .catch((err) => console.error("detach_terminal failed:", err));
-    };
-    return (
-      <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
-        <i className="codicon codicon-link-external" />
-      </button>
-    );
+function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
+  return function DockTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
+    if (activePanel?.id === "terminal") {
+      const handleDetach = () => {
+        invoke("detach_terminal")
+          .then(() => closeTerminalPanel(containerApi, positionRef))
+          .catch((err) => console.error("detach_terminal failed:", err));
+      };
+      return (
+        <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
+          <i className="codicon codicon-link-external" />
+        </button>
+      );
+    }
+    if (activePanel?.id === "run-controls" && activePanel.group.api.location.type !== "floating") {
+      const handleFloat = () => containerApi.addFloatingGroup(activePanel, RUN_CONTROLS_FLOAT_BOUNDS);
+      return (
+        <button className="dock-tab-action" onClick={handleFloat} title="Float Run Controls">
+          <i className="codicon codicon-multiple-windows" />
+        </button>
+      );
+    }
+    return null;
   };
 }
 
@@ -518,7 +554,7 @@ export default function DockLayout() {
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
   const terminalPositionRef = useRef<DockedPanelPosition | null>(null);
   const lastPanelPositionRef = useRef<Partial<Record<MainPanelId, PanelPosition>>>({});
-  const TerminalTabActions = useMemo(() => makeTerminalTabActions(terminalPositionRef), []);
+  const DockTabActions = useMemo(() => makeDockTabActions(terminalPositionRef), []);
 
   useEffect(
     () => () => {
@@ -589,7 +625,7 @@ export default function DockLayout() {
   // Rust-driven detach/reattach (the Window > Terminal menu item, and the
   // detached window's native close button) has no JS handler of its own
   // already in place to add/remove the "terminal" dock panel — the dock
-  // tab's own Detach button (`TerminalTabActions` below) does that inline
+  // tab's own Detach button (`DockTabActions` below) does that inline
   // since it's already running in this component, but the menu/close paths
   // instead emit these two events for the same effect.
   useEffect(() => {
@@ -631,7 +667,7 @@ export default function DockLayout() {
     <div className="dock-layout">
       <DockviewReact
         components={panelComponents}
-        rightHeaderActionsComponent={TerminalTabActions}
+        rightHeaderActionsComponent={DockTabActions}
         onReady={onReady}
         theme={{ ...EMMA65_DOCK_THEME_BASE, colorScheme: resolvedTheme }}
       />
