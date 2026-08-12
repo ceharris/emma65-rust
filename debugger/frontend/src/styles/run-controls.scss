@@ -10,7 +10,10 @@
 .run-controls-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  // Wider than the 6px/5px gaps within each button group below, so the
+  // Auto-Step group reads as visually distinct from the core run/step
+  // actions rather than just another button in the same row.
+  gap: 16px;
 }
 
 .exec-controls {
@@ -19,17 +22,10 @@
   gap: 6px;
 }
 
-.auto-step-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .auto-step-control {
   display: flex;
   align-items: center;
   gap: 5px;
-  justify-content: flex-start;
 }
 
 .speed-slider {
@@ -120,10 +116,5 @@
       border-color: var(--color-accent);
       color: var(--color-fg-strong);
     }
-  }
-
-  &.disclosure-btn {
-    color: var(--color-muted);
-    padding: 4px 5px;
   }
 }

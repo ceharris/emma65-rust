@@ -81,7 +81,11 @@ type FloatingBounds = { x: number; y: number; width: number; height: number } | 
  * persisted layout predates this panel. Dockview's `FloatingGroupService`
  * clamps on-screen at runtime, so an imperfect guess self-corrects.
  */
-const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: 300, height: RUN_CONTROLS_HEIGHT };
+// Wider than the 7-buttons-only 300px that was confirmed correct earlier —
+// the Auto-Step speed slider/input/unit now live inline on this same row
+// instead of a separate (removed) collapsible drawer, adding real content
+// width, not just chrome.
+const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: 420, height: RUN_CONTROLS_HEIGHT };
 
 /**
  * Records the "terminal" panel's current group/index into `positionRef`

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useExecutionContext } from "./ExecutionContext";
 import { SLIDER_STEPS, intervalToSlider, useRunControlsContext } from "./RunControlsContext";
 import "./styles/run-controls.scss";
@@ -8,22 +7,20 @@ const INTERVAL_MIN = 0;
 const INTERVAL_MAX = 1000;
 
 /**
- * Floating-window height (px) that fits the button row plus dockview's own
- * floating-titlebar/tab-bar chrome, *and* the Auto-Step drawer expanded —
- * see `DockLayout.tsx`'s `RUN_CONTROLS_DEFAULT_BOUNDS`. Dockview never
- * auto-resizes a floating group to fit its content, and the one documented
- * way to resize an already-floating group in place (re-floating it via
- * `addFloatingGroup`) turned out to corrupt the group's width across
- * repeated calls and then persist that corruption to disk — worse than the
- * blank space it was meant to fix — so the window is sized once, for the
- * larger of the two states, rather than resized on every toggle.
+ * Floating-window height (px) that fits the single control row plus
+ * dockview's own floating-titlebar/tab-bar chrome — see `DockLayout.tsx`'s
+ * `RUN_CONTROLS_DEFAULT_BOUNDS`. Dockview never auto-resizes a floating
+ * group to fit its content and there's no safe way to resize one after
+ * creation (see `project_dockview_addfloatinggroup_resize_bug` in memory),
+ * so a collapsible Auto-Step drawer that changed the panel's height was a
+ * dead end — Auto-Step's controls stay inline on the one row instead.
  */
-export const RUN_CONTROLS_HEIGHT = 150;
+export const RUN_CONTROLS_HEIGHT = 100;
 
 /**
- * Floating panel hosting the Run/Stop/Step Into/Step Over/Step Return buttons
- * and a collapsible Auto-Step drawer (toggle + speed slider), replacing the
- * toolbar that used to live in Disassembly's header.
+ * Floating panel hosting the Run/Stop/Step Into/Step Over/Step Return
+ * buttons plus the Auto-Step toggle and speed slider, all on one row,
+ * replacing the toolbar that used to live in Disassembly's header.
  */
 export default function RunControlsPanel() {
   const { cpuStopped } = useExecutionContext();
@@ -32,7 +29,6 @@ export default function RunControlsPanel() {
     runCpu, stopCpu, stepInto, stepOver, stepReturn, toggleAutoStep,
     handleSliderChange, handleIntervalInputChange, handleIntervalInputBlur, handleIntervalInputKeyDown,
   } = useRunControlsContext();
-  const [autoStepExpanded, setAutoStepExpanded] = useState(false);
 
   return (
     <div className="run-controls-panel">
@@ -79,7 +75,7 @@ export default function RunControlsPanel() {
             <i className="codicon codicon-debug-stop" />
           </button>
         </div>
-        <div className="auto-step-toggle">
+        <div className="auto-step-control">
           <button
             className={`exec-btn auto-step-btn${isAutoStepping ? " active" : ""}`}
             onClick={toggleAutoStep}
@@ -88,17 +84,6 @@ export default function RunControlsPanel() {
           >
             <i className={`codicon codicon-${isAutoStepping ? "debug-pause" : "sync"}`} />
           </button>
-          <button
-            className="exec-btn disclosure-btn"
-            onClick={() => setAutoStepExpanded((prev) => !prev)}
-            title={autoStepExpanded ? "Hide Auto-Step speed" : "Show Auto-Step speed"}
-          >
-            <i className={`codicon codicon-chevron-${autoStepExpanded ? "up" : "down"}`} />
-          </button>
-        </div>
-      </div>
-      {autoStepExpanded && (
-        <div className="run-controls-row auto-step-control">
           <input
             className="speed-slider"
             type="range"
@@ -120,7 +105,7 @@ export default function RunControlsPanel() {
           />
           <span className="speed-unit">ms</span>
         </div>
-      )}
+      </div>
     </div>
   );
 }
