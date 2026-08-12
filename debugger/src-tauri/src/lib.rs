@@ -50,11 +50,10 @@ mod stack;
 /// Terminal window: console byte-stream bridge and window visibility.
 mod terminal;
 
-/// Trace window: live-recorded execution trace, windowed reads, and window visibility.
+/// Trace panel: live-recorded execution trace and windowed reads.
 mod trace;
 
-/// Log window: in-memory ring buffer of structured log records pushed live to the
-/// frontend, and window visibility.
+/// Log panel: in-memory ring buffer of structured log records pushed live to the frontend.
 mod logging;
 
 /// Native app menu bar (File/Edit/Window/Help) and Window-menu checkbox sync.
@@ -445,9 +444,9 @@ pub fn run() {
             } else if event.id() == menu::TOGGLE_TERMINAL_ID {
                 let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);
             } else if event.id() == menu::TOGGLE_TRACE_ID {
-                let _ = menu::toggle_window_visibility(app, trace::TRACE_WINDOW_LABEL, &state.trace_item);
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "trace");
             } else if event.id() == menu::TOGGLE_LOG_ID {
-                let _ = menu::toggle_window_visibility(app, logging::LOG_WINDOW_LABEL, &state.log_item);
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "log");
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -463,9 +462,7 @@ pub fn run() {
             trace::stop_trace,
             trace::get_trace_window,
             trace::get_trace_status,
-            trace::toggle_trace_visibility,
             logging::get_log_records,
-            logging::toggle_log_visibility,
             disassembly::run_cpu,
             disassembly::stop_cpu,
             disassembly::step_into,
@@ -526,46 +523,31 @@ pub fn run() {
             // `app.set_menu` above attaches the same menu — accelerators included —
             // to every window that doesn't already have its own explicit menu (see
             // `App::set_menu`'s "set it on all windows that don't have one" doc
-            // comment), not just the main window. Left alone, that means every
+            // comment), not just the main window. Left alone, that would mean every
             // File-menu accelerator (e.g. Ctrl+N, Ctrl+O, Ctrl+Q) fires natively from
-            // the Terminal/Trace windows too, independent of and in addition to any
-            // JS-level scoping — so strip the menu back off these two immediately.
-            // Shortcuts meant to work from every window (toggle-terminal,
-            // toggle-trace) still do, via their shared `APP_KEY_BINDINGS` JS
-            // bindings; main-window-only ones (New Profile, Open Profile, Quit) now
-            // correctly don't, since each is handled locally in the main window's
-            // React tree instead.
+            // the Terminal window too, independent of and in addition to any
+            // JS-level scoping — so strip the menu back off it immediately.
+            // Shortcuts meant to work from every window (toggle-terminal) still do,
+            // via their shared `APP_KEY_BINDINGS` JS bindings; main-window-only ones
+            // (New Profile, Open Profile, Quit) now correctly don't, since each is
+            // handled locally in the main window's React tree instead.
             if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
                 let _ = terminal_window.remove_menu();
                 install_toggleable_window_lifecycle(&terminal_window, window_menu_state.terminal_item.clone());
             }
-            if let Some(trace_window) = app.get_webview_window(trace::TRACE_WINDOW_LABEL) {
-                let _ = trace_window.remove_menu();
-                install_toggleable_window_lifecycle(&trace_window, window_menu_state.trace_item.clone());
-            }
-            // No need for Terminal's "briefly show then hide" WebKitGTK realize workaround below
-            // — that exists only because Terminal needs a `terminal_ready` JS handshake to
-            // complete before anything can be written to it. The Log window doesn't need JS
-            // running while hidden: history is hydrated via `get_log_records` in a `useEffect` on
-            // mount (same as Trace's `get_trace_status` pattern), so it works correctly the first
-            // time it's actually shown, same as Trace today.
-            if let Some(log_window) = app.get_webview_window(logging::LOG_WINDOW_LABEL) {
-                let _ = log_window.remove_menu();
-                install_toggleable_window_lifecycle(&log_window, window_menu_state.log_item.clone());
-            }
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
 
-            // The Terminal and Trace windows stay alive (merely hidden) for the
-            // life of the process, so Tauri's default "exit when all windows are
-            // closed" behavior never fires from the main window alone — closing
-            // it via the window manager's close control left the process running
-            // in the background (issue #340). Exit explicitly instead, routed
-            // through `request_exit` so the close control honors the exit
-            // confirmation dialog (issue #349) the same as File > Exit and
-            // Ctrl+Q. Always prevent the default close: the window must stay
-            // open unless/until `request_exit` (or the dialog it opens) decides
-            // to actually exit the process.
+            // The Terminal window stays alive (merely hidden) for the life of the
+            // process, so Tauri's default "exit when all windows are closed"
+            // behavior never fires from the main window alone — closing it via the
+            // window manager's close control left the process running in the
+            // background (issue #340). Exit explicitly instead, routed through
+            // `request_exit` so the close control honors the exit confirmation
+            // dialog (issue #349) the same as File > Exit and Ctrl+Q. Always prevent
+            // the default close: the window must stay open unless/until
+            // `request_exit` (or the dialog it opens) decides to actually exit the
+            // process.
             if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let app_for_close = app.handle().clone();
                 main_window.on_window_event(move |event| {

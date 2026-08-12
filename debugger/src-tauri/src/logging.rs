@@ -1,5 +1,5 @@
-//! Log window: in-memory ring buffer of structured `LogRecord`s pushed live to the frontend as
-//! they're produced, plus the commands backing history hydration and window visibility.
+//! Log panel: in-memory ring buffer of structured `LogRecord`s pushed live to the frontend as
+//! they're produced, plus the command backing history hydration.
 //!
 //! Named `logging`, not `log` — `log` is already a direct crate dependency, and a module
 //! literally named `log` would shadow it. This is a different module from the library's own
@@ -14,8 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use emma65::emulator::LogRecord;
 
-/// Window label of the auxiliary log window, as declared in `tauri.conf.json`.
-pub const LOG_WINDOW_LABEL: &str = "log";
+use crate::MAIN_WINDOW_LABEL;
 
 /// Cap on the in-memory ring buffer held in [`LogState`]; the frontend mirrors the same cap on
 /// its own buffer of live-streamed records.
@@ -60,7 +59,8 @@ impl From<LogRecord> for LogRecordDto {
 pub struct LogState(pub Mutex<VecDeque<LogRecordDto>>);
 
 /// Converts `record` to a DTO, appends it to `LogState` (dropping the oldest entry first if
-/// already at [`LOG_BUFFER_CAPACITY`]), then emits it to the log window as a `log-record` event.
+/// already at [`LOG_BUFFER_CAPACITY`]), then emits it to the main window (since #383, the Log
+/// panel lives there, not in its own window) as a `log-record` event.
 ///
 /// Called from the `spawn_log_collector` callback in `lib.rs`, so it runs on the collector's
 /// background thread — `AppHandle::state()`/`emit_to` are thread-safe, same as
@@ -80,21 +80,13 @@ pub fn push_record<R: tauri::Runtime>(app: &AppHandle<R>, record: LogRecord) {
     buffer.push_back(dto.clone());
     drop(buffer);
 
-    let _ = app.emit_to(LOG_WINDOW_LABEL, "log-record", dto);
+    let _ = app.emit_to(MAIN_WINDOW_LABEL, "log-record", dto);
 }
 
-/// Returns the full current ring buffer, for the Log window to hydrate on mount/reopen.
+/// Returns the full current ring buffer, for the Log panel to hydrate on mount.
 #[tauri::command]
 pub fn get_log_records(state: State<LogState>) -> Vec<LogRecordDto> {
     state.0.lock().unwrap().iter().cloned().collect()
-}
-
-/// Toggles the log window's visibility. Bound to Ctrl+Shift+L (see `useAppKeyBindings.ts`),
-/// mirroring `trace::toggle_trace_visibility`. Delegates to the shared helper in `menu.rs` so
-/// the Window-menu checkbox stays in sync regardless of which path toggled the window.
-#[tauri::command]
-pub fn toggle_log_visibility(app: AppHandle, window_menu: State<crate::menu::WindowMenuState>) -> Result<(), String> {
-    crate::menu::toggle_window_visibility(&app, LOG_WINDOW_LABEL, &window_menu.log_item)
 }
 
 #[cfg(test)]
@@ -107,10 +99,11 @@ mod tests {
     use tauri::test::{mock_builder, mock_context, noop_assets};
     use tauri::{Listener, WebviewWindowBuilder};
 
-    /// Builds a mocked app + real `log` window, calls `push_record` from a genuine background
+    /// Builds a mocked app + real main window, calls `push_record` from a genuine background
     /// thread (mirroring `spawn_log_collector`'s callback), then asserts both that the ring
     /// buffer state was updated and that the `log-record` event was actually emitted and
-    /// received by a listener on the window.
+    /// received by a listener on the window — since #383, the Log panel lives in the main
+    /// window rather than its own, so this targets `MAIN_WINDOW_LABEL`.
     #[test]
     fn push_record_from_background_thread_updates_state_and_emits_event() {
         let app = mock_builder()
@@ -118,9 +111,9 @@ mod tests {
             .build(mock_context(noop_assets()))
             .expect("failed to build mock app");
 
-        let window = WebviewWindowBuilder::new(&app, LOG_WINDOW_LABEL, Default::default())
+        let window = WebviewWindowBuilder::new(&app, MAIN_WINDOW_LABEL, Default::default())
             .build()
-            .expect("failed to build log window");
+            .expect("failed to build main window");
 
         let (tx, rx) = mpsc::channel();
         window.listen("log-record", move |event| {

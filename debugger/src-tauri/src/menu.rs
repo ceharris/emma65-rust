@@ -5,9 +5,7 @@ use std::path::PathBuf;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, Wry};
 
-use crate::logging::LOG_WINDOW_LABEL;
 use crate::terminal::TERMINAL_WINDOW_LABEL;
-use crate::trace::TRACE_WINDOW_LABEL;
 
 /// Menu item id for the Window > Terminal checkable item.
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
@@ -31,15 +29,14 @@ pub(crate) const EXIT_ID: &str = "exit";
 /// The menu items whose state needs to stay in sync with actual window
 /// visibility, and (for Exit) whose click needs to be dispatched to app
 /// logic. Managed as app state so both the global `on_menu_event` handler
-/// and the `toggle_terminal_visibility`/`toggle_trace_visibility` commands
-/// can reach the same item instances.
+/// and the `toggle_terminal_visibility` command can reach the same item
+/// instance. Trace and Log (since #383) are plain, non-checkable "Reveal…"
+/// items — they don't reflect any window-visibility boolean, so their click
+/// is matched by id alone in `on_menu_event` and no handle to them needs to
+/// be kept here.
 pub struct WindowMenuState {
     /// The Window > Terminal checkable item.
     pub terminal_item: CheckMenuItem<Wry>,
-    /// The Window > Trace checkable item.
-    pub trace_item: CheckMenuItem<Wry>,
-    /// The Window > Log checkable item.
-    pub log_item: CheckMenuItem<Wry>,
     /// The File > Exit item.
     pub exit_item: MenuItem<Wry>,
 }
@@ -109,18 +106,12 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         terminal_visible,
         Some("Ctrl+Shift+T"),
     )?;
-    let trace_visible = window_is_visible(app, TRACE_WINDOW_LABEL);
-    let trace_item = CheckMenuItem::with_id(
-        app,
-        TOGGLE_TRACE_ID,
-        "Trace",
-        true,
-        trace_visible,
-        Some("Ctrl+Shift+Y"),
-    )?;
-    let log_visible = window_is_visible(app, LOG_WINDOW_LABEL);
-    let log_item =
-        CheckMenuItem::with_id(app, TOGGLE_LOG_ID, "Log", true, log_visible, Some("Ctrl+Shift+L"))?;
+    // Plain items, not checkable: since #383, Trace/Log are dockview panels
+    // rather than their own window, so there's no visibility boolean to
+    // reflect — clicking either just reveals its dock tab (see `on_menu_event`
+    // in `lib.rs`).
+    let trace_item = MenuItem::with_id(app, TOGGLE_TRACE_ID, "Reveal Trace", true, Some("Ctrl+Shift+Y"))?;
+    let log_item = MenuItem::with_id(app, TOGGLE_LOG_ID, "Reveal Log", true, Some("Ctrl+Shift+L"))?;
     let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item, &trace_item, &log_item])?;
 
     let about_item = PredefinedMenuItem::about(app, None, None)?;
@@ -128,7 +119,7 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
 
     let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
 
-    Ok((menu, WindowMenuState { terminal_item, trace_item, log_item, exit_item }, RecentMenuState(open_recent_submenu)))
+    Ok((menu, WindowMenuState { terminal_item, exit_item }, RecentMenuState(open_recent_submenu)))
 }
 
 fn window_is_visible(app: &tauri::App, label: &str) -> bool {
@@ -180,9 +171,8 @@ pub(crate) fn rebuild_open_recent_submenu(
 /// `check_item`'s checked state to match the new visibility.
 ///
 /// Used by the Window-menu item's own click handler and by the
-/// `toggle_terminal_visibility`/`toggle_trace_visibility` commands (bound to
-/// Ctrl+Shift+T/Ctrl+Shift+Y), so every path that can show or hide one of
-/// these windows keeps the menu checkbox consistent.
+/// `toggle_terminal_visibility` command (bound to Ctrl+Shift+T), so every
+/// path that can show or hide the window keeps the menu checkbox consistent.
 pub fn toggle_window_visibility(app: &AppHandle, label: &str, check_item: &CheckMenuItem<Wry>) -> Result<(), String> {
     let window = app.get_webview_window(label).ok_or_else(|| format!("{label} window not found"))?;
     let visible = window.is_visible().map_err(|e| e.to_string())?;

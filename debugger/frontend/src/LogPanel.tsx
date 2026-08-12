@@ -1,8 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {listen} from "@tauri-apps/api/event";
 import {invoke} from "@tauri-apps/api/core";
-import {useAppKeyBindings} from "./useAppKeyBindings";
-import {resolveTheme, ThemeMode} from "./ThemeContext";
 import "./styles/log.scss";
 
 interface LogRecordDto {
@@ -53,41 +51,11 @@ function LogColGroup() {
 }
 
 export default function LogPanel() {
-  const [mode, setMode] = useState<ThemeMode>("auto");
-  const [prefersDark, setPrefersDark] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
   const [records, setRecords] = useState<LogRow[]>([]);
 
   // Client-side sequential id counter for stable React keys — the DTO itself carries no
   // sequence number, and timestamp_ms alone isn't guaranteed unique across records.
   const nextIdRef = useRef(0);
-
-  useAppKeyBindings();
-
-  // This window has its own document — React context can't cross the window
-  // boundary — so it tracks the theme mode independently, mirroring TracePanel.
-  useEffect(() => {
-    invoke<ThemeMode>("get_theme").then(setMode).catch((err) => console.error("get_theme failed:", err));
-
-    const unlistenPromise = listen<ThemeMode>("theme-changed", (event) => {
-      setMode(event.payload);
-    });
-
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e: MediaQueryListEvent) => setPrefersDark(e.matches);
-    media.addEventListener("change", handler);
-
-    return () => {
-      unlistenPromise.then((f) => f());
-      media.removeEventListener("change", handler);
-    };
-  }, []);
-
-  const resolvedTheme = resolveTheme(mode, prefersDark);
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", resolvedTheme);
-  }, [resolvedTheme]);
 
   // Hydrate history on mount, then append live records as they're pushed from the backend.
   useEffect(() => {

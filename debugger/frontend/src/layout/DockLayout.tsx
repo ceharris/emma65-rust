@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   AddPanelPositionOptions,
   DockviewIDisposable,
@@ -48,6 +49,11 @@ const REGISTERS_PANEL_DEFAULT_HEIGHT = 150;
 // body padding, with headroom for cross-platform font-metric variance.
 const STACK_PANEL_DEFAULT_HEIGHT = 260;
 
+// Trace/Log form a VS Code-style Output/Problems bottom dock, tabbed against
+// each other. Given as a plain height (not width): both scroll internally,
+// so this just trades off default vertical space against the panels above.
+const BOTTOM_GROUP_DEFAULT_HEIGHT = 260;
+
 /**
  * Hardcoded default arrangement mirroring today's 3-column layout as
  * **splits, not tabs** — nothing is hidden behind a tab today, and the
@@ -65,8 +71,10 @@ const STACK_PANEL_DEFAULT_HEIGHT = 260;
  * columns' heights down to just the top row.
  */
 function addDefaultLayout(api: DockviewReadyEvent["api"]) {
-  const add = (id: MainPanelId, rest: { position?: AddPanelPositionOptions; initialWidth?: number }) =>
-    api.addPanel({ id, component: id, title: PANEL_TITLES[id], ...rest });
+  const add = (
+    id: MainPanelId,
+    rest: { position?: AddPanelPositionOptions; initialWidth?: number; initialHeight?: number },
+  ) => api.addPanel({ id, component: id, title: PANEL_TITLES[id], ...rest });
 
   add("memory", { initialWidth: 640 });
   add("disassembly", { position: { referencePanel: "memory", direction: "right" } });
@@ -74,6 +82,14 @@ function addDefaultLayout(api: DockviewReadyEvent["api"]) {
   add("watchpoints", { position: { referencePanel: "memory", direction: "below" } });
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
   add("cpu-bus", { position: { referencePanel: "stack", direction: "below" } });
+
+  // No referencePanel: an AbsolutePosition split (dockview-core's
+  // `orthogonalize`) applies to the grid's root rather than to one panel's
+  // own cell, so this spans the full width below the three-column row above
+  // — unlike the "below" splits just above, which nest inside their
+  // column's own cell precisely because they *do* reference a panel there.
+  add("trace", { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT });
+  add("log", { position: { referencePanel: "trace" } });
 
   // Reserve Memory's full page height directly rather than sizing
   // Watchpoints (dockview gives the sibling whichever space is left over).
@@ -125,11 +141,12 @@ async function restoreLayout(api: DockviewReadyEvent["api"]) {
   }
 }
 
-/** Hosts the six main-window panels (Register/Disassembly/Memory/Stack/Watchpoint/CpuBus) in a dockview grid. */
+/** Hosts the main window's dockview panels (Register/Disassembly/Memory/Stack/Watchpoint/CpuBus/Trace/Log) in a dockview grid. */
 export default function DockLayout() {
   const { resolvedTheme } = useTheme();
   const layoutChangeSubscriptionRef = useRef<DockviewIDisposable | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
 
   useEffect(
     () => () => {
@@ -139,7 +156,22 @@ export default function DockLayout() {
     [],
   );
 
+  // Trace/Log no longer have their own window to show/hide, so Ctrl+Shift+Y/L
+  // and the Window-menu "Reveal Trace"/"Reveal Log" items just need their dock
+  // tab brought to the front — reachable from any window (the native menu
+  // accelerator only ever fires from the main window, but the JS-level
+  // binding in useAppKeyBindings.ts can fire from Terminal too) via the
+  // `reveal-panel` event, targeted at this window specifically since it's the
+  // only one hosting a dockview instance.
+  useEffect(() => {
+    const unlistenPromise = listen<MainPanelId>("reveal-panel", (event) => {
+      apiRef.current?.getPanel(event.payload)?.api.setActive();
+    });
+    return () => { unlistenPromise.then((f) => f()); };
+  }, []);
+
   const onReady = useCallback((event: DockviewReadyEvent) => {
+    apiRef.current = event.api;
     restoreLayout(event.api);
     layoutChangeSubscriptionRef.current = event.api.onDidLayoutChange(() => {
       if (persistTimerRef.current !== null) clearTimeout(persistTimerRef.current);

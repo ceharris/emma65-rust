@@ -261,7 +261,7 @@ React/TypeScript frontend (`debugger/frontend/`) via `#[tauri::command]`s. UI pr
 - **`memory`** — paged reads/writes/fills/file loads
 - **`stack`** — stack pointer and stack page snapshot
 - **`terminal`** — console byte-stream bridge and window visibility (toggleable window)
-- **`trace`** — live-recorded execution trace, windowed reads, window visibility (toggleable window)
+- **`trace`** — live-recorded execution trace, windowed reads
 - **`watchpoints`** — loads/compiles `watchpoints.emw`, evaluates on demand, add/remove/edit/toggle with persistence
 - **`theme`** — light/dark theme preference; also owns `UiConfig`/`ui.toml` persistence used by
   the exit-confirmation "Don't ask again" preference (set from `lib.rs`'s `confirm_exit`)

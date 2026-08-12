@@ -2,8 +2,6 @@ import {useCallback, useEffect, useRef, useState} from "react";
 import {listen} from "@tauri-apps/api/event";
 import {invoke} from "@tauri-apps/api/core";
 import {save} from "@tauri-apps/plugin-dialog";
-import {useAppKeyBindings} from "./useAppKeyBindings";
-import {resolveTheme, ThemeMode} from "./ThemeContext";
 import "./styles/trace.scss";
 
 interface TraceBusOpDto {
@@ -101,10 +99,6 @@ function TraceColGroup() {
 }
 
 export default function TracePanel() {
-  const [mode, setMode] = useState<ThemeMode>("auto");
-  const [prefersDark, setPrefersDark] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
   const [recording, setRecording] = useState(false);
   const [tracePath, setTracePath] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
@@ -125,32 +119,6 @@ export default function TracePanel() {
   pausedRef.current = paused;
   totalRowsRef.current = totalRows;
   startRowRef.current = startRow;
-
-  useAppKeyBindings();
-
-  // This window has its own document — React context can't cross the window
-  // boundary — so it tracks the theme mode independently, mirroring TerminalWindow.
-  useEffect(() => {
-    invoke<ThemeMode>("get_theme").then(setMode).catch((err) => console.error("get_theme failed:", err));
-
-    const unlistenPromise = listen<ThemeMode>("theme-changed", (event) => {
-      setMode(event.payload);
-    });
-
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e: MediaQueryListEvent) => setPrefersDark(e.matches);
-    media.addEventListener("change", handler);
-
-    return () => {
-      unlistenPromise.then((f) => f());
-      media.removeEventListener("change", handler);
-    };
-  }, []);
-
-  const resolvedTheme = resolveTheme(mode, prefersDark);
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", resolvedTheme);
-  }, [resolvedTheme]);
 
   // Whether the log body should snap to the bottom of its content once the
   // window just fetched is rendered. Only true for tail-follow fetches; scroll/

@@ -106,9 +106,9 @@ pub fn ensure_profile_dir(name: &str) -> Result<PathBuf, String> {
 /// toggle — GTK/Wayland client-side decorations otherwise don't repaint the
 /// titlebar text for a window that's already mapped (same decoration-redraw
 /// quirk as tauri-apps/tauri#11856 / tauri-apps/tao#1046, worked around
-/// elsewhere in this crate for the hidden→shown terminal/trace windows via
-/// their `Focused` handler; this window is visible from startup, so there's
-/// no focus event to hook and the toggle must happen right here instead).
+/// elsewhere in this crate for the hidden→shown terminal window via its
+/// `Focused` handler; this window is visible from startup, so there's no
+/// focus event to hook and the toggle must happen right here instead).
 pub fn set_window_title(window: &WebviewWindow, base: &str, profile: &str) -> Result<(), String> {
     window.set_title(&format!("{base} — {profile}")).map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
@@ -119,14 +119,13 @@ pub fn set_window_title(window: &WebviewWindow, base: &str, profile: &str) -> Re
     Ok(())
 }
 
-/// Sets the title of every debugger window (main, terminal, trace) to
-/// reflect `profile`. Windows not yet created (e.g. during tests) are
-/// silently skipped.
+/// Sets the title of every debugger window (main, terminal) to reflect
+/// `profile`. Windows not yet created (e.g. during tests) are silently
+/// skipped.
 pub fn set_all_window_titles(app: &impl Manager<Wry>, profile: &str) {
-    const WINDOWS: [(&str, &str); 3] = [
+    const WINDOWS: [(&str, &str); 2] = [
         (crate::MAIN_WINDOW_LABEL, "Emma65 Debugger"),
         (crate::terminal::TERMINAL_WINDOW_LABEL, "Emma65 Terminal"),
-        (crate::trace::TRACE_WINDOW_LABEL, "Emma65 Trace"),
     ];
     for (label, base) in WINDOWS {
         if let Some(window) = app.get_webview_window(label) {

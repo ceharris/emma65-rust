@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /** Label of the main window, per `MAIN_WINDOW_LABEL` in `debugger/src-tauri/src/lib.rs`. */
@@ -7,16 +8,33 @@ const MAIN_WINDOW_LABEL = "main";
 
 export interface AppKeyBinding {
   matches: (e: KeyboardEvent) => boolean;
-  command: string;
+  /** Runs the binding's action. Called with `preventDefault()` already applied to the event. */
+  run: () => void;
   /**
    * True if this binding's shortcut is also a native menu accelerator (see
-   * `menu.rs`) that fires the same command from the main window. The main
+   * `menu.rs`) that fires the same action from the main window. The main
    * window's copy of this handler skips such bindings, since the native
-   * accelerator + `on_menu_event` already covers it there — invoking again
-   * from here would double-toggle the target window. Windows without the app
-   * menu (Terminal/Trace/Log) still rely on this handler as their only path.
+   * accelerator + `on_menu_event` already covers it there — running it again
+   * from here would double-fire. Windows without the app menu (Terminal)
+   * still rely on this handler as their only path.
    */
   hasMainWindowAccelerator?: boolean;
+}
+
+/**
+ * Reveals `panelId`'s dock tab in the main window by emitting `reveal-panel`
+ * there — used for both Trace and Log, which (since #383) are dockview
+ * panels rather than their own window, so there's no `AppHandle` window
+ * label to show()/hide() any more. Works from any window: the main window's
+ * own copy is skipped in favor of the native accelerator (see
+ * `hasMainWindowAccelerator` above), but Terminal's copy has no direct
+ * access to the main window's dockview instance (separate webview, separate
+ * JS runtime) and needs this cross-window emit either way.
+ */
+function revealPanel(panelId: "trace" | "log") {
+  emitTo(MAIN_WINDOW_LABEL, "reveal-panel", panelId).catch((err) =>
+    console.error(`emitTo reveal-panel(${panelId}) failed:`, err),
+  );
 }
 
 /**
@@ -35,17 +53,21 @@ export interface AppKeyBinding {
 export const APP_KEY_BINDINGS: AppKeyBinding[] = [
   {
     matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyT",
-    command: "toggle_terminal_visibility",
+    run: () => {
+      invoke("toggle_terminal_visibility").catch((err) =>
+        console.error("toggle_terminal_visibility failed:", err),
+      );
+    },
     hasMainWindowAccelerator: true,
   },
   {
     matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyY",
-    command: "toggle_trace_visibility",
+    run: () => revealPanel("trace"),
     hasMainWindowAccelerator: true,
   },
   {
     matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyL",
-    command: "toggle_log_visibility",
+    run: () => revealPanel("log"),
     hasMainWindowAccelerator: true,
   },
 ];
@@ -60,7 +82,7 @@ export function useAppKeyBindings() {
       );
       if (!binding) return;
       e.preventDefault();
-      invoke(binding.command).catch((err) => console.error(`${binding.command} failed:`, err));
+      binding.run();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
