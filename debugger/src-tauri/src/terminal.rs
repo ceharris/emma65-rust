@@ -159,16 +159,22 @@ pub fn detach_terminal(app: AppHandle) -> Result<(), String> {
     begin_terminal_detach(&app)
 }
 
-/// Hides the detached-Terminal window, retargets the console bridge back to
-/// the main window, persists the terminal-detached flag as false, updates
-/// the Window > Terminal menu label, and tells the main layout to reinsert
-/// the Terminal panel via the `terminal-reattached` event. Shared by the
-/// detached window's native close button (see `install_detached_window`),
-/// the Window > "Attach Terminal" menu action (`lib.rs`'s `on_menu_event`),
-/// and the `attach_terminal` command below.
+/// Hides the detached-Terminal window, focuses the main window (so the
+/// panel's own subsequent `term.focus()` on remount lands somewhere the
+/// user is actually looking, rather than wherever OS focus happened to fall
+/// back to once the detached window disappeared), retargets the console
+/// bridge back to the main window, persists the terminal-detached flag as
+/// false, updates the Window > Terminal menu label, and tells the main
+/// layout to reinsert the Terminal panel via the `terminal-reattached`
+/// event. Shared by the detached window's native close button (see
+/// `install_detached_window`), the Window > "Attach Terminal" menu action
+/// (`lib.rs`'s `on_menu_event`), and the `attach_terminal` command below.
 pub(crate) fn reattach_terminal(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(TERMINAL_DETACHED_WINDOW_LABEL) {
         let _ = window.hide();
+    }
+    if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = main_window.set_focus();
     }
     *app.state::<TerminalTargetWindow>().0.lock().unwrap() = MAIN_WINDOW_LABEL.to_string();
     if let Err(e) = crate::layout::set_terminal_detached(app, false) {

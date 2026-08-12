@@ -112,6 +112,12 @@ export default function TerminalPanel() {
     term.loadAddon(fitAddon);
     term.open(containerRef.current!);
     fitAddon.fit();
+    // Every mount of this component is a moment the user just landed on a
+    // terminal they presumably want to type into right away — the very
+    // first mount (docked or detached), and every detach/reattach remount
+    // (issue #385) — so grab keyboard focus immediately rather than leaving
+    // it wherever it happened to be.
+    term.focus();
 
     // A dockview split drag resizes this panel's container without resizing
     // the OS window, so window-resize alone (the old standalone Terminal
