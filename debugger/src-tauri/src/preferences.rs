@@ -22,10 +22,19 @@ pub enum ThemeMode {
     Light,
 }
 
+/// xterm.js's own built-in default for `ITerminalOptions.scrollback`, reused
+/// here as this config's default so an absent/fresh `ui.toml` reproduces the
+/// same behavior the terminal already had before `terminal_scrollback`
+/// existed.
+fn default_terminal_scrollback() -> u32 {
+    1000
+}
+
 /// Persisted debugger UI preferences that aren't scoped to any profile — see
 /// issue #68 for the original theme-only version, issue #349 for the
-/// exit-confirmation addition, and issue #357 for the file dialog directory.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+/// exit-confirmation addition, issue #357 for the file dialog directory, and
+/// issue #385 for the terminal scrollback line count.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UiConfig {
     /// The user's selected theme mode.
     #[serde(default)]
@@ -41,6 +50,24 @@ pub struct UiConfig {
     /// issue #357.
     #[serde(default)]
     pub last_file_dialog_dir: Option<String>,
+    /// Number of lines the terminal (docked or detached — see issue #385)
+    /// keeps in its scrollback buffer beyond its visible rows. Not yet
+    /// exposed via any UI control — edit `ui.toml` directly to change it,
+    /// per UAT feedback on #385; a future story may add a proper preference
+    /// control.
+    #[serde(default = "default_terminal_scrollback")]
+    pub terminal_scrollback: u32,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme: ThemeMode::default(),
+            skip_exit_confirmation: false,
+            last_file_dialog_dir: None,
+            terminal_scrollback: default_terminal_scrollback(),
+        }
+    }
 }
 
 /// Managed state wrapping the current [`UiConfig`].
@@ -79,6 +106,13 @@ pub fn set_theme(mode: ThemeMode, state: State<UiConfigState>, app: AppHandle) -
     save_ui_config_to(&profile::config_dir()?, &config)?;
     let _ = app.emit("theme-changed", mode);
     Ok(())
+}
+
+/// Returns the terminal's configured scrollback line count — see
+/// `UiConfig::terminal_scrollback`'s doc comment for how to change it.
+#[tauri::command]
+pub fn get_terminal_scrollback(state: State<UiConfigState>) -> u32 {
+    state.0.lock().unwrap().terminal_scrollback
 }
 
 /// Persists `skip` as the "Don't ask again" exit-confirmation preference.
@@ -165,6 +199,20 @@ mod tests {
     fn defaults_last_file_dialog_dir_to_none_when_missing() {
         let config: UiConfig = toml::from_str("").unwrap();
         assert_eq!(config.last_file_dialog_dir, None);
+    }
+
+    #[test]
+    fn defaults_terminal_scrollback_to_1000_when_missing() {
+        let config: UiConfig = toml::from_str("").unwrap();
+        assert_eq!(config.terminal_scrollback, 1000);
+    }
+
+    #[test]
+    fn round_trips_terminal_scrollback() {
+        let config = UiConfig { terminal_scrollback: 5000, ..Default::default() };
+        let serialized = toml::to_string(&config).unwrap();
+        let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.terminal_scrollback, 5000);
     }
 
     #[test]

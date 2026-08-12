@@ -1,9 +1,13 @@
 import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /** Label of the main window, per `MAIN_WINDOW_LABEL` in `debugger/src-tauri/src/lib.rs`. */
 const MAIN_WINDOW_LABEL = "main";
+
+/** Label of the detached-Terminal window, per `TERMINAL_DETACHED_WINDOW_LABEL` in `debugger/src-tauri/src/terminal.rs`. */
+const TERMINAL_DETACHED_WINDOW_LABEL = "terminal-detached";
 
 export interface AppKeyBinding {
   matches: (e: KeyboardEvent) => boolean;
@@ -37,9 +41,9 @@ function revealPanel(panelId: "trace" | "log" | "terminal") {
 }
 
 /**
- * Key bindings effective in every debugger window — currently just main,
- * since Terminal (as of #384) is a dock panel rather than its own window; a
- * future detached-window host (#385) would install this hook too.
+ * Key bindings effective in every debugger window that installs this hook —
+ * the main window (`App.tsx`) and the detached-Terminal window
+ * (`terminal-detached.tsx`, since #385).
  *
  * Terminal was originally Ctrl+Shift+` (VS Code's terminal-toggle shortcut),
  * but GTK can't deliver a working native menu accelerator for Shift+backtick
@@ -54,7 +58,18 @@ function revealPanel(panelId: "trace" | "log" | "terminal") {
 export const APP_KEY_BINDINGS: AppKeyBinding[] = [
   {
     matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyT",
-    run: () => revealPanel("terminal"),
+    // From the detached-Terminal window itself (issue #385), Ctrl+Shift+T
+    // reattaches rather than revealing — there's no dock tab to reveal from
+    // in that window, and it's a much more useful binding there than a
+    // no-op. `attach_terminal` is the same reattach path the window's
+    // native close button and the Window > "Attach Terminal" menu item use.
+    run: () => {
+      if (getCurrentWindow().label === TERMINAL_DETACHED_WINDOW_LABEL) {
+        invoke("attach_terminal").catch((err) => console.error("attach_terminal failed:", err));
+      } else {
+        revealPanel("terminal");
+      }
+    },
     hasMainWindowAccelerator: true,
   },
   {

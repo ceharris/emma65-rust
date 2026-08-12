@@ -182,6 +182,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     // leaking alongside the new session's.
     *app.state::<CpuState>().0.lock().unwrap() = None;
     *app.state::<terminal::TerminalTx>().0.lock().unwrap() = None;
+    app.state::<terminal::TerminalHistory>().0.lock().unwrap().clear();
 
     *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
 
@@ -352,6 +353,8 @@ pub fn run() {
     let profile_dir = profile::ensure_profile_dir(&profile_name).expect("Failed to prepare profile directory");
     let config_dir = profile::config_dir().expect("Failed to resolve debugger config directory");
     let recent_profiles = recent::load_recent_from(&config_dir);
+    let dock_layout = layout::load_dock_layout_from(&config_dir);
+    let terminal_was_detached = dock_layout.terminal_detached;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -366,8 +369,9 @@ pub fn run() {
                 .build(),
         )
         .manage(SessionStatusState(Mutex::new(None)))
-        .manage(terminal::TerminalOutputBuffer(Mutex::new(terminal::TerminalOutputState::default())))
+        .manage(terminal::TerminalHistory::default())
         .manage(terminal::TerminalTx(Mutex::new(None)))
+        .manage(terminal::TerminalTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
         .manage(disassembly::DisassemblerState(Mutex::new(None)))
@@ -386,7 +390,7 @@ pub fn run() {
             cpu_waiting: false,
         })))
         .manage(preferences::UiConfigState(Mutex::new(preferences::load_ui_config_from(&config_dir))))
-        .manage(layout::LayoutState(Mutex::new(layout::load_dock_layout_from(&config_dir))))
+        .manage(layout::LayoutState(Mutex::new(dock_layout)))
         .manage(profile::ProfileDirState(Mutex::new(profile_dir.clone())))
         .manage(recent::RecentProfilesState(Mutex::new(recent_profiles)))
         .manage(watchpoints::WatchState(Mutex::new(watchpoints::WatchData {
@@ -416,7 +420,14 @@ pub fn run() {
                     recent::open_recent_profile(app_handle, path).await;
                 });
             } else if event.id() == menu::TOGGLE_TERMINAL_ID {
-                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "terminal");
+                let detached = app.state::<layout::LayoutState>().0.lock().unwrap().terminal_detached;
+                if detached {
+                    terminal::reattach_terminal(app);
+                } else if let Err(e) = terminal::begin_terminal_detach(app) {
+                    eprintln!("Failed to detach terminal: {e}");
+                } else {
+                    let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-detach-requested", ());
+                }
             } else if event.id() == menu::TOGGLE_TRACE_ID {
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "trace");
             } else if event.id() == menu::TOGGLE_LOG_ID {
@@ -430,7 +441,9 @@ pub fn run() {
             profile::open_profile,
             get_session_status,
             terminal::write_terminal,
-            terminal::terminal_ready,
+            terminal::get_terminal_history,
+            terminal::detach_terminal,
+            terminal::attach_terminal,
             trace::record_trace,
             trace::stop_trace,
             trace::get_trace_window,
@@ -466,6 +479,7 @@ pub fn run() {
             preferences::get_theme,
             preferences::set_theme,
             preferences::get_last_file_dialog_dir,
+            preferences::get_terminal_scrollback,
             preferences::set_last_file_dialog_dir,
             layout::get_dock_layout,
             layout::set_dock_layout,
@@ -496,6 +510,18 @@ pub fn run() {
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
 
+            // Detached-Terminal window: strip its menu and install the
+            // close-hides-and-reattaches lifecycle once, regardless of
+            // whether it's ever actually detached this run (see
+            // `install_detached_window`'s doc comment). If the persisted
+            // layout says Terminal was left detached last time the app
+            // exited, reopen it now rather than silently re-docking it
+            // (issue #385's risk #3) — `DockLayout.tsx`'s own restore logic
+            // independently consults the same flag to skip re-adding the
+            // dock panel, so this only needs to handle the window side.
+            terminal::install_detached_window(app.handle());
+            terminal::restore_detached_window_if_needed(app.handle(), terminal_was_detached);
+
             // Exit explicitly rather than relying on Tauri's default "exit when all
             // windows are closed" behavior, so the close control honors the exit
             // confirmation dialog (issue #349) the same as File > Exit and Ctrl+Q.
@@ -513,12 +539,12 @@ pub fn run() {
             }
 
             // Starts loading the session immediately, without waiting for the
-            // terminal panel to signal readiness: unlike the old standalone
-            // Terminal window, the panel lives inside the main window's
-            // dockview instance, which doesn't render until the session
-            // itself is ready — waiting here would deadlock. Console output
-            // produced before the panel's listener attaches is buffered
-            // backend-side instead (see `terminal::TerminalOutputBuffer`).
+            // terminal panel to mount: unlike the old standalone Terminal
+            // window, the panel lives inside the main window's dockview
+            // instance, which doesn't render until the session itself is
+            // ready — waiting here would deadlock. Console output produced
+            // before any panel mounts is retained regardless (see
+            // `terminal::TerminalHistory`), so nothing is lost.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 load_or_reload_session(&handle, &profile_dir).await;

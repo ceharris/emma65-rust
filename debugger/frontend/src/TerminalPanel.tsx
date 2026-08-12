@@ -28,11 +28,13 @@ const XTERM_LIGHT_THEME: ITheme = {
 
 /**
  * The dock panel hosting the emulator's console. Shaped for reuse: it reads
- * the theme via `useTheme()` rather than tracking it independently, so a
- * future detached-window host (#385) just needs to wrap it in its own
- * `ThemeProvider`, the same way `main.tsx` wraps `App`. Global key bindings
+ * the theme via `useTheme()` rather than tracking it independently, so both
+ * the main window's docked instance and the detached-window host
+ * (`terminal-detached.tsx`, issue #385) just need their own `ThemeProvider`
+ * ancestor, the same way `main.tsx` wraps `App`. Global key bindings
  * (`useAppKeyBindings`) are installed by the host document, not here — the
- * main window already installs them once at `App.tsx`'s root.
+ * main window installs them once at `App.tsx`'s root, and
+ * `terminal-detached.tsx` does the same for its own window.
  */
 export default function TerminalPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,6 +46,20 @@ export default function TerminalPanel() {
       termRef.current.options.theme = resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
     }
   }, [resolvedTheme]);
+
+  // Not yet a live preference (see `UiConfig::terminal_scrollback`'s doc
+  // comment) — fetched once and applied to the already-constructed
+  // terminal, same pattern as the theme-sync effect above. xterm.js
+  // supports changing `options.scrollback` on a live instance, trimming or
+  // growing its buffer accordingly, so this doesn't need to gate the
+  // terminal's initial construction below on the fetch completing first.
+  useEffect(() => {
+    invoke<number>("get_terminal_scrollback")
+      .then((lines) => {
+        if (termRef.current) termRef.current.options.scrollback = lines;
+      })
+      .catch((err) => console.error("get_terminal_scrollback failed:", err));
+  }, []);
 
   useEffect(() => {
     const monoFont =
@@ -96,30 +112,85 @@ export default function TerminalPanel() {
     term.loadAddon(fitAddon);
     term.open(containerRef.current!);
     fitAddon.fit();
+    // Every mount of this component is a moment the user just landed on a
+    // terminal they presumably want to type into right away — the very
+    // first mount (docked or detached), and every detach/reattach remount
+    // (issue #385) — so grab keyboard focus immediately rather than leaving
+    // it wherever it happened to be.
+    term.focus();
 
     // A dockview split drag resizes this panel's container without resizing
     // the OS window, so window-resize alone (the old standalone Terminal
     // window's refit trigger) wouldn't cover it here — this observer handles
-    // both split-drag and inactive→active tab transitions.
+    // both split-drag and inactive→active tab transitions. Not started
+    // watching until after the history replay below has fully completed —
+    // see that block's comment for why.
     const resizeObserver = new ResizeObserver(() => fitAddon.fit());
-    resizeObserver.observe(containerRef.current!);
 
     term.onData((data) => {
       const bytes = Array.from(new TextEncoder().encode(data));
       invoke("write_terminal", { bytes }).catch(() => {});
     });
 
-    // Register the output listener, then signal the backend that we are ready.
-    // The backend will not start the CPU until it receives this signal.
-    const unlistenPromise = listen<number[]>("terminal-output", (event) => {
-      term.write(new Uint8Array(event.payload));
-    }).then((unlisten) => {
-      invoke("terminal_ready").catch(() => {});
-      return unlisten;
-    });
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    // Replays recent console output before registering the live listener,
+    // so a freshly (re)mounted terminal — the very first one at startup, or
+    // any later detach/reattach cycle (issue #385) — catches up to the
+    // current session instead of starting blank.
+    //
+    // Sequenced carefully to avoid a reproduced bug (issue #385 UAT: typing
+    // an unterminated line while docked, then detaching, hard-wrapped just
+    // that line every couple of characters in the freshly shown detached
+    // window — but never when typing directly into an already-detached
+    // window with nothing to replay). `Terminal.write()` processes its
+    // input *asynchronously* (see `@xterm/xterm`'s own doc comment on
+    // `write`), so resizing while a large write (a full history replay is
+    // the only write here large enough to still be mid-flight when a resize
+    // could land) is still being processed corrupts wrapping for whatever
+    // hadn't been parsed yet, which is reliably the *newest* tail of the
+    // buffer: exactly the freshly typed, not-yet-newline-terminated line,
+    // never the older already-rendered banner lines above it. So: one
+    // corrective fit after a real paint (the very first fit() above can
+    // measure a container whose layout hasn't settled yet, most visibly the
+    // detached window's first-ever mount), then no further fit/resize at
+    // all — including via the ResizeObserver above — until the history
+    // write's own completion callback confirms it's fully processed.
+    (async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (disposed) return;
+      fitAddon.fit();
+
+      let history: number[] = [];
+      try {
+        history = await invoke<number[]>("get_terminal_history");
+      } catch (err) {
+        console.error("get_terminal_history failed:", err);
+      }
+      if (disposed) return;
+      if (history.length > 0) {
+        await new Promise<void>((resolve) => term.write(new Uint8Array(history), resolve));
+      }
+      if (disposed) return;
+
+      // A byte emitted live in the gap between here and the listener
+      // actually registering could in principle be missed; accepted as the
+      // same class of narrow race already tolerated elsewhere in #385 (e.g.
+      // the detach/reattach `emit_to`-retarget race).
+      unlisten = await listen<number[]>("terminal-output", (event) => {
+        term.write(new Uint8Array(event.payload));
+      });
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      resizeObserver.observe(containerRef.current!);
+    })();
 
     return () => {
-      unlistenPromise.then((f) => f());
+      disposed = true;
+      unlisten?.();
       resizeObserver.disconnect();
       termRef.current = null;
       term.dispose();

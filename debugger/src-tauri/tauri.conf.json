@@ -16,6 +16,16 @@
         "height": 800,
         "resizable": true,
         "fullscreen": false
+      },
+      {
+        "label": "terminal-detached",
+        "title": "Emma65 Terminal",
+        "url": "terminal-detached.html",
+        "width": 860,
+        "height": 480,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {
