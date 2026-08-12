@@ -959,6 +959,7 @@ dependencies = [
  "gtk",
  "log",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",

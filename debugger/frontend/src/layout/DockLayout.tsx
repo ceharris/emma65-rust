@@ -1,9 +1,21 @@
-import { useCallback } from "react";
-import { AddPanelPositionOptions, DockviewReact, DockviewReadyEvent, DockviewTheme } from "dockview-react";
+import { useCallback, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  AddPanelPositionOptions,
+  DockviewIDisposable,
+  DockviewReact,
+  DockviewReadyEvent,
+  DockviewTheme,
+  SerializedDockview,
+} from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import "../styles/dock-layout.scss";
 import { useTheme } from "../ThemeContext";
 import { MainPanelId, PANEL_TITLES, panelComponents } from "./panelRegistry";
+
+// Debounces persisting the layout while the user is actively dragging/resizing
+// panels — onDidLayoutChange fires on every intermediate frame of a drag.
+const LAYOUT_PERSIST_DEBOUNCE_MS = 500;
 
 /**
  * Theme hooks driven from the app's existing `--color-*` custom properties
@@ -39,7 +51,8 @@ const STACK_PANEL_DEFAULT_HEIGHT = 260;
 /**
  * Hardcoded default arrangement mirroring today's 3-column layout as
  * **splits, not tabs** — nothing is hidden behind a tab today, and the
- * default shouldn't regress that. No persistence yet (issue #382).
+ * default shouldn't regress that. Used on first run and as the fallback
+ * whenever a persisted layout (issue #382) is missing or fails to restore.
  *
  * `position: {referencePanel, direction}` splits relative to the *group*
  * containing that panel, not the whole row/column it happens to sit in —
@@ -79,12 +92,62 @@ function addDefaultLayout(api: DockviewReadyEvent["api"]) {
   api.getPanel("stack")?.api.setSize({ height: STACK_PANEL_DEFAULT_HEIGHT });
 }
 
+/**
+ * Persists the current layout to `~/.emma/debugger/config/layout.json` via
+ * the `set_dock_layout` command. `api.toJSON()` returns dockview's own
+ * serialization format; the Rust side stores it as opaque JSON and never
+ * parses its internal schema (see `layout.rs`).
+ */
+function persistLayout(api: DockviewReadyEvent["api"]) {
+  invoke("set_dock_layout", { layout: api.toJSON() }).catch((err) => console.error("set_dock_layout failed:", err));
+}
+
+/**
+ * Restores the persisted layout on mount via `get_dock_layout`, falling back
+ * to the hardcoded default (and re-persisting it) if none was saved yet or
+ * the saved layout fails to deserialize — e.g. after a dockview version
+ * upgrade changes its internal schema.
+ */
+async function restoreLayout(api: DockviewReadyEvent["api"]) {
+  let restored = false;
+  try {
+    const saved = await invoke<SerializedDockview | null>("get_dock_layout");
+    if (saved) {
+      api.fromJSON(saved);
+      restored = true;
+    }
+  } catch (err) {
+    console.error("Failed to restore persisted dock layout, falling back to default:", err);
+  }
+  if (!restored) {
+    addDefaultLayout(api);
+    persistLayout(api);
+  }
+}
+
 /** Hosts the six main-window panels (Register/Disassembly/Memory/Stack/Watchpoint/CpuBus) in a dockview grid. */
 export default function DockLayout() {
   const { resolvedTheme } = useTheme();
+  const layoutChangeSubscriptionRef = useRef<DockviewIDisposable | null>(null);
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      layoutChangeSubscriptionRef.current?.dispose();
+      if (persistTimerRef.current !== null) clearTimeout(persistTimerRef.current);
+    },
+    [],
+  );
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
-    addDefaultLayout(event.api);
+    restoreLayout(event.api);
+    layoutChangeSubscriptionRef.current = event.api.onDidLayoutChange(() => {
+      if (persistTimerRef.current !== null) clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = setTimeout(() => {
+        persistTimerRef.current = null;
+        persistLayout(event.api);
+      }, LAYOUT_PERSIST_DEBOUNCE_MS);
+    });
   }, []);
 
   return (
