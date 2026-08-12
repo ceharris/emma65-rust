@@ -1,4 +1,4 @@
-//! Native application menu bar: File/Edit/View/Window/Help.
+//! Native application menu bar: File/Edit/View/Run/Memory/Window/Help.
 
 use std::path::PathBuf;
 
@@ -38,6 +38,15 @@ pub(crate) const STEP_OVER_ID: &str = "step-over";
 pub(crate) const STEP_RETURN_ID: &str = "step-return";
 /// Menu item id / `run-menu-action` event payload for the Run > Toggle Auto-Step item.
 pub(crate) const TOGGLE_AUTO_STEP_ID: &str = "toggle-auto-step";
+
+/// Menu item id / `memory-menu-action` event payload for the Memory > Load from File… item.
+pub(crate) const LOAD_MEMORY_ID: &str = "load-memory";
+/// Menu item id / `memory-menu-action` event payload for the Memory > Save to File… item.
+pub(crate) const SAVE_MEMORY_ID: &str = "save-memory";
+/// Menu item id / `memory-menu-action` event payload for the Memory > Edit… item.
+pub(crate) const EDIT_MEMORY_ID: &str = "edit-memory";
+/// Menu item id / `memory-menu-action` event payload for the Memory > Fill… item.
+pub(crate) const FILL_MEMORY_ID: &str = "fill-memory";
 
 /// Holds menu items `on_menu_event`/other modules need a handle to after
 /// construction. The View menu's per-panel items (issue #393) are plain,
@@ -97,7 +106,7 @@ pub struct RunControlsEnabled {
     pub toggle_auto_step: bool,
 }
 
-/// Builds the native app menu (File/Edit/View/Window/Help) and the `exit_item`
+/// Builds the native app menu (File/Edit/View/Run/Memory/Window/Help) and the `exit_item`
 /// handle `on_menu_event` needs to dispatch an Exit click. The File > Open
 /// Recent submenu starts empty — populated once the recent-profiles list is
 /// loaded, via `rebuild_open_recent_submenu`.
@@ -180,6 +189,36 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         &[&run_item, &stop_item, &step_into_item, &step_over_item, &step_return_item, &toggle_auto_step_item],
     )?;
 
+    // Replaces the Memory panel's own header button row (issue #411) with a
+    // top-level menu, following the same click-dispatches-an-event pattern as
+    // the Run menu above: `on_menu_event` in `lib.rs` reveals the Memory
+    // panel then emits `memory-menu-action`, which `MemoryPanel.tsx` handles
+    // the same way it handles a click on its own dialog-opening code (there
+    // are no more buttons left to click). The four former shortcuts
+    // Alt+Shift+H/Alt+Shift+A (open Edit, hex/UTF-8) and Alt+F/Alt+Shift+F
+    // (Load/Fill) are discarded outright rather than remapped, since Edit no
+    // longer needs two separate entry points now that its dialog carries its
+    // own Hexadecimal/ASCII-Unicode Text radio group.
+    let load_memory_item = MenuItem::with_id(app, LOAD_MEMORY_ID, "Load from File…", true, Some("CmdOrCtrl+L"))?;
+    let save_memory_item = MenuItem::with_id(app, SAVE_MEMORY_ID, "Save to File…", true, Some("CmdOrCtrl+S"))?;
+    let edit_memory_item = MenuItem::with_id(app, EDIT_MEMORY_ID, "Edit…", true, Some("CmdOrCtrl+E"))?;
+    let fill_memory_item = MenuItem::with_id(app, FILL_MEMORY_ID, "Fill…", true, Some("CmdOrCtrl+Shift+F"))?;
+    let memory_separator_1 = PredefinedMenuItem::separator(app)?;
+    let memory_separator_2 = PredefinedMenuItem::separator(app)?;
+    let memory_menu = Submenu::with_items(
+        app,
+        "Memory",
+        true,
+        &[
+            &load_memory_item,
+            &save_memory_item,
+            &memory_separator_1,
+            &edit_memory_item,
+            &memory_separator_2,
+            &fill_memory_item,
+        ],
+    )?;
+
     // Gets a real native accelerator (issue #377), same as the File-menu items
     // above, so the shortcut text renders with native styling instead of being baked
     // into the label. The accelerator only ever fires while the main window (the only
@@ -224,7 +263,10 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     let about_item = PredefinedMenuItem::about(app, None, None)?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&about_item])?;
 
-    let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &view_menu, &run_menu, &window_menu, &help_menu])?;
+    let menu = Menu::with_items(
+        app,
+        &[&file_menu, &edit_menu, &view_menu, &run_menu, &memory_menu, &window_menu, &help_menu],
+    )?;
 
     Ok((
         menu,

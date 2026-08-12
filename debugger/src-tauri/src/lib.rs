@@ -473,6 +473,17 @@ pub fn run() {
                 // all end up calling the exact same code.
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "run-controls");
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "run-menu-action", event.id().as_ref().to_string());
+            } else if matches!(
+                event.id().as_ref(),
+                menu::LOAD_MEMORY_ID | menu::SAVE_MEMORY_ID | menu::EDIT_MEMORY_ID | menu::FILL_MEMORY_ID
+            ) {
+                // Same pattern as the Run menu above (issue #411): bring the
+                // Memory panel back if it's been dismissed, then dispatch the
+                // action itself to `MemoryPanel.tsx`, which owns the actual
+                // dialog-opening logic that used to live behind its own
+                // header buttons.
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "memory");
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "memory-menu-action", event.id().as_ref().to_string());
             }
         })
         .invoke_handler(tauri::generate_handler![

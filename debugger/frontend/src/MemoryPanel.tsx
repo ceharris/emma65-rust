@@ -255,64 +255,36 @@ export default function MemoryPanel() {
     return () => window.removeEventListener("keydown", handler);
   }, [fetchPage]);
 
-  /** Alt+Shift+H / Alt+Shift+A: open edit dialog at an arbitrary address. */
+  // The Memory panel's header buttons (Load/Save/Edit/Fill) were replaced by
+  // a top-level Memory menu (issue #411): a native accelerator or menu click
+  // reaches this handler as an event targeted at the main window, the same
+  // way `run-menu-action` reaches `RunControlsContext.tsx`. Dispatching to
+  // the exact same dialog-opening code the old buttons called means there's
+  // still only one implementation of each action. The four former shortcuts
+  // Alt+Shift+H/Alt+Shift+A and Alt+F/Alt+Shift+F are discarded rather than
+  // remapped — Edit's dialog already carries its own Hexadecimal/ASCII-Unicode
+  // Text radio group, so it no longer needs two separate entry points.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (document.activeElement instanceof HTMLInputElement) return;
-      if (execState !== "stopped" || editDialog) return;
-      if (e.altKey && e.shiftKey && e.code === "KeyH") {
-        e.preventDefault();
-        setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
-      } else if (e.altKey && e.shiftKey && e.code === "KeyA") {
-        e.preventDefault();
-        setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "utf8", allowRomOverwrite: false });
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [execState, editDialog]);
-
-  /** Alt+F: open load-file dialog. */
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (document.activeElement instanceof HTMLInputElement) return;
-      if (execState !== "stopped" || loadDialog || editDialog) return;
-      if (e.altKey && !e.shiftKey && e.code === "KeyF") {
-        e.preventDefault();
-        setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "", symbolPath: "" });
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [execState, loadDialog, editDialog]);
-
-  /** Alt+Shift+F: open fill-memory dialog. */
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (document.activeElement instanceof HTMLInputElement) return;
-      if (execState !== "stopped" || fillDialog || loadDialog || editDialog) return;
-      if (e.altKey && e.shiftKey && e.code === "KeyF") {
-        e.preventDefault();
-        const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
-        setFillDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: fmtAddr(endAddr), endError: "", fillValue: "00", fillError: "", allowRomOverwrite: false });
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [execState, fillDialog, loadDialog, editDialog]);
-
-  /** Ctrl+S: open save-memory dialog. */
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (document.activeElement instanceof HTMLInputElement) return;
+    const unlistenPromise = listen<string>("memory-menu-action", (event) => {
       if (execState !== "stopped" || saveDialog || fillDialog || loadDialog || editDialog) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        setSaveDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: "FFFF", endError: "", path: "", pathError: "" });
+      switch (event.payload) {
+        case "load-memory":
+          setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "", symbolPath: "" });
+          break;
+        case "save-memory":
+          setSaveDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: "FFFF", endError: "", path: "", pathError: "" });
+          break;
+        case "edit-memory":
+          setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false });
+          break;
+        case "fill-memory": {
+          const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
+          setFillDialog({ startInput: fmtAddr(pageAddrRef.current), startError: "", endInput: fmtAddr(endAddr), endError: "", fillValue: "00", fillError: "", allowRomOverwrite: false });
+          break;
+        }
       }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    });
+    return () => { unlistenPromise.then((f) => f()); };
   }, [execState, saveDialog, fillDialog, loadDialog, editDialog]);
 
   /** Wheel scrolling: one row per tick. */
@@ -667,45 +639,6 @@ export default function MemoryPanel() {
   return (
     <div className="memory-panel" onWheel={handleWheel}>
       <div className="memory-header">
-        <div className="mem-header-left">
-          <button
-            className="mem-load-btn"
-            onClick={() => setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "", symbolPath: "" })}
-            disabled={execState !== "stopped"}
-            title="Load file into memory (Alt+F)"
-          >
-            Load
-          </button>
-          <button
-            className="mem-save-btn"
-            onClick={() =>
-              setSaveDialog({ startInput: fmtAddr(pageAddr), startError: "", endInput: "FFFF", endError: "", path: "", pathError: "" })
-            }
-            disabled={execState !== "stopped"}
-            title="Save memory range to file (Ctrl+S)"
-          >
-            Save
-          </button>
-          <button
-            className="mem-fill-btn"
-            onClick={() => {
-              const endAddr = (pageAddrRef.current + 0xff) & 0xffff;
-              setFillDialog({ startInput: fmtAddr(pageAddr), startError: "", endInput: fmtAddr(endAddr), endError: "", fillValue: "00", fillError: "", allowRomOverwrite: false });
-            }}
-            disabled={execState !== "stopped"}
-            title="Fill memory range (Alt+Shift+F)"
-          >
-            Fill
-          </button>
-          <button
-            className="mem-edit-btn"
-            onClick={() => setEditDialog({ addr: null, addrInput: "", addrError: "", inputValue: "", errorMsg: "", mode: "hex", allowRomOverwrite: false })}
-            disabled={execState !== "stopped"}
-            title="Edit memory (Alt+Shift+H)"
-          >
-            Edit
-          </button>
-        </div>
         <input
           className="mem-addr-input"
           value={inputValue}
@@ -835,7 +768,7 @@ export default function MemoryPanel() {
           onWheel={(e) => e.stopPropagation()}
         >
           <div className="mem-load-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="mem-load-title">Load File</div>
+            <div className="mem-load-title">Load Memory from File</div>
 
             <div className="mem-load-path-row">
               <input
@@ -992,7 +925,7 @@ export default function MemoryPanel() {
           onWheel={(e) => e.stopPropagation()}
         >
           <div className="mem-save-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="mem-save-title">Save Memory</div>
+            <div className="mem-save-title">Save Memory to File</div>
 
             <div className="mem-save-field">
               <label className="mem-save-label">Start Address</label>
