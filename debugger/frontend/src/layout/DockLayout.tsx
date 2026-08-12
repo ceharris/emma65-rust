@@ -530,7 +530,7 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
       };
       return (
         <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
-          <i className="codicon codicon-link-external" />
+          <i className="codicon codicon-multiple-windows" />
         </button>
       );
     }
