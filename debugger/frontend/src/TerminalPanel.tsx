@@ -122,61 +122,75 @@ export default function TerminalPanel() {
     // A dockview split drag resizes this panel's container without resizing
     // the OS window, so window-resize alone (the old standalone Terminal
     // window's refit trigger) wouldn't cover it here — this observer handles
-    // both split-drag and inactive→active tab transitions.
+    // both split-drag and inactive→active tab transitions. Not started
+    // watching until after the history replay below has fully completed —
+    // see that block's comment for why.
     const resizeObserver = new ResizeObserver(() => fitAddon.fit());
-    resizeObserver.observe(containerRef.current!);
-
-    // The synchronous fit() above can measure a container whose layout
-    // hasn't actually settled yet — reproduced specifically in the detached
-    // window (issue #385): WebKitGTK begins running a just-`.show()`n
-    // window's JS without waiting for its layout to catch up to the
-    // window's configured size, so the very first fit() can land on far
-    // fewer columns than the window will actually have a moment later. The
-    // ResizeObserver above doesn't catch this on its own, since the
-    // container's size may never actually *change* afterward — only the
-    // measurement was wrong, not the size. Text written against the bad
-    // measurement (most visibly a whole backlog replayed in one shot via
-    // get_terminal_history right after mount) hard-wraps at that wrong
-    // width; a later correct fit() reflows it back, which is what these
-    // two deferred corrective passes are for. Guarded by `disposed` rather
-    // than tracked/canceled animation-frame ids, since a stray fit() call
-    // after `term.dispose()` would throw.
-    let disposed = false;
-    requestAnimationFrame(() => {
-      if (disposed) return;
-      fitAddon.fit();
-      requestAnimationFrame(() => {
-        if (!disposed) fitAddon.fit();
-      });
-    });
 
     term.onData((data) => {
       const bytes = Array.from(new TextEncoder().encode(data));
       invoke("write_terminal", { bytes }).catch(() => {});
     });
 
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
     // Replays recent console output before registering the live listener,
     // so a freshly (re)mounted terminal — the very first one at startup, or
     // any later detach/reattach cycle (issue #385) — catches up to the
-    // current session instead of starting blank. A byte emitted live in the
-    // narrow gap between the history fetch resolving and the listener
-    // actually registering could in principle be missed; accepted as the
-    // same class of narrow race already tolerated elsewhere in #385 (e.g.
-    // the detach/reattach `emit_to`-retarget race).
-    const attachOutputListener = () =>
-      listen<number[]>("terminal-output", (event) => {
+    // current session instead of starting blank.
+    //
+    // Sequenced carefully to avoid a reproduced bug (issue #385 UAT: typing
+    // an unterminated line while docked, then detaching, hard-wrapped just
+    // that line every couple of characters in the freshly shown detached
+    // window — but never when typing directly into an already-detached
+    // window with nothing to replay). `Terminal.write()` processes its
+    // input *asynchronously* (see `@xterm/xterm`'s own doc comment on
+    // `write`), so resizing while a large write (a full history replay is
+    // the only write here large enough to still be mid-flight when a resize
+    // could land) is still being processed corrupts wrapping for whatever
+    // hadn't been parsed yet, which is reliably the *newest* tail of the
+    // buffer: exactly the freshly typed, not-yet-newline-terminated line,
+    // never the older already-rendered banner lines above it. So: one
+    // corrective fit after a real paint (the very first fit() above can
+    // measure a container whose layout hasn't settled yet, most visibly the
+    // detached window's first-ever mount), then no further fit/resize at
+    // all — including via the ResizeObserver above — until the history
+    // write's own completion callback confirms it's fully processed.
+    (async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (disposed) return;
+      fitAddon.fit();
+
+      let history: number[] = [];
+      try {
+        history = await invoke<number[]>("get_terminal_history");
+      } catch (err) {
+        console.error("get_terminal_history failed:", err);
+      }
+      if (disposed) return;
+      if (history.length > 0) {
+        await new Promise<void>((resolve) => term.write(new Uint8Array(history), resolve));
+      }
+      if (disposed) return;
+
+      // A byte emitted live in the gap between here and the listener
+      // actually registering could in principle be missed; accepted as the
+      // same class of narrow race already tolerated elsewhere in #385 (e.g.
+      // the detach/reattach `emit_to`-retarget race).
+      unlisten = await listen<number[]>("terminal-output", (event) => {
         term.write(new Uint8Array(event.payload));
       });
-    const unlistenPromise = invoke<number[]>("get_terminal_history")
-      .then((history) => {
-        if (history.length > 0) term.write(new Uint8Array(history));
-      })
-      .catch((err) => console.error("get_terminal_history failed:", err))
-      .then(attachOutputListener);
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      resizeObserver.observe(containerRef.current!);
+    })();
 
     return () => {
       disposed = true;
-      unlistenPromise.then((f) => f());
+      unlisten?.();
       resizeObserver.disconnect();
       termRef.current = null;
       term.dispose();
