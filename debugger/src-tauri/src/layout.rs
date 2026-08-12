@@ -1,8 +1,9 @@
 //! Debugger dock layout persistence: the dockview panel arrangement,
 //! persisted as opaque JSON — see issue #382. Also carries the "Terminal is
-//! currently detached to its own window" flag (issue #385) alongside it,
-//! rather than in `preferences.rs`'s `ui.toml`, since it's a property of the
-//! dock arrangement rather than a general UI preference.
+//! currently detached to its own window" flag (issue #385) and the per-panel
+//! last-known-dock-position map (issue #393) alongside it, rather than in
+//! `preferences.rs`'s `ui.toml`, since both are properties of the dock
+//! arrangement rather than a general UI preference.
 
 use std::fs;
 use std::path::Path;
@@ -15,7 +16,7 @@ use crate::profile;
 
 /// The persisted dock layout: dockview's own serialized arrangement (treated
 /// as opaque JSON — this module never parses its internal schema) plus the
-/// terminal-detached flag.
+/// terminal-detached flag and the per-panel last-known-position map.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DockLayoutData {
     /// dockview's `api.toJSON()` output, or `None` if nothing has been
@@ -26,6 +27,15 @@ pub struct DockLayoutData {
     /// rather than docked in the main layout.
     #[serde(default)]
     pub terminal_detached: bool,
+    /// Opaque per-panel "last known dock position" map (issue #393):
+    /// dockview panel id -> `{group_id, index}`, kept up to date by
+    /// `DockLayout.tsx`'s `recordPanelPositions` and consulted when the View
+    /// menu needs to re-add a panel whose dock tab was closed. Persisted
+    /// alongside `dockview` rather than derived from it, since dockview's own
+    /// serialization only ever describes currently-present panels, never
+    /// ones that were removed — this module still never parses its shape.
+    #[serde(default)]
+    pub panel_positions: Option<Value>,
 }
 
 /// Managed state wrapping the last-known dock layout data.
@@ -52,14 +62,18 @@ pub fn get_dock_layout(state: State<LayoutState>) -> DockLayoutData {
     state.0.lock().unwrap().clone()
 }
 
-/// Persists `layout` (dockview's own serialized arrangement) to
-/// `~/.emma/debugger/config/layout.json`, leaving the terminal-detached flag
-/// untouched.
+/// Persists `layout` (dockview's own serialized arrangement) and
+/// `panel_positions` (the per-panel last-known-position map — see
+/// `DockLayoutData`) to `~/.emma/debugger/config/layout.json`, leaving the
+/// terminal-detached flag untouched. The two always originate from, and are
+/// written by, the same `onDidLayoutChange` tick in `DockLayout.tsx`, so
+/// they're accepted and persisted together rather than via separate calls.
 #[tauri::command]
-pub fn set_dock_layout(layout: Value, state: State<LayoutState>) -> Result<(), String> {
+pub fn set_dock_layout(layout: Value, panel_positions: Value, state: State<LayoutState>) -> Result<(), String> {
     let data = {
         let mut guard = state.0.lock().unwrap();
         guard.dockview = Some(layout);
+        guard.panel_positions = Some(panel_positions);
         guard.clone()
     };
     save_dock_layout_to(&profile::config_dir()?, &data)
@@ -104,6 +118,7 @@ mod tests {
         let data = DockLayoutData {
             dockview: Some(serde_json::json!({"grid": {"root": {"type": "leaf"}}})),
             terminal_detached: true,
+            panel_positions: Some(serde_json::json!({"trace": {"group_id": "group_1", "index": 0}})),
         };
         save_dock_layout_to(&dir, &data).unwrap();
         let loaded = load_dock_layout_from(&dir);

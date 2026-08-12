@@ -21,27 +21,34 @@ const LAYOUT_PERSIST_DEBOUNCE_MS = 500;
 
 /**
  * `layout::get_dock_layout`'s return shape (see `layout.rs`): dockview's own
- * serialized arrangement plus the "Terminal is detached to its own window"
- * flag persisted alongside it (issue #385) — snake_case to match the Rust
- * struct's field names directly, same convention `CpuBusPanel.tsx` follows
- * for `effective_speed`.
+ * serialized arrangement, the "Terminal is detached to its own window" flag
+ * (issue #385), and the per-panel last-known-position map (issue #393), all
+ * persisted alongside each other — snake_case to match the Rust struct's
+ * field names directly, same convention `CpuBusPanel.tsx` follows for
+ * `effective_speed`.
  */
 interface DockLayoutData {
   dockview: SerializedDockview | null;
   terminal_detached: boolean;
+  panel_positions: Partial<Record<MainPanelId, PanelPosition>> | null;
 }
 
 /**
  * A dock group (and tab index within it) some panel occupied at some point
  * in the past. Used two ways: `terminalPositionRef` below remembers exactly
  * where Terminal was immediately before a detach, so reattach can put it
- * back; `lastPanelPositionRef` (see `recordPanelPositions`) continuously
- * tracks every panel's most recent position, so the View menu (issue #393)
- * can restore a panel whose dock tab was simply closed. Neither is
- * persisted — a fresh session has no "previous" position to restore anyway.
+ * back (in-memory only — a fresh session has no "previous" position to
+ * restore anyway); `lastPanelPositionRef` (see `recordPanelPositions`)
+ * continuously tracks every panel's most recent position and is persisted
+ * alongside the dockview arrangement itself, so the View menu (issue #393)
+ * can restore a panel whose dock tab was closed even across an app restart.
+ * `group_id` values from a restored session remain valid to look up via
+ * `api.getGroup` after `fromJSON` restores the same arrangement, since
+ * dockview's serialized format embeds each group's id and reconstructs it
+ * exactly on restore.
  */
 interface PanelPosition {
-  groupId: string;
+  group_id: string;
   index?: number;
 }
 
@@ -55,7 +62,7 @@ interface PanelPosition {
 function closeTerminalPanel(api: DockviewReadyEvent["api"] | null, positionRef: React.MutableRefObject<PanelPosition | null>) {
   const panel = api?.getPanel("terminal");
   if (!panel) return;
-  positionRef.current = { groupId: panel.group.id, index: panel.group.panels.indexOf(panel) };
+  positionRef.current = { group_id: panel.group.id, index: panel.group.panels.indexOf(panel) };
   panel.api.close();
 }
 
@@ -66,9 +73,9 @@ function closeTerminalPanel(api: DockviewReadyEvent["api"] | null, positionRef: 
  * same default bottom-group tab position `addMissingBottomPanels` uses.
  */
 function positionForReattach(api: DockviewReadyEvent["api"], remembered: PanelPosition | null): AddPanelPositionOptions {
-  const groupStillExists = remembered !== null && api.getGroup(remembered.groupId) !== undefined;
+  const groupStillExists = remembered !== null && api.getGroup(remembered.group_id) !== undefined;
   return groupStillExists
-    ? { referenceGroup: remembered.groupId, index: remembered.index }
+    ? { referenceGroup: remembered.group_id, index: remembered.index }
     : { referencePanel: "trace" };
 }
 
@@ -104,7 +111,7 @@ function recordPanelPositions(api: DockviewReadyEvent["api"], ref: React.Mutable
   for (const id of Object.keys(PANEL_TITLES) as MainPanelId[]) {
     const panel = api.getPanel(id);
     if (panel) {
-      ref.current[id] = { groupId: panel.group.id, index: panel.group.panels.indexOf(panel) };
+      ref.current[id] = { group_id: panel.group.id, index: panel.group.panels.indexOf(panel) };
     }
   }
 }
@@ -124,8 +131,8 @@ function resolveRevealPosition(
   lastPositions: Partial<Record<MainPanelId, PanelPosition>>,
 ): { position?: AddPanelPositionOptions; initialHeight?: number } {
   const remembered = lastPositions[id];
-  if (remembered && api.getGroup(remembered.groupId)) {
-    return { position: { referenceGroup: remembered.groupId, index: remembered.index } };
+  if (remembered && api.getGroup(remembered.group_id)) {
+    return { position: { referenceGroup: remembered.group_id, index: remembered.index } };
   }
   if (id === "trace") {
     return { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT };
@@ -235,13 +242,17 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
 }
 
 /**
- * Persists the current layout to `~/.emma/debugger/config/layout.json` via
- * the `set_dock_layout` command. `api.toJSON()` returns dockview's own
- * serialization format; the Rust side stores it as opaque JSON and never
- * parses its internal schema (see `layout.rs`).
+ * Persists the current layout, plus `lastPositions` (the per-panel
+ * last-known-position map — see `recordPanelPositions`), to
+ * `~/.emma/debugger/config/layout.json` via the `set_dock_layout` command.
+ * `api.toJSON()` returns dockview's own serialization format; the Rust side
+ * stores both as opaque JSON and never parses their internal shape (see
+ * `layout.rs`).
  */
-function persistLayout(api: DockviewReadyEvent["api"]) {
-  invoke("set_dock_layout", { layout: api.toJSON() }).catch((err) => console.error("set_dock_layout failed:", err));
+function persistLayout(api: DockviewReadyEvent["api"], lastPositions: Partial<Record<MainPanelId, PanelPosition>>) {
+  invoke("set_dock_layout", { layout: api.toJSON(), panelPositions: lastPositions }).catch((err) =>
+    console.error("set_dock_layout failed:", err),
+  );
 }
 
 /**
@@ -312,13 +323,26 @@ function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached
  * saying detached (or vice versa isn't possible: `addMissingBottomPanels`
  * already treats "flag false, panel missing" as a reconciliation case). Any
  * such mismatch is corrected here before the panel actions render.
+ *
+ * Also seeds `lastPositionsRef` from the persisted `panel_positions` map
+ * (issue #393) before `fromJSON` runs, so a panel closed in a prior session
+ * still has a last-known position for the View menu to restore it to. This
+ * is safe to do unconditionally: `fromJSON`'s own layout-change event fires
+ * `recordPanelPositions` immediately afterward (see `onReady`), which
+ * overwrites the seeded entry for every panel the restored arrangement
+ * actually contains with its live position, leaving the seed intact only for
+ * panels the restored arrangement doesn't (i.e. ones already closed as of
+ * the last save).
  */
-async function restoreLayout(api: DockviewReadyEvent["api"]) {
+async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: React.MutableRefObject<Partial<Record<MainPanelId, PanelPosition>>>) {
   let restored = false;
   let terminalDetached = false;
   try {
     const saved = await invoke<DockLayoutData>("get_dock_layout");
     terminalDetached = saved.terminal_detached;
+    if (saved.panel_positions) {
+      lastPositionsRef.current = saved.panel_positions;
+    }
     if (saved.dockview) {
       api.fromJSON(saved.dockview);
       restored = true;
@@ -328,14 +352,14 @@ async function restoreLayout(api: DockviewReadyEvent["api"]) {
   }
   if (!restored) {
     addDefaultLayout(api, terminalDetached);
-    persistLayout(api);
+    persistLayout(api, lastPositionsRef.current);
     return;
   }
   if (terminalDetached) {
     api.getPanel("terminal")?.api.close();
   }
   if (addMissingBottomPanels(api, terminalDetached)) {
-    persistLayout(api);
+    persistLayout(api, lastPositionsRef.current);
   }
 }
 
@@ -443,13 +467,13 @@ export default function DockLayout() {
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api;
-    restoreLayout(event.api);
+    restoreLayout(event.api, lastPanelPositionRef);
     layoutChangeSubscriptionRef.current = event.api.onDidLayoutChange(() => {
       recordPanelPositions(event.api, lastPanelPositionRef);
       if (persistTimerRef.current !== null) clearTimeout(persistTimerRef.current);
       persistTimerRef.current = setTimeout(() => {
         persistTimerRef.current = null;
-        persistLayout(event.api);
+        persistLayout(event.api, lastPanelPositionRef.current);
       }, LAYOUT_PERSIST_DEBOUNCE_MS);
     });
   }, []);
