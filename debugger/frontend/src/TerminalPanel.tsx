@@ -125,14 +125,24 @@ export default function TerminalPanel() {
       invoke("write_terminal", { bytes }).catch(() => {});
     });
 
-    // Register the output listener, then signal the backend that we are ready.
-    // The backend will not start the CPU until it receives this signal.
-    const unlistenPromise = listen<number[]>("terminal-output", (event) => {
-      term.write(new Uint8Array(event.payload));
-    }).then((unlisten) => {
-      invoke("terminal_ready").catch(() => {});
-      return unlisten;
-    });
+    // Replays recent console output before registering the live listener,
+    // so a freshly (re)mounted terminal — the very first one at startup, or
+    // any later detach/reattach cycle (issue #385) — catches up to the
+    // current session instead of starting blank. A byte emitted live in the
+    // narrow gap between the history fetch resolving and the listener
+    // actually registering could in principle be missed; accepted as the
+    // same class of narrow race already tolerated elsewhere in #385 (e.g.
+    // the detach/reattach `emit_to`-retarget race).
+    const attachOutputListener = () =>
+      listen<number[]>("terminal-output", (event) => {
+        term.write(new Uint8Array(event.payload));
+      });
+    const unlistenPromise = invoke<number[]>("get_terminal_history")
+      .then((history) => {
+        if (history.length > 0) term.write(new Uint8Array(history));
+      })
+      .catch((err) => console.error("get_terminal_history failed:", err))
+      .then(attachOutputListener);
 
     return () => {
       unlistenPromise.then((f) => f());

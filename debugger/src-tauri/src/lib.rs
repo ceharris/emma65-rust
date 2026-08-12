@@ -182,6 +182,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     // leaking alongside the new session's.
     *app.state::<CpuState>().0.lock().unwrap() = None;
     *app.state::<terminal::TerminalTx>().0.lock().unwrap() = None;
+    app.state::<terminal::TerminalHistory>().0.lock().unwrap().clear();
 
     *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
 
@@ -368,7 +369,7 @@ pub fn run() {
                 .build(),
         )
         .manage(SessionStatusState(Mutex::new(None)))
-        .manage(terminal::TerminalOutputBuffer(Mutex::new(terminal::TerminalOutputState::default())))
+        .manage(terminal::TerminalHistory::default())
         .manage(terminal::TerminalTx(Mutex::new(None)))
         .manage(terminal::TerminalTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
         .manage(CpuState(Mutex::new(None)))
@@ -440,7 +441,7 @@ pub fn run() {
             profile::open_profile,
             get_session_status,
             terminal::write_terminal,
-            terminal::terminal_ready,
+            terminal::get_terminal_history,
             terminal::detach_terminal,
             terminal::attach_terminal,
             trace::record_trace,
@@ -538,12 +539,12 @@ pub fn run() {
             }
 
             // Starts loading the session immediately, without waiting for the
-            // terminal panel to signal readiness: unlike the old standalone
-            // Terminal window, the panel lives inside the main window's
-            // dockview instance, which doesn't render until the session
-            // itself is ready — waiting here would deadlock. Console output
-            // produced before the panel's listener attaches is buffered
-            // backend-side instead (see `terminal::TerminalOutputBuffer`).
+            // terminal panel to mount: unlike the old standalone Terminal
+            // window, the panel lives inside the main window's dockview
+            // instance, which doesn't render until the session itself is
+            // ready — waiting here would deadlock. Console output produced
+            // before any panel mounts is retained regardless (see
+            // `terminal::TerminalHistory`), so nothing is lost.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 load_or_reload_session(&handle, &profile_dir).await;

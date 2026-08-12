@@ -29,27 +29,36 @@ pub struct TerminalTx(pub Mutex<Option<File>>);
 /// `begin_terminal_detach`/`reattach_terminal`.
 pub struct TerminalTargetWindow(pub Mutex<String>);
 
-/// Buffers console output emitted before the terminal panel's listener attaches.
-///
-/// The terminal panel lives inside the main window's dockview instance, which
-/// `App.tsx` doesn't render until the emulator session itself is ready — so,
-/// unlike the old standalone Terminal window (which mounted independently of
-/// session status), session bring-up can no longer block on a `terminal_ready`
-/// handshake before starting the CPU: that would deadlock, since the panel
-/// that sends `terminal_ready` can't mount until the session it's waiting on
-/// is already loaded. Instead, `run_terminal_bridge` buffers bytes here until
-/// `terminal_ready` fires once (ever, for the life of the process — the panel
-/// stays mounted afterward per dockview's confirmed non-lazy-mount behavior,
-/// see issue #379), at which point the buffer is flushed and every later byte
-/// is emitted directly.
-#[derive(Default)]
-pub struct TerminalOutputState {
-    ready: bool,
-    buffered: Vec<u8>,
-}
+/// Cap, in bytes, on `TerminalHistory`'s rolling buffer — generous for a
+/// low-volume serial console's raw byte stream. Independent of
+/// `preferences::UiConfig::terminal_scrollback` (xterm's own line-based
+/// backscroll setting): converting this byte cap to a visual line count
+/// would require re-running terminal emulation over the buffered bytes, so
+/// the two aren't kept in sync.
+const TERMINAL_HISTORY_CAP_BYTES: usize = 64 * 1024;
 
-/// Tauri-managed [`TerminalOutputState`].
-pub struct TerminalOutputBuffer(pub Mutex<TerminalOutputState>);
+/// Rolling buffer of the last `TERMINAL_HISTORY_CAP_BYTES` bytes of console
+/// output, accumulated unconditionally regardless of whether any terminal
+/// panel is currently mounted or listening. Queried via
+/// `get_terminal_history` by every terminal panel right after it mounts
+/// (the very first one at startup, and every detach/reattach cycle
+/// thereafter — issue #385 UAT feedback: reattaching showed a blank
+/// terminal even though the same session's output was still visible in the
+/// still-mounted detached window) so it can replay recent output instead of
+/// starting blank, before registering its live listener for anything after.
+#[derive(Default)]
+pub struct TerminalHistory(pub Mutex<Vec<u8>>);
+
+/// Appends `bytes` to `history`, trimming from the front if that pushes it
+/// past `TERMINAL_HISTORY_CAP_BYTES`.
+fn append_history(history: &TerminalHistory, bytes: &[u8]) {
+    let mut buf = history.0.lock().unwrap();
+    buf.extend_from_slice(bytes);
+    if buf.len() > TERMINAL_HISTORY_CAP_BYTES {
+        let excess = buf.len() - TERMINAL_HISTORY_CAP_BYTES;
+        buf.drain(0..excess);
+    }
+}
 
 /// Tokio task that reads bytes from the remote pipe rx and emits `terminal-output` events.
 pub async fn run_terminal_bridge(rx: File, app: AppHandle) {
@@ -67,15 +76,15 @@ pub async fn run_terminal_bridge(rx: File, app: AppHandle) {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => {
                 let bytes = &buf[..n];
-                let state = app.state::<TerminalOutputBuffer>();
-                let mut guard = state.0.lock().unwrap();
-                if guard.ready {
-                    drop(guard);
-                    let target = current_target(&app);
-                    let _ = app.emit_to(target, "terminal-output", bytes.to_vec());
-                } else {
-                    guard.buffered.extend_from_slice(bytes);
-                }
+                append_history(&app.state::<TerminalHistory>(), bytes);
+                // Emitting live even when nothing is listening yet (e.g. at
+                // startup, before any terminal panel has mounted) is
+                // harmless — Tauri silently drops an event with no
+                // listener — and no longer needs a "ready" gate now that
+                // every panel replays `TerminalHistory` on mount regardless
+                // of when it mounts.
+                let target = current_target(&app);
+                let _ = app.emit_to(target, "terminal-output", bytes.to_vec());
             }
             Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
             Ok(Err(_)) => break,
@@ -89,21 +98,13 @@ fn current_target(app: &AppHandle) -> String {
     app.state::<TerminalTargetWindow>().0.lock().unwrap().clone()
 }
 
-/// Tauri command: called by the terminal panel once its event listener is registered.
-/// Flushes any output buffered before this first call; a no-op on any later call.
+/// Tauri command: called by a terminal panel right after it mounts (the
+/// first one at startup, or any later detach/reattach cycle) to replay
+/// recent console output before registering its live listener, so it
+/// catches up to the current session instead of starting blank.
 #[tauri::command]
-pub fn terminal_ready(app: AppHandle, state: State<TerminalOutputBuffer>) {
-    let mut guard = state.0.lock().unwrap();
-    if guard.ready {
-        return;
-    }
-    guard.ready = true;
-    let buffered = std::mem::take(&mut guard.buffered);
-    drop(guard);
-    if !buffered.is_empty() {
-        let target = current_target(&app);
-        let _ = app.emit_to(target, "terminal-output", buffered);
-    }
+pub fn get_terminal_history(state: State<TerminalHistory>) -> Vec<u8> {
+    state.0.lock().unwrap().clone()
 }
 
 /// Tauri command: send bytes typed in the terminal to the emulated console.
@@ -231,5 +232,28 @@ pub(crate) fn restore_detached_window_if_needed(app: &AppHandle, was_detached: b
         return;
     }
     crate::menu::set_terminal_menu_label(&app.state::<crate::menu::WindowMenuState>(), true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_history_accumulates_bytes() {
+        let history = TerminalHistory::default();
+        append_history(&history, b"hello");
+        append_history(&history, b" world");
+        assert_eq!(*history.0.lock().unwrap(), b"hello world");
+    }
+
+    #[test]
+    fn append_history_trims_from_front_past_cap() {
+        let history = TerminalHistory::default();
+        append_history(&history, &vec![b'a'; TERMINAL_HISTORY_CAP_BYTES]);
+        append_history(&history, b"bcd");
+        let buf = history.0.lock().unwrap();
+        assert_eq!(buf.len(), TERMINAL_HISTORY_CAP_BYTES);
+        assert_eq!(&buf[buf.len() - 3..], b"bcd");
+    }
 }
 
