@@ -84,7 +84,15 @@ button.status-bar-cell .status-bar-label,
   line-height: 1;
 }
 
-// Run/Stop/Step indicator colors
+// Run/Stop/Step/STP indicator colors. Boosted relative to the shared tokens
+// (also used by Log severity colors and the Watchpoints true/false dots,
+// which shouldn't change) since the same hues read as washed out against
+// this bar's mid-gray --color-bg-handle chrome, unlike a panel's
+// near-black/white --color-bg.
+.status-bar-run .indicator {
+  filter: saturate(1.6) brightness(1.25);
+}
+
 .indicator-run  { color: var(--color-success); }
 .indicator-stop { color: var(--color-indicator-stop); }
 .indicator-step { color: var(--color-info); }
