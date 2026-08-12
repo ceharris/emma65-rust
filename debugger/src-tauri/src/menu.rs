@@ -24,14 +24,19 @@ pub(crate) const CLEAR_RECENT_ID: &str = "clear-recent";
 /// Menu item id for the File > Exit item.
 pub(crate) const EXIT_ID: &str = "exit";
 
-/// Holds the File > Exit item so `on_menu_event` can match its id against
-/// the clicked item. Terminal, Trace, and Log (since #384/#383) are all
-/// plain, non-checkable "Reveal…" items — they don't reflect any
-/// window-visibility boolean, so their click is matched by id alone in
-/// `on_menu_event` and no handle to them needs to be kept here.
+/// Holds menu items `on_menu_event`/other modules need a handle to after
+/// construction. Trace and Log are plain, non-checkable "Reveal…" items —
+/// they don't reflect any window-visibility boolean, so their click is
+/// matched by id alone in `on_menu_event` and no handle to them needs to be
+/// kept here. Terminal (since #385) toggles between "Detach Terminal…" and
+/// "Attach Terminal" depending on whether it's currently docked or
+/// detached, so its handle is kept for `set_terminal_menu_label` to mutate
+/// in place.
 pub struct WindowMenuState {
     /// The File > Exit item.
     pub exit_item: MenuItem<Wry>,
+    /// The Window > Terminal item.
+    pub terminal_item: MenuItem<Wry>,
 }
 
 /// Holds the File > Open Recent submenu so its items can be replaced in
@@ -91,11 +96,15 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // below, and Terminal's fallback to a letter. See
     // https://docs.gtk.org/gtk3/class.AccelGroup.html on consumed modifiers.
     //
-    // All three are plain items, not checkable: since #383/#384, Terminal/Trace/Log
-    // are dockview panels rather than their own window, so there's no visibility
-    // boolean to reflect — clicking any of them just reveals its dock tab (see
-    // `on_menu_event` in `lib.rs`).
-    let terminal_item = MenuItem::with_id(app, TOGGLE_TERMINAL_ID, "Reveal Terminal", true, Some("Ctrl+Shift+T"))?;
+    // Trace/Log are plain, non-checkable items: since #383, they're dockview
+    // panels rather than their own window, so there's no visibility boolean to
+    // reflect — clicking either just reveals its dock tab (see `on_menu_event`
+    // in `lib.rs`). Terminal (since #385) is different again: it can be docked
+    // *or* detached to its own window, so its click toggles between the two —
+    // starts out "Detach Terminal…", mutated to "Attach Terminal" in place by
+    // `set_terminal_menu_label` whenever that state flips (including once here
+    // at startup, if the persisted layout says Terminal was left detached).
+    let terminal_item = MenuItem::with_id(app, TOGGLE_TERMINAL_ID, "Detach Terminal…", true, Some("Ctrl+Shift+T"))?;
     let trace_item = MenuItem::with_id(app, TOGGLE_TRACE_ID, "Reveal Trace", true, Some("Ctrl+Shift+Y"))?;
     let log_item = MenuItem::with_id(app, TOGGLE_LOG_ID, "Reveal Log", true, Some("Ctrl+Shift+L"))?;
     let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item, &trace_item, &log_item])?;
@@ -105,7 +114,17 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
 
     let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
 
-    Ok((menu, WindowMenuState { exit_item }, RecentMenuState(open_recent_submenu)))
+    Ok((menu, WindowMenuState { exit_item, terminal_item }, RecentMenuState(open_recent_submenu)))
+}
+
+/// Updates the Window > Terminal item's label to reflect whether the
+/// terminal is currently detached to its own window ("Attach Terminal") or
+/// docked ("Detach Terminal…") — mutated in place, the same pattern
+/// `rebuild_open_recent_submenu` uses for its submenu, rather than
+/// rebuilding the whole app menu.
+pub(crate) fn set_terminal_menu_label(state: &WindowMenuState, detached: bool) {
+    let label = if detached { "Attach Terminal" } else { "Detach Terminal…" };
+    let _ = state.terminal_item.set_text(label);
 }
 
 /// Replaces the File > Open Recent submenu's items with `entries` (each a

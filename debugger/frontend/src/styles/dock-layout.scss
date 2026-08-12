@@ -74,4 +74,28 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
+
+  // Terminal tab's "Detach" action (issue #385), rendered via dockview's
+  // rightHeaderActionsComponent — styled as a plain icon button matching
+  // the tab bar chrome around it rather than the panel-content `.btn` look
+  // used inside panel bodies.
+  .dock-tab-action {
+    display: flex;
+    align-items: center;
+    background: transparent;
+    border: none;
+    color: var(--color-muted);
+    cursor: pointer;
+    padding: 2px 8px;
+    margin-right: 4px;
+
+    .codicon {
+      font-size: 0.95rem;
+    }
+
+    &:hover {
+      background-color: var(--dv-icon-hover-background-color);
+      color: var(--color-fg);
+    }
+  }
 }

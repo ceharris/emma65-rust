@@ -25,6 +25,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
+        "terminal-detached": resolve(__dirname, "terminal-detached.html"),
       },
     },
   },
