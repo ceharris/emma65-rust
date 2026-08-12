@@ -38,8 +38,12 @@ mod registers;
 /// CPU/bus panel: IRQ/NMI controls, reset, and cached bus-signal snapshot.
 mod cpu_bus;
 
-/// Disassembly panel: run/step/stop controls, breakpoints, and disassembly listing.
+/// Disassembly panel: run/step/stop controls and disassembly listing.
 mod disassembly;
+
+/// Breakpoint panel: tracked breakpoint set, CRUD commands, and the
+/// `breakpoints-changed` broadcast shared with the Disassembly gutter.
+mod breakpoints;
 
 /// Memory panel: paged reads, writes, fills, and file loads.
 mod memory;
@@ -256,7 +260,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
 
             // Reset the rest of the per-panel state that assumes one
             // long-lived session, so nothing from the previous profile lingers.
-            *app.state::<disassembly::BreakpointState>().0.lock().unwrap() = std::collections::BTreeMap::new();
+            *app.state::<breakpoints::BreakpointState>().0.lock().unwrap() = std::collections::BTreeMap::new();
             *app.state::<disassembly::SkipBreakpointPc>().0.lock().unwrap() = None;
             *app.state::<disassembly::LiveSnapshotRx>().0.lock().unwrap() = None;
             *app.state::<registers::ChangedFlagsState>().0.lock().unwrap() = 0;
@@ -384,7 +388,7 @@ pub fn run() {
         .manage(registers::ChangedFlagsState(Mutex::new(0)))
         .manage(disassembly::RunStopperState(Mutex::new(None)))
         .manage(disassembly::SkipBreakpointPc(Mutex::new(None)))
-        .manage(disassembly::BreakpointState(Mutex::new(std::collections::BTreeMap::new())))
+        .manage(breakpoints::BreakpointState(Mutex::new(std::collections::BTreeMap::new())))
         .manage(disassembly::LiveSnapshotRx(Mutex::new(None)))
         .manage(memory::MemoryViewAddr(Arc::new(AtomicU16::new(0))))
         .manage(cpu_bus::CpuBusCache(Mutex::new(cpu_bus::CpuBusSnapshot {
@@ -519,12 +523,12 @@ pub fn run() {
             memory::save_memory,
             memory::fill_memory,
             stack::get_stack,
-            disassembly::toggle_breakpoint,
-            disassembly::set_breakpoint,
-            disassembly::remove_breakpoint,
-            disassembly::disable_breakpoint,
-            disassembly::enable_breakpoint,
-            disassembly::get_breakpoints,
+            breakpoints::toggle_breakpoint,
+            breakpoints::set_breakpoint,
+            breakpoints::remove_breakpoint,
+            breakpoints::disable_breakpoint,
+            breakpoints::enable_breakpoint,
+            breakpoints::get_breakpoints,
             cpu_bus::get_cpu_bus_state,
             resolve_symbol,
             memory::get_symbols_for_range,

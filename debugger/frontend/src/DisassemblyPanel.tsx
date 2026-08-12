@@ -230,6 +230,11 @@ export default function DisassemblyPanel() {
       if (pc !== null) fetchFrom(pc);
     });
 
+    // Keep the gutter in sync with edits made from the standalone Breakpoints panel.
+    const unlistenBreakpointsChangedPromise = listen<BreakpointInfo[]>("breakpoints-changed", (event) => {
+      applyBreakpointList(event.payload);
+    });
+
     // Proactively fetch on mount: the initial `debugger-halted` event can fire
     // before our listener is registered (listen() is async), leaving rows empty.
     invoke<RegisterSnapshot>("get_registers")
@@ -244,6 +249,7 @@ export default function DisassemblyPanel() {
       unlistenHaltedPromise.then((f) => f());
       unlistenRunStoppedPromise.then((f) => f());
       unlistenMemoryModifiedPromise.then((f) => f());
+      unlistenBreakpointsChangedPromise.then((f) => f());
     };
   }, [handleHalted, onStep, applyBreakpointList, fetchFrom]);
 

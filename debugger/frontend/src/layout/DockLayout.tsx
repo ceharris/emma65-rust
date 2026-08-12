@@ -18,6 +18,7 @@ import "../styles/dock-layout.scss";
 import {useTheme} from "../ThemeContext";
 import {MainPanelId, PANEL_TITLES, panelComponents} from "./panelRegistry";
 import {RUN_CONTROLS_MIN_HEIGHT, RUN_CONTROLS_MIN_WIDTH} from "../RunControlsPanel";
+import {PanelHeaderActionProvider, usePanelHeaderActions} from "./panelHeaderActions";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
 // panels — onDidLayoutChange fires on every intermediate frame of a drag.
@@ -143,6 +144,7 @@ const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: Main
   registers: { referencePanel: "disassembly", direction: "right" },
   watchpoints: { referencePanel: "memory", direction: "below" },
   stack: { referencePanel: "registers", direction: "below" },
+  breakpoints: { referencePanel: "stack", direction: "below" },
   log: { referencePanel: "trace" },
   terminal: { referencePanel: "trace" },
 };
@@ -267,6 +269,11 @@ const REGISTERS_PANEL_DEFAULT_HEIGHT = 150;
 // body padding, with headroom for cross-platform font-metric variance.
 const STACK_PANEL_DEFAULT_HEIGHT = 260;
 
+// BreakpointPanel is meant to stay small (issue #413) — a handful of rows at
+// most before it scrolls internally, so it shouldn't compete with Stack or
+// Registers for vertical space in their shared column.
+const BREAKPOINTS_PANEL_DEFAULT_HEIGHT = 140;
+
 // Trace/Log form a VS Code-style Output/Problems bottom dock, tabbed against
 // each other. Given as a plain height (not width): both scroll internally,
 // so this just trades off default vertical space against the panels above.
@@ -305,6 +312,7 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   add("registers", { position: { referencePanel: "disassembly", direction: "right" }, initialWidth: 220 });
   add("watchpoints", { position: { referencePanel: "memory", direction: "below" } });
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
+  add("breakpoints", { position: { referencePanel: "stack", direction: "below" } });
 
   // Bottom of Disassembly's column (issue #402) — see RUN_CONTROLS_DEFAULT_POSITION.
   api.addPanel({
@@ -330,18 +338,19 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   // Watchpoints (dockview gives the sibling whichever space is left over).
   api.getPanel("memory")?.api.setSize({ height: MEMORY_PANEL_DEFAULT_HEIGHT });
 
-  // Registers/Stack form one flat 2-way vertical split (see the ordering
-  // note above). dockview's resizeView sets the target's size exactly, then
-  // redistributes the delta across the *other* views in that split — so a
-  // setSize call perturbs whatever was set by an earlier call, but leaves
-  // nothing after it untouched. Stack must come last: it can't shrink and
-  // scroll (fixed 8-row page, like Memory), so its size has to land exactly
-  // on target, whereas Registers degrades gracefully via its own
-  // overflow-y: auto — Stack's setSize redistributes its delta onto
-  // Registers (the only other view left in this split), which ends up
+  // Registers/Stack/Breakpoints form one flat 3-way vertical split (see the
+  // ordering note above). dockview's resizeView sets the target's size
+  // exactly, then redistributes the delta across the *other* views in that
+  // split — so a setSize call perturbs whatever was set by an earlier call,
+  // but leaves nothing after it untouched. Stack must come last: it can't
+  // shrink and scroll (fixed 8-row page, like Memory), so its size has to
+  // land exactly on target, whereas Registers and Breakpoints both degrade
+  // gracefully via their own overflow-y: auto — Stack's setSize redistributes
+  // its delta across the other views left in this split, which ends up
   // taking whatever's left over in the column, same role CpuBus used to play
   // here.
   api.getPanel("registers")?.api.setSize({ height: REGISTERS_PANEL_DEFAULT_HEIGHT });
+  api.getPanel("breakpoints")?.api.setSize({ height: BREAKPOINTS_PANEL_DEFAULT_HEIGHT });
   api.getPanel("stack")?.api.setSize({ height: STACK_PANEL_DEFAULT_HEIGHT });
 }
 
@@ -519,9 +528,18 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
  * valid dock target) to actually resolve to "float" in this layout. Hidden
  * once the panel is already floating, since floating an already-floating
  * panel does nothing useful.
+ *
+ * Any other panel gets a generic fallback: whatever single action it
+ * registered via `usePanelHeaderAction` (see `panelHeaderActions.tsx`) is
+ * rendered as a plain "+" icon button, so panels like Breakpoints and
+ * Watchpoints get a tab-header action without hardcoding their ids here.
+ * `usePanelHeaderActions()` must run on every render of this component (not
+ * just the fallback branch) to satisfy the rules of hooks, since the
+ * terminal/run-controls branches above return early.
  */
 function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
   return function DockTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
+    const headerActions = usePanelHeaderActions();
     if (activePanel?.id === "terminal") {
       const handleDetach = () => {
         invoke("detach_terminal")
@@ -539,6 +557,19 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
       return (
         <button className="dock-tab-action" onClick={handleFloat} title="Float Run Controls">
           <i className="codicon codicon-multiple-windows" />
+        </button>
+      );
+    }
+    const action = activePanel ? headerActions[activePanel.id as MainPanelId] : undefined;
+    if (action) {
+      return (
+        <button
+          className="dock-tab-action"
+          onClick={action.onClick}
+          disabled={action.disabled}
+          title={action.disabled ? (action.disabledTitle ?? action.title) : action.title}
+        >
+          <i className="codicon codicon-add" />
         </button>
       );
     }
@@ -664,13 +695,15 @@ export default function DockLayout() {
   }, []);
 
   return (
-    <div className="dock-layout">
-      <DockviewReact
-        components={panelComponents}
-        rightHeaderActionsComponent={DockTabActions}
-        onReady={onReady}
-        theme={{ ...EMMA65_DOCK_THEME_BASE, colorScheme: resolvedTheme }}
-      />
-    </div>
+    <PanelHeaderActionProvider>
+      <div className="dock-layout">
+        <DockviewReact
+          components={panelComponents}
+          rightHeaderActionsComponent={DockTabActions}
+          onReady={onReady}
+          theme={{ ...EMMA65_DOCK_THEME_BASE, colorScheme: resolvedTheme }}
+        />
+      </div>
+    </PanelHeaderActionProvider>
   );
 }

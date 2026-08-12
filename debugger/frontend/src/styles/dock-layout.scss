@@ -141,5 +141,14 @@
       background-color: var(--dv-icon-hover-background-color);
       color: var(--color-fg);
     }
+
+    &:disabled {
+      color: var(--color-muted-2);
+      cursor: default;
+
+      &:hover {
+        background-color: transparent;
+      }
+    }
   }
 }
