@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useExecutionContext } from "./ExecutionContext";
 import { formatDataRadix, RadixButton, useDataRadix } from "./RadixControl";
+import { usePanelHeaderAction } from "./layout/panelHeaderActions";
 import "./styles/watchpoints.scss";
 
 interface WatchpointRow {
@@ -201,18 +202,15 @@ export default function WatchpointPanel() {
     return () => document.removeEventListener("keydown", handler);
   }, [addDialog]);
 
+  usePanelHeaderAction("watchpoints", {
+    title: "Add watchpoint",
+    onClick: () => setAddDialog({ value: "", error: "" }),
+    disabled: !canEdit,
+    disabledTitle: "Stop the CPU to edit watchpoints",
+  });
+
   return (
     <div className="watchpoint-panel" ref={panelRef}>
-      <div className="watchpoint-header">
-        <button
-          className="watchpoint-add-btn"
-          onClick={() => setAddDialog({ value: "", error: "" })}
-          disabled={!canEdit}
-          title={canEdit ? "Add watchpoint" : "Stop the CPU to edit watchpoints"}
-        >
-          +
-        </button>
-      </div>
       {snapshot === null ? (
         <span className="watchpoint-empty">Waiting…</span>
       ) : snapshot.compile_error !== null ? (
