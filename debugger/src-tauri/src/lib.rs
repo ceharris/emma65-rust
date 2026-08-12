@@ -428,10 +428,26 @@ pub fn run() {
                 } else {
                     let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-detach-requested", ());
                 }
-            } else if event.id() == menu::TOGGLE_TRACE_ID {
-                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "trace");
-            } else if event.id() == menu::TOGGLE_LOG_ID {
-                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "log");
+            } else if let Some(panel_id) = event.id().as_ref().strip_prefix(menu::VIEW_PANEL_ID_PREFIX) {
+                // Terminal is special-cased: while it's detached to its own
+                // window, that window (not a "terminal" dock panel) is the
+                // thing to reveal — asking the dock to add a panel that
+                // duplicates it would fight the single-source-of-truth
+                // detach/reattach design in `terminal.rs`. Every other panel
+                // id, and Terminal while it's docked, goes through the
+                // generic dockview-driven `reveal-panel` handler in
+                // `DockLayout.tsx`, which adds the panel back (using its last
+                // dock position, or its default position) if it isn't
+                // present, or just activates its tab if it is.
+                let terminal_detached = panel_id == "terminal"
+                    && app.state::<layout::LayoutState>().0.lock().unwrap().terminal_detached;
+                if terminal_detached {
+                    if let Some(window) = app.get_webview_window(terminal::TERMINAL_DETACHED_WINDOW_LABEL) {
+                        let _ = window.set_focus();
+                    }
+                } else {
+                    let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", panel_id.to_string());
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

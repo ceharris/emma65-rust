@@ -25,16 +25,19 @@ export interface AppKeyBinding {
 }
 
 /**
- * Reveals `panelId`'s dock tab in the main window by emitting `reveal-panel`
- * there — used for Trace, Log, and (since #384) Terminal, which are all
- * dockview panels rather than their own window, so there's no `AppHandle`
- * window label to show()/hide() any more. The main window's own copy is
- * skipped in favor of the native accelerator (see `hasMainWindowAccelerator`
- * above); a future detached-window host for Terminal (#385) would need this
- * cross-window emit either way, since it wouldn't have direct access to the
- * main window's dockview instance (separate webview, separate JS runtime).
+ * Reveals Terminal's dock tab in the main window by emitting `reveal-panel`
+ * there — Terminal is a dockview panel rather than its own window when
+ * docked, so there's no `AppHandle` window label to show()/hide() from here.
+ * (Trace and Log had the same treatment pre-#393, reachable via this same
+ * Ctrl+Shift+T-adjacent path; they're now reached only through the View
+ * menu's per-panel items — see `menu.rs` — which also cover the case this
+ * function doesn't: re-adding a panel whose dock tab was closed.) The main
+ * window's own copy is skipped in favor of the native accelerator (see
+ * `hasMainWindowAccelerator` above); the detached-Terminal window needs this
+ * cross-window emit, since it has no direct access to the main window's
+ * dockview instance (separate webview, separate JS runtime).
  */
-function revealPanel(panelId: "trace" | "log" | "terminal") {
+function revealPanel(panelId: "terminal") {
   emitTo(MAIN_WINDOW_LABEL, "reveal-panel", panelId).catch((err) =>
     console.error(`emitTo reveal-panel(${panelId}) failed:`, err),
   );
@@ -48,9 +51,11 @@ function revealPanel(panelId: "trace" | "log" | "terminal") {
  * Terminal was originally Ctrl+Shift+` (VS Code's terminal-toggle shortcut),
  * but GTK can't deliver a working native menu accelerator for Shift+backtick
  * (see the long comment in `menu.rs`), so it was moved to the letter-based
- * Ctrl+Shift+T, bumping the previous Trace binding to Ctrl+Shift+Y.
+ * Ctrl+Shift+T. Trace and Log's Ctrl+Shift+Y/L bindings were dropped
+ * entirely (issue #393) rather than reassigned — reaching a dismissed panel
+ * now goes through the View menu instead of a shortcut.
  *
- * Exported so `TerminalPanel` can exclude these combos from xterm's own key
+ * Exported so `TerminalPanel` can exclude this combo from xterm's own key
  * handling via `attachCustomKeyEventHandler` — xterm otherwise treats
  * Ctrl+Shift+letter combos as terminal control input and stops them from
  * ever bubbling to the window-level listener below.
@@ -70,16 +75,6 @@ export const APP_KEY_BINDINGS: AppKeyBinding[] = [
         revealPanel("terminal");
       }
     },
-    hasMainWindowAccelerator: true,
-  },
-  {
-    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyY",
-    run: () => revealPanel("trace"),
-    hasMainWindowAccelerator: true,
-  },
-  {
-    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyL",
-    run: () => revealPanel("log"),
     hasMainWindowAccelerator: true,
   },
 ];

@@ -1,4 +1,4 @@
-//! Native application menu bar: File/Edit/Window/Help.
+//! Native application menu bar: File/Edit/View/Window/Help.
 
 use std::path::PathBuf;
 
@@ -7,10 +7,10 @@ use tauri::{AppHandle, Wry};
 
 /// Menu item id for the Window > Terminal item.
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
-/// Menu item id for the Window > Trace item.
-pub(crate) const TOGGLE_TRACE_ID: &str = "toggle-trace";
-/// Menu item id for the Window > Log item.
-pub(crate) const TOGGLE_LOG_ID: &str = "toggle-log";
+/// Id prefix for entries in the View menu; each item's full id is this
+/// prefix followed by the panel's dockview id (`MainPanelId` in
+/// `panelRegistry.tsx`), e.g. `"view-panel:trace"`.
+pub(crate) const VIEW_PANEL_ID_PREFIX: &str = "view-panel:";
 /// Menu item id for the File > New Profile item.
 pub(crate) const NEW_PROFILE_ID: &str = "new-profile";
 /// Menu item id for the File > Open Profile item.
@@ -25,13 +25,12 @@ pub(crate) const CLEAR_RECENT_ID: &str = "clear-recent";
 pub(crate) const EXIT_ID: &str = "exit";
 
 /// Holds menu items `on_menu_event`/other modules need a handle to after
-/// construction. Trace and Log are plain, non-checkable "Reveal…" items —
-/// they don't reflect any window-visibility boolean, so their click is
-/// matched by id alone in `on_menu_event` and no handle to them needs to be
-/// kept here. Terminal (since #385) toggles between "Detach Terminal…" and
-/// "Attach Terminal" depending on whether it's currently docked or
-/// detached, so its handle is kept for `set_terminal_menu_label` to mutate
-/// in place.
+/// construction. The View menu's per-panel items (issue #393) are plain,
+/// non-checkable items matched by id prefix alone in `on_menu_event`, so no
+/// handle to them needs to be kept here. Terminal (since #385) toggles
+/// between "Detach Terminal…" and "Attach Terminal" depending on whether
+/// it's currently docked or detached, so its handle is kept for
+/// `set_terminal_menu_label` to mutate in place.
 pub struct WindowMenuState {
     /// The File > Exit item.
     pub exit_item: MenuItem<Wry>,
@@ -44,7 +43,7 @@ pub struct WindowMenuState {
 /// `recent::record_recent_profile`), without rebuilding the whole app menu.
 pub struct RecentMenuState(pub Submenu<Wry>);
 
-/// Builds the native app menu (File/Edit/Window/Help) and the `exit_item`
+/// Builds the native app menu (File/Edit/View/Window/Help) and the `exit_item`
 /// handle `on_menu_event` needs to dispatch an Exit click. The File > Open
 /// Recent submenu starts empty — populated once the recent-profiles list is
 /// loaded, via `rebuild_open_recent_submenu`.
@@ -73,17 +72,45 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // Placeholder: no items yet.
     let edit_menu = Submenu::new(app, "Edit", true)?;
 
-    // These get real native accelerators (issue #377), same as the File-menu items
+    // One item per dockable panel (issue #393), letting a user bring back a
+    // panel whose dock tab they closed — the old Window-menu "Reveal…" items
+    // this replaces only ever re-activated an already-present tab, so they
+    // had no effect once a panel was actually dismissed (see `on_menu_event`
+    // in `lib.rs`, which now handles both cases via the shared `reveal-panel`
+    // event). Ordered lexically by the label shown on the panel's dock tab
+    // (`PANEL_TITLES` in `panelRegistry.tsx`), not by dock position — kept in
+    // sync with that map by hand, since Rust has no access to the frontend's
+    // TypeScript constants. None of these carry an accelerator: Trace/Log's
+    // former Ctrl+Shift+Y/L bindings were dropped rather than reassigned here
+    // (issue #393), and Terminal's Ctrl+Shift+T remains the Window menu's
+    // detach/attach accelerator below, so reusing it here would collide.
+    let view_panels: [(&str, &str); 9] = [
+        ("cpu-bus", "CPU and Bus"),
+        ("disassembly", "Disassembly"),
+        ("log", "Log"),
+        ("memory", "Memory"),
+        ("registers", "Registers"),
+        ("stack", "Stack"),
+        ("terminal", "Terminal"),
+        ("trace", "Trace"),
+        ("watchpoints", "Watchpoints"),
+    ];
+    let view_menu = Submenu::new(app, "View", true)?;
+    for (id, label) in view_panels {
+        let item = MenuItem::with_id(app, format!("{VIEW_PANEL_ID_PREFIX}{id}"), label, true, None::<&str>)?;
+        view_menu.append(&item)?;
+    }
+
+    // Gets a real native accelerator (issue #377), same as the File-menu items
     // above, so the shortcut text renders with native styling instead of being baked
     // into the label. The accelerator only ever fires while the main window (the only
     // one carrying this menu) has focus; `on_menu_event` in `lib.rs` handles the click.
-    // These same combos also work via the JS-level listener in `useAppKeyBindings.ts`
-    // (needed today for a Terminal/Trace/Log tab not currently focused, and for any
-    // future window that installs that hook) — that listener skips them specifically
-    // for the main window, so the native accelerator and the JS invoke don't both fire
-    // there.
+    // The same combo also works via the JS-level listener in `useAppKeyBindings.ts`
+    // (needed today for the detached Terminal window, and for any future window that
+    // installs that hook) — that listener skips it specifically for the main window,
+    // so the native accelerator and the JS invoke don't both fire there.
     //
-    // Terminal is Ctrl+Shift+T rather than the VS Code-style Ctrl+Shift+` originally
+    // This is Ctrl+Shift+T rather than the VS Code-style Ctrl+Shift+` originally
     // wanted (issue #377): on GTK, Shift is a *consumed* modifier for punctuation keys
     // like backtick or digits — it's what selects the shifted symbol (backtick+Shift is
     // "~", 1+Shift is "!") — so registering the accelerator as the unshifted symbol plus
@@ -92,27 +119,23 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // accepts a physical-key accelerator string and always builds it from the unshifted
     // symbol, so there's no accelerator string that works around this for punctuation
     // keys. Letters don't have the problem, since GTK canonicalizes a shifted letter to
-    // its uppercase keyval, which is exactly how muda registers it — hence Trace/Log
-    // below, and Terminal's fallback to a letter. See
-    // https://docs.gtk.org/gtk3/class.AccelGroup.html on consumed modifiers.
+    // its uppercase keyval, which is exactly how muda registers it — hence the fallback
+    // to a letter here. See https://docs.gtk.org/gtk3/class.AccelGroup.html on consumed
+    // modifiers.
     //
-    // Trace/Log are plain, non-checkable items: since #383, they're dockview
-    // panels rather than their own window, so there's no visibility boolean to
-    // reflect — clicking either just reveals its dock tab (see `on_menu_event`
-    // in `lib.rs`). Terminal (since #385) is different again: it can be docked
-    // *or* detached to its own window, so its click toggles between the two —
-    // starts out "Detach Terminal…", mutated to "Attach Terminal" in place by
-    // `set_terminal_menu_label` whenever that state flips (including once here
-    // at startup, if the persisted layout says Terminal was left detached).
+    // Terminal can be docked *or* detached to its own window, so its click toggles
+    // between the two — starts out "Detach Terminal…", mutated to "Attach Terminal" in
+    // place by `set_terminal_menu_label` whenever that state flips (including once here
+    // at startup, if the persisted layout says Terminal was left detached). Bringing a
+    // dismissed-while-docked Terminal tab back (issue #393) is instead View > Terminal's
+    // job, alongside the other eight panels — see `on_menu_event` in `lib.rs`.
     let terminal_item = MenuItem::with_id(app, TOGGLE_TERMINAL_ID, "Detach Terminal…", true, Some("Ctrl+Shift+T"))?;
-    let trace_item = MenuItem::with_id(app, TOGGLE_TRACE_ID, "Reveal Trace", true, Some("Ctrl+Shift+Y"))?;
-    let log_item = MenuItem::with_id(app, TOGGLE_LOG_ID, "Reveal Log", true, Some("Ctrl+Shift+L"))?;
-    let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item, &trace_item, &log_item])?;
+    let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item])?;
 
     let about_item = PredefinedMenuItem::about(app, None, None)?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&about_item])?;
 
-    let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
+    let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &view_menu, &window_menu, &help_menu])?;
 
     Ok((menu, WindowMenuState { exit_item, terminal_item }, RecentMenuState(open_recent_submenu)))
 }

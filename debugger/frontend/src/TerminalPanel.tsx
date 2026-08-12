@@ -74,12 +74,12 @@ export default function TerminalPanel() {
     });
     termRef.current = term;
 
-    // Let app-wide shortcuts (e.g. Ctrl+Shift+T/Ctrl+Shift+Y) bypass xterm's
-    // own key handling — otherwise xterm treats them as terminal control
-    // input and stops the keydown from ever reaching the window-level
-    // listener. Ctrl+Q is deliberately NOT one of these (issue #351): it's
-    // scoped to the main window only, so xterm is free to treat it as XON
-    // here, same as any other terminal.
+    // Let app-wide shortcuts (e.g. Ctrl+Shift+T) bypass xterm's own key
+    // handling — otherwise xterm treats them as terminal control input and
+    // stops the keydown from ever reaching the window-level listener. Ctrl+Q
+    // is deliberately NOT one of these (issue #351): it's scoped to the main
+    // window only, so xterm is free to treat it as XON here, same as any
+    // other terminal.
     //
     // Ctrl+Shift+C/V are handled here rather than via APP_KEY_BINDINGS because
     // they need direct access to this xterm instance (selection, paste), not
