@@ -8,7 +8,7 @@
 .memory-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   padding: 4px 10px;
   background-color: var(--color-bg-alt);
   border-bottom: 1px solid var(--color-border);
@@ -115,54 +115,6 @@
       background-color: transparent;
       color: inherit;
     }
-  }
-}
-
-.mem-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mem-load-btn {
-  background: var(--color-btn-bg);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-fg);
-  font-family: var(--font-ui);
-  font-size: var(--font-size-btn);
-  padding: 2px 8px;
-  cursor: pointer;
-  border-radius: 3px;
-
-  &:hover:not(:disabled) {
-    background: var(--color-border);
-    border-color: var(--color-accent);
-  }
-
-  &:disabled {
-    color: var(--color-muted-2);
-    cursor: default;
-  }
-}
-
-.mem-save-btn {
-  background: var(--color-btn-bg);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-fg);
-  font-family: var(--font-ui);
-  font-size: var(--font-size-btn);
-  padding: 2px 8px;
-  cursor: pointer;
-  border-radius: 3px;
-
-  &:hover:not(:disabled) {
-    background: var(--color-border);
-    border-color: var(--color-accent);
-  }
-
-  &:disabled {
-    color: var(--color-muted-2);
-    cursor: default;
   }
 }
 
@@ -710,48 +662,6 @@
 
   &.mem-edit-btn-ok {
     color: var(--color-accent);
-  }
-}
-
-.mem-fill-btn {
-  background: var(--color-btn-bg);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-fg);
-  font-family: var(--font-ui);
-  font-size: var(--font-size-btn);
-  padding: 2px 8px;
-  cursor: pointer;
-  border-radius: 3px;
-
-  &:hover:not(:disabled) {
-    background: var(--color-border);
-    border-color: var(--color-accent);
-  }
-
-  &:disabled {
-    color: var(--color-muted-2);
-    cursor: default;
-  }
-}
-
-.mem-edit-btn {
-  background: var(--color-btn-bg);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-fg);
-  font-family: var(--font-ui);
-  font-size: var(--font-size-btn);
-  padding: 2px 8px;
-  cursor: pointer;
-  border-radius: 3px;
-
-  &:hover:not(:disabled) {
-    background: var(--color-border);
-    border-color: var(--color-accent);
-  }
-
-  &:disabled {
-    color: var(--color-muted-2);
-    cursor: default;
   }
 }
 

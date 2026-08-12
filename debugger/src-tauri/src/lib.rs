@@ -473,6 +473,17 @@ pub fn run() {
                 // all end up calling the exact same code.
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "run-controls");
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "run-menu-action", event.id().as_ref().to_string());
+            } else if matches!(
+                event.id().as_ref(),
+                menu::LOAD_MEMORY_ID | menu::SAVE_MEMORY_ID | menu::EDIT_MEMORY_ID | menu::FILL_MEMORY_ID
+            ) {
+                // Same pattern as the Run menu above (issue #411): bring the
+                // Memory panel back if it's been dismissed, then dispatch the
+                // action itself to `MemoryPanel.tsx`, which owns the actual
+                // dialog-opening logic that used to live behind its own
+                // header buttons.
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "memory");
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "memory-menu-action", event.id().as_ref().to_string());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -532,9 +543,11 @@ pub fn run() {
             watchpoints::toggle_watchpoint,
             recent::clear_recent_profiles,
             menu::set_run_controls_enabled,
+            menu::set_memory_menu_enabled,
         ])
         .setup(move |app| {
-            let (app_menu, window_menu_state, recent_menu_state, run_menu_state) = menu::build_menu(app)?;
+            let (app_menu, window_menu_state, recent_menu_state, run_menu_state, memory_menu_state) =
+                menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
             // GTK's default `gtk-menu-bar-accel` binds F10 to focus/open the menu
@@ -553,6 +566,7 @@ pub fn run() {
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
             app.manage(run_menu_state);
+            app.manage(memory_menu_state);
 
             // Detached-Terminal window: strip its menu and install the
             // close-hides-and-reattaches lifecycle once, regardless of

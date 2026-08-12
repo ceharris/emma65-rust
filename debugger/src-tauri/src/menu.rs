@@ -1,4 +1,4 @@
-//! Native application menu bar: File/Edit/View/Window/Help.
+//! Native application menu bar: File/Edit/View/Run/Memory/Window/Help.
 
 use std::path::PathBuf;
 
@@ -38,6 +38,15 @@ pub(crate) const STEP_OVER_ID: &str = "step-over";
 pub(crate) const STEP_RETURN_ID: &str = "step-return";
 /// Menu item id / `run-menu-action` event payload for the Run > Toggle Auto-Step item.
 pub(crate) const TOGGLE_AUTO_STEP_ID: &str = "toggle-auto-step";
+
+/// Menu item id / `memory-menu-action` event payload for the Memory > Load from File… item.
+pub(crate) const LOAD_MEMORY_ID: &str = "load-memory";
+/// Menu item id / `memory-menu-action` event payload for the Memory > Save to File… item.
+pub(crate) const SAVE_MEMORY_ID: &str = "save-memory";
+/// Menu item id / `memory-menu-action` event payload for the Memory > Edit… item.
+pub(crate) const EDIT_MEMORY_ID: &str = "edit-memory";
+/// Menu item id / `memory-menu-action` event payload for the Memory > Fill… item.
+pub(crate) const FILL_MEMORY_ID: &str = "fill-memory";
 
 /// Holds menu items `on_menu_event`/other modules need a handle to after
 /// construction. The View menu's per-panel items (issue #393) are plain,
@@ -97,11 +106,30 @@ pub struct RunControlsEnabled {
     pub toggle_auto_step: bool,
 }
 
-/// Builds the native app menu (File/Edit/View/Window/Help) and the `exit_item`
+/// Holds the Memory menu's four item handles so `set_memory_menu_enabled`
+/// (issue #411) can toggle them all in place — all four share a single
+/// enabled condition (the CPU must be stopped), unlike the Run menu's six
+/// independently-gated items, so there's no need for a per-item flags struct
+/// here.
+pub struct MemoryMenuState {
+    /// The Memory > Load from File… item.
+    pub load_item: MenuItem<Wry>,
+    /// The Memory > Save to File… item.
+    pub save_item: MenuItem<Wry>,
+    /// The Memory > Edit… item.
+    pub edit_item: MenuItem<Wry>,
+    /// The Memory > Fill… item.
+    pub fill_item: MenuItem<Wry>,
+}
+
+/// Builds the native app menu (File/Edit/View/Run/Memory/Window/Help) and the `exit_item`
 /// handle `on_menu_event` needs to dispatch an Exit click. The File > Open
 /// Recent submenu starts empty — populated once the recent-profiles list is
 /// loaded, via `rebuild_open_recent_submenu`.
-pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState)> {
+#[allow(clippy::type_complexity)]
+pub fn build_menu(
+    app: &tauri::App,
+) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState, MemoryMenuState)> {
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
     // predefined types on Linux), so the item never appeared at all. The
@@ -180,6 +208,36 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         &[&run_item, &stop_item, &step_into_item, &step_over_item, &step_return_item, &toggle_auto_step_item],
     )?;
 
+    // Replaces the Memory panel's own header button row (issue #411) with a
+    // top-level menu, following the same click-dispatches-an-event pattern as
+    // the Run menu above: `on_menu_event` in `lib.rs` reveals the Memory
+    // panel then emits `memory-menu-action`, which `MemoryPanel.tsx` handles
+    // the same way it handles a click on its own dialog-opening code (there
+    // are no more buttons left to click). The four former shortcuts
+    // Alt+Shift+H/Alt+Shift+A (open Edit, hex/UTF-8) and Alt+F/Alt+Shift+F
+    // (Load/Fill) are discarded outright rather than remapped, since Edit no
+    // longer needs two separate entry points now that its dialog carries its
+    // own Hexadecimal/ASCII-Unicode Text radio group.
+    let load_memory_item = MenuItem::with_id(app, LOAD_MEMORY_ID, "Load from File…", true, Some("CmdOrCtrl+L"))?;
+    let save_memory_item = MenuItem::with_id(app, SAVE_MEMORY_ID, "Save to File…", true, Some("CmdOrCtrl+S"))?;
+    let edit_memory_item = MenuItem::with_id(app, EDIT_MEMORY_ID, "Edit…", true, Some("CmdOrCtrl+Shift+E"))?;
+    let fill_memory_item = MenuItem::with_id(app, FILL_MEMORY_ID, "Fill…", true, Some("CmdOrCtrl+Shift+F"))?;
+    let memory_separator_1 = PredefinedMenuItem::separator(app)?;
+    let memory_separator_2 = PredefinedMenuItem::separator(app)?;
+    let memory_menu = Submenu::with_items(
+        app,
+        "Memory",
+        true,
+        &[
+            &load_memory_item,
+            &save_memory_item,
+            &memory_separator_1,
+            &edit_memory_item,
+            &memory_separator_2,
+            &fill_memory_item,
+        ],
+    )?;
+
     // Gets a real native accelerator (issue #377), same as the File-menu items
     // above, so the shortcut text renders with native styling instead of being baked
     // into the label. The accelerator only ever fires while the main window (the only
@@ -224,14 +282,37 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     let about_item = PredefinedMenuItem::about(app, None, None)?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&about_item])?;
 
-    let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &view_menu, &run_menu, &window_menu, &help_menu])?;
+    let menu = Menu::with_items(
+        app,
+        &[&file_menu, &edit_menu, &view_menu, &run_menu, &memory_menu, &window_menu, &help_menu],
+    )?;
 
     Ok((
         menu,
         WindowMenuState { exit_item, terminal_item },
         RecentMenuState(open_recent_submenu),
         RunMenuState { run_item, stop_item, step_into_item, step_over_item, step_return_item, toggle_auto_step_item },
+        MemoryMenuState {
+            load_item: load_memory_item,
+            save_item: save_memory_item,
+            edit_item: edit_memory_item,
+            fill_item: fill_memory_item,
+        },
     ))
+}
+
+/// Enables or disables all four Memory menu items together — they share a
+/// single condition (the CPU must be stopped), matching the `disabled`
+/// attribute the panel's old header buttons carried before issue #411
+/// replaced them with this menu. `MemoryPanel.tsx` calls this whenever
+/// `execState` changes, the same way `RunControlsContext.tsx` keeps the Run
+/// menu's items in lockstep with the floating Run Controls panel.
+#[tauri::command]
+pub fn set_memory_menu_enabled(enabled: bool, state: State<MemoryMenuState>) {
+    let _ = state.load_item.set_enabled(enabled);
+    let _ = state.save_item.set_enabled(enabled);
+    let _ = state.edit_item.set_enabled(enabled);
+    let _ = state.fill_item.set_enabled(enabled);
 }
 
 /// Pushes `flags` onto the Run menu's six items' enabled state
