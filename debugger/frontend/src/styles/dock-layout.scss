@@ -15,17 +15,27 @@
   --dv-tabs-and-actions-container-font-size: var(--font-size-tab);
   --dv-tab-font-size: var(--font-size-tab);
 
-  --dv-activegroup-visiblepanel-tab-background-color: var(--color-bg);
+  // Both "visiblepanel" (active tab) variants stay on --color-bg-alt, same
+  // as the "hiddenpanel" ones — every one of our default groups holds a
+  // single always-active panel, so with no distinct alt background here the
+  // tab bar would render in --color-bg, identical to --dv-group-view-
+  // background-color, and visually fuse with panel content above/below it.
+  --dv-activegroup-visiblepanel-tab-background-color: var(--color-bg-alt);
   --dv-activegroup-visiblepanel-tab-color: var(--color-accent);
   --dv-activegroup-hiddenpanel-tab-background-color: var(--color-bg-alt);
   --dv-activegroup-hiddenpanel-tab-color: var(--color-muted);
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-bg);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-bg-alt);
   --dv-inactivegroup-visiblepanel-tab-color: var(--color-muted);
   --dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-bg-alt);
   --dv-inactivegroup-hiddenpanel-tab-color: var(--color-muted-2);
 
   --dv-tab-divider-color: var(--color-border);
-  --dv-separator-border: 1px solid var(--color-border);
+  // A plain color, not a border shorthand: dockview applies this as a
+  // background-color on the divider it draws between vertically/
+  // horizontally adjacent groups. The border-shorthand value copied from
+  // the spike prototype was silently invalid here (background-color can't
+  // parse "1px solid ...") so that divider never rendered at all.
+  --dv-separator-border: var(--color-border);
   --dv-icon-hover-background-color: var(--color-bg-hover);
   --dv-drag-over-background-color: var(--color-bg-selected);
   --dv-drag-over-border-color: var(--color-accent);
@@ -44,8 +54,13 @@
   // and labels, same as it did before dockview. A theme-root-level
   // font-family here would silently override that inherited default for
   // any panel element that doesn't redeclare it.
+  // border-bottom recreates the old .panel-title header's own divider —
+  // needed on top of the background-color change above, since a group's
+  // tab bar and its own content immediately below it would otherwise still
+  // share one solid --color-bg-alt/--color-bg block with no seam.
   .dv-tabs-and-actions-container {
     font-family: var(--font-ui);
+    border-bottom: 1px solid var(--color-border);
   }
 
   // Revives the old .panel-title look (bold, uppercase, letter-spaced) for
