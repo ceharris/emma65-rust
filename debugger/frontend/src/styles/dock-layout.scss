@@ -117,6 +117,28 @@
     letter-spacing: 0.06em;
   }
 
+  // Replaces dockview's default per-tab dismiss control — an 11px svg on
+  // 4px padding, ~19px overall — with a small ballot-box-with-X glyph sized
+  // off our own --font-size-tab; that svg towered over the 0.62rem tab label
+  // it sat next to (issue #414). The svg is hidden rather than removed since
+  // it's dockview-managed markup, not ours to delete.
+  .dv-default-tab .dv-default-tab-action {
+    padding: 2px;
+
+    .dv-svg {
+      display: none;
+    }
+
+    &::before {
+      content: "\2612"; // U+2612 BALLOT BOX WITH X
+      // Sized up from --font-size-tab itself: this glyph's em-box carries
+      // more internal padding than the tab label's letterforms, so matching
+      // the raw value read visibly smaller than the text next to it.
+      font-size: calc(var(--font-size-tab) * 1.25);
+      line-height: 1;
+    }
+  }
+
   // Per-panel tab header actions (Terminal's "Detach", issue #385; Run
   // Controls' "Float", issue #404), rendered via dockview's
   // rightHeaderActionsComponent — styled as a plain icon button matching
