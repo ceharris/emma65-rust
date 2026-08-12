@@ -9,6 +9,7 @@ import {
   DockviewReact,
   DockviewReadyEvent,
   DockviewTheme,
+  FloatingGroupOptions,
   IDockviewHeaderActionsProps,
   SerializedDockview,
 } from "dockview-react";
@@ -16,7 +17,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "../styles/dock-layout.scss";
 import {useTheme} from "../ThemeContext";
 import {MainPanelId, PANEL_TITLES, panelComponents} from "./panelRegistry";
-import {RUN_CONTROLS_HEIGHT, RUN_CONTROLS_WIDTH} from "../RunControlsPanel";
+import {RUN_CONTROLS_MIN_HEIGHT, RUN_CONTROLS_MIN_WIDTH} from "../RunControlsPanel";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
 // panels — onDidLayoutChange fires on every intermediate frame of a drag.
@@ -76,16 +77,26 @@ type PanelPosition = DockedPanelPosition | FloatingPanelPosition;
 type FloatingBounds = { x: number; y: number; width: number; height: number } | { position: AnchorPosition; width: number; height: number };
 
 /**
- * Default floating position/size for the Run Controls panel (issue #395)
- * when it has no remembered position — first run, or after a restore whose
- * persisted layout predates this panel. Dockview's `FloatingGroupService`
- * clamps on-screen at runtime, so an imperfect guess self-corrects.
+ * Default *docked* position (issue #402): the bottom of Disassembly's own
+ * column, rather than a `DEFAULT_PANEL_POSITION` entry, because that map has
+ * no per-entry way to also carry `RUN_CONTROLS_MIN_HEIGHT` as an
+ * `initialHeight` — without it a "below" split would default to a 50/50
+ * split, giving this single-row toolbar half of Disassembly's column.
  */
-// Wider than the 7-buttons-only 300px that was confirmed correct earlier —
-// the Auto-Step speed slider/input/unit now live inline on this same row
-// instead of a separate (removed) collapsible drawer, adding real content
-// width, not just chrome.
-const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: RUN_CONTROLS_WIDTH, height: RUN_CONTROLS_HEIGHT };
+const RUN_CONTROLS_DEFAULT_POSITION: AddPanelPositionOptions = { referencePanel: "disassembly", direction: "below" };
+
+/**
+ * Bounds used by the Run Controls tab's explicit "Float" action (issue
+ * #404) — the same size manually confirmed via UAT when this panel
+ * defaulted to floating (issue #395). Wider/taller than
+ * `RUN_CONTROLS_MIN_WIDTH`/`RUN_CONTROLS_MIN_HEIGHT`: those describe the
+ * docked *content* minimum, whereas a floating group additionally needs
+ * room for dockview's own floating-titlebar/tab-bar chrome. An explicit
+ * action rather than a drag gesture because this app's dockview grid fills
+ * the entire window with no empty margin to drop into — there's nowhere
+ * drag-and-drop could resolve to "no valid dock target" and float instead.
+ */
+const RUN_CONTROLS_FLOAT_BOUNDS: FloatingGroupOptions = { x: 460, y: 40, width: RUN_CONTROLS_MIN_WIDTH, height: 100 };
 
 /**
  * Records the "terminal" panel's current group/index into `positionRef`
@@ -122,9 +133,10 @@ function positionForReattach(api: DockviewReadyEvent["api"], remembered: DockedP
  * and Trace are absent: they're the two structural roots `addDefaultLayout`
  * adds first (Memory with no position at all, Trace via an
  * `AbsolutePosition` split), so `resolveRevealPosition` special-cases both
- * instead. Run Controls (issue #395) is also absent — it's floating, not
- * docked, so it falls back to `RUN_CONTROLS_DEFAULT_BOUNDS` instead of an
- * entry here.
+ * instead. Run Controls (issue #395/#402) is also absent — its default needs
+ * a fixed `initialHeight` alongside its position, which this map has no
+ * per-entry way to carry, so `resolveRevealPosition` special-cases it too,
+ * via `RUN_CONTROLS_DEFAULT_POSITION`.
  */
 const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: MainPanelId; direction?: "right" | "below" }>> = {
   disassembly: { referencePanel: "memory", direction: "right" },
@@ -190,11 +202,12 @@ function recordPanelPositions(api: DockviewReadyEvent["api"], ref: React.Mutable
  * Resolves where to re-add a panel that a View menu click (issue #393) found
  * missing from the dock: its last recorded position if that group/window
  * still exists, else Trace's usual full-width bottom-group split (for
- * "trace" itself), the floating default (for "run-controls"), or the
- * corresponding `DEFAULT_PANEL_POSITION` entry (for anything else, provided
- * its reference panel is actually present — otherwise dockview has no cell
- * to split relative to, so the panel is added as a new group instead, which
- * is what an absent `position` produces).
+ * "trace" itself), the bottom-of-Disassembly's-column default (for
+ * "run-controls"), or the corresponding `DEFAULT_PANEL_POSITION` entry (for
+ * anything else, provided its reference panel is actually present —
+ * otherwise dockview has no cell to split relative to, so the panel is
+ * added as a new group instead, which is what an absent `position`
+ * produces).
  */
 function resolveRevealPosition(
   api: DockviewReadyEvent["api"],
@@ -215,7 +228,7 @@ function resolveRevealPosition(
     return { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT };
   }
   if (id === "run-controls") {
-    return { floating: RUN_CONTROLS_DEFAULT_BOUNDS };
+    return { position: RUN_CONTROLS_DEFAULT_POSITION, initialHeight: RUN_CONTROLS_MIN_HEIGHT };
   }
   const fallback = DEFAULT_PANEL_POSITION[id];
   if (fallback && api.getPanel(fallback.referencePanel)) {
@@ -295,12 +308,15 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
   add("cpu-bus", { position: { referencePanel: "stack", direction: "below" } });
 
-  // Floating, not docked — see RUN_CONTROLS_DEFAULT_BOUNDS.
+  // Bottom of Disassembly's column (issue #402) — see RUN_CONTROLS_DEFAULT_POSITION.
   api.addPanel({
     id: "run-controls",
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
-    floating: RUN_CONTROLS_DEFAULT_BOUNDS,
+    position: RUN_CONTROLS_DEFAULT_POSITION,
+    initialHeight: RUN_CONTROLS_MIN_HEIGHT,
+    minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
+    minimumWidth: RUN_CONTROLS_MIN_WIDTH,
   });
 
   // No referencePanel: an AbsolutePosition split (dockview-core's
@@ -396,23 +412,29 @@ function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached
 }
 
 /**
- * Adds the "run-controls" floating panel (issue #395) if a just-restored
- * layout is missing it — i.e. it was persisted before this panel existed.
- * Same backfill pattern as `addMissingBottomPanels`, reusing
- * `resolveRevealPosition` so a restored old layout's remembered floating
- * bounds (if any survived in `panel_positions`) are honored, falling back to
- * `RUN_CONTROLS_DEFAULT_BOUNDS` otherwise. Returns whether it was added, so
- * the caller knows whether to re-persist.
+ * Adds the "run-controls" panel (issue #395/#402) if a just-restored layout
+ * is missing it — i.e. it was persisted before this panel existed. Same
+ * backfill pattern as `addMissingBottomPanels`, reusing
+ * `resolveRevealPosition` so a restored old layout's remembered position
+ * (docked or floating, if it survived in `panel_positions`) is honored,
+ * falling back to `RUN_CONTROLS_DEFAULT_POSITION` otherwise. Returns whether
+ * it was added, so the caller knows whether to re-persist.
  */
 function addMissingRunControlsPanel(api: DockviewReadyEvent["api"], lastPositions: Partial<Record<MainPanelId, PanelPosition>>): boolean {
   if (api.getPanel("run-controls")) return false;
-  const { floating } = resolveRevealPosition(api, "run-controls", lastPositions);
-  api.addPanel({
-    id: "run-controls",
+  const { position, initialHeight, floating } = resolveRevealPosition(api, "run-controls", lastPositions);
+  const base = {
+    id: "run-controls" as const,
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
-    floating: floating ?? RUN_CONTROLS_DEFAULT_BOUNDS,
-  });
+    minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
+    minimumWidth: RUN_CONTROLS_MIN_WIDTH,
+  };
+  if (floating) {
+    api.addPanel({ ...base, floating });
+  } else {
+    api.addPanel({ ...base, position, initialHeight });
+  }
   return true;
 }
 
@@ -475,30 +497,52 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
 }
 
 /**
- * Builds the `rightHeaderActionsComponent` dockview renders once per group,
- * closing over `positionRef` so the Detach button can remember where
- * Terminal was before closing it (see `closeTerminalPanel`) — dockview gives
- * this component no way to receive extra props of its own, only the
- * per-group `IDockviewHeaderActionsProps` it defines. Groups whose active
- * panel isn't "terminal" render nothing. Clicking Detach calls the
- * `detach_terminal` command (shows the detached window, retargets the
- * console bridge, persists the flag — see `terminal.rs`) and only then
- * closes the dock panel, deliberately after the new window/target is fully
- * in place (issue #385's `emit_to`-retarget race mitigation).
+ * Builds the `rightHeaderActionsComponent` dockview renders once per group
+ * — dockview supports only one such component for the whole component, so
+ * every panel needing a header action shares this one, branching on
+ * `activePanel.id`; groups whose active panel needs no action render
+ * nothing.
+ *
+ * Terminal's Detach button closes over `positionRef` so it can remember
+ * where Terminal was before closing it (see `closeTerminalPanel`). Clicking
+ * it calls the `detach_terminal` command (shows the detached window,
+ * retargets the console bridge, persists the flag — see `terminal.rs`) and
+ * only then closes the dock panel, deliberately after the new window/target
+ * is fully in place (issue #385's `emit_to`-retarget race mitigation).
+ *
+ * Run Controls' Float button (issue #404) is a plain dockview-only
+ * operation — `containerApi.addFloatingGroup` moves the panel into a new
+ * floating group in place, no Tauri command involved. It's needed as an
+ * explicit action because this app's dockview grid fills the entire window
+ * with no empty margin to drop a dragged tab into — there's nowhere for
+ * dockview's own drag-to-float gesture (which floats on a drop with no
+ * valid dock target) to actually resolve to "float" in this layout. Hidden
+ * once the panel is already floating, since floating an already-floating
+ * panel does nothing useful.
  */
-function makeTerminalTabActions(positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
-  return function TerminalTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
-    if (activePanel?.id !== "terminal") return null;
-    const handleDetach = () => {
-      invoke("detach_terminal")
-        .then(() => closeTerminalPanel(containerApi, positionRef))
-        .catch((err) => console.error("detach_terminal failed:", err));
-    };
-    return (
-      <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
-        <i className="codicon codicon-link-external" />
-      </button>
-    );
+function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
+  return function DockTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
+    if (activePanel?.id === "terminal") {
+      const handleDetach = () => {
+        invoke("detach_terminal")
+          .then(() => closeTerminalPanel(containerApi, positionRef))
+          .catch((err) => console.error("detach_terminal failed:", err));
+      };
+      return (
+        <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
+          <i className="codicon codicon-multiple-windows" />
+        </button>
+      );
+    }
+    if (activePanel?.id === "run-controls" && activePanel.group.api.location.type !== "floating") {
+      const handleFloat = () => containerApi.addFloatingGroup(activePanel, RUN_CONTROLS_FLOAT_BOUNDS);
+      return (
+        <button className="dock-tab-action" onClick={handleFloat} title="Float Run Controls">
+          <i className="codicon codicon-multiple-windows" />
+        </button>
+      );
+    }
+    return null;
   };
 }
 
@@ -510,7 +554,7 @@ export default function DockLayout() {
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
   const terminalPositionRef = useRef<DockedPanelPosition | null>(null);
   const lastPanelPositionRef = useRef<Partial<Record<MainPanelId, PanelPosition>>>({});
-  const TerminalTabActions = useMemo(() => makeTerminalTabActions(terminalPositionRef), []);
+  const DockTabActions = useMemo(() => makeDockTabActions(terminalPositionRef), []);
 
   useEffect(
     () => () => {
@@ -543,10 +587,15 @@ export default function DockLayout() {
         return;
       }
       const { position, initialHeight, floating } = resolveRevealPosition(api, id, lastPanelPositionRef.current);
+      // Run Controls needs its own minimum-size floor regardless of which
+      // branch below re-adds it — see RUN_CONTROLS_MIN_HEIGHT/WIDTH.
+      const constraints = id === "run-controls"
+        ? { minimumHeight: RUN_CONTROLS_MIN_HEIGHT, minimumWidth: RUN_CONTROLS_MIN_WIDTH }
+        : undefined;
       if (floating) {
-        api.addPanel({ id, component: id, title: PANEL_TITLES[id], floating });
+        api.addPanel({ id, component: id, title: PANEL_TITLES[id], floating, ...constraints });
       } else {
-        api.addPanel({ id, component: id, title: PANEL_TITLES[id], position, initialHeight });
+        api.addPanel({ id, component: id, title: PANEL_TITLES[id], position, initialHeight, ...constraints });
       }
     });
     return () => { unlistenPromise.then((f) => f()); };
@@ -576,7 +625,7 @@ export default function DockLayout() {
   // Rust-driven detach/reattach (the Window > Terminal menu item, and the
   // detached window's native close button) has no JS handler of its own
   // already in place to add/remove the "terminal" dock panel — the dock
-  // tab's own Detach button (`TerminalTabActions` below) does that inline
+  // tab's own Detach button (`DockTabActions` below) does that inline
   // since it's already running in this component, but the menu/close paths
   // instead emit these two events for the same effect.
   useEffect(() => {
@@ -618,7 +667,7 @@ export default function DockLayout() {
     <div className="dock-layout">
       <DockviewReact
         components={panelComponents}
-        rightHeaderActionsComponent={TerminalTabActions}
+        rightHeaderActionsComponent={DockTabActions}
         onReady={onReady}
         theme={{ ...EMMA65_DOCK_THEME_BASE, colorScheme: resolvedTheme }}
       />

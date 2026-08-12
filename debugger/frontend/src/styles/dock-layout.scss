@@ -117,7 +117,8 @@
     letter-spacing: 0.06em;
   }
 
-  // Terminal tab's "Detach" action (issue #385), rendered via dockview's
+  // Per-panel tab header actions (Terminal's "Detach", issue #385; Run
+  // Controls' "Float", issue #404), rendered via dockview's
   // rightHeaderActionsComponent — styled as a plain icon button matching
   // the tab bar chrome around it rather than the panel-content `.btn` look
   // used inside panel bodies.
