@@ -4,6 +4,7 @@ import DisassemblyPanel from "../DisassemblyPanel";
 import LogPanel from "../LogPanel";
 import MemoryPanel from "../MemoryPanel";
 import RegisterPanel from "../RegisterPanel";
+import RunControlsPanel from "../RunControlsPanel";
 import StackPanel from "../StackPanel";
 import TerminalPanel from "../TerminalPanel";
 import TracePanel from "../TracePanel";
@@ -17,6 +18,7 @@ export type MainPanelId =
   | "stack"
   | "watchpoints"
   | "cpu-bus"
+  | "run-controls"
   | "trace"
   | "log"
   | "terminal";
@@ -29,6 +31,7 @@ export const PANEL_TITLES: Record<MainPanelId, string> = {
   stack: "Stack",
   watchpoints: "Watchpoints",
   "cpu-bus": "CPU and Bus",
+  "run-controls": "Run Controls",
   trace: "Trace",
   log: "Log",
   terminal: "Terminal",
@@ -42,6 +45,7 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   stack: () => <StackPanel />,
   watchpoints: () => <WatchpointPanel />,
   "cpu-bus": () => <CpuBusPanel />,
+  "run-controls": () => <RunControlsPanel />,
   trace: () => <TracePanel />,
   log: () => <LogPanel />,
   terminal: () => <TerminalPanel />,

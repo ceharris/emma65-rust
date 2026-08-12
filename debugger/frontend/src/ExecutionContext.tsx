@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ExecState } from "./DisassemblyPanel";
+import { ExecState } from "./RunControlsContext";
 import { RegisterSnapshot } from "./RegisterPanel";
 
 interface ExecutionContextValue {

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, State, Wry};
 
 /// Menu item id for the Window > Terminal item.
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
@@ -24,6 +24,19 @@ pub(crate) const CLEAR_RECENT_ID: &str = "clear-recent";
 /// Menu item id for the File > Exit item.
 pub(crate) const EXIT_ID: &str = "exit";
 
+/// Menu item id / `run-menu-action` event payload for the Run > Run item.
+pub(crate) const RUN_CPU_ID: &str = "run-cpu";
+/// Menu item id / `run-menu-action` event payload for the Run > Stop item.
+pub(crate) const STOP_CPU_ID: &str = "stop-cpu";
+/// Menu item id / `run-menu-action` event payload for the Run > Step Into item.
+pub(crate) const STEP_INTO_ID: &str = "step-into";
+/// Menu item id / `run-menu-action` event payload for the Run > Step Over item.
+pub(crate) const STEP_OVER_ID: &str = "step-over";
+/// Menu item id / `run-menu-action` event payload for the Run > Step Return item.
+pub(crate) const STEP_RETURN_ID: &str = "step-return";
+/// Menu item id / `run-menu-action` event payload for the Run > Toggle Auto-Step item.
+pub(crate) const TOGGLE_AUTO_STEP_ID: &str = "toggle-auto-step";
+
 /// Holds menu items `on_menu_event`/other modules need a handle to after
 /// construction. The View menu's per-panel items (issue #393) are plain,
 /// non-checkable items matched by id prefix alone in `on_menu_event`, so no
@@ -43,11 +56,50 @@ pub struct WindowMenuState {
 /// `recent::record_recent_profile`), without rebuilding the whole app menu.
 pub struct RecentMenuState(pub Submenu<Wry>);
 
+/// Holds the Run menu's six item handles so `set_run_controls_enabled`
+/// (issue #395) can toggle each one's enabled state in place, mirroring the
+/// floating Run Controls panel's own button `disabled` logic.
+pub struct RunMenuState {
+    /// The Run > Run item.
+    pub run_item: MenuItem<Wry>,
+    /// The Run > Stop item.
+    pub stop_item: MenuItem<Wry>,
+    /// The Run > Step Into item.
+    pub step_into_item: MenuItem<Wry>,
+    /// The Run > Step Over item.
+    pub step_over_item: MenuItem<Wry>,
+    /// The Run > Step Return item.
+    pub step_return_item: MenuItem<Wry>,
+    /// The Run > Toggle Auto-Step item.
+    pub toggle_auto_step_item: MenuItem<Wry>,
+}
+
+/// Enabled state for the Run menu's six items, pushed from the frontend
+/// (`RunControlsContext.tsx`) whenever the underlying run/step/auto-step
+/// state changes — the same booleans that drive the floating Run Controls
+/// panel's own button `disabled` attributes, kept in sync so the native menu
+/// never lets a click through that the panel itself would have blocked.
+#[derive(serde::Deserialize)]
+pub struct RunControlsEnabled {
+    /// Whether Run > Run should be enabled.
+    pub run: bool,
+    /// Whether Run > Stop should be enabled.
+    pub stop: bool,
+    /// Whether Run > Step Into should be enabled.
+    pub step_into: bool,
+    /// Whether Run > Step Over should be enabled.
+    pub step_over: bool,
+    /// Whether Run > Step Return should be enabled.
+    pub step_return: bool,
+    /// Whether Run > Toggle Auto-Step should be enabled.
+    pub toggle_auto_step: bool,
+}
+
 /// Builds the native app menu (File/Edit/View/Window/Help) and the `exit_item`
 /// handle `on_menu_event` needs to dispatch an Exit click. The File > Open
 /// Recent submenu starts empty — populated once the recent-profiles list is
 /// loaded, via `rebuild_open_recent_submenu`.
-pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState)> {
+pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState)> {
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
     // predefined types on Linux), so the item never appeared at all. The
@@ -84,12 +136,13 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // former Ctrl+Shift+Y/L bindings were dropped rather than reassigned here
     // (issue #393), and Terminal's Ctrl+Shift+T remains the Window menu's
     // detach/attach accelerator below, so reusing it here would collide.
-    let view_panels: [(&str, &str); 9] = [
+    let view_panels: [(&str, &str); 10] = [
         ("cpu-bus", "CPU and Bus"),
         ("disassembly", "Disassembly"),
         ("log", "Log"),
         ("memory", "Memory"),
         ("registers", "Registers"),
+        ("run-controls", "Run Controls"),
         ("stack", "Stack"),
         ("terminal", "Terminal"),
         ("trace", "Trace"),
@@ -100,6 +153,31 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         let item = MenuItem::with_id(app, format!("{VIEW_PANEL_ID_PREFIX}{id}"), label, true, None::<&str>)?;
         view_menu.append(&item)?;
     }
+
+    // One item per Run/Step action (issue #395), mirroring the floating Run
+    // Controls panel's five buttons plus its Auto-Step toggle. F5/F10/F11 and
+    // their Shift variants are all valid muda accelerators on every platform
+    // — unlike Ctrl+Shift+T above, F-keys have no GTK shift-consumption issue
+    // since they aren't punctuation/digit keys. `on_menu_event` in `lib.rs`
+    // both reveals the floating panel (the existing `reveal-panel` event) and
+    // dispatches the action itself (a new `run-menu-action` event) on a
+    // click, so a menu click, a native accelerator, and the panel's own
+    // button all funnel through the exact same handler in
+    // `RunControlsContext.tsx`. Enabled state is pushed from there via
+    // `set_run_controls_enabled`, not tracked here.
+    let run_item = MenuItem::with_id(app, RUN_CPU_ID, "Run", true, Some("F5"))?;
+    let stop_item = MenuItem::with_id(app, STOP_CPU_ID, "Stop", true, Some("Shift+F5"))?;
+    let step_into_item = MenuItem::with_id(app, STEP_INTO_ID, "Step Into", true, Some("F11"))?;
+    let step_over_item = MenuItem::with_id(app, STEP_OVER_ID, "Step Over", true, Some("F10"))?;
+    let step_return_item = MenuItem::with_id(app, STEP_RETURN_ID, "Step Return", true, Some("Shift+F11"))?;
+    let toggle_auto_step_item =
+        MenuItem::with_id(app, TOGGLE_AUTO_STEP_ID, "Toggle Auto-Step", true, Some("CmdOrCtrl+Shift+F5"))?;
+    let run_menu = Submenu::with_items(
+        app,
+        "Run",
+        true,
+        &[&run_item, &stop_item, &step_into_item, &step_over_item, &step_return_item, &toggle_auto_step_item],
+    )?;
 
     // Gets a real native accelerator (issue #377), same as the File-menu items
     // above, so the shortcut text renders with native styling instead of being baked
@@ -135,9 +213,29 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     let about_item = PredefinedMenuItem::about(app, None, None)?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&about_item])?;
 
-    let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &view_menu, &window_menu, &help_menu])?;
+    let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &view_menu, &run_menu, &window_menu, &help_menu])?;
 
-    Ok((menu, WindowMenuState { exit_item, terminal_item }, RecentMenuState(open_recent_submenu)))
+    Ok((
+        menu,
+        WindowMenuState { exit_item, terminal_item },
+        RecentMenuState(open_recent_submenu),
+        RunMenuState { run_item, stop_item, step_into_item, step_over_item, step_return_item, toggle_auto_step_item },
+    ))
+}
+
+/// Pushes `flags` onto the Run menu's six items' enabled state
+/// (`RunControlsContext.tsx` calls this whenever the underlying run/step/
+/// auto-step state changes), so a native accelerator or menu click never
+/// gets through when the floating Run Controls panel's matching button would
+/// have been disabled.
+#[tauri::command]
+pub fn set_run_controls_enabled(flags: RunControlsEnabled, state: State<RunMenuState>) {
+    let _ = state.run_item.set_enabled(flags.run);
+    let _ = state.stop_item.set_enabled(flags.stop);
+    let _ = state.step_into_item.set_enabled(flags.step_into);
+    let _ = state.step_over_item.set_enabled(flags.step_over);
+    let _ = state.step_return_item.set_enabled(flags.step_return);
+    let _ = state.toggle_auto_step_item.set_enabled(flags.toggle_auto_step);
 }
 
 /// Updates the Window > Terminal item's label to reflect whether the
