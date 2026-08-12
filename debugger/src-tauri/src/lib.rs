@@ -353,8 +353,6 @@ pub fn run() {
     let config_dir = profile::config_dir().expect("Failed to resolve debugger config directory");
     let recent_profiles = recent::load_recent_from(&config_dir);
 
-    let (ready_tx, ready_rx) = oneshot::channel::<()>();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -368,7 +366,7 @@ pub fn run() {
                 .build(),
         )
         .manage(SessionStatusState(Mutex::new(None)))
-        .manage(terminal::TerminalReadyTx(Mutex::new(Some(ready_tx))))
+        .manage(terminal::TerminalOutputBuffer(Mutex::new(terminal::TerminalOutputState::default())))
         .manage(terminal::TerminalTx(Mutex::new(None)))
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
@@ -514,13 +512,15 @@ pub fn run() {
                 });
             }
 
+            // Starts loading the session immediately, without waiting for the
+            // terminal panel to signal readiness: unlike the old standalone
+            // Terminal window, the panel lives inside the main window's
+            // dockview instance, which doesn't render until the session
+            // itself is ready — waiting here would deadlock. Console output
+            // produced before the panel's listener attaches is buffered
+            // backend-side instead (see `terminal::TerminalOutputBuffer`).
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                // Wait for the terminal panel to signal it is ready (mounted inside
-                // the main window's single webview, so no separate-window realize
-                // step is needed here as there was before #384).
-                let _ = ready_rx.await;
-
                 load_or_reload_session(&handle, &profile_dir).await;
             });
             Ok(())

@@ -4,9 +4,8 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::unix::AsyncFd;
-use tokio::sync::oneshot;
 
 use crate::MAIN_WINDOW_LABEL;
 
@@ -16,8 +15,27 @@ use crate::MAIN_WINDOW_LABEL;
 /// mid-reload while the previous session's transport is being torn down.
 pub struct TerminalTx(pub Mutex<Option<File>>);
 
-/// One-shot sender signaling that the terminal panel is ready to receive output.
-pub struct TerminalReadyTx(pub Mutex<Option<oneshot::Sender<()>>>);
+/// Buffers console output emitted before the terminal panel's listener attaches.
+///
+/// The terminal panel lives inside the main window's dockview instance, which
+/// `App.tsx` doesn't render until the emulator session itself is ready — so,
+/// unlike the old standalone Terminal window (which mounted independently of
+/// session status), session bring-up can no longer block on a `terminal_ready`
+/// handshake before starting the CPU: that would deadlock, since the panel
+/// that sends `terminal_ready` can't mount until the session it's waiting on
+/// is already loaded. Instead, `run_terminal_bridge` buffers bytes here until
+/// `terminal_ready` fires once (ever, for the life of the process — the panel
+/// stays mounted afterward per dockview's confirmed non-lazy-mount behavior,
+/// see issue #379), at which point the buffer is flushed and every later byte
+/// is emitted directly.
+#[derive(Default)]
+pub struct TerminalOutputState {
+    ready: bool,
+    buffered: Vec<u8>,
+}
+
+/// Tauri-managed [`TerminalOutputState`].
+pub struct TerminalOutputBuffer(pub Mutex<TerminalOutputState>);
 
 /// Tokio task that reads bytes from the remote pipe rx and emits `terminal-output` events.
 pub async fn run_terminal_bridge(rx: File, app: AppHandle) {
@@ -34,8 +52,15 @@ pub async fn run_terminal_bridge(rx: File, app: AppHandle) {
         match guard.try_io(|fd| fd.get_ref().read(&mut buf)) {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => {
-                let bytes: Vec<u8> = buf[..n].to_vec();
-                let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-output", bytes);
+                let bytes = &buf[..n];
+                let state = app.state::<TerminalOutputBuffer>();
+                let mut guard = state.0.lock().unwrap();
+                if guard.ready {
+                    drop(guard);
+                    let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-output", bytes.to_vec());
+                } else {
+                    guard.buffered.extend_from_slice(bytes);
+                }
             }
             Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
             Ok(Err(_)) => break,
@@ -45,10 +70,18 @@ pub async fn run_terminal_bridge(rx: File, app: AppHandle) {
 }
 
 /// Tauri command: called by the terminal panel once its event listener is registered.
+/// Flushes any output buffered before this first call; a no-op on any later call.
 #[tauri::command]
-pub fn terminal_ready(state: State<TerminalReadyTx>) {
-    if let Some(tx) = state.0.lock().unwrap().take() {
-        let _ = tx.send(());
+pub fn terminal_ready(app: AppHandle, state: State<TerminalOutputBuffer>) {
+    let mut guard = state.0.lock().unwrap();
+    if guard.ready {
+        return;
+    }
+    guard.ready = true;
+    let buffered = std::mem::take(&mut guard.buffered);
+    drop(guard);
+    if !buffered.is_empty() {
+        let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-output", buffered);
     }
 }
 
