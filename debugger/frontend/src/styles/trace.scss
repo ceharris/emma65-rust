@@ -82,8 +82,21 @@
   flex-shrink: 0;
 }
 
+// Log area (left) and bus-op detail (right), side by side — the dock panel
+// (unlike the old standalone Trace window) is usually wider than it is
+// tall, so a right-hand detail column makes better use of the space than
+// stacking it below the log.
+.trace-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-height: 0;
+}
+
 .trace-log-area {
   flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -288,9 +301,10 @@
 }
 
 .trace-detail {
-  flex: 0 0 140px;
+  flex: 0 0 300px;
   overflow-y: auto;
-  border-top: 1px solid var(--color-border);
+  overflow-x: hidden;
+  border-left: 1px solid var(--color-border);
   background-color: var(--color-bg);
   font-size: var(--font-size-mono);
   line-height: 1.5;
