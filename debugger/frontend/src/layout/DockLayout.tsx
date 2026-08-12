@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import {useCallback, useEffect, useMemo, useRef} from "react";
+import {invoke} from "@tauri-apps/api/core";
+import {listen} from "@tauri-apps/api/event";
 import {
   AddPanelPositionOptions,
   AnchoredBox,
@@ -14,9 +14,9 @@ import {
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import "../styles/dock-layout.scss";
-import { useTheme } from "../ThemeContext";
-import { MainPanelId, PANEL_TITLES, panelComponents } from "./panelRegistry";
-import { RUN_CONTROLS_HEIGHT } from "../RunControlsPanel";
+import {useTheme} from "../ThemeContext";
+import {MainPanelId, PANEL_TITLES, panelComponents} from "./panelRegistry";
+import {RUN_CONTROLS_HEIGHT, RUN_CONTROLS_WIDTH} from "../RunControlsPanel";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
 // panels — onDidLayoutChange fires on every intermediate frame of a drag.
@@ -85,7 +85,7 @@ type FloatingBounds = { x: number; y: number; width: number; height: number } | 
 // the Auto-Step speed slider/input/unit now live inline on this same row
 // instead of a separate (removed) collapsible drawer, adding real content
 // width, not just chrome.
-const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: 420, height: RUN_CONTROLS_HEIGHT };
+const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: RUN_CONTROLS_WIDTH, height: RUN_CONTROLS_HEIGHT };
 
 /**
  * Records the "terminal" panel's current group/index into `positionRef`

@@ -1,5 +1,5 @@
-import { useExecutionContext } from "./ExecutionContext";
-import { SLIDER_STEPS, intervalToSlider, useRunControlsContext } from "./RunControlsContext";
+import {useExecutionContext} from "./ExecutionContext";
+import {intervalToSlider, SLIDER_STEPS, useRunControlsContext} from "./RunControlsContext";
 import "./styles/run-controls.scss";
 
 /** Auto-step interval bounds in milliseconds, for the speed-input title. */
@@ -16,6 +16,8 @@ const INTERVAL_MAX = 1000;
  * dead end — Auto-Step's controls stay inline on the one row instead.
  */
 export const RUN_CONTROLS_HEIGHT = 100;
+
+export const RUN_CONTROLS_WIDTH = 400;
 
 /**
  * Floating panel hosting the Run/Stop/Step Into/Step Over/Step Return
