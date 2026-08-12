@@ -106,11 +106,30 @@ pub struct RunControlsEnabled {
     pub toggle_auto_step: bool,
 }
 
+/// Holds the Memory menu's four item handles so `set_memory_menu_enabled`
+/// (issue #411) can toggle them all in place — all four share a single
+/// enabled condition (the CPU must be stopped), unlike the Run menu's six
+/// independently-gated items, so there's no need for a per-item flags struct
+/// here.
+pub struct MemoryMenuState {
+    /// The Memory > Load from File… item.
+    pub load_item: MenuItem<Wry>,
+    /// The Memory > Save to File… item.
+    pub save_item: MenuItem<Wry>,
+    /// The Memory > Edit… item.
+    pub edit_item: MenuItem<Wry>,
+    /// The Memory > Fill… item.
+    pub fill_item: MenuItem<Wry>,
+}
+
 /// Builds the native app menu (File/Edit/View/Run/Memory/Window/Help) and the `exit_item`
 /// handle `on_menu_event` needs to dispatch an Exit click. The File > Open
 /// Recent submenu starts empty — populated once the recent-profiles list is
 /// loaded, via `rebuild_open_recent_submenu`.
-pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState)> {
+#[allow(clippy::type_complexity)]
+pub fn build_menu(
+    app: &tauri::App,
+) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState, MemoryMenuState)> {
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
     // predefined types on Linux), so the item never appeared at all. The
@@ -273,7 +292,27 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
         WindowMenuState { exit_item, terminal_item },
         RecentMenuState(open_recent_submenu),
         RunMenuState { run_item, stop_item, step_into_item, step_over_item, step_return_item, toggle_auto_step_item },
+        MemoryMenuState {
+            load_item: load_memory_item,
+            save_item: save_memory_item,
+            edit_item: edit_memory_item,
+            fill_item: fill_memory_item,
+        },
     ))
+}
+
+/// Enables or disables all four Memory menu items together — they share a
+/// single condition (the CPU must be stopped), matching the `disabled`
+/// attribute the panel's old header buttons carried before issue #411
+/// replaced them with this menu. `MemoryPanel.tsx` calls this whenever
+/// `execState` changes, the same way `RunControlsContext.tsx` keeps the Run
+/// menu's items in lockstep with the floating Run Controls panel.
+#[tauri::command]
+pub fn set_memory_menu_enabled(enabled: bool, state: State<MemoryMenuState>) {
+    let _ = state.load_item.set_enabled(enabled);
+    let _ = state.save_item.set_enabled(enabled);
+    let _ = state.edit_item.set_enabled(enabled);
+    let _ = state.fill_item.set_enabled(enabled);
 }
 
 /// Pushes `flags` onto the Run menu's six items' enabled state

@@ -287,6 +287,20 @@ export default function MemoryPanel() {
     return () => { unlistenPromise.then((f) => f()); };
   }, [execState, saveDialog, fillDialog, loadDialog, editDialog]);
 
+  // Keeps the native Memory menu's enabled state in lockstep with the old
+  // header buttons' `disabled={execState !== "stopped"}` condition — all four
+  // items share this one rule, unlike the Run menu's six independently-gated
+  // items, so there's no per-item flags object to build here.
+  const lastMemoryMenuEnabledRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const enabled = execState === "stopped";
+    if (enabled === lastMemoryMenuEnabledRef.current) return;
+    lastMemoryMenuEnabledRef.current = enabled;
+    invoke("set_memory_menu_enabled", { enabled }).catch((e) =>
+      console.error("set_memory_menu_enabled failed:", e),
+    );
+  }, [execState]);
+
   /** Wheel scrolling: one row per tick. */
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {

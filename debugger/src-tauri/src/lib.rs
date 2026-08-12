@@ -543,9 +543,11 @@ pub fn run() {
             watchpoints::toggle_watchpoint,
             recent::clear_recent_profiles,
             menu::set_run_controls_enabled,
+            menu::set_memory_menu_enabled,
         ])
         .setup(move |app| {
-            let (app_menu, window_menu_state, recent_menu_state, run_menu_state) = menu::build_menu(app)?;
+            let (app_menu, window_menu_state, recent_menu_state, run_menu_state, memory_menu_state) =
+                menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
             // GTK's default `gtk-menu-bar-accel` binds F10 to focus/open the menu
@@ -564,6 +566,7 @@ pub fn run() {
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
             app.manage(run_menu_state);
+            app.manage(memory_menu_state);
 
             // Detached-Terminal window: strip its menu and install the
             // close-hides-and-reattaches lifecycle once, regardless of
