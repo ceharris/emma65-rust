@@ -1,5 +1,4 @@
 import { IDockviewPanelProps } from "dockview-react";
-import CpuBusPanel from "../CpuBusPanel";
 import DisassemblyPanel from "../DisassemblyPanel";
 import LogPanel from "../LogPanel";
 import MemoryPanel from "../MemoryPanel";
@@ -17,7 +16,6 @@ export type MainPanelId =
   | "memory"
   | "stack"
   | "watchpoints"
-  | "cpu-bus"
   | "run-controls"
   | "trace"
   | "log"
@@ -30,7 +28,6 @@ export const PANEL_TITLES: Record<MainPanelId, string> = {
   memory: "Memory",
   stack: "Stack",
   watchpoints: "Watchpoints",
-  "cpu-bus": "CPU and Bus",
   "run-controls": "Run Controls",
   trace: "Trace",
   log: "Log",
@@ -44,7 +41,6 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   memory: () => <MemoryPanel />,
   stack: () => <StackPanel />,
   watchpoints: () => <WatchpointPanel />,
-  "cpu-bus": () => <CpuBusPanel />,
   "run-controls": () => <RunControlsPanel />,
   trace: () => <TracePanel />,
   log: () => <LogPanel />,

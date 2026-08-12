@@ -28,7 +28,7 @@ const LAYOUT_PERSIST_DEBOUNCE_MS = 500;
  * serialized arrangement, the "Terminal is detached to its own window" flag
  * (issue #385), and the per-panel last-known-position map (issue #393), all
  * persisted alongside each other — snake_case to match the Rust struct's
- * field names directly, same convention `CpuBusPanel.tsx` follows for
+ * field names directly, same convention `StatusBar.tsx` follows for
  * `effective_speed`.
  */
 interface DockLayoutData {
@@ -143,7 +143,6 @@ const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: Main
   registers: { referencePanel: "disassembly", direction: "right" },
   watchpoints: { referencePanel: "memory", direction: "below" },
   stack: { referencePanel: "registers", direction: "below" },
-  "cpu-bus": { referencePanel: "stack", direction: "below" },
   log: { referencePanel: "trace" },
   terminal: { referencePanel: "trace" },
 };
@@ -283,11 +282,11 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 260;
  * containing that panel, not the whole row/column it happens to sit in —
  * so the top-level left/center/right row must be established first (memory,
  * disassembly, registers as horizontal siblings of the root). Only then can
- * watchpoints/stack/cpu-bus be added "below" their column's top panel,
- * which nests a new column *inside* that row cell rather than splitting the
- * grid's root. Adding a "below" split before the row exists instead nests
- * the next "right" split inside that same cell, collapsing all three
- * columns' heights down to just the top row.
+ * watchpoints/stack be added "below" their column's top panel, which nests a
+ * new column *inside* that row cell rather than splitting the grid's root.
+ * Adding a "below" split before the row exists instead nests the next
+ * "right" split inside that same cell, collapsing all three columns' heights
+ * down to just the top row.
  *
  * `terminalDetached` skips adding the "terminal" panel — reachable even on a
  * brand-new profile with no saved dockview arrangement yet, since the
@@ -306,7 +305,6 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   add("registers", { position: { referencePanel: "disassembly", direction: "right" }, initialWidth: 220 });
   add("watchpoints", { position: { referencePanel: "memory", direction: "below" } });
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
-  add("cpu-bus", { position: { referencePanel: "stack", direction: "below" } });
 
   // Bottom of Disassembly's column (issue #402) — see RUN_CONTROLS_DEFAULT_POSITION.
   api.addPanel({
@@ -332,15 +330,17 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   // Watchpoints (dockview gives the sibling whichever space is left over).
   api.getPanel("memory")?.api.setSize({ height: MEMORY_PANEL_DEFAULT_HEIGHT });
 
-  // Registers/Stack/CpuBus form one flat 3-way vertical split (see the
-  // ordering note above). dockview's resizeView sets the target's size
-  // exactly, then redistributes the delta proportionally across the *other*
-  // views in that split — so a setSize call perturbs whatever was set by an
-  // earlier call, but leaves nothing after it untouched. Stack must come
-  // last: it can't shrink and scroll (fixed 8-row page, like Memory), so its
-  // size has to land exactly on target, whereas Registers degrades
-  // gracefully via its own overflow-y: auto if the earlier call gets
-  // nudged. CpuBus is left unset and simply takes what's left over.
+  // Registers/Stack form one flat 2-way vertical split (see the ordering
+  // note above). dockview's resizeView sets the target's size exactly, then
+  // redistributes the delta across the *other* views in that split — so a
+  // setSize call perturbs whatever was set by an earlier call, but leaves
+  // nothing after it untouched. Stack must come last: it can't shrink and
+  // scroll (fixed 8-row page, like Memory), so its size has to land exactly
+  // on target, whereas Registers degrades gracefully via its own
+  // overflow-y: auto — Stack's setSize redistributes its delta onto
+  // Registers (the only other view left in this split), which ends up
+  // taking whatever's left over in the column, same role CpuBus used to play
+  // here.
   api.getPanel("registers")?.api.setSize({ height: REGISTERS_PANEL_DEFAULT_HEIGHT });
   api.getPanel("stack")?.api.setSize({ height: STACK_PANEL_DEFAULT_HEIGHT });
 }
@@ -546,7 +546,7 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
   };
 }
 
-/** Hosts the main window's dockview panels (Register/Disassembly/Memory/Stack/Watchpoint/CpuBus/Trace/Log/Terminal) in a dockview grid. */
+/** Hosts the main window's dockview panels (Register/Disassembly/Memory/Stack/Watchpoint/Trace/Log/Terminal) in a dockview grid. */
 export default function DockLayout() {
   const { resolvedTheme } = useTheme();
   const layoutChangeSubscriptionRef = useRef<DockviewIDisposable | null>(null);

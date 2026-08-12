@@ -1,0 +1,89 @@
+// Fixed bottom-of-window status bar (issue #400), replacing the old CPU/Bus
+// dock panel. --color-bg-handle is the app's "plain window chrome" token
+// (see the --dv-floating-titlebar-background-color comment in
+// dock-layout.scss) — already reserved for exactly this "distinguish chrome
+// from panel content" purpose, and used by nothing else that sits directly
+// above this bar.
+.status-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  height: 22px;
+  background-color: var(--color-bg-handle);
+  border-top: 1px solid var(--color-border);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  color: var(--color-fg);
+  user-select: none;
+}
+
+// Reserved for future use — pushes every cell to the right-hand end per the
+// issue's sketch, without needing a placeholder cell of its own.
+.status-bar-spacer {
+  flex: 1 1 auto;
+}
+
+.status-bar-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border-left: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+// NMI/IRQ/Reset double as buttons (issue #400: "labels would be button
+// controls"), styled subtly like vscode's status bar items — no visible
+// border or background at rest, just a hover highlight — rather than reusing
+// the heavier bordered `.exec-btn` look from panel content.
+button.status-bar-cell {
+  background: none;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+
+  &:hover {
+    background-color: var(--color-bg-hover);
+  }
+
+  &.active {
+    background-color: var(--color-warning-bg);
+    color: var(--color-fg-strong);
+  }
+}
+
+.status-bar-label {
+  color: var(--color-muted);
+}
+
+.cycles-value {
+  color: var(--color-number);
+  font-variant-numeric: tabular-nums;
+}
+
+// Reserves enough width for the longest Run-state label ("STP Executed") so
+// the cell doesn't reflow as the CPU transitions between states.
+.status-bar-run-label {
+  display: inline-block;
+  min-width: 6.5em;
+}
+
+.indicator {
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+// Run/Stop/Step indicator colors
+.indicator-run  { color: var(--color-success); }
+.indicator-stop { color: var(--color-indicator-stop); }
+.indicator-step { color: var(--color-info); }
+
+// NMI / IRQ / WAI indicator colors
+.indicator-nmi-active,
+.indicator-irq-active,
+.indicator-wai { color: var(--color-warning); }
+
+.indicator-idle { color: var(--color-idle); }

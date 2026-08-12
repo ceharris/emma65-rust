@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useExecutionContext } from "./ExecutionContext";
 
-/** CPU execution state, used by CpuBusPanel to display the Run/Stop/Step indicator. */
+/** CPU execution state, used by StatusBar to display the Run/Stop/Step indicator. */
 export type ExecState = "stopped" | "stepping" | "running";
 
 interface RegisterSnapshot {
@@ -253,7 +253,7 @@ export function RunControlsProvider({ children }: { children: ReactNode }) {
     return () => clearAutoStepTimer();
   }, [clearAutoStepTimer]);
 
-  // Notify ExecutionContext of execution state changes so CpuBusPanel can update its indicator.
+  // Notify ExecutionContext of execution state changes so StatusBar can update its indicator.
   useEffect(() => {
     if (stepping || isAutoStepping) {
       onExecStateChange("stepping");
@@ -264,7 +264,7 @@ export function RunControlsProvider({ children }: { children: ReactNode }) {
     }
   }, [stepping, isAutoStepping, isFreeRunning, onExecStateChange]);
 
-  // Stop auto-step when the CPU is reset from CpuBusPanel.
+  // Stop auto-step when the CPU is reset from StatusBar.
   useEffect(() => {
     const unlistenPromise = listen("debugger-cpu-reset", () => {
       if (isAutoSteppingRef.current) {

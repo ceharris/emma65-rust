@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ExecState } from "./RunControlsContext";
 import { useExecutionContext } from "./ExecutionContext";
 import { RegisterSnapshot } from "./RegisterPanel";
-import "./styles/cpu-bus.scss";
+import "./styles/status-bar.scss";
 
 /** Minimum time in ms that the Step indicator remains visible so users can perceive it. */
 const STEP_INDICATOR_MIN_MS = 75;
@@ -30,10 +30,17 @@ function formatCycles(n: number): string {
   return n.toLocaleString();
 }
 
-export default function CpuBusPanel() {
+/**
+ * Fixed status bar docked to the bottom of the main window (issue #400),
+ * replacing the old CPU/Bus dock panel so this information stays visible
+ * regardless of which panels are docked. Logic ported from the retired
+ * `CpuBusPanel`: same commands, same events, same Run/Stop/Step flash
+ * behavior — only the layout and visual weight change.
+ */
+export default function StatusBar() {
   const { execState, onReset } = useExecutionContext();
   const [cpuBus, setCpuBus] = useState<CpuBusState | null>(null);
-  // Local toggle state for the IRQ button, independent of the aggregate
+  // Local toggle state for the IRQ control, independent of the aggregate
   // cpuBus.irq_active indicator (which reflects all IRQ sources, including devices).
   const [irqAsserted, setIrqAsserted] = useState(false);
 
@@ -147,7 +154,7 @@ export default function CpuBusPanel() {
       // While free-running (or step-over/step-return in progress), the backend
       // treats assert_irq as a one-shot pulse that auto-releases once the CPU
       // services it (see #261) — so there's no sticky "asserted" state to track
-      // here, and the button behaves like the momentary NMI trigger instead of
+      // here, and the control behaves like the momentary NMI trigger instead of
       // a toggle.
       if (cpuBus?.is_running) {
         const result = await invoke<CpuBusState>("assert_irq");
@@ -187,50 +194,44 @@ export default function CpuBusPanel() {
   const [speedValue, speedUnit] = splitSpeed(cpuBus?.effective_speed ?? "0 MHz");
 
   return (
-    <div className="cpu-bus-panel">
-      <div className="cpu-bus-body">
-        <div className="cpu-bus-row">
-          <span className={`indicator ${runStopClass}`}>●</span>
-          <span className="indicator-label">{runStopLabel}</span>
-        </div>
-        <div className="cpu-bus-row">
-          <span className={`indicator ${cpuBus?.nmi_pending ? "indicator-nmi-active" : "indicator-idle"}`}>●</span>
-          <span className="indicator-label">NMI</span>
-          <span className={`indicator indicator-spaced ${cpuBus?.irq_active ? "indicator-irq-active" : "indicator-idle"}`}>●</span>
-          <span className="indicator-label">IRQ</span>
-        </div>
-        <div className="cpu-bus-row cpu-bus-cycles">
-          <span className="cycles-value">{cpuBus !== null ? formatCycles(cpuBus.cycles) : "—"}</span>
-          <span className="cycles-label">cycles</span>
-        </div>
-        <div className="cpu-bus-row cpu-bus-speed">
-          <span className="speed-value">{speedValue}</span>
-          <span className="speed-unit">{speedUnit}</span>
-        </div>
-        <div className="cpu-bus-row cpu-bus-buttons">
-          <button
-            className="exec-btn nmi-btn"
-            onClick={handleTriggerNmi}
-            title="Trigger NMI"
-          >
-            NMI
-          </button>
-          <button
-            className={`exec-btn irq-btn${irqAsserted ? " active" : ""}`}
-            onClick={handleToggleIrq}
-            title={cpuBus?.is_running ? "Trigger IRQ (one-shot while running)" : "Assert/Release IRQ"}
-          >
-            IRQ
-          </button>
-          <button
-            className="exec-btn reset-btn"
-            onClick={handleReset}
-            title="Reset CPU"
-          >
-            Reset
-          </button>
-        </div>
+    <footer className="status-bar">
+      {/* Unused space is reserved for future use. */}
+      <div className="status-bar-spacer" />
+      <div className="status-bar-cell status-bar-cycles">
+        <span className="cycles-value">{cpuBus !== null ? formatCycles(cpuBus.cycles) : "—"}</span>
+        <span className="status-bar-label">cycles</span>
       </div>
-    </div>
+      <div className="status-bar-cell status-bar-speed">
+        <span className="cycles-value">{speedValue}</span>
+        <span className="status-bar-label">{speedUnit}</span>
+      </div>
+      <button
+        className="status-bar-cell status-bar-toggle"
+        onClick={handleTriggerNmi}
+        title="Trigger NMI"
+      >
+        <span className={`indicator ${cpuBus?.nmi_pending ? "indicator-nmi-active" : "indicator-idle"}`}>●</span>
+        <span className="status-bar-label">NMI</span>
+      </button>
+      <button
+        className={`status-bar-cell status-bar-toggle${irqAsserted ? " active" : ""}`}
+        onClick={handleToggleIrq}
+        title={cpuBus?.is_running ? "Trigger IRQ (one-shot while running)" : "Assert/Release IRQ"}
+      >
+        <span className={`indicator ${cpuBus?.irq_active ? "indicator-irq-active" : "indicator-idle"}`}>●</span>
+        <span className="status-bar-label">IRQ</span>
+      </button>
+      <div className="status-bar-cell status-bar-run">
+        <span className={`indicator ${runStopClass}`}>●</span>
+        <span className="status-bar-label status-bar-run-label">{runStopLabel}</span>
+      </div>
+      <button
+        className="status-bar-cell status-bar-toggle status-bar-reset"
+        onClick={handleReset}
+        title="Reset CPU"
+      >
+        Reset
+      </button>
+    </footer>
   );
 }

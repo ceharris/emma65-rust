@@ -7,6 +7,7 @@ import { ExecutionProvider } from "./ExecutionContext";
 import NewProfileDialog from "./NewProfileDialog";
 import RestoreLayoutDialog from "./RestoreLayoutDialog";
 import { RunControlsProvider } from "./RunControlsContext";
+import StatusBar from "./StatusBar";
 import ThemeSelector from "./ThemeSelector";
 import { useAppKeyBindings } from "./useAppKeyBindings";
 
@@ -106,6 +107,7 @@ export default function App() {
             <Suspense fallback={<div className="app-splash"><span className="status-pending">Initializing…</span></div>}>
               <DockLayout />
             </Suspense>
+            <StatusBar />
           </RunControlsProvider>
         </ExecutionProvider>
       </div>
