@@ -220,7 +220,7 @@ pub fn build_menu(
     // own Hexadecimal/ASCII-Unicode Text radio group.
     let load_memory_item = MenuItem::with_id(app, LOAD_MEMORY_ID, "Load from File…", true, Some("CmdOrCtrl+L"))?;
     let save_memory_item = MenuItem::with_id(app, SAVE_MEMORY_ID, "Save to File…", true, Some("CmdOrCtrl+S"))?;
-    let edit_memory_item = MenuItem::with_id(app, EDIT_MEMORY_ID, "Edit…", true, Some("CmdOrCtrl+E"))?;
+    let edit_memory_item = MenuItem::with_id(app, EDIT_MEMORY_ID, "Edit…", true, Some("CmdOrCtrl+Shift+E"))?;
     let fill_memory_item = MenuItem::with_id(app, FILL_MEMORY_ID, "Fill…", true, Some("CmdOrCtrl+Shift+F"))?;
     let memory_separator_1 = PredefinedMenuItem::separator(app)?;
     let memory_separator_2 = PredefinedMenuItem::separator(app)?;
