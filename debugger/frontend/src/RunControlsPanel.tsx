@@ -17,6 +17,9 @@ const INTERVAL_MAX = 1000;
  */
 export const RUN_CONTROLS_HEIGHT = 100;
 
+/**
+ * Floating-window width (px) that fits the full set of run controls.
+ */
 export const RUN_CONTROLS_WIDTH = 400;
 
 /**
