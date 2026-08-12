@@ -78,6 +78,7 @@ export default function App() {
     <>
       <NewProfileDialog />
       <ClearRecentDialog />
+      <RestoreLayoutDialog />
       <ExitConfirmDialog />
       <div className="app-shell">
         <header className="app-toolbar">
