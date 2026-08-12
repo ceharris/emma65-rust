@@ -18,6 +18,10 @@ pub struct CliArgs {
     /// Name of the configuration profile to use.
     #[clap(long = "profile", default_value = "default")]
     pub profile: String,
+    /// Discard the persisted dock layout so the debugger starts with all
+    /// panels in their default dock locations and sizes (issue #398).
+    #[clap(long = "restore-layout")]
+    pub restore_layout: bool,
 }
 
 /// Tauri-managed state holding the directory of the currently active

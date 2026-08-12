@@ -552,6 +552,27 @@ export default function DockLayout() {
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
+  // Window > Restore Layout… (issue #398), confirmed via `RestoreLayoutDialog`
+  // and actually triggered by the `restore_dock_layout` command: discards
+  // every panel's current position/size and rebuilds the same default
+  // arrangement `restoreLayout` falls back to on first run, then re-persists
+  // it — the actual `layout.json` overwrite that makes the reset stick.
+  // `terminalDetached` is always false here — `restore_dock_layout` reattaches
+  // Terminal first (emitting its own `terminal-reattached`) if it was
+  // detached, since the default layout always docks it.
+  useEffect(() => {
+    const unlistenPromise = listen("dock-layout-reset", () => {
+      const api = apiRef.current;
+      if (!api) return;
+      api.clear();
+      lastPanelPositionRef.current = {};
+      terminalPositionRef.current = null;
+      addDefaultLayout(api, false);
+      persistLayout(api, lastPanelPositionRef.current);
+    });
+    return () => { unlistenPromise.then((f) => f()); };
+  }, []);
+
   // Rust-driven detach/reattach (the Window > Terminal menu item, and the
   // detached window's native close button) has no JS handler of its own
   // already in place to add/remove the "terminal" dock panel — the dock

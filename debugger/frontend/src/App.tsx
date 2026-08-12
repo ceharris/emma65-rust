@@ -6,6 +6,7 @@ import ExitConfirmDialog from "./ExitConfirmDialog";
 import { ExecutionProvider } from "./ExecutionContext";
 import DockLayout from "./layout/DockLayout";
 import NewProfileDialog from "./NewProfileDialog";
+import RestoreLayoutDialog from "./RestoreLayoutDialog";
 import { RunControlsProvider } from "./RunControlsContext";
 import ThemeSelector from "./ThemeSelector";
 import { useAppKeyBindings } from "./useAppKeyBindings";
@@ -60,6 +61,7 @@ export default function App() {
       <>
         <NewProfileDialog />
         <ClearRecentDialog />
+        <RestoreLayoutDialog />
         <ExitConfirmDialog />
         <div className="app-splash">
           {status === null ? (

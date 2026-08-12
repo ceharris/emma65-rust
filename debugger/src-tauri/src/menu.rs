@@ -7,6 +7,8 @@ use tauri::{AppHandle, State, Wry};
 
 /// Menu item id for the Window > Terminal item.
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
+/// Menu item id for the Window > Restore Layout… item.
+pub(crate) const RESTORE_LAYOUT_ID: &str = "restore-layout";
 /// Id prefix for entries in the View menu; each item's full id is this
 /// prefix followed by the panel's dockview id (`MainPanelId` in
 /// `panelRegistry.tsx`), e.g. `"view-panel:trace"`.
@@ -208,7 +210,17 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // dismissed-while-docked Terminal tab back (issue #393) is instead View > Terminal's
     // job, alongside the other eight panels — see `on_menu_event` in `lib.rs`.
     let terminal_item = MenuItem::with_id(app, TOGGLE_TERMINAL_ID, "Detach Terminal…", true, Some("Ctrl+Shift+T"))?;
-    let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item])?;
+
+    // Bottom of the Window menu, set off by its own separator (issue #398):
+    // discards every panel's current position/size, restoring the same
+    // default arrangement a brand-new profile starts with. Dialog-confirmed
+    // like Clear Recent… above — `on_menu_event` in `lib.rs` just opens the
+    // confirmation modal; the actual reset happens via the `restore_dock_layout`
+    // command once the user confirms (see `layout.rs`).
+    let window_separator = PredefinedMenuItem::separator(app)?;
+    let restore_layout_item = MenuItem::with_id(app, RESTORE_LAYOUT_ID, "Restore Layout…", true, None::<&str>)?;
+    let window_menu =
+        Submenu::with_items(app, "Window", true, &[&terminal_item, &window_separator, &restore_layout_item])?;
 
     let about_item = PredefinedMenuItem::about(app, None, None)?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&about_item])?;

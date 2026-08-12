@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::profile;
 
@@ -91,6 +91,44 @@ pub(crate) fn set_terminal_detached(app: &AppHandle, detached: bool) -> Result<(
         guard.clone()
     };
     save_dock_layout_to(&profile::config_dir()?, &data)
+}
+
+/// Discards the persisted dock arrangement and per-panel position map
+/// (issue #398's Window > Restore Layout…), reattaching Terminal first if
+/// it's currently detached to its own window — the default layout always
+/// docks Terminal, so a restore that left it floating separately wouldn't
+/// actually be "default." Invoked from the frontend confirmation dialog
+/// opened by `emit_open_restore_layout_dialog`, once the user clicks
+/// "Restore". This only clears the Rust-side record and re-saves the empty
+/// result to `layout.json`; the `dock-layout-reset` event it emits is what
+/// tells `DockLayout.tsx` to actually clear and rebuild the live dockview
+/// arrangement (and re-persist it, which is what makes the reset stick
+/// rather than being immediately overwritten by the next debounced save of
+/// whatever was on screen before this ran).
+#[tauri::command]
+pub fn restore_dock_layout(app: AppHandle) -> Result<(), String> {
+    let was_detached = app.state::<LayoutState>().0.lock().unwrap().terminal_detached;
+    if was_detached {
+        crate::terminal::reattach_terminal(&app);
+    }
+    let data = {
+        let state = app.state::<LayoutState>();
+        let mut guard = state.0.lock().unwrap();
+        guard.dockview = None;
+        guard.panel_positions = None;
+        guard.clone()
+    };
+    save_dock_layout_to(&profile::config_dir()?, &data)?;
+    let _ = app.emit_to(crate::MAIN_WINDOW_LABEL, "dock-layout-reset", ());
+    Ok(())
+}
+
+/// Emits `open-restore-layout-dialog`, telling the main window's React layer
+/// to open the Restore Layout confirmation modal. Called directly from the
+/// Window > Restore Layout… menu item's `on_menu_event` handler, mirroring
+/// `recent::emit_open_clear_recent_dialog`.
+pub(crate) fn emit_open_restore_layout_dialog(app: &AppHandle) {
+    let _ = app.emit("open-restore-layout-dialog", ());
 }
 
 #[cfg(test)]
