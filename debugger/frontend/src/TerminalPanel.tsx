@@ -126,6 +126,30 @@ export default function TerminalPanel() {
     const resizeObserver = new ResizeObserver(() => fitAddon.fit());
     resizeObserver.observe(containerRef.current!);
 
+    // The synchronous fit() above can measure a container whose layout
+    // hasn't actually settled yet — reproduced specifically in the detached
+    // window (issue #385): WebKitGTK begins running a just-`.show()`n
+    // window's JS without waiting for its layout to catch up to the
+    // window's configured size, so the very first fit() can land on far
+    // fewer columns than the window will actually have a moment later. The
+    // ResizeObserver above doesn't catch this on its own, since the
+    // container's size may never actually *change* afterward — only the
+    // measurement was wrong, not the size. Text written against the bad
+    // measurement (most visibly a whole backlog replayed in one shot via
+    // get_terminal_history right after mount) hard-wraps at that wrong
+    // width; a later correct fit() reflows it back, which is what these
+    // two deferred corrective passes are for. Guarded by `disposed` rather
+    // than tracked/canceled animation-frame ids, since a stray fit() call
+    // after `term.dispose()` would throw.
+    let disposed = false;
+    requestAnimationFrame(() => {
+      if (disposed) return;
+      fitAddon.fit();
+      requestAnimationFrame(() => {
+        if (!disposed) fitAddon.fit();
+      });
+    });
+
     term.onData((data) => {
       const bytes = Array.from(new TextEncoder().encode(data));
       invoke("write_terminal", { bytes }).catch(() => {});
@@ -151,6 +175,7 @@ export default function TerminalPanel() {
       .then(attachOutputListener);
 
     return () => {
+      disposed = true;
       unlistenPromise.then((f) => f());
       resizeObserver.disconnect();
       termRef.current = null;
