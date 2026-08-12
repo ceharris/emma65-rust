@@ -42,6 +42,12 @@
   --dv-sash-color: transparent;
   --dv-active-sash-color: var(--color-accent);
   --dv-floating-titlebar-background-color: var(--color-bg-alt);
+  // Same seam problem the tab-bar border-bottom below fixes, on the drag
+  // handle dockview renders above a floating group's tab bar (issue #395):
+  // without a divider, it shares the tab bar's --color-bg-alt with nothing
+  // to distinguish "drag the window" from "click a tab", so the handle was
+  // invisible and undiscoverable.
+  --dv-floating-titlebar-border-bottom: 1px solid var(--color-border);
   --dv-context-menu-background-color: var(--color-bg-alt);
   --dv-context-menu-color: var(--color-fg);
 
