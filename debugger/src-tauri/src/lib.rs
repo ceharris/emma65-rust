@@ -448,6 +448,23 @@ pub fn run() {
                 } else {
                     let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", panel_id.to_string());
                 }
+            } else if matches!(
+                event.id().as_ref(),
+                menu::RUN_CPU_ID
+                    | menu::STOP_CPU_ID
+                    | menu::STEP_INTO_ID
+                    | menu::STEP_OVER_ID
+                    | menu::STEP_RETURN_ID
+                    | menu::TOGGLE_AUTO_STEP_ID
+            ) {
+                // Bring the floating panel back if it's been dismissed, then
+                // dispatch the action itself — both routed to
+                // `RunControlsContext.tsx`, which owns the actual
+                // run/step/auto-step handlers (issue #395). A native
+                // accelerator, this menu click, and the panel's own button
+                // all end up calling the exact same code.
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "run-controls");
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "run-menu-action", event.id().as_ref().to_string());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -505,9 +522,10 @@ pub fn run() {
             watchpoints::edit_watchpoint,
             watchpoints::toggle_watchpoint,
             recent::clear_recent_profiles,
+            menu::set_run_controls_enabled,
         ])
         .setup(move |app| {
-            let (app_menu, window_menu_state, recent_menu_state) = menu::build_menu(app)?;
+            let (app_menu, window_menu_state, recent_menu_state, run_menu_state) = menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
             // GTK's default `gtk-menu-bar-accel` binds F10 to focus/open the menu
@@ -525,6 +543,7 @@ pub fn run() {
 
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
+            app.manage(run_menu_state);
 
             // Detached-Terminal window: strip its menu and install the
             // close-hides-and-reattaches lifecycle once, regardless of

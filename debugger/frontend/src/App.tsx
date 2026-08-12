@@ -6,6 +6,7 @@ import ExitConfirmDialog from "./ExitConfirmDialog";
 import { ExecutionProvider } from "./ExecutionContext";
 import DockLayout from "./layout/DockLayout";
 import NewProfileDialog from "./NewProfileDialog";
+import { RunControlsProvider } from "./RunControlsContext";
 import ThemeSelector from "./ThemeSelector";
 import { useAppKeyBindings } from "./useAppKeyBindings";
 
@@ -81,7 +82,9 @@ export default function App() {
           <ThemeSelector />
         </header>
         <ExecutionProvider>
-          <DockLayout />
+          <RunControlsProvider>
+            <DockLayout />
+          </RunControlsProvider>
         </ExecutionProvider>
       </div>
     </>

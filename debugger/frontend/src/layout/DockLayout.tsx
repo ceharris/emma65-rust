@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import {useCallback, useEffect, useMemo, useRef} from "react";
+import {invoke} from "@tauri-apps/api/core";
+import {listen} from "@tauri-apps/api/event";
 import {
   AddPanelPositionOptions,
+  AnchoredBox,
+  AnchorPosition,
   DockviewIDisposable,
   DockviewReact,
   DockviewReadyEvent,
@@ -12,8 +14,9 @@ import {
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import "../styles/dock-layout.scss";
-import { useTheme } from "../ThemeContext";
-import { MainPanelId, PANEL_TITLES, panelComponents } from "./panelRegistry";
+import {useTheme} from "../ThemeContext";
+import {MainPanelId, PANEL_TITLES, panelComponents} from "./panelRegistry";
+import {RUN_CONTROLS_HEIGHT, RUN_CONTROLS_WIDTH} from "../RunControlsPanel";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
 // panels — onDidLayoutChange fires on every intermediate frame of a drag.
@@ -45,12 +48,44 @@ interface DockLayoutData {
  * `group_id` values from a restored session remain valid to look up via
  * `api.getGroup` after `fromJSON` restores the same arrangement, since
  * dockview's serialized format embeds each group's id and reconstructs it
- * exactly on restore.
+ * exactly on restore. Terminal is always docked, so `terminalPositionRef`
+ * only ever holds this shape; `lastPanelPositionRef` covers every panel and
+ * so must also allow the floating shape below (issue #395's Run Controls
+ * panel).
  */
-interface PanelPosition {
+interface DockedPanelPosition {
   group_id: string;
   index?: number;
 }
+
+/**
+ * Where a floating panel last sat, in dockview's own anchored-box format
+ * (`AnchoredBox` — one of the four corner shapes plus a size). No `group_id`
+ * to look up: a closed floating group's window is gone entirely, unlike a
+ * docked group which can persist empty.
+ */
+interface FloatingPanelPosition {
+  kind: "floating";
+  bounds: AnchoredBox;
+}
+
+/** Undiscriminated docked shape kept exactly as before (issue #393) so old persisted JSON keeps parsing as-is; `kind` distinguishes the new floating variant. */
+type PanelPosition = DockedPanelPosition | FloatingPanelPosition;
+
+/** The `floating` shape `api.addPanel` accepts — either a fresh `x`/`y` guess or a remembered corner-anchored position, both paired with a size. */
+type FloatingBounds = { x: number; y: number; width: number; height: number } | { position: AnchorPosition; width: number; height: number };
+
+/**
+ * Default floating position/size for the Run Controls panel (issue #395)
+ * when it has no remembered position — first run, or after a restore whose
+ * persisted layout predates this panel. Dockview's `FloatingGroupService`
+ * clamps on-screen at runtime, so an imperfect guess self-corrects.
+ */
+// Wider than the 7-buttons-only 300px that was confirmed correct earlier —
+// the Auto-Step speed slider/input/unit now live inline on this same row
+// instead of a separate (removed) collapsible drawer, adding real content
+// width, not just chrome.
+const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: RUN_CONTROLS_WIDTH, height: RUN_CONTROLS_HEIGHT };
 
 /**
  * Records the "terminal" panel's current group/index into `positionRef`
@@ -59,7 +94,7 @@ interface PanelPosition {
  * Window-menu/native-close-driven detach path (`terminal-detach-requested`),
  * since both ultimately just close the same panel.
  */
-function closeTerminalPanel(api: DockviewReadyEvent["api"] | null, positionRef: React.MutableRefObject<PanelPosition | null>) {
+function closeTerminalPanel(api: DockviewReadyEvent["api"] | null, positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
   const panel = api?.getPanel("terminal");
   if (!panel) return;
   positionRef.current = { group_id: panel.group.id, index: panel.group.panels.indexOf(panel) };
@@ -72,7 +107,7 @@ function closeTerminalPanel(api: DockviewReadyEvent["api"] | null, positionRef: 
  * was the last panel in it — dockview removes emptied groups), otherwise the
  * same default bottom-group tab position `addMissingBottomPanels` uses.
  */
-function positionForReattach(api: DockviewReadyEvent["api"], remembered: PanelPosition | null): AddPanelPositionOptions {
+function positionForReattach(api: DockviewReadyEvent["api"], remembered: DockedPanelPosition | null): AddPanelPositionOptions {
   const groupStillExists = remembered !== null && api.getGroup(remembered.group_id) !== undefined;
   return groupStillExists
     ? { referenceGroup: remembered.group_id, index: remembered.index }
@@ -80,13 +115,16 @@ function positionForReattach(api: DockviewReadyEvent["api"], remembered: PanelPo
 }
 
 /**
- * Default position to re-add a panel that's missing and has no remembered
- * position (see `recordPanelPositions`/`resolveRevealPosition` below) —
- * mirrors `addDefaultLayout`'s placements so a dismissed-then-restored panel
- * lands roughly where a fresh profile would put it. Memory and Trace are
- * absent: they're the two structural roots `addDefaultLayout` adds first
- * (Memory with no position at all, Trace via an `AbsolutePosition` split),
- * so `resolveRevealPosition` special-cases both instead.
+ * Default position to re-add a *docked* panel that's missing and has no
+ * remembered position (see `recordPanelPositions`/`resolveRevealPosition`
+ * below) — mirrors `addDefaultLayout`'s placements so a dismissed-then-
+ * restored panel lands roughly where a fresh profile would put it. Memory
+ * and Trace are absent: they're the two structural roots `addDefaultLayout`
+ * adds first (Memory with no position at all, Trace via an
+ * `AbsolutePosition` split), so `resolveRevealPosition` special-cases both
+ * instead. Run Controls (issue #395) is also absent — it's floating, not
+ * docked, so it falls back to `RUN_CONTROLS_DEFAULT_BOUNDS` instead of an
+ * entry here.
  */
 const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: MainPanelId; direction?: "right" | "below" }>> = {
   disassembly: { referencePanel: "memory", direction: "right" },
@@ -99,43 +137,85 @@ const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: Main
 };
 
 /**
- * Snapshots every currently-present main panel's group/index into `ref`,
+ * Finds the remembered on-screen bounds of the floating window hosting
+ * `groupId`, by scanning `json.floatingGroups` for the entry whose
+ * legacy single-group `data.id` matches. Doesn't handle the nested-`grid`
+ * form (multiple groups dragged into one floating window) — an edge case
+ * for a panel meant to be used alone, so it degrades to "no remembered
+ * bounds" rather than a crash.
+ */
+function findFloatingBounds(json: SerializedDockview, groupId: string): AnchoredBox | null {
+  for (const fg of json.floatingGroups ?? []) {
+    if (fg.data?.id === groupId) return fg.position;
+  }
+  return null;
+}
+
+/**
+ * Snapshots every currently-present main panel's position into `ref`,
  * called on every `onDidLayoutChange` (drag, resize, add, remove, move —
  * see `onReady` below). Since this only ever writes an entry for a panel
  * that still exists, a panel's entry simply stops updating (rather than
  * being cleared) once it's removed — leaving `ref` holding each panel's
  * *last* known position, which is exactly what the View menu's restore
  * (`resolveRevealPosition`) needs.
+ *
+ * Floating panels (issue #395) need one `api.toJSON()` call to read their
+ * on-screen bounds back out, so the floating check runs first and that call
+ * is skipped entirely in the common all-docked case — this function runs on
+ * every drag frame.
  */
 function recordPanelPositions(api: DockviewReadyEvent["api"], ref: React.MutableRefObject<Partial<Record<MainPanelId, PanelPosition>>>) {
+  const floatingIds: MainPanelId[] = [];
   for (const id of Object.keys(PANEL_TITLES) as MainPanelId[]) {
     const panel = api.getPanel(id);
-    if (panel) {
+    if (!panel) continue;
+    if (panel.group.api.location.type === "floating") {
+      floatingIds.push(id);
+    } else {
       ref.current[id] = { group_id: panel.group.id, index: panel.group.panels.indexOf(panel) };
     }
+  }
+  if (floatingIds.length === 0) return;
+  const json = api.toJSON();
+  for (const id of floatingIds) {
+    const panel = api.getPanel(id);
+    if (!panel) continue;
+    const bounds = findFloatingBounds(json, panel.group.id);
+    if (bounds) ref.current[id] = { kind: "floating", bounds };
   }
 }
 
 /**
  * Resolves where to re-add a panel that a View menu click (issue #393) found
- * missing from the dock: its last recorded position if that group still
- * exists, else Trace's usual full-width bottom-group split (for "trace"
- * itself) or the corresponding `DEFAULT_PANEL_POSITION` entry (for anything
- * else, provided its reference panel is actually present — otherwise dockview
- * has no cell to split relative to, so the panel is added as a new group
- * instead, which is what an absent `position` produces).
+ * missing from the dock: its last recorded position if that group/window
+ * still exists, else Trace's usual full-width bottom-group split (for
+ * "trace" itself), the floating default (for "run-controls"), or the
+ * corresponding `DEFAULT_PANEL_POSITION` entry (for anything else, provided
+ * its reference panel is actually present — otherwise dockview has no cell
+ * to split relative to, so the panel is added as a new group instead, which
+ * is what an absent `position` produces).
  */
 function resolveRevealPosition(
   api: DockviewReadyEvent["api"],
   id: MainPanelId,
   lastPositions: Partial<Record<MainPanelId, PanelPosition>>,
-): { position?: AddPanelPositionOptions; initialHeight?: number } {
+): { position?: AddPanelPositionOptions; initialHeight?: number; floating?: FloatingBounds } {
   const remembered = lastPositions[id];
-  if (remembered && api.getGroup(remembered.group_id)) {
-    return { position: { referenceGroup: remembered.group_id, index: remembered.index } };
+  if (remembered) {
+    if ("kind" in remembered) {
+      const { width, height, ...position } = remembered.bounds;
+      return { floating: { position, width, height } };
+    }
+    if (api.getGroup(remembered.group_id)) {
+      return { position: { referenceGroup: remembered.group_id, index: remembered.index } };
+    }
   }
   if (id === "trace") {
     return { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT };
+  }
+  if (id === "run-controls") {
+    return { floating: RUN_CONTROLS_DEFAULT_BOUNDS };
   }
   const fallback = DEFAULT_PANEL_POSITION[id];
   if (fallback && api.getPanel(fallback.referencePanel)) {
@@ -214,6 +294,14 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   add("watchpoints", { position: { referencePanel: "memory", direction: "below" } });
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
   add("cpu-bus", { position: { referencePanel: "stack", direction: "below" } });
+
+  // Floating, not docked — see RUN_CONTROLS_DEFAULT_BOUNDS.
+  api.addPanel({
+    id: "run-controls",
+    component: "run-controls",
+    title: PANEL_TITLES["run-controls"],
+    floating: RUN_CONTROLS_DEFAULT_BOUNDS,
+  });
 
   // No referencePanel: an AbsolutePosition split (dockview-core's
   // `orthogonalize`) applies to the grid's root rather than to one panel's
@@ -308,6 +396,27 @@ function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached
 }
 
 /**
+ * Adds the "run-controls" floating panel (issue #395) if a just-restored
+ * layout is missing it — i.e. it was persisted before this panel existed.
+ * Same backfill pattern as `addMissingBottomPanels`, reusing
+ * `resolveRevealPosition` so a restored old layout's remembered floating
+ * bounds (if any survived in `panel_positions`) are honored, falling back to
+ * `RUN_CONTROLS_DEFAULT_BOUNDS` otherwise. Returns whether it was added, so
+ * the caller knows whether to re-persist.
+ */
+function addMissingRunControlsPanel(api: DockviewReadyEvent["api"], lastPositions: Partial<Record<MainPanelId, PanelPosition>>): boolean {
+  if (api.getPanel("run-controls")) return false;
+  const { floating } = resolveRevealPosition(api, "run-controls", lastPositions);
+  api.addPanel({
+    id: "run-controls",
+    component: "run-controls",
+    title: PANEL_TITLES["run-controls"],
+    floating: floating ?? RUN_CONTROLS_DEFAULT_BOUNDS,
+  });
+  return true;
+}
+
+/**
  * Restores the persisted layout on mount via `get_dock_layout`, falling back
  * to the hardcoded default (and re-persisting it) if none was saved yet or
  * the saved layout fails to deserialize — e.g. after a dockview version
@@ -358,7 +467,9 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
   if (terminalDetached) {
     api.getPanel("terminal")?.api.close();
   }
-  if (addMissingBottomPanels(api, terminalDetached)) {
+  const addedBottomPanels = addMissingBottomPanels(api, terminalDetached);
+  const addedRunControls = addMissingRunControlsPanel(api, lastPositionsRef.current);
+  if (addedBottomPanels || addedRunControls) {
     persistLayout(api, lastPositionsRef.current);
   }
 }
@@ -375,7 +486,7 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
  * closes the dock panel, deliberately after the new window/target is fully
  * in place (issue #385's `emit_to`-retarget race mitigation).
  */
-function makeTerminalTabActions(positionRef: React.MutableRefObject<PanelPosition | null>) {
+function makeTerminalTabActions(positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
   return function TerminalTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
     if (activePanel?.id !== "terminal") return null;
     const handleDetach = () => {
@@ -397,7 +508,7 @@ export default function DockLayout() {
   const layoutChangeSubscriptionRef = useRef<DockviewIDisposable | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
-  const terminalPositionRef = useRef<PanelPosition | null>(null);
+  const terminalPositionRef = useRef<DockedPanelPosition | null>(null);
   const lastPanelPositionRef = useRef<Partial<Record<MainPanelId, PanelPosition>>>({});
   const TerminalTabActions = useMemo(() => makeTerminalTabActions(terminalPositionRef), []);
 
@@ -431,8 +542,12 @@ export default function DockLayout() {
         existing.api.setActive();
         return;
       }
-      const { position, initialHeight } = resolveRevealPosition(api, id, lastPanelPositionRef.current);
-      api.addPanel({ id, component: id, title: PANEL_TITLES[id], position, initialHeight });
+      const { position, initialHeight, floating } = resolveRevealPosition(api, id, lastPanelPositionRef.current);
+      if (floating) {
+        api.addPanel({ id, component: id, title: PANEL_TITLES[id], floating });
+      } else {
+        api.addPanel({ id, component: id, title: PANEL_TITLES[id], position, initialHeight });
+      }
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);

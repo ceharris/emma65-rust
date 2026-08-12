@@ -1,0 +1,120 @@
+.run-controls-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 6px 10px;
+  gap: 6px;
+  background-color: var(--color-bg-alt);
+}
+
+.run-controls-row {
+  display: flex;
+  align-items: center;
+  // Wider than the 6px/5px gaps within each button group below, so the
+  // Auto-Step group reads as visually distinct from the core run/step
+  // actions rather than just another button in the same row.
+  gap: 16px;
+}
+
+.exec-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.auto-step-control {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.speed-slider {
+  width: 80px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.speed-input {
+  width: 5ch;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 3px;
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 1px 3px;
+  text-align: right;
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+}
+
+.speed-unit {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  color: var(--color-muted);
+}
+
+.exec-btn {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 4px 7px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+
+  .codicon {
+    font-size: 1rem;
+    display: block;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  &.run-btn {
+    color: var(--color-run-btn);
+  }
+
+  &.stop-btn {
+    color: var(--color-danger);
+  }
+
+  &.step-into-btn {
+    color: var(--color-accent);
+  }
+
+  &.step-over-btn {
+    color: var(--color-accent);
+  }
+
+  &.step-return-btn {
+    color: var(--color-accent);
+  }
+
+  &.reset-btn {
+    color: var(--color-danger);
+  }
+
+  &.auto-step-btn {
+    color: var(--color-accent);
+
+    &.active {
+      background: var(--color-bg-active);
+      border-color: var(--color-accent);
+      color: var(--color-fg-strong);
+    }
+  }
+}
