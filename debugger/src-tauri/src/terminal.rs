@@ -1,4 +1,4 @@
-//! Terminal window: console byte-stream bridge and window visibility.
+//! Terminal panel: console byte-stream bridge.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -6,10 +6,8 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::unix::AsyncFd;
-use tokio::sync::oneshot;
 
-/// Window label of the auxiliary terminal window, as declared in `tauri.conf.json`.
-pub const TERMINAL_WINDOW_LABEL: &str = "terminal";
+use crate::MAIN_WINDOW_LABEL;
 
 /// Holds the tx end of the remote pipe so `write_terminal` can send bytes to the console.
 ///
@@ -17,8 +15,27 @@ pub const TERMINAL_WINDOW_LABEL: &str = "terminal";
 /// mid-reload while the previous session's transport is being torn down.
 pub struct TerminalTx(pub Mutex<Option<File>>);
 
-/// One-shot sender signaling that the terminal window is ready to receive output.
-pub struct TerminalReadyTx(pub Mutex<Option<oneshot::Sender<()>>>);
+/// Buffers console output emitted before the terminal panel's listener attaches.
+///
+/// The terminal panel lives inside the main window's dockview instance, which
+/// `App.tsx` doesn't render until the emulator session itself is ready — so,
+/// unlike the old standalone Terminal window (which mounted independently of
+/// session status), session bring-up can no longer block on a `terminal_ready`
+/// handshake before starting the CPU: that would deadlock, since the panel
+/// that sends `terminal_ready` can't mount until the session it's waiting on
+/// is already loaded. Instead, `run_terminal_bridge` buffers bytes here until
+/// `terminal_ready` fires once (ever, for the life of the process — the panel
+/// stays mounted afterward per dockview's confirmed non-lazy-mount behavior,
+/// see issue #379), at which point the buffer is flushed and every later byte
+/// is emitted directly.
+#[derive(Default)]
+pub struct TerminalOutputState {
+    ready: bool,
+    buffered: Vec<u8>,
+}
+
+/// Tauri-managed [`TerminalOutputState`].
+pub struct TerminalOutputBuffer(pub Mutex<TerminalOutputState>);
 
 /// Tokio task that reads bytes from the remote pipe rx and emits `terminal-output` events.
 pub async fn run_terminal_bridge(rx: File, app: AppHandle) {
@@ -35,8 +52,15 @@ pub async fn run_terminal_bridge(rx: File, app: AppHandle) {
         match guard.try_io(|fd| fd.get_ref().read(&mut buf)) {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => {
-                let bytes: Vec<u8> = buf[..n].to_vec();
-                let _ = app.emit_to(TERMINAL_WINDOW_LABEL, "terminal-output", bytes);
+                let bytes = &buf[..n];
+                let state = app.state::<TerminalOutputBuffer>();
+                let mut guard = state.0.lock().unwrap();
+                if guard.ready {
+                    drop(guard);
+                    let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-output", bytes.to_vec());
+                } else {
+                    guard.buffered.extend_from_slice(bytes);
+                }
             }
             Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
             Ok(Err(_)) => break,
@@ -45,11 +69,19 @@ pub async fn run_terminal_bridge(rx: File, app: AppHandle) {
     }
 }
 
-/// Tauri command: called by the terminal window once its event listener is registered.
+/// Tauri command: called by the terminal panel once its event listener is registered.
+/// Flushes any output buffered before this first call; a no-op on any later call.
 #[tauri::command]
-pub fn terminal_ready(state: State<TerminalReadyTx>) {
-    if let Some(tx) = state.0.lock().unwrap().take() {
-        let _ = tx.send(());
+pub fn terminal_ready(app: AppHandle, state: State<TerminalOutputBuffer>) {
+    let mut guard = state.0.lock().unwrap();
+    if guard.ready {
+        return;
+    }
+    guard.ready = true;
+    let buffered = std::mem::take(&mut guard.buffered);
+    drop(guard);
+    if !buffered.is_empty() {
+        let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-output", buffered);
     }
 }
 
@@ -61,38 +93,3 @@ pub fn write_terminal(bytes: Vec<u8>, state: State<TerminalTx>) -> Result<(), St
     tx.write_all(&bytes).map_err(|e| e.to_string())
 }
 
-/// Toggles the terminal window's visibility. Bound to Ctrl+Shift+T in both the
-/// main and terminal windows (see `useAppKeyBindings.ts`), so the frontend
-/// doesn't need to track visibility state itself. Delegates to the shared
-/// helper in `menu.rs` so the Window-menu checkbox stays in sync regardless
-/// of which path (menu click, shortcut, or this command) toggled the window.
-#[tauri::command]
-pub fn toggle_terminal_visibility(app: AppHandle, window_menu: State<crate::menu::WindowMenuState>) -> Result<(), String> {
-    crate::menu::toggle_window_visibility(&app, TERMINAL_WINDOW_LABEL, &window_menu.terminal_item)
-}
-
-/// Shows the terminal window (created hidden at startup, per `tauri.conf.json`).
-///
-/// On the webkit2gtk backend, a window's webview doesn't realize — and its JS
-/// never runs — until the window is actually mapped, so this must happen
-/// before awaiting the terminal's ready handshake. Callers should hide it
-/// again afterward (see `hide_terminal_window`) so the window stays hidden
-/// at launch as intended, until the user toggles it via `toggle_terminal_visibility`.
-pub fn show_terminal_window(app: &AppHandle) -> Result<(), String> {
-    app.get_webview_window(TERMINAL_WINDOW_LABEL)
-        .ok_or_else(|| "terminal window not found".to_string())?
-        .show()
-        .map_err(|e| e.to_string())
-}
-
-/// Hides the terminal window.
-///
-/// Used to re-hide the window after the startup `show_terminal_window` call
-/// that works around webkit2gtk's hidden-webview bug, restoring the intended
-/// "hidden until the user toggles it" launch state.
-pub fn hide_terminal_window(app: &AppHandle) -> Result<(), String> {
-    app.get_webview_window(TERMINAL_WINDOW_LABEL)
-        .ok_or_else(|| "terminal window not found".to_string())?
-        .hide()
-        .map_err(|e| e.to_string())
-}

@@ -90,6 +90,7 @@ function addDefaultLayout(api: DockviewReadyEvent["api"]) {
   // column's own cell precisely because they *do* reference a panel there.
   add("trace", { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT });
   add("log", { position: { referencePanel: "trace" } });
+  add("terminal", { position: { referencePanel: "trace" } });
 
   // Reserve Memory's full page height directly rather than sizing
   // Watchpoints (dockview gives the sibling whichever space is left over).
@@ -119,21 +120,22 @@ function persistLayout(api: DockviewReadyEvent["api"]) {
 }
 
 /**
- * Adds Trace/Log as the bottom tabbed group if a just-restored layout is
- * missing either — i.e. it was persisted before #383 introduced them (or,
- * for `log` alone, before this function existed to add it). Returns whether
- * anything was added, so the caller knows whether to re-persist.
+ * Adds Trace/Log/Terminal as the bottom tabbed group if a just-restored
+ * layout is missing any of them — i.e. it was persisted before #383/#384
+ * introduced them. Returns whether anything was added, so the caller knows
+ * whether to re-persist.
  *
  * `api.fromJSON` doesn't error just because the saved JSON has fewer panels
  * than `panelComponents` now registers — it happily restores a valid subset
- * — so restoring an old layout otherwise leaves Trace/Log permanently
- * missing rather than falling back to `addDefaultLayout`, which is the only
- * other place that adds them. The next dockview-panel addition (Terminal,
- * #384) needs the same kind of reconciliation here.
+ * — so restoring an old layout otherwise leaves a since-added panel
+ * permanently missing rather than falling back to `addDefaultLayout`, which
+ * is the only other place that adds them. Any future addition to this
+ * bottom group needs the same kind of reconciliation here.
  */
 function addMissingBottomPanels(api: DockviewReadyEvent["api"]): boolean {
   const hasTrace = api.getPanel("trace") !== undefined;
   const hasLog = api.getPanel("log") !== undefined;
+  const hasTerminal = api.getPanel("terminal") !== undefined;
   if (!hasTrace) {
     api.addPanel({
       id: "trace",
@@ -153,7 +155,15 @@ function addMissingBottomPanels(api: DockviewReadyEvent["api"]): boolean {
       position: { referencePanel: "trace" },
     });
   }
-  return !hasTrace || !hasLog;
+  if (!hasTerminal) {
+    api.addPanel({
+      id: "terminal",
+      component: "terminal",
+      title: PANEL_TITLES.terminal,
+      position: { referencePanel: "trace" },
+    });
+  }
+  return !hasTrace || !hasLog || !hasTerminal;
 }
 
 /**
@@ -183,7 +193,7 @@ async function restoreLayout(api: DockviewReadyEvent["api"]) {
   }
 }
 
-/** Hosts the main window's dockview panels (Register/Disassembly/Memory/Stack/Watchpoint/CpuBus/Trace/Log) in a dockview grid. */
+/** Hosts the main window's dockview panels (Register/Disassembly/Memory/Stack/Watchpoint/CpuBus/Trace/Log/Terminal) in a dockview grid. */
 export default function DockLayout() {
   const { resolvedTheme } = useTheme();
   const layoutChangeSubscriptionRef = useRef<DockviewIDisposable | null>(null);
@@ -198,11 +208,11 @@ export default function DockLayout() {
     [],
   );
 
-  // Trace/Log no longer have their own window to show/hide, so Ctrl+Shift+Y/L
-  // and the Window-menu "Reveal Trace"/"Reveal Log" items just need their dock
-  // tab brought to the front — reachable from any window (the native menu
-  // accelerator only ever fires from the main window, but the JS-level
-  // binding in useAppKeyBindings.ts can fire from Terminal too) via the
+  // Trace/Log/Terminal no longer have their own window to show/hide, so
+  // Ctrl+Shift+Y/L/T and the Window-menu "Reveal Trace"/"Reveal Log"/"Reveal
+  // Terminal" items just need their dock tab brought to the front —
+  // reachable from any window via the native menu accelerator (main window
+  // only) or the JS-level binding in useAppKeyBindings.ts, via the
   // `reveal-panel` event, targeted at this window specifically since it's the
   // only one hosting a dockview instance.
   useEffect(() => {

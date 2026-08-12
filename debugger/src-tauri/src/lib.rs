@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use figment::{Figment, providers::{Env, Format, Toml}};
-use tauri::{AppHandle, Emitter, Listener, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tauri_plugin_log::{Target, TargetKind};
 use tokio::sync::oneshot;
 
@@ -47,7 +47,7 @@ mod memory;
 /// Stack panel: stack pointer and stack page snapshot.
 mod stack;
 
-/// Terminal window: console byte-stream bridge and window visibility.
+/// Terminal panel: console byte-stream bridge.
 mod terminal;
 
 /// Trace panel: live-recorded execution trace and windowed reads.
@@ -56,7 +56,7 @@ mod trace;
 /// Log panel: in-memory ring buffer of structured log records pushed live to the frontend.
 mod logging;
 
-/// Native app menu bar (File/Edit/Window/Help) and Window-menu checkbox sync.
+/// Native app menu bar (File/Edit/Window/Help).
 mod menu;
 
 /// Recently-used profile list backing the File > Open Recent submenu.
@@ -169,7 +169,7 @@ async fn stop_active_run(app: &AppHandle) {
 /// transport in turn, unwinding the previous terminal bridge task via EOF —
 /// before building the new one.
 ///
-/// Updates `ProfileDirState` and every window's title to match `profile_dir`
+/// Updates `ProfileDirState` and the main window's title to match `profile_dir`
 /// regardless of whether the session itself loads successfully. UI
 /// preferences are not profile-scoped, so they're left untouched. Emits
 /// `session-status`, and on success `debugger-halted` with the freshly reset
@@ -186,7 +186,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
 
     let profile_name = profile_dir.file_name().and_then(|n| n.to_str()).unwrap_or("default").to_string();
-    profile::set_all_window_titles(app, &profile_name);
+    profile::set_main_window_title(app, &profile_name);
     recent::record_recent_profile(app, profile_dir);
 
     // One `LogSender`/collector pair per session load, backed by a background thread that
@@ -340,30 +340,6 @@ fn resolve_symbol(name: String, cpu_state: State<CpuState>) -> Option<u16> {
     cpu_state.0.lock().unwrap().as_ref()?.bus().symbol_table().address_for(&name)
 }
 
-/// Installs the shared "hide instead of close" lifecycle for a toggleable
-/// auxiliary window (Terminal, Trace): closing it via native window chrome
-/// hides it instead of destroying it, so the corresponding toggle command can
-/// still find it afterward, and `check_item`'s Window-menu checkbox is kept
-/// in sync. Also applies the Wayland/GTK decoration-hit-test workaround
-/// (tauri-apps/tauri#11856, tauri-apps/tao#1046) on every focus, since these
-/// windows can be hidden/shown repeatedly.
-fn install_toggleable_window_lifecycle(window: &WebviewWindow, check_item: tauri::menu::CheckMenuItem<tauri::Wry>) {
-    let window_for_events = window.clone();
-    window.on_window_event(move |event| match event {
-        tauri::WindowEvent::CloseRequested { api, .. } => {
-            api.prevent_close();
-            let _ = window_for_events.hide();
-            menu::sync_checkbox(&check_item, false);
-        }
-        #[cfg(target_os = "linux")]
-        tauri::WindowEvent::Focused(true) => {
-            let _ = window_for_events.set_resizable(false);
-            let _ = window_for_events.set_resizable(true);
-        }
-        _ => {}
-    });
-}
-
 fn emit_status(app: &AppHandle, status: SessionStatus) {
     app.state::<SessionStatusState>().0.lock().unwrap().replace(status.clone());
     let _ = app.emit("session-status", status);
@@ -376,8 +352,6 @@ pub fn run() {
     let profile_dir = profile::ensure_profile_dir(&profile_name).expect("Failed to prepare profile directory");
     let config_dir = profile::config_dir().expect("Failed to resolve debugger config directory");
     let recent_profiles = recent::load_recent_from(&config_dir);
-
-    let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -392,7 +366,7 @@ pub fn run() {
                 .build(),
         )
         .manage(SessionStatusState(Mutex::new(None)))
-        .manage(terminal::TerminalReadyTx(Mutex::new(Some(ready_tx))))
+        .manage(terminal::TerminalOutputBuffer(Mutex::new(terminal::TerminalOutputState::default())))
         .manage(terminal::TerminalTx(Mutex::new(None)))
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
@@ -442,7 +416,7 @@ pub fn run() {
                     recent::open_recent_profile(app_handle, path).await;
                 });
             } else if event.id() == menu::TOGGLE_TERMINAL_ID {
-                let _ = menu::toggle_window_visibility(app, terminal::TERMINAL_WINDOW_LABEL, &state.terminal_item);
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "terminal");
             } else if event.id() == menu::TOGGLE_TRACE_ID {
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "trace");
             } else if event.id() == menu::TOGGLE_LOG_ID {
@@ -454,7 +428,6 @@ pub fn run() {
             confirm_exit,
             profile::create_profile,
             profile::open_profile,
-            terminal::toggle_terminal_visibility,
             get_session_status,
             terminal::write_terminal,
             terminal::terminal_ready,
@@ -518,34 +491,15 @@ pub fn run() {
                 settings.set_property("gtk-menu-bar-accel", None::<&str>);
             }
 
-            profile::set_all_window_titles(app, &profile_name);
+            profile::set_main_window_title(app, &profile_name);
 
-            // `app.set_menu` above attaches the same menu — accelerators included —
-            // to every window that doesn't already have its own explicit menu (see
-            // `App::set_menu`'s "set it on all windows that don't have one" doc
-            // comment), not just the main window. Left alone, that would mean every
-            // File-menu accelerator (e.g. Ctrl+N, Ctrl+O, Ctrl+Q) fires natively from
-            // the Terminal window too, independent of and in addition to any
-            // JS-level scoping — so strip the menu back off it immediately.
-            // Shortcuts meant to work from every window (toggle-terminal) still do,
-            // via their shared `APP_KEY_BINDINGS` JS bindings; main-window-only ones
-            // (New Profile, Open Profile, Quit) now correctly don't, since each is
-            // handled locally in the main window's React tree instead.
-            if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_WINDOW_LABEL) {
-                let _ = terminal_window.remove_menu();
-                install_toggleable_window_lifecycle(&terminal_window, window_menu_state.terminal_item.clone());
-            }
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
 
-            // The Terminal window stays alive (merely hidden) for the life of the
-            // process, so Tauri's default "exit when all windows are closed"
-            // behavior never fires from the main window alone — closing it via the
-            // window manager's close control left the process running in the
-            // background (issue #340). Exit explicitly instead, routed through
-            // `request_exit` so the close control honors the exit confirmation
-            // dialog (issue #349) the same as File > Exit and Ctrl+Q. Always prevent
-            // the default close: the window must stay open unless/until
+            // Exit explicitly rather than relying on Tauri's default "exit when all
+            // windows are closed" behavior, so the close control honors the exit
+            // confirmation dialog (issue #349) the same as File > Exit and Ctrl+Q.
+            // Always prevent the default close: the window must stay open unless/until
             // `request_exit` (or the dialog it opens) decides to actually exit the
             // process.
             if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
@@ -558,25 +512,15 @@ pub fn run() {
                 });
             }
 
+            // Starts loading the session immediately, without waiting for the
+            // terminal panel to signal readiness: unlike the old standalone
+            // Terminal window, the panel lives inside the main window's
+            // dockview instance, which doesn't render until the session
+            // itself is ready — waiting here would deadlock. Console output
+            // produced before the panel's listener attaches is buffered
+            // backend-side instead (see `terminal::TerminalOutputBuffer`).
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                // Briefly show the terminal window (created hidden at startup) so
-                // its webview realizes and runs on webkit2gtk; hidden windows never
-                // fire their JS there, so terminal_ready would otherwise never arrive.
-                // Only needed once, here, at startup: the window stays realized
-                // (its JS keeps running while hidden) across any later session reload.
-                if let Err(e) = terminal::show_terminal_window(&handle) {
-                    eprintln!("Failed to show terminal window: {e}");
-                    return;
-                }
-
-                // Wait for the terminal window to signal it is ready.
-                let _ = ready_rx.await;
-
-                // Hide it again so the window stays hidden at launch as intended;
-                // the user reveals it with Ctrl+Shift+T (see `toggle_terminal_visibility`).
-                let _ = terminal::hide_terminal_window(&handle);
-
                 load_or_reload_session(&handle, &profile_dir).await;
             });
             Ok(())

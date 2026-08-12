@@ -5,6 +5,7 @@ import LogPanel from "../LogPanel";
 import MemoryPanel from "../MemoryPanel";
 import RegisterPanel from "../RegisterPanel";
 import StackPanel from "../StackPanel";
+import TerminalPanel from "../TerminalPanel";
 import TracePanel from "../TracePanel";
 import WatchpointPanel from "../WatchpointPanel";
 
@@ -17,7 +18,8 @@ export type MainPanelId =
   | "watchpoints"
   | "cpu-bus"
   | "trace"
-  | "log";
+  | "log"
+  | "terminal";
 
 /** Tab/group title dockview displays for each main-window panel. */
 export const PANEL_TITLES: Record<MainPanelId, string> = {
@@ -29,6 +31,7 @@ export const PANEL_TITLES: Record<MainPanelId, string> = {
   "cpu-bus": "CPU and Bus",
   trace: "Trace",
   log: "Log",
+  terminal: "Terminal",
 };
 
 /** dockview component-id -> renderer map for the main window's dockview panels. */
@@ -41,4 +44,5 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   "cpu-bus": () => <CpuBusPanel />,
   trace: () => <TracePanel />,
   log: () => <LogPanel />,
+  terminal: () => <TerminalPanel />,
 };

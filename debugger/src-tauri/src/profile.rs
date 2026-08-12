@@ -1,7 +1,7 @@
 //! Configuration profile selection: the `--profile` CLI flag, resolving a
 //! profile name to its directory under `~/.emma/debugger/profiles/`, seeding
-//! a newly-created profile from the default profile's files, and setting
-//! each window's title to reflect the active profile.
+//! a newly-created profile from the default profile's files, and setting the
+//! main window's title to reflect the active profile.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -105,10 +105,9 @@ pub fn ensure_profile_dir(name: &str) -> Result<PathBuf, String> {
 /// On Linux, immediately follows with a `set_resizable(false)`/`set_resizable(true)`
 /// toggle — GTK/Wayland client-side decorations otherwise don't repaint the
 /// titlebar text for a window that's already mapped (same decoration-redraw
-/// quirk as tauri-apps/tauri#11856 / tauri-apps/tao#1046, worked around
-/// elsewhere in this crate for the hidden→shown terminal window via its
-/// `Focused` handler; this window is visible from startup, so there's no
-/// focus event to hook and the toggle must happen right here instead).
+/// quirk as tauri-apps/tauri#11856 / tauri-apps/tao#1046). This window is
+/// visible from startup, so there's no focus event to hook the workaround to
+/// instead, and the toggle must happen right here.
 pub fn set_window_title(window: &WebviewWindow, base: &str, profile: &str) -> Result<(), String> {
     window.set_title(&format!("{base} — {profile}")).map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
@@ -119,18 +118,11 @@ pub fn set_window_title(window: &WebviewWindow, base: &str, profile: &str) -> Re
     Ok(())
 }
 
-/// Sets the title of every debugger window (main, terminal) to reflect
-/// `profile`. Windows not yet created (e.g. during tests) are silently
-/// skipped.
-pub fn set_all_window_titles(app: &impl Manager<Wry>, profile: &str) {
-    const WINDOWS: [(&str, &str); 2] = [
-        (crate::MAIN_WINDOW_LABEL, "Emma65 Debugger"),
-        (crate::terminal::TERMINAL_WINDOW_LABEL, "Emma65 Terminal"),
-    ];
-    for (label, base) in WINDOWS {
-        if let Some(window) = app.get_webview_window(label) {
-            let _ = set_window_title(&window, base, profile);
-        }
+/// Sets the main debugger window's title to reflect `profile`. A no-op if
+/// the window isn't created yet (e.g. during tests).
+pub fn set_main_window_title(app: &impl Manager<Wry>, profile: &str) {
+    if let Some(window) = app.get_webview_window(crate::MAIN_WINDOW_LABEL) {
+        let _ = set_window_title(&window, "Emma65 Debugger", profile);
     }
 }
 

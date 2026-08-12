@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "@xterm/xterm/css/xterm.css";
-import { useAppKeyBindings, APP_KEY_BINDINGS } from "./useAppKeyBindings";
-import { resolveTheme, ThemeMode } from "./ThemeContext";
+import { APP_KEY_BINDINGS } from "./useAppKeyBindings";
+import { useTheme } from "./ThemeContext";
 
 const XTERM_DARK_THEME: ITheme = {
   background: "#1e1e1e",
@@ -26,39 +26,20 @@ const XTERM_LIGHT_THEME: ITheme = {
   selectionBackground: "#cce4f7",
 };
 
-export default function TerminalWindow() {
+/**
+ * The dock panel hosting the emulator's console. Shaped for reuse: it reads
+ * the theme via `useTheme()` rather than tracking it independently, so a
+ * future detached-window host (#385) just needs to wrap it in its own
+ * `ThemeProvider`, the same way `main.tsx` wraps `App`. Global key bindings
+ * (`useAppKeyBindings`) are installed by the host document, not here — the
+ * main window already installs them once at `App.tsx`'s root.
+ */
+export default function TerminalPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const [mode, setMode] = useState<ThemeMode>("auto");
-  const [prefersDark, setPrefersDark] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
-
-  useAppKeyBindings();
-
-  // This window has its own document — React context can't cross the window
-  // boundary — so it tracks the theme mode independently, mirroring ThemeProvider.
-  useEffect(() => {
-    invoke<ThemeMode>("get_theme").then(setMode).catch((err) => console.error("get_theme failed:", err));
-
-    const unlistenPromise = listen<ThemeMode>("theme-changed", (event) => {
-      setMode(event.payload);
-    });
-
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e: MediaQueryListEvent) => setPrefersDark(e.matches);
-    media.addEventListener("change", handler);
-
-    return () => {
-      unlistenPromise.then((f) => f());
-      media.removeEventListener("change", handler);
-    };
-  }, []);
-
-  const resolvedTheme = resolveTheme(mode, prefersDark);
+  const { resolvedTheme } = useTheme();
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", resolvedTheme);
     if (termRef.current) {
       termRef.current.options.theme = resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
     }
@@ -71,7 +52,7 @@ export default function TerminalWindow() {
     const term = new Terminal({
       cols: 80,
       rows: 24,
-      theme: resolveTheme(mode, prefersDark) === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME,
+      theme: resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME,
       fontFamily: monoFont,
       fontSize: 14,
     });
@@ -116,6 +97,13 @@ export default function TerminalWindow() {
     term.open(containerRef.current!);
     fitAddon.fit();
 
+    // A dockview split drag resizes this panel's container without resizing
+    // the OS window, so window-resize alone (the old standalone Terminal
+    // window's refit trigger) wouldn't cover it here — this observer handles
+    // both split-drag and inactive→active tab transitions.
+    const resizeObserver = new ResizeObserver(() => fitAddon.fit());
+    resizeObserver.observe(containerRef.current!);
+
     term.onData((data) => {
       const bytes = Array.from(new TextEncoder().encode(data));
       invoke("write_terminal", { bytes }).catch(() => {});
@@ -132,6 +120,7 @@ export default function TerminalWindow() {
 
     return () => {
       unlistenPromise.then((f) => f());
+      resizeObserver.disconnect();
       termRef.current = null;
       term.dispose();
     };
