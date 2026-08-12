@@ -1,11 +1,11 @@
-//! Trace window: live-recorded execution trace, windowed reads, and window visibility.
+//! Trace panel: live-recorded execution trace and windowed reads.
 
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use tauri::{AppHandle, State};
+use tauri::State;
 
 use emma65::disasm::{Disassembler, TraceBusOp, TraceRowAssembler};
 use emma65::emulator::{
@@ -14,9 +14,6 @@ use emma65::emulator::{
 };
 
 use crate::CpuState;
-
-/// Window label of the auxiliary trace window, as declared in `tauri.conf.json`.
-pub const TRACE_WINDOW_LABEL: &str = "trace";
 
 /// Capacity of the bounded channel between the CPU thread and the trace writer thread.
 const TRACE_CHANNEL_CAPACITY: usize = 4096;
@@ -282,18 +279,9 @@ pub fn get_trace_window(
 }
 
 /// Returns the current recording status, letting the toolbar restore
-/// Record/Stop button state on window reopen.
+/// Record/Stop button state on panel mount.
 #[tauri::command]
 pub fn get_trace_status(trace_state: State<TraceState>) -> TraceStatus {
     let state = trace_state.0.lock().unwrap();
     TraceStatus { recording: state.recording, path: state.path.as_ref().map(|p| p.display().to_string()) }
-}
-
-/// Toggles the trace window's visibility. Bound to Ctrl+Shift+Y (see
-/// `useAppKeyBindings.ts`), mirroring `terminal::toggle_terminal_visibility`.
-/// Delegates to the shared helper in `menu.rs` so the Window-menu checkbox
-/// stays in sync regardless of which path toggled the window.
-#[tauri::command]
-pub fn toggle_trace_visibility(app: AppHandle, window_menu: State<crate::menu::WindowMenuState>) -> Result<(), String> {
-    crate::menu::toggle_window_visibility(&app, TRACE_WINDOW_LABEL, &window_menu.trace_item)
 }

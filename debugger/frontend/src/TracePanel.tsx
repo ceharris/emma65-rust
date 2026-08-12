@@ -2,8 +2,6 @@ import {useCallback, useEffect, useRef, useState} from "react";
 import {listen} from "@tauri-apps/api/event";
 import {invoke} from "@tauri-apps/api/core";
 import {save} from "@tauri-apps/plugin-dialog";
-import {useAppKeyBindings} from "./useAppKeyBindings";
-import {resolveTheme, ThemeMode} from "./ThemeContext";
 import "./styles/trace.scss";
 
 interface TraceBusOpDto {
@@ -101,10 +99,6 @@ function TraceColGroup() {
 }
 
 export default function TracePanel() {
-  const [mode, setMode] = useState<ThemeMode>("auto");
-  const [prefersDark, setPrefersDark] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
   const [recording, setRecording] = useState(false);
   const [tracePath, setTracePath] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
@@ -125,32 +119,6 @@ export default function TracePanel() {
   pausedRef.current = paused;
   totalRowsRef.current = totalRows;
   startRowRef.current = startRow;
-
-  useAppKeyBindings();
-
-  // This window has its own document — React context can't cross the window
-  // boundary — so it tracks the theme mode independently, mirroring TerminalWindow.
-  useEffect(() => {
-    invoke<ThemeMode>("get_theme").then(setMode).catch((err) => console.error("get_theme failed:", err));
-
-    const unlistenPromise = listen<ThemeMode>("theme-changed", (event) => {
-      setMode(event.payload);
-    });
-
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e: MediaQueryListEvent) => setPrefersDark(e.matches);
-    media.addEventListener("change", handler);
-
-    return () => {
-      unlistenPromise.then((f) => f());
-      media.removeEventListener("change", handler);
-    };
-  }, []);
-
-  const resolvedTheme = resolveTheme(mode, prefersDark);
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", resolvedTheme);
-  }, [resolvedTheme]);
 
   // Whether the log body should snap to the bottom of its content once the
   // window just fetched is rendered. Only true for tail-follow fetches; scroll/
@@ -378,115 +346,117 @@ export default function TracePanel() {
         <span className="trace-path">{tracePath ? basename(tracePath) : "No trace recorded"}</span>
         <span className="trace-row-count">{totalRows} rows</span>
       </div>
-      <div className="trace-log-area">
-        <div className="trace-log-header">
-          <table className="trace-table">
-            <TraceColGroup />
-            <thead>
-              <tr>
-                <th>Seq#</th>
-                <th>Cyc</th>
-                <th>A</th>
-                <th>X</th>
-                <th>Y</th>
-                <th>S</th>
-                <th>P</th>
-                <th>Flags</th>
-                <th>Addr</th>
-                <th>Code</th>
-                <th colSpan={3}>Instruction</th>
-              </tr>
-            </thead>
-          </table>
-        </div>
-        <div className="trace-log-scroller">
-          <div className="trace-log-body" ref={logBodyRef} onWheel={handleWheel}>
+      <div className="trace-body">
+        <div className="trace-log-area">
+          <div className="trace-log-header">
             <table className="trace-table">
               <TraceColGroup />
-              <tbody>
-                {rows.length === 0 ? (
-                  <tr className="trace-empty-row">
-                    <td colSpan={13} className="trace-empty">
-                      {recording ? "Waiting for instructions…" : "Not recording"}
-                    </td>
-                  </tr>
-                ) : (
-                  rows.flatMap((row) => {
-                    const labelRows = row.labels.map((label, i) => (
-                      <tr key={`${row.seq}-label-${i}`} className="trace-row trace-label-row">
-                        <td colSpan={8} />
-                        <td colSpan={5} className="trace-label">
-                          {label}:
-                        </td>
-                      </tr>
-                    ));
-                    const instrRow = (
-                      <tr
-                        key={row.seq}
-                        className={`trace-row${row.seq === selectedSeq ? " selected" : ""}${row.is_valid ? "" : " invalid-op"}`}
-                        onClick={() => setSelectedSeq(row.seq)}
-                      >
-                        <td className="trace-seq">{row.seq}</td>
-                        <td className="trace-cyc">{row.cycles ?? ""}</td>
-                        <td className="trace-reg">{formatByte(row.a)}</td>
-                        <td className="trace-reg">{formatByte(row.x)}</td>
-                        <td className="trace-reg">{formatByte(row.y)}</td>
-                        <td className="trace-reg">{formatByte(row.s)}</td>
-                        <td className="trace-reg">{formatByte(row.p)}</td>
-                        <td className="trace-flags">{formatFlags(row.p)}</td>
-                        <td className="trace-addr">{formatAddr(row.addr)}</td>
-                        <td className="trace-bytes">{formatBytes(row.bytes)}</td>
-                        <td className="trace-mnemonic">{row.mnemonic}</td>
-                        <td className="trace-operand">{row.operand}</td>
-                        <td className="trace-comment">{row.comment}</td>
-                      </tr>
-                    );
-                    return [...labelRows, instrRow];
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-          {totalRows > VIEWPORT_ROWS && (
-            <div className="trace-scrollbar" ref={scrollbarTrackRef} onMouseDown={handleTrackMouseDown}>
-              <div
-                className="trace-scrollbar-thumb"
-                style={{ height: `${thumbHeightPct}%`, top: `${thumbTopPct}%` }}
-                onMouseDown={handleThumbMouseDown}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="trace-detail">
-        {selectedRow ? (
-          selectedRow.bus_ops.length === 0 ? (
-            <span className="trace-detail-empty">No bus operations recorded for this instruction.</span>
-          ) : (
-            <table className="trace-detail-table">
               <thead>
                 <tr>
-                  <th className="trace-detail-addr">Address</th>
-                  <th className="trace-detail-op">Operation</th>
-                  <th className="trace-detail-value">Data</th>
+                  <th>Seq#</th>
+                  <th>Cyc</th>
+                  <th>A</th>
+                  <th>X</th>
+                  <th>Y</th>
+                  <th>S</th>
+                  <th>P</th>
+                  <th>Flags</th>
+                  <th>Addr</th>
+                  <th>Code</th>
+                  <th colSpan={3}>Instruction</th>
                 </tr>
               </thead>
-              <tbody>
-                {selectedRow.bus_ops.map((op, i) => (
-                  <tr key={i} className="trace-detail-row">
-                    <td className="trace-detail-addr">{formatAddr(op.addr)}</td>
-                    <td className="trace-detail-op">{op.op}</td>
-                    <td className="trace-detail-value">
-                      {formatByte(op.value)} <span className="trace-detail-comment">{op.comment}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
             </table>
-          )
-        ) : (
-          <span className="trace-detail-empty">Select a row to see its bus operations.</span>
-        )}
+          </div>
+          <div className="trace-log-scroller">
+            <div className="trace-log-body" ref={logBodyRef} onWheel={handleWheel}>
+              <table className="trace-table">
+                <TraceColGroup />
+                <tbody>
+                  {rows.length === 0 ? (
+                    <tr className="trace-empty-row">
+                      <td colSpan={13} className="trace-empty">
+                        {recording ? "Waiting for instructions…" : "Not recording"}
+                      </td>
+                    </tr>
+                  ) : (
+                    rows.flatMap((row) => {
+                      const labelRows = row.labels.map((label, i) => (
+                        <tr key={`${row.seq}-label-${i}`} className="trace-row trace-label-row">
+                          <td colSpan={8} />
+                          <td colSpan={5} className="trace-label">
+                            {label}:
+                          </td>
+                        </tr>
+                      ));
+                      const instrRow = (
+                        <tr
+                          key={row.seq}
+                          className={`trace-row${row.seq === selectedSeq ? " selected" : ""}${row.is_valid ? "" : " invalid-op"}`}
+                          onClick={() => setSelectedSeq(row.seq)}
+                        >
+                          <td className="trace-seq">{row.seq}</td>
+                          <td className="trace-cyc">{row.cycles ?? ""}</td>
+                          <td className="trace-reg">{formatByte(row.a)}</td>
+                          <td className="trace-reg">{formatByte(row.x)}</td>
+                          <td className="trace-reg">{formatByte(row.y)}</td>
+                          <td className="trace-reg">{formatByte(row.s)}</td>
+                          <td className="trace-reg">{formatByte(row.p)}</td>
+                          <td className="trace-flags">{formatFlags(row.p)}</td>
+                          <td className="trace-addr">{formatAddr(row.addr)}</td>
+                          <td className="trace-bytes">{formatBytes(row.bytes)}</td>
+                          <td className="trace-mnemonic">{row.mnemonic}</td>
+                          <td className="trace-operand">{row.operand}</td>
+                          <td className="trace-comment">{row.comment}</td>
+                        </tr>
+                      );
+                      return [...labelRows, instrRow];
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {totalRows > VIEWPORT_ROWS && (
+              <div className="trace-scrollbar" ref={scrollbarTrackRef} onMouseDown={handleTrackMouseDown}>
+                <div
+                  className="trace-scrollbar-thumb"
+                  style={{ height: `${thumbHeightPct}%`, top: `${thumbTopPct}%` }}
+                  onMouseDown={handleThumbMouseDown}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="trace-detail">
+          {selectedRow ? (
+            selectedRow.bus_ops.length === 0 ? (
+              <span className="trace-detail-empty">No bus operations recorded for this instruction.</span>
+            ) : (
+              <table className="trace-detail-table">
+                <thead>
+                  <tr>
+                    <th className="trace-detail-addr">Address</th>
+                    <th className="trace-detail-op">Operation</th>
+                    <th className="trace-detail-value">Data</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRow.bus_ops.map((op, i) => (
+                    <tr key={i} className="trace-detail-row">
+                      <td className="trace-detail-addr">{formatAddr(op.addr)}</td>
+                      <td className="trace-detail-op">{op.op}</td>
+                      <td className="trace-detail-value">
+                        {formatByte(op.value)} <span className="trace-detail-comment">{op.comment}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          ) : (
+            <span className="trace-detail-empty">Select a row to see its bus operations.</span>
+          )}
+        </div>
       </div>
       {error && (
         <div className="trace-error-backdrop" onClick={() => setError(null)}>
