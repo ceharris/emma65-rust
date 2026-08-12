@@ -59,6 +59,14 @@ button.status-bar-cell {
   color: var(--color-muted);
 }
 
+// NMI/IRQ (button labels) and the Run/Stop/etc indicator label read as
+// primary status text, same foreground as the Reset button, rather than the
+// muted color used for the cycles/speed units.
+button.status-bar-cell .status-bar-label,
+.status-bar-run-label {
+  color: var(--color-fg);
+}
+
 .cycles-value {
   color: var(--color-number);
   font-variant-numeric: tabular-nums;
