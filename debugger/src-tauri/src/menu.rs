@@ -2,16 +2,14 @@
 
 use std::path::PathBuf;
 
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Manager, Wry};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{AppHandle, Wry};
 
-use crate::terminal::TERMINAL_WINDOW_LABEL;
-
-/// Menu item id for the Window > Terminal checkable item.
+/// Menu item id for the Window > Terminal item.
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
-/// Menu item id for the Window > Trace checkable item.
+/// Menu item id for the Window > Trace item.
 pub(crate) const TOGGLE_TRACE_ID: &str = "toggle-trace";
-/// Menu item id for the Window > Log checkable item.
+/// Menu item id for the Window > Log item.
 pub(crate) const TOGGLE_LOG_ID: &str = "toggle-log";
 /// Menu item id for the File > New Profile item.
 pub(crate) const NEW_PROFILE_ID: &str = "new-profile";
@@ -26,17 +24,12 @@ pub(crate) const CLEAR_RECENT_ID: &str = "clear-recent";
 /// Menu item id for the File > Exit item.
 pub(crate) const EXIT_ID: &str = "exit";
 
-/// The menu items whose state needs to stay in sync with actual window
-/// visibility, and (for Exit) whose click needs to be dispatched to app
-/// logic. Managed as app state so both the global `on_menu_event` handler
-/// and the `toggle_terminal_visibility` command can reach the same item
-/// instance. Trace and Log (since #383) are plain, non-checkable "Reveal…"
-/// items — they don't reflect any window-visibility boolean, so their click
-/// is matched by id alone in `on_menu_event` and no handle to them needs to
-/// be kept here.
+/// Holds the File > Exit item so `on_menu_event` can match its id against
+/// the clicked item. Terminal, Trace, and Log (since #384/#383) are all
+/// plain, non-checkable "Reveal…" items — they don't reflect any
+/// window-visibility boolean, so their click is matched by id alone in
+/// `on_menu_event` and no handle to them needs to be kept here.
 pub struct WindowMenuState {
-    /// The Window > Terminal checkable item.
-    pub terminal_item: CheckMenuItem<Wry>,
     /// The File > Exit item.
     pub exit_item: MenuItem<Wry>,
 }
@@ -46,12 +39,10 @@ pub struct WindowMenuState {
 /// `recent::record_recent_profile`), without rebuilding the whole app menu.
 pub struct RecentMenuState(pub Submenu<Wry>);
 
-/// Builds the native app menu (File/Edit/Window/Help) and the menu-item
-/// handles needed to keep Window-menu checkboxes in sync with window
-/// visibility. Checked state for Terminal/Trace is initialized from each
-/// window's current `is_visible()`. The File > Open Recent submenu starts
-/// empty — populated once the recent-profiles list is loaded, via
-/// `rebuild_open_recent_submenu`.
+/// Builds the native app menu (File/Edit/Window/Help) and the `exit_item`
+/// handle `on_menu_event` needs to dispatch an Exit click. The File > Open
+/// Recent submenu starts empty — populated once the recent-profiles list is
+/// loaded, via `rebuild_open_recent_submenu`.
 pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState)> {
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
@@ -59,9 +50,9 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // click is dispatched to the same `request_exit` the "quit" command
     // (bound to Ctrl+Q — see `App.tsx`) already uses. Both the menu
     // accelerator and the JS-level binding are main-window-only (issue
-    // #351): the menu is stripped from the Terminal/Trace windows in
-    // `run()`'s `setup`, and Ctrl+Q is handled locally in `App.tsx` rather
-    // than via the cross-window `APP_KEY_BINDINGS` array.
+    // #351): the main window is the only one carrying this menu, and Ctrl+Q
+    // is handled locally in `App.tsx` rather than via the cross-window
+    // `APP_KEY_BINDINGS` array.
     let new_profile_item = MenuItem::with_id(app, NEW_PROFILE_ID, "New Profile", true, Some("CmdOrCtrl+N"))?;
     let open_profile_item = MenuItem::with_id(app, OPEN_PROFILE_ID, "Open Profile", true, Some("CmdOrCtrl+O"))?;
     let open_recent_submenu = Submenu::with_id(app, "open-recent", "Open Recent", false)?;
@@ -81,9 +72,11 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // above, so the shortcut text renders with native styling instead of being baked
     // into the label. The accelerator only ever fires while the main window (the only
     // one carrying this menu) has focus; `on_menu_event` in `lib.rs` handles the click.
-    // These same combos also work from the Terminal/Trace/Log windows via the JS-level
-    // listener in `useAppKeyBindings.ts` — that listener skips them specifically for the
-    // main window, so the native accelerator and the JS invoke don't both fire there.
+    // These same combos also work via the JS-level listener in `useAppKeyBindings.ts`
+    // (needed today for a Terminal/Trace/Log tab not currently focused, and for any
+    // future window that installs that hook) — that listener skips them specifically
+    // for the main window, so the native accelerator and the JS invoke don't both fire
+    // there.
     //
     // Terminal is Ctrl+Shift+T rather than the VS Code-style Ctrl+Shift+` originally
     // wanted (issue #377): on GTK, Shift is a *consumed* modifier for punctuation keys
@@ -97,19 +90,12 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // its uppercase keyval, which is exactly how muda registers it — hence Trace/Log
     // below, and Terminal's fallback to a letter. See
     // https://docs.gtk.org/gtk3/class.AccelGroup.html on consumed modifiers.
-    let terminal_visible = window_is_visible(app, TERMINAL_WINDOW_LABEL);
-    let terminal_item = CheckMenuItem::with_id(
-        app,
-        TOGGLE_TERMINAL_ID,
-        "Terminal",
-        true,
-        terminal_visible,
-        Some("Ctrl+Shift+T"),
-    )?;
-    // Plain items, not checkable: since #383, Trace/Log are dockview panels
-    // rather than their own window, so there's no visibility boolean to
-    // reflect — clicking either just reveals its dock tab (see `on_menu_event`
-    // in `lib.rs`).
+    //
+    // All three are plain items, not checkable: since #383/#384, Terminal/Trace/Log
+    // are dockview panels rather than their own window, so there's no visibility
+    // boolean to reflect — clicking any of them just reveals its dock tab (see
+    // `on_menu_event` in `lib.rs`).
+    let terminal_item = MenuItem::with_id(app, TOGGLE_TERMINAL_ID, "Reveal Terminal", true, Some("Ctrl+Shift+T"))?;
     let trace_item = MenuItem::with_id(app, TOGGLE_TRACE_ID, "Reveal Trace", true, Some("Ctrl+Shift+Y"))?;
     let log_item = MenuItem::with_id(app, TOGGLE_LOG_ID, "Reveal Log", true, Some("Ctrl+Shift+L"))?;
     let window_menu = Submenu::with_items(app, "Window", true, &[&terminal_item, &trace_item, &log_item])?;
@@ -119,11 +105,7 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
 
     let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
 
-    Ok((menu, WindowMenuState { terminal_item, exit_item }, RecentMenuState(open_recent_submenu)))
-}
-
-fn window_is_visible(app: &tauri::App, label: &str) -> bool {
-    app.get_webview_window(label).and_then(|w| w.is_visible().ok()).unwrap_or(false)
+    Ok((menu, WindowMenuState { exit_item }, RecentMenuState(open_recent_submenu)))
 }
 
 /// Replaces the File > Open Recent submenu's items with `entries` (each a
@@ -165,27 +147,4 @@ pub(crate) fn rebuild_open_recent_submenu(
     }
     submenu.set_enabled(has_recent)?;
     Ok(())
-}
-
-/// Toggles the visibility of the window labeled `label` and updates
-/// `check_item`'s checked state to match the new visibility.
-///
-/// Used by the Window-menu item's own click handler and by the
-/// `toggle_terminal_visibility` command (bound to Ctrl+Shift+T), so every
-/// path that can show or hide the window keeps the menu checkbox consistent.
-pub fn toggle_window_visibility(app: &AppHandle, label: &str, check_item: &CheckMenuItem<Wry>) -> Result<(), String> {
-    let window = app.get_webview_window(label).ok_or_else(|| format!("{label} window not found"))?;
-    let visible = window.is_visible().map_err(|e| e.to_string())?;
-    if visible { window.hide() } else { window.show() }.map_err(|e| e.to_string())?;
-    sync_checkbox(check_item, !visible);
-    Ok(())
-}
-
-/// Sets `check_item`'s checked state to `visible`, best-effort.
-///
-/// Used wherever a window's visibility changes through a path other than
-/// `toggle_window_visibility` — namely the native close button, which always
-/// hides rather than toggling.
-pub fn sync_checkbox(check_item: &CheckMenuItem<Wry>, visible: bool) {
-    let _ = check_item.set_checked(visible);
 }

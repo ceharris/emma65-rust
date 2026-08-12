@@ -16,16 +16,6 @@
         "height": 800,
         "resizable": true,
         "fullscreen": false
-      },
-      {
-        "label": "terminal",
-        "title": "Emma65 Terminal",
-        "url": "terminal.html",
-        "width": 860,
-        "height": 480,
-        "resizable": true,
-        "fullscreen": false,
-        "visible": false
       }
     ],
     "security": {
