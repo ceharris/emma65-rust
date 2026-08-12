@@ -353,7 +353,13 @@ pub fn run() {
     let profile_dir = profile::ensure_profile_dir(&profile_name).expect("Failed to prepare profile directory");
     let config_dir = profile::config_dir().expect("Failed to resolve debugger config directory");
     let recent_profiles = recent::load_recent_from(&config_dir);
-    let dock_layout = layout::load_dock_layout_from(&config_dir);
+    // `--restore-layout` (issue #398) skips loading the persisted arrangement
+    // entirely rather than deleting `layout.json` up front: `DockLayoutData::default()`
+    // is exactly what a brand-new profile starts with, and `DockLayout.tsx`'s own
+    // "nothing persisted" fallback (`restoreLayout`) already rebuilds the default
+    // arrangement and re-persists it, which is what actually overwrites the stale file.
+    let dock_layout =
+        if cli.restore_layout { layout::DockLayoutData::default() } else { layout::load_dock_layout_from(&config_dir) };
     let terminal_was_detached = dock_layout.terminal_detached;
 
     tauri::Builder::default()
@@ -413,6 +419,8 @@ pub fn run() {
                 });
             } else if event.id() == menu::CLEAR_RECENT_ID {
                 recent::emit_open_clear_recent_dialog(app);
+            } else if event.id() == menu::RESTORE_LAYOUT_ID {
+                layout::emit_open_restore_layout_dialog(app);
             } else if let Some(path) = event.id().as_ref().strip_prefix(menu::OPEN_RECENT_ID_PREFIX) {
                 let app_handle = app.clone();
                 let path = std::path::PathBuf::from(path);
@@ -516,6 +524,7 @@ pub fn run() {
             preferences::set_last_file_dialog_dir,
             layout::get_dock_layout,
             layout::set_dock_layout,
+            layout::restore_dock_layout,
             watchpoints::get_watchpoints,
             watchpoints::add_watchpoint,
             watchpoints::remove_watchpoint,
