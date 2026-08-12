@@ -24,6 +24,10 @@ mod profile;
 /// persisted state and Tauri commands.
 mod preferences;
 
+/// Dock layout persistence: the dockview panel arrangement, persisted as
+/// opaque JSON.
+mod layout;
+
 /// Watchpoint panel: loads/compiles `watchpoints.emw`, evaluates it on demand,
 /// and supports adding/removing watchpoints with persistence back to the file.
 mod watchpoints;
@@ -409,6 +413,7 @@ pub fn run() {
             cpu_waiting: false,
         })))
         .manage(preferences::UiConfigState(Mutex::new(preferences::load_ui_config_from(&config_dir))))
+        .manage(layout::LayoutState(Mutex::new(layout::load_dock_layout_from(&config_dir))))
         .manage(profile::ProfileDirState(Mutex::new(profile_dir.clone())))
         .manage(recent::RecentProfilesState(Mutex::new(recent_profiles)))
         .manage(watchpoints::WatchState(Mutex::new(watchpoints::WatchData {
@@ -492,6 +497,8 @@ pub fn run() {
             preferences::set_theme,
             preferences::get_last_file_dialog_dir,
             preferences::set_last_file_dialog_dir,
+            layout::get_dock_layout,
+            layout::set_dock_layout,
             watchpoints::get_watchpoints,
             watchpoints::add_watchpoint,
             watchpoints::remove_watchpoint,
