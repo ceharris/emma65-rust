@@ -80,17 +80,8 @@ type FloatingBounds = { x: number; y: number; width: number; height: number } | 
  * when it has no remembered position — first run, or after a restore whose
  * persisted layout predates this panel. Dockview's `FloatingGroupService`
  * clamps on-screen at runtime, so an imperfect guess self-corrects.
- *
- * `width` is well above what the button row alone needs (~275px) because a
- * `width: 300` default was observed rendering far narrower in practice —
- * dockview's own "N hidden tabs" overflow indicator appeared on a group
- * with only one tab, meaning the *actual* rendered box, not just what's
- * visible on screen, was narrower than requested. Root cause unconfirmed
- * (measured screenshots suggest something close to a fixed ~0.57x width
- * attenuation, not reproduced for height); this value asks for enough
- * headroom to land close to the intended size even under that attenuation.
  */
-const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: 700, height: RUN_CONTROLS_COLLAPSED_HEIGHT };
+const RUN_CONTROLS_DEFAULT_BOUNDS: FloatingBounds = { x: 460, y: 40, width: 300, height: RUN_CONTROLS_COLLAPSED_HEIGHT };
 
 /**
  * Records the "terminal" panel's current group/index into `positionRef`
