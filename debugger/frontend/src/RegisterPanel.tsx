@@ -329,62 +329,69 @@ export default function RegisterPanel() {
 
   return (
     <div className="register-panel">
-      <div className="panel-title">Registers</div>
       {snap === null ? (
         <span className="registers-empty">Waiting…</span>
       ) : (
-        <table className="reg-table">
-          <tbody>
-            <tr className="reg-group-header">
-              <td />
-              <td>
-                <RadixButton radix={dataRadix} onCycle={cycleDataRadix} />
-              </td>
-            </tr>
-            <tr>
-              <td className="reg-name">A</td>
-              <td className="reg-value">
-                {renderRegisterValue("a", formatDataRadix(snap.a, dataRadix, 8), dataRadix, 8, true)}
-                {editingTarget !== "a" && printableAscii(snap.a) !== null && (
-                  <span className="reg-ascii">{printableAscii(snap.a)}</span>
-                )}
-              </td>
-            </tr>
-            <tr>
-              <td className="reg-name">X</td>
-              <td className="reg-value">{renderRegisterValue("x", formatDataRadix(snap.x, dataRadix, 8), dataRadix, 8, true)}</td>
-            </tr>
-            <tr>
-              <td className="reg-name">Y</td>
-              <td className="reg-value">{renderRegisterValue("y", formatDataRadix(snap.y, dataRadix, 8), dataRadix, 8, true)}</td>
-            </tr>
-            <tr className="reg-separator" />
-            <tr className="reg-group-header">
-              <td />
-              <td>
-                <RadixButton radix={addrRadix} onCycle={cycleAddrRadix} />
-              </td>
-            </tr>
-            <tr>
-              <td className="reg-name">PC</td>
-              <td className="reg-value">{renderRegisterValue("pc", formatDataRadix(snap.pc, addrRadix, 16), addrRadix, 16, false)}</td>
-            </tr>
-            <tr>
-              <td className="reg-name">S</td>
-              <td className="reg-value">{renderRegisterValue("s", formatDataRadix(snap.s, addrRadix, 8), addrRadix, 8, true)}</td>
-            </tr>
-            <tr>
-              <td className="reg-name">P</td>
-              <td className="reg-value">{renderRegisterValue("p", formatDataRadix(snap.p, addrRadix, 8), addrRadix, 8, true)}</td>
-            </tr>
-            <tr>
-              <td className="reg-name" />
-              <td className="reg-flags">
-                {renderFlags(snap.p, snap.changed_flags)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        // Two side-by-side name/value column pairs (data registers, address
+        // registers + flags) rather than one long stacked list — cuts the
+        // panel's needed height roughly in half, freeing dockview split
+        // space for the fixed 8-row Stack panel below it.
+        <div className="reg-groups">
+          <table className="reg-table">
+            <tbody>
+              <tr className="reg-group-header">
+                <td />
+                <td>
+                  <RadixButton radix={dataRadix} onCycle={cycleDataRadix} />
+                </td>
+              </tr>
+              <tr>
+                <td className="reg-name">A</td>
+                <td className="reg-value">
+                  {renderRegisterValue("a", formatDataRadix(snap.a, dataRadix, 8), dataRadix, 8, true)}
+                  {editingTarget !== "a" && printableAscii(snap.a) !== null && (
+                    <span className="reg-ascii">{printableAscii(snap.a)}</span>
+                  )}
+                </td>
+              </tr>
+              <tr>
+                <td className="reg-name">X</td>
+                <td className="reg-value">{renderRegisterValue("x", formatDataRadix(snap.x, dataRadix, 8), dataRadix, 8, true)}</td>
+              </tr>
+              <tr>
+                <td className="reg-name">Y</td>
+                <td className="reg-value">{renderRegisterValue("y", formatDataRadix(snap.y, dataRadix, 8), dataRadix, 8, true)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <table className="reg-table">
+            <tbody>
+              <tr className="reg-group-header">
+                <td />
+                <td>
+                  <RadixButton radix={addrRadix} onCycle={cycleAddrRadix} />
+                </td>
+              </tr>
+              <tr>
+                <td className="reg-name">PC</td>
+                <td className="reg-value">{renderRegisterValue("pc", formatDataRadix(snap.pc, addrRadix, 16), addrRadix, 16, false)}</td>
+              </tr>
+              <tr>
+                <td className="reg-name">S</td>
+                <td className="reg-value">{renderRegisterValue("s", formatDataRadix(snap.s, addrRadix, 8), addrRadix, 8, true)}</td>
+              </tr>
+              <tr>
+                <td className="reg-name">P</td>
+                <td className="reg-value">{renderRegisterValue("p", formatDataRadix(snap.p, addrRadix, 8), addrRadix, 8, true)}</td>
+              </tr>
+              <tr>
+                <td className="reg-flags" colSpan={2}>
+                  {renderFlags(snap.p, snap.changed_flags)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

@@ -668,7 +668,6 @@ export default function MemoryPanel() {
     <div className="memory-panel" onWheel={handleWheel}>
       <div className="memory-header">
         <div className="mem-header-left">
-          <span className="panel-title">Memory</span>
           <button
             className="mem-load-btn"
             onClick={() => setLoadDialog({ path: "", pathError: "", format: null, formatError: "", loadAddress: "0000", loadAddressError: "", symbolPath: "" })}

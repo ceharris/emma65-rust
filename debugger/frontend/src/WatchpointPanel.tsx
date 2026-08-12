@@ -204,7 +204,6 @@ export default function WatchpointPanel() {
   return (
     <div className="watchpoint-panel" ref={panelRef}>
       <div className="watchpoint-header">
-        <span className="panel-title">Watchpoints</span>
         <button
           className="watchpoint-add-btn"
           onClick={() => setAddDialog({ value: "", error: "" })}

@@ -188,7 +188,6 @@ export default function CpuBusPanel() {
 
   return (
     <div className="cpu-bus-panel">
-      <span className="panel-title">CPU and Bus</span>
       <div className="cpu-bus-body">
         <div className="cpu-bus-row">
           <span className={`indicator ${runStopClass}`}>●</span>

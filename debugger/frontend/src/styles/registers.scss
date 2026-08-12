@@ -1,8 +1,9 @@
 .register-panel {
   display: flex;
   flex-direction: column;
+  height: 100%;
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--color-border);
+  overflow-y: auto;
 }
 
 .registers-empty {
@@ -11,8 +12,19 @@
   font-size: var(--font-size-mono);
 }
 
+// Two side-by-side register tables (data registers, address registers +
+// flags) instead of one long stacked list.
+.reg-groups {
+  display: flex;
+  align-items: flex-start;
+
+  .reg-table:not(:first-child) {
+    border-left: 1px solid var(--color-border);
+    padding-left: 10px;
+  }
+}
+
 .reg-table {
-  width: 100%;
   border-collapse: collapse;
   font-size: var(--font-size-mono);
   padding: 4px 0;
@@ -46,13 +58,17 @@
     font-size: var(--font-size-mono);
   }
 
-  .reg-separator {
-    height: 6px;
-  }
-
+  // Spans both columns (colSpan={2} in RegisterPanel.tsx) rather than
+  // sitting in the narrower value column alone — 8 letter-spaced flag
+  // characters don't fit the value column's width once the register table
+  // is only half the panel's width (two side-by-side column pairs). Uses
+  // the cell's normal (unindented) left padding so it actually gets the
+  // extra width colSpan frees up — re-adding the name-column's indent here
+  // would just push the content back to the old, too-narrow start position.
   .reg-flags {
     letter-spacing: 0.08em;
     font-size: var(--font-size-mono);
+    white-space: nowrap;
   }
 }
 
