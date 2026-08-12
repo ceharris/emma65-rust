@@ -1,15 +1,24 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import ClearRecentDialog from "./ClearRecentDialog";
 import ExitConfirmDialog from "./ExitConfirmDialog";
 import { ExecutionProvider } from "./ExecutionContext";
-import DockLayout from "./layout/DockLayout";
 import NewProfileDialog from "./NewProfileDialog";
 import RestoreLayoutDialog from "./RestoreLayoutDialog";
 import { RunControlsProvider } from "./RunControlsContext";
 import ThemeSelector from "./ThemeSelector";
 import { useAppKeyBindings } from "./useAppKeyBindings";
+
+// Loaded as a dynamic import (rather than a static one) so the splash screen
+// below doesn't have to wait on DockLayout's module graph — dockview-react,
+// xterm, and every dock panel — to be fetched and evaluated before it can
+// paint (issue #405). `loadDockLayout` is called eagerly on mount (not just
+// from `lazy()`'s own trigger) so the chunk starts loading in parallel with
+// the backend's own session startup instead of only starting once the
+// session is already ready.
+const loadDockLayout = () => import("./layout/DockLayout");
+const DockLayout = lazy(loadDockLayout);
 
 interface SessionStatus {
   message: string;
@@ -56,6 +65,14 @@ export default function App() {
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
+  // Start fetching DockLayout's chunk as soon as the splash screen is up,
+  // in parallel with the backend loading the emulator session, so it's
+  // already in the module cache by the time `status.ok` flips true and
+  // `lazy()` needs it — see the `loadDockLayout` comment above.
+  useEffect(() => {
+    loadDockLayout();
+  }, []);
+
   if (status === null || !status.ok) {
     return (
       <>
@@ -86,7 +103,9 @@ export default function App() {
         </header>
         <ExecutionProvider>
           <RunControlsProvider>
-            <DockLayout />
+            <Suspense fallback={<div className="app-splash"><span className="status-pending">Initializing…</span></div>}>
+              <DockLayout />
+            </Suspense>
           </RunControlsProvider>
         </ExecutionProvider>
       </div>
