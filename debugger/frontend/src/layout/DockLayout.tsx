@@ -119,10 +119,50 @@ function persistLayout(api: DockviewReadyEvent["api"]) {
 }
 
 /**
+ * Adds Trace/Log as the bottom tabbed group if a just-restored layout is
+ * missing either — i.e. it was persisted before #383 introduced them (or,
+ * for `log` alone, before this function existed to add it). Returns whether
+ * anything was added, so the caller knows whether to re-persist.
+ *
+ * `api.fromJSON` doesn't error just because the saved JSON has fewer panels
+ * than `panelComponents` now registers — it happily restores a valid subset
+ * — so restoring an old layout otherwise leaves Trace/Log permanently
+ * missing rather than falling back to `addDefaultLayout`, which is the only
+ * other place that adds them. The next dockview-panel addition (Terminal,
+ * #384) needs the same kind of reconciliation here.
+ */
+function addMissingBottomPanels(api: DockviewReadyEvent["api"]): boolean {
+  const hasTrace = api.getPanel("trace") !== undefined;
+  const hasLog = api.getPanel("log") !== undefined;
+  if (!hasTrace) {
+    api.addPanel({
+      id: "trace",
+      component: "trace",
+      title: PANEL_TITLES.trace,
+      position: { direction: "below" },
+      initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT,
+    });
+  }
+  if (!hasLog) {
+    api.addPanel({
+      id: "log",
+      component: "log",
+      title: PANEL_TITLES.log,
+      // Tabs alongside Trace if this restore just added it above; otherwise
+      // Trace was already present in the restored layout, so tab there.
+      position: { referencePanel: "trace" },
+    });
+  }
+  return !hasTrace || !hasLog;
+}
+
+/**
  * Restores the persisted layout on mount via `get_dock_layout`, falling back
  * to the hardcoded default (and re-persisting it) if none was saved yet or
  * the saved layout fails to deserialize — e.g. after a dockview version
- * upgrade changes its internal schema.
+ * upgrade changes its internal schema. A layout that restores successfully
+ * but predates a since-added panel gets that panel patched in and
+ * re-persisted too (see `addMissingBottomPanels`).
  */
 async function restoreLayout(api: DockviewReadyEvent["api"]) {
   let restored = false;
@@ -137,6 +177,8 @@ async function restoreLayout(api: DockviewReadyEvent["api"]) {
   }
   if (!restored) {
     addDefaultLayout(api);
+    persistLayout(api);
+  } else if (addMissingBottomPanels(api)) {
     persistLayout(api);
   }
 }
