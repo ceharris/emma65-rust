@@ -41,13 +41,13 @@
   --dv-drag-over-border-color: var(--color-accent);
   --dv-sash-color: transparent;
   --dv-active-sash-color: var(--color-accent);
-  // A distinct blue-tinted "engaged" shade (already used for the auto-step
-  // toggle's active state and drag-over highlights) rather than the
-  // --color-bg-alt every docked tab bar already uses — issue #395 follow-up:
-  // with the same background as everything around it, the floating window
-  // (and its drag handle specifically) was easy to lose track of among the
-  // docked panels.
-  --dv-floating-titlebar-background-color: var(--color-bg-active);
+  // A neutral, grayscale shade (~15% offset from the panel backgrounds, see
+  // $dark-palette/$light-palette in global.scss) rather than --color-bg-alt
+  // (every docked tab bar already uses that) or --color-bg-active (already
+  // means "selected/highlighted" elsewhere — drag-over, the auto-step
+  // toggle's active state — and reusing it here read as the same kind of
+  // highlight instead of plain window chrome).
+  --dv-floating-titlebar-background-color: var(--color-bg-handle);
   // Same seam problem the tab-bar border-bottom below fixes, on the drag
   // handle dockview renders above a floating group's tab bar (issue #395):
   // without a divider, it shares the tab bar's background with nothing to
