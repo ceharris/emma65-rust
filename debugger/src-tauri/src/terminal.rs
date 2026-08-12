@@ -162,9 +162,9 @@ pub fn detach_terminal(app: AppHandle) -> Result<(), String> {
 /// the main window, persists the terminal-detached flag as false, updates
 /// the Window > Terminal menu label, and tells the main layout to reinsert
 /// the Terminal panel via the `terminal-reattached` event. Shared by the
-/// detached window's native close button (see `install_detached_window`)
-/// and the Window > "Attach Terminal" menu action (`lib.rs`'s
-/// `on_menu_event`) — both are just two triggers for the same reattach path.
+/// detached window's native close button (see `install_detached_window`),
+/// the Window > "Attach Terminal" menu action (`lib.rs`'s `on_menu_event`),
+/// and the `attach_terminal` command below.
 pub(crate) fn reattach_terminal(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(TERMINAL_DETACHED_WINDOW_LABEL) {
         let _ = window.hide();
@@ -175,6 +175,14 @@ pub(crate) fn reattach_terminal(app: &AppHandle) {
     }
     crate::menu::set_terminal_menu_label(&app.state::<crate::menu::WindowMenuState>(), false);
     let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-reattached", ());
+}
+
+/// Tauri command: the detached window's own Ctrl+Shift+T reattaches it — a
+/// thin wrapper around `reattach_terminal`, the same fn the window's native
+/// close button and the Window > "Attach Terminal" menu item use.
+#[tauri::command]
+pub fn attach_terminal(app: AppHandle) {
+    reattach_terminal(&app);
 }
 
 /// One-time setup for the detached-Terminal window, called from `setup()`

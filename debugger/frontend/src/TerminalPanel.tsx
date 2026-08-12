@@ -28,11 +28,13 @@ const XTERM_LIGHT_THEME: ITheme = {
 
 /**
  * The dock panel hosting the emulator's console. Shaped for reuse: it reads
- * the theme via `useTheme()` rather than tracking it independently, so a
- * future detached-window host (#385) just needs to wrap it in its own
- * `ThemeProvider`, the same way `main.tsx` wraps `App`. Global key bindings
+ * the theme via `useTheme()` rather than tracking it independently, so both
+ * the main window's docked instance and the detached-window host
+ * (`terminal-detached.tsx`, issue #385) just need their own `ThemeProvider`
+ * ancestor, the same way `main.tsx` wraps `App`. Global key bindings
  * (`useAppKeyBindings`) are installed by the host document, not here — the
- * main window already installs them once at `App.tsx`'s root.
+ * main window installs them once at `App.tsx`'s root, and
+ * `terminal-detached.tsx` does the same for its own window.
  */
 export default function TerminalPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,6 +46,20 @@ export default function TerminalPanel() {
       termRef.current.options.theme = resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
     }
   }, [resolvedTheme]);
+
+  // Not yet a live preference (see `UiConfig::terminal_scrollback`'s doc
+  // comment) — fetched once and applied to the already-constructed
+  // terminal, same pattern as the theme-sync effect above. xterm.js
+  // supports changing `options.scrollback` on a live instance, trimming or
+  // growing its buffer accordingly, so this doesn't need to gate the
+  // terminal's initial construction below on the fetch completing first.
+  useEffect(() => {
+    invoke<number>("get_terminal_scrollback")
+      .then((lines) => {
+        if (termRef.current) termRef.current.options.scrollback = lines;
+      })
+      .catch((err) => console.error("get_terminal_scrollback failed:", err));
+  }, []);
 
   useEffect(() => {
     const monoFont =

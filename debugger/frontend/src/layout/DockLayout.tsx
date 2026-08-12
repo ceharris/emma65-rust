@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -29,6 +29,45 @@ const LAYOUT_PERSIST_DEBOUNCE_MS = 500;
 interface DockLayoutData {
   dockview: SerializedDockview | null;
   terminal_detached: boolean;
+}
+
+/**
+ * The dock group (and tab index within it) the Terminal panel occupied just
+ * before a detach, remembered in-memory only (not persisted — a fresh
+ * session has no "previous" position to restore anyway) so a reattach can
+ * put it back where the user had it rather than always landing in the
+ * default bottom group next to Trace.
+ */
+interface TerminalPosition {
+  groupId: string;
+  index?: number;
+}
+
+/**
+ * Records the "terminal" panel's current group/index into `positionRef`
+ * before closing it, so a later reattach (`positionForReattach` below) can
+ * restore it there. Shared by the dock tab's own Detach button and the
+ * Window-menu/native-close-driven detach path (`terminal-detach-requested`),
+ * since both ultimately just close the same panel.
+ */
+function closeTerminalPanel(api: DockviewReadyEvent["api"] | null, positionRef: React.MutableRefObject<TerminalPosition | null>) {
+  const panel = api?.getPanel("terminal");
+  if (!panel) return;
+  positionRef.current = { groupId: panel.group.id, index: panel.group.panels.indexOf(panel) };
+  panel.api.close();
+}
+
+/**
+ * Resolves where to re-add the "terminal" panel on reattach: the remembered
+ * pre-detach group/index if that group still exists (it won't if Terminal
+ * was the last panel in it — dockview removes emptied groups), otherwise the
+ * same default bottom-group tab position `addMissingBottomPanels` uses.
+ */
+function positionForReattach(api: DockviewReadyEvent["api"], remembered: TerminalPosition | null): AddPanelPositionOptions {
+  const groupStillExists = remembered !== null && api.getGroup(remembered.groupId) !== undefined;
+  return groupStillExists
+    ? { referenceGroup: remembered.groupId, index: remembered.index }
+    : { referencePanel: "trace" };
 }
 
 /**
@@ -234,27 +273,31 @@ async function restoreLayout(api: DockviewReadyEvent["api"]) {
 }
 
 /**
- * Renders a "Detach" action in the tab bar of whichever group's active
- * panel is "terminal" — dockview calls this once per group, passing that
- * group's own `activePanel`/`containerApi`, so groups without a "terminal"
- * tab active render nothing. Calls the `detach_terminal` command (shows the
- * detached window, retargets the console bridge, persists the flag — see
- * `terminal.rs`) and only then closes the dock panel, deliberately after
- * the new window/target is fully in place (issue #385's `emit_to`-retarget
- * race mitigation).
+ * Builds the `rightHeaderActionsComponent` dockview renders once per group,
+ * closing over `positionRef` so the Detach button can remember where
+ * Terminal was before closing it (see `closeTerminalPanel`) — dockview gives
+ * this component no way to receive extra props of its own, only the
+ * per-group `IDockviewHeaderActionsProps` it defines. Groups whose active
+ * panel isn't "terminal" render nothing. Clicking Detach calls the
+ * `detach_terminal` command (shows the detached window, retargets the
+ * console bridge, persists the flag — see `terminal.rs`) and only then
+ * closes the dock panel, deliberately after the new window/target is fully
+ * in place (issue #385's `emit_to`-retarget race mitigation).
  */
-function TerminalTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
-  if (activePanel?.id !== "terminal") return null;
-  const handleDetach = () => {
-    invoke("detach_terminal")
-      .then(() => containerApi.getPanel("terminal")?.api.close())
-      .catch((err) => console.error("detach_terminal failed:", err));
+function makeTerminalTabActions(positionRef: React.MutableRefObject<TerminalPosition | null>) {
+  return function TerminalTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
+    if (activePanel?.id !== "terminal") return null;
+    const handleDetach = () => {
+      invoke("detach_terminal")
+        .then(() => closeTerminalPanel(containerApi, positionRef))
+        .catch((err) => console.error("detach_terminal failed:", err));
+    };
+    return (
+      <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
+        <i className="codicon codicon-link-external" />
+      </button>
+    );
   };
-  return (
-    <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
-      <i className="codicon codicon-link-external" />
-    </button>
-  );
 }
 
 /** Hosts the main window's dockview panels (Register/Disassembly/Memory/Stack/Watchpoint/CpuBus/Trace/Log/Terminal) in a dockview grid. */
@@ -263,6 +306,8 @@ export default function DockLayout() {
   const layoutChangeSubscriptionRef = useRef<DockviewIDisposable | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
+  const terminalPositionRef = useRef<TerminalPosition | null>(null);
+  const TerminalTabActions = useMemo(() => makeTerminalTabActions(terminalPositionRef), []);
 
   useEffect(
     () => () => {
@@ -299,16 +344,22 @@ export default function DockLayout() {
   // instead emit these two events for the same effect.
   useEffect(() => {
     const unlistenPromise = listen("terminal-detach-requested", () => {
-      apiRef.current?.getPanel("terminal")?.api.close();
+      closeTerminalPanel(apiRef.current, terminalPositionRef);
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
+  // Restores Terminal to the group/index it occupied before the detach that
+  // preceded this reattach (see `positionForReattach`), falling back to the
+  // default bottom-group tab position when that's no longer resolvable —
+  // e.g. a fresh session with no remembered position, or a group that got
+  // emptied and removed while Terminal was away.
   useEffect(() => {
     const unlistenPromise = listen("terminal-reattached", () => {
       const api = apiRef.current;
       if (!api || api.getPanel("terminal")) return;
-      api.addPanel({ id: "terminal", component: "terminal", title: PANEL_TITLES.terminal, position: { referencePanel: "trace" } });
+      const position = positionForReattach(api, terminalPositionRef.current);
+      api.addPanel({ id: "terminal", component: "terminal", title: PANEL_TITLES.terminal, position });
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
