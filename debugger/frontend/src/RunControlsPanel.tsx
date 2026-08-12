@@ -23,6 +23,25 @@ export const RUN_CONTROLS_HEIGHT = 100;
 export const RUN_CONTROLS_WIDTH = 400;
 
 /**
+ * Minimum content height (px) dockview should allow when this panel is
+ * docked: the single control row plus the panel's own vertical padding,
+ * without `RUN_CONTROLS_HEIGHT`'s floating-titlebar/tab-bar allowance.
+ * Passed as `minimumHeight` on every `addPanel` call that creates this
+ * panel (see `DockLayout.tsx`) — without it, dockview's `DockviewGroupPanel`
+ * falls back to its own hardcoded 100px group minimum for any panel that
+ * doesn't declare one, which is far more than this single-row toolbar needs
+ * once docked (issue #401).
+ */
+export const RUN_CONTROLS_MIN_HEIGHT = 40;
+
+/**
+ * Minimum content width (px) dockview should allow when this panel is
+ * docked — same value as `RUN_CONTROLS_WIDTH` since that was already tuned
+ * to the narrowest width the single-row layout fits without wrapping.
+ */
+export const RUN_CONTROLS_MIN_WIDTH = RUN_CONTROLS_WIDTH;
+
+/**
  * Floating panel hosting the Run/Stop/Step Into/Step Over/Step Return
  * buttons plus the Auto-Step toggle and speed slider, all on one row,
  * replacing the toolbar that used to live in Disassembly's header.

@@ -16,7 +16,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "../styles/dock-layout.scss";
 import {useTheme} from "../ThemeContext";
 import {MainPanelId, PANEL_TITLES, panelComponents} from "./panelRegistry";
-import {RUN_CONTROLS_HEIGHT, RUN_CONTROLS_WIDTH} from "../RunControlsPanel";
+import {RUN_CONTROLS_HEIGHT, RUN_CONTROLS_MIN_HEIGHT, RUN_CONTROLS_MIN_WIDTH, RUN_CONTROLS_WIDTH} from "../RunControlsPanel";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
 // panels — onDidLayoutChange fires on every intermediate frame of a drag.
@@ -301,6 +301,8 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
     floating: RUN_CONTROLS_DEFAULT_BOUNDS,
+    minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
+    minimumWidth: RUN_CONTROLS_MIN_WIDTH,
   });
 
   // No referencePanel: an AbsolutePosition split (dockview-core's
@@ -412,6 +414,8 @@ function addMissingRunControlsPanel(api: DockviewReadyEvent["api"], lastPosition
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
     floating: floating ?? RUN_CONTROLS_DEFAULT_BOUNDS,
+    minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
+    minimumWidth: RUN_CONTROLS_MIN_WIDTH,
   });
   return true;
 }
@@ -543,10 +547,15 @@ export default function DockLayout() {
         return;
       }
       const { position, initialHeight, floating } = resolveRevealPosition(api, id, lastPanelPositionRef.current);
+      // Run Controls needs its own minimum-size floor regardless of which
+      // branch below re-adds it — see RUN_CONTROLS_MIN_HEIGHT/WIDTH.
+      const constraints = id === "run-controls"
+        ? { minimumHeight: RUN_CONTROLS_MIN_HEIGHT, minimumWidth: RUN_CONTROLS_MIN_WIDTH }
+        : undefined;
       if (floating) {
-        api.addPanel({ id, component: id, title: PANEL_TITLES[id], floating });
+        api.addPanel({ id, component: id, title: PANEL_TITLES[id], floating, ...constraints });
       } else {
-        api.addPanel({ id, component: id, title: PANEL_TITLES[id], position, initialHeight });
+        api.addPanel({ id, component: id, title: PANEL_TITLES[id], position, initialHeight, ...constraints });
       }
     });
     return () => { unlistenPromise.then((f) => f()); };
