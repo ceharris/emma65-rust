@@ -26,7 +26,7 @@ const ExecutionContext = createContext<ExecutionContextValue | null>(null);
 
 /**
  * Provides the shared register snapshot and execution-state that Disassembly,
- * Register, CpuBus, Memory, and Watchpoint panels all need, plus the update
+ * Register, StatusBar, Memory, and Watchpoint panels all need, plus the update
  * callbacks that keep them in sync with each other.
  */
 export function ExecutionProvider({ children }: { children: ReactNode }) {
@@ -50,7 +50,7 @@ export function ExecutionProvider({ children }: { children: ReactNode }) {
     setExecState(state);
   }, []);
 
-  // Shared by Reset (CpuBusPanel) and register edits (RegisterPanel) — both
+  // Shared by Reset (StatusBar) and register edits (RegisterPanel) — both
   // just need lastSnapshot to reflect the command's returned snapshot.
   const handleSnapshotUpdate = useCallback((snap: RegisterSnapshot) => {
     setLastSnapshot(snap);

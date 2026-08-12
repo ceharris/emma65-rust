@@ -138,8 +138,7 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, WindowMenuState
     // former Ctrl+Shift+Y/L bindings were dropped rather than reassigned here
     // (issue #393), and Terminal's Ctrl+Shift+T remains the Window menu's
     // detach/attach accelerator below, so reusing it here would collide.
-    let view_panels: [(&str, &str); 10] = [
-        ("cpu-bus", "CPU and Bus"),
+    let view_panels: [(&str, &str); 9] = [
         ("disassembly", "Disassembly"),
         ("log", "Log"),
         ("memory", "Memory"),
