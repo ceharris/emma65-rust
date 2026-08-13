@@ -287,6 +287,8 @@ pub fn build_menu(
     let window_menu =
         Submenu::with_items(app, "Window", true, &[&terminal_item, &window_separator, &restore_layout_item])?;
 
+    let github_item = MenuItem::with_id(app, GITHUB_ID, "View on GitHub", true, None::<&str>)?;
+    let help_separator = PredefinedMenuItem::separator(app)?;
     // A plain `MenuItem` rather than `PredefinedMenuItem::about`: the
     // predefined item delegates to the OS/toolkit's own About box (bare and
     // unstyled on Linux/GTK), which can't carry the app description,
@@ -294,9 +296,7 @@ pub fn build_menu(
     // asks for. `on_menu_event` in `lib.rs` opens the same kind of custom
     // modal dialog every other menu item here does.
     let about_item = MenuItem::with_id(app, ABOUT_ID, "About", true, None::<&str>)?;
-    let help_separator = PredefinedMenuItem::separator(app)?;
-    let github_item = MenuItem::with_id(app, GITHUB_ID, "View on GitHub", true, None::<&str>)?;
-    let help_menu = Submenu::with_items(app, "Help", true, &[&about_item, &help_separator, &github_item])?;
+    let help_menu = Submenu::with_items(app, "Help", true, &[&github_item, &help_separator, &about_item])?;
 
     let menu = Menu::with_items(
         app,
