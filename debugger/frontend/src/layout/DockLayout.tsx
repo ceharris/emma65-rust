@@ -545,6 +545,23 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
  * once the panel is already floating, since floating an already-floating
  * panel does nothing useful.
  *
+ * Run Controls' Dock button is the reverse, shown only while floating.
+ * dockview's public `DockviewApi` has no "move floating panel back into the
+ * grid" primitive (`moveGroupOrPanel` exists only on the internal
+ * `DockviewComponent`, not on the `api` this component gets), so it closes
+ * the floating panel and re-adds it docked at `RUN_CONTROLS_DEFAULT_POSITION`
+ * with the same fixed-height/min-width constraints `addDefaultLayout` uses —
+ * the same close-then-`addPanel` pattern Terminal's detach/reattach already
+ * uses to cross between docked and undocked. There's no remembered
+ * pre-float position to restore (unlike Terminal's `terminalPositionRef`):
+ * Run Controls always floats to the same fixed `RUN_CONTROLS_FLOAT_BOUNDS`,
+ * so docking back to a single fixed position is the symmetric choice. Reuses
+ * `codicon-multiple-windows`, the same icon Float and Terminal's Detach
+ * button use — Terminal's own reverse operation (reattach) has no dedicated
+ * button or icon of its own (native window-close, the "Attach Terminal" menu
+ * item, and Ctrl+Shift+T all reach it instead), so there's no separate
+ * "dock/attach" icon already established in this codebase to match instead.
+ *
  * Any other panel gets a generic fallback: whatever single action it
  * registered via `usePanelHeaderAction` (see `panelHeaderActions.tsx`) is
  * rendered as a plain "+" icon button, so panels like Breakpoints and
@@ -572,6 +589,31 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
       const handleFloat = () => containerApi.addFloatingGroup(activePanel, RUN_CONTROLS_FLOAT_BOUNDS);
       return (
         <button className="dock-tab-action" onClick={handleFloat} title="Float Run Controls">
+          <i className="codicon codicon-multiple-windows" />
+        </button>
+      );
+    }
+    if (activePanel?.id === "run-controls" && activePanel.group.api.location.type === "floating") {
+      const handleDock = () => {
+        activePanel.api.close();
+        const panel = containerApi.addPanel({
+          id: "run-controls",
+          component: "run-controls",
+          title: PANEL_TITLES["run-controls"],
+          position: RUN_CONTROLS_DEFAULT_POSITION,
+          initialHeight: RUN_CONTROLS_DOCKED_HEIGHT,
+          minimumHeight: RUN_CONTROLS_DOCKED_HEIGHT,
+          maximumHeight: RUN_CONTROLS_DOCKED_HEIGHT,
+          minimumWidth: RUN_CONTROLS_MIN_WIDTH,
+        });
+        // initialHeight alone leaves the panel at its prior floating size
+        // until the user drags a sash — same as Registers/Breakpoints/Stack
+        // below in addDefaultLayout, an explicit setSize is what actually
+        // forces dockview's layout engine to apply the height now.
+        panel.api.setSize({ height: RUN_CONTROLS_DOCKED_HEIGHT });
+      };
+      return (
+        <button className="dock-tab-action" onClick={handleDock} title="Dock Run Controls">
           <i className="codicon codicon-multiple-windows" />
         </button>
       );
