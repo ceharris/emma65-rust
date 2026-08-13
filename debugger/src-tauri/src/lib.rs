@@ -543,6 +543,7 @@ pub fn run() {
             quit,
             confirm_exit,
             profile::create_profile,
+            profile::list_templates,
             profile::open_profile,
             get_session_status,
             terminal::write_terminal,
