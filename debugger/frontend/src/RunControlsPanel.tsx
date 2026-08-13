@@ -7,27 +7,30 @@ const INTERVAL_MIN = 0;
 const INTERVAL_MAX = 1000;
 
 /**
- * Minimum content height (px) dockview should allow for this panel: the
- * single control row plus the panel's own vertical padding. Also used as
- * the docked default's `initialHeight` (issue #402) — a bare "below" split
- * would otherwise give this single-row toolbar 50% of Disassembly's column.
- * Passed as `minimumHeight` on every `addPanel` call that creates this
- * panel (see `DockLayout.tsx`) — without it, dockview's `DockviewGroupPanel`
- * falls back to its own hardcoded 100px group minimum for any panel that
- * doesn't declare one, which is far more than this toolbar needs (issue
- * #401). Dockview never auto-resizes a floating group to fit its content
- * and there's no safe way to resize one after creation (see
- * `project_dockview_addfloatinggroup_resize_bug` in memory), so a
- * collapsible Auto-Step drawer that changed the panel's height was a dead
- * end — Auto-Step's controls stay inline on the one row instead.
+ * Fixed content height (px) for this panel while docked: the single control
+ * row plus the panel's own vertical padding, with a little breathing room
+ * (issue #421's tailored default). Passed as both `minimumHeight` and
+ * `maximumHeight` on every docked `addPanel` call that creates this panel
+ * (see `DockLayout.tsx`), locking it at this height — a single-row toolbar
+ * never needs more or less, so leaving it resizable only wastes, or steals
+ * from Disassembly's column, space that never gets used (issue #424).
+ * Without an explicit `minimumHeight` below dockview's own hardcoded 100px
+ * `DockviewGroupPanel` group-minimum fallback, this would also be far more
+ * than this toolbar needs (issue #401). Dockview never auto-resizes a
+ * floating group to fit its content and there's no safe way to resize one
+ * after creation (see `project_dockview_addfloatinggroup_resize_bug` in
+ * memory), so a collapsible Auto-Step drawer that changed the panel's height
+ * was a dead end — Auto-Step's controls stay inline on the one row instead.
  */
-export const RUN_CONTROLS_MIN_HEIGHT = 40;
+export const RUN_CONTROLS_DOCKED_HEIGHT = 70;
 
 /**
  * Minimum content width (px) dockview should allow for this panel — the
  * narrowest width the single-row layout (buttons plus the Auto-Step
  * slider/input) fits without wrapping. Passed as `minimumWidth` alongside
- * `RUN_CONTROLS_MIN_HEIGHT`.
+ * `RUN_CONTROLS_DOCKED_HEIGHT`. Unlike height, there's no matching maximum:
+ * while docked, width is shared with Disassembly's column via the sash
+ * between columns, so capping it here would cap Disassembly's width too.
  */
 export const RUN_CONTROLS_MIN_WIDTH = 400;
 

@@ -17,7 +17,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "../styles/dock-layout.scss";
 import {useTheme} from "../ThemeContext";
 import {MainPanelId, PANEL_TITLES, panelComponents} from "./panelRegistry";
-import {RUN_CONTROLS_MIN_HEIGHT, RUN_CONTROLS_MIN_WIDTH} from "../RunControlsPanel";
+import {RUN_CONTROLS_DOCKED_HEIGHT, RUN_CONTROLS_MIN_WIDTH} from "../RunControlsPanel";
 import {PanelHeaderActionProvider, usePanelHeaderActions} from "./panelHeaderActions";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
@@ -80,27 +80,25 @@ type FloatingBounds = { x: number; y: number; width: number; height: number } | 
 /**
  * Default *docked* position (issue #402): the bottom of Disassembly's own
  * column, rather than a `DEFAULT_PANEL_POSITION` entry, because that map has
- * no per-entry way to also carry `RUN_CONTROLS_DEFAULT_HEIGHT` as an
+ * no per-entry way to also carry `RUN_CONTROLS_DOCKED_HEIGHT` as an
  * `initialHeight` — without it a "below" split would default to a 50/50
  * split, giving this single-row toolbar half of Disassembly's column.
  */
 const RUN_CONTROLS_DEFAULT_POSITION: AddPanelPositionOptions = { referencePanel: "disassembly", direction: "below" };
 
-// Comfortably above RUN_CONTROLS_MIN_HEIGHT (the hard floor its content
-// needs) — from the same tailored arrangement as the other *_DEFAULT_HEIGHT
-// constants (issue #421), giving the toolbar some breathing room by default.
-const RUN_CONTROLS_DEFAULT_HEIGHT = 70;
-
 /**
  * Bounds used by the Run Controls tab's explicit "Float" action (issue
  * #404) — the same size manually confirmed via UAT when this panel
- * defaulted to floating (issue #395). Wider/taller than
- * `RUN_CONTROLS_MIN_WIDTH`/`RUN_CONTROLS_MIN_HEIGHT`: those describe the
- * docked *content* minimum, whereas a floating group additionally needs
- * room for dockview's own floating-titlebar/tab-bar chrome. An explicit
- * action rather than a drag gesture because this app's dockview grid fills
- * the entire window with no empty margin to drop into — there's nowhere
- * drag-and-drop could resolve to "no valid dock target" and float instead.
+ * defaulted to floating (issue #395). Taller than `RUN_CONTROLS_DOCKED_HEIGHT`:
+ * that describes the docked *content* height, whereas a floating group
+ * additionally needs room for dockview's own floating-titlebar/tab-bar
+ * chrome. Unlike docked (issue #424), the floating window stays resizable —
+ * dockview attaches its floating-window resize handles unconditionally, with
+ * no supported way to disable them, so there's no clean way to lock this
+ * one down too. An explicit action rather than a drag gesture because this
+ * app's dockview grid fills the entire window with no empty margin to drop
+ * into — there's nowhere drag-and-drop could resolve to "no valid dock
+ * target" and float instead.
  */
 const RUN_CONTROLS_FLOAT_BOUNDS: FloatingGroupOptions = { x: 460, y: 40, width: RUN_CONTROLS_MIN_WIDTH, height: 100 };
 
@@ -234,7 +232,7 @@ function resolveRevealPosition(
     return { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT };
   }
   if (id === "run-controls") {
-    return { position: RUN_CONTROLS_DEFAULT_POSITION, initialHeight: RUN_CONTROLS_MIN_HEIGHT };
+    return { position: RUN_CONTROLS_DEFAULT_POSITION, initialHeight: RUN_CONTROLS_DOCKED_HEIGHT };
   }
   const fallback = DEFAULT_PANEL_POSITION[id];
   if (fallback && api.getPanel(fallback.referencePanel)) {
@@ -330,13 +328,16 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   add("breakpoints", { position: { referencePanel: "stack", direction: "below" } });
 
   // Bottom of Disassembly's column (issue #402) — see RUN_CONTROLS_DEFAULT_POSITION.
+  // minimumHeight/maximumHeight are equal (issue #424): docked, this panel's
+  // height is fixed, not just floored.
   api.addPanel({
     id: "run-controls",
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
     position: RUN_CONTROLS_DEFAULT_POSITION,
-    initialHeight: RUN_CONTROLS_DEFAULT_HEIGHT,
-    minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
+    initialHeight: RUN_CONTROLS_DOCKED_HEIGHT,
+    minimumHeight: RUN_CONTROLS_DOCKED_HEIGHT,
+    maximumHeight: RUN_CONTROLS_DOCKED_HEIGHT,
     minimumWidth: RUN_CONTROLS_MIN_WIDTH,
   });
 
@@ -450,13 +451,14 @@ function addMissingRunControlsPanel(api: DockviewReadyEvent["api"], lastPosition
     id: "run-controls" as const,
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
-    minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
+    minimumHeight: RUN_CONTROLS_DOCKED_HEIGHT,
     minimumWidth: RUN_CONTROLS_MIN_WIDTH,
   };
   if (floating) {
     api.addPanel({ ...base, floating });
   } else {
-    api.addPanel({ ...base, position, initialHeight });
+    // maximumHeight only while docked (issue #424) — see RUN_CONTROLS_DOCKED_HEIGHT.
+    api.addPanel({ ...base, position, initialHeight, maximumHeight: RUN_CONTROLS_DOCKED_HEIGHT });
   }
   return true;
 }
@@ -632,14 +634,18 @@ export default function DockLayout() {
         return;
       }
       const { position, initialHeight, floating } = resolveRevealPosition(api, id, lastPanelPositionRef.current);
-      // Run Controls needs its own minimum-size floor regardless of which
-      // branch below re-adds it — see RUN_CONTROLS_MIN_HEIGHT/WIDTH.
-      const constraints = id === "run-controls"
-        ? { minimumHeight: RUN_CONTROLS_MIN_HEIGHT, minimumWidth: RUN_CONTROLS_MIN_WIDTH }
-        : undefined;
+      // Run Controls needs its own size constraints regardless of which
+      // branch below re-adds it — fixed height while docked (issue #424),
+      // see RUN_CONTROLS_DOCKED_HEIGHT/RUN_CONTROLS_MIN_WIDTH.
       if (floating) {
+        const constraints = id === "run-controls"
+          ? { minimumHeight: RUN_CONTROLS_DOCKED_HEIGHT, minimumWidth: RUN_CONTROLS_MIN_WIDTH }
+          : undefined;
         api.addPanel({ id, component: id, title: PANEL_TITLES[id], floating, ...constraints });
       } else {
+        const constraints = id === "run-controls"
+          ? { minimumHeight: RUN_CONTROLS_DOCKED_HEIGHT, maximumHeight: RUN_CONTROLS_DOCKED_HEIGHT, minimumWidth: RUN_CONTROLS_MIN_WIDTH }
+          : undefined;
         api.addPanel({ id, component: id, title: PANEL_TITLES[id], position, initialHeight, ...constraints });
       }
     });
