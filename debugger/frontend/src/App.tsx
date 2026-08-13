@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import AboutDialog from "./AboutDialog";
 import ClearRecentDialog from "./ClearRecentDialog";
 import ExitConfirmDialog from "./ExitConfirmDialog";
 import { ExecutionProvider } from "./ExecutionContext";
@@ -81,6 +82,7 @@ export default function App() {
         <ClearRecentDialog />
         <RestoreLayoutDialog />
         <ExitConfirmDialog />
+        <AboutDialog />
         <div className="app-splash">
           {status === null ? (
             <span className="status-pending">Initializing…</span>

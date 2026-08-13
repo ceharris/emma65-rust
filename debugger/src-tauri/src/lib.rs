@@ -67,6 +67,10 @@ mod menu;
 /// Recently-used profile list backing the File > Open Recent submenu.
 mod recent;
 
+/// Help > About dialog: static app info plus a production-only build-info
+/// line (git commit hash, build timestamp).
+mod about;
+
 /// Shared test-only helpers (e.g. a `HOME` env var lock) used across modules'
 /// `#[cfg(test)]` blocks.
 #[cfg(test)]
@@ -458,6 +462,8 @@ pub fn run() {
                 recent::emit_open_clear_recent_dialog(app);
             } else if event.id() == menu::RESTORE_LAYOUT_ID {
                 layout::emit_open_restore_layout_dialog(app);
+            } else if event.id() == menu::ABOUT_ID {
+                about::emit_open_about_dialog(app);
             } else if let Some(path) = event.id().as_ref().strip_prefix(menu::OPEN_RECENT_ID_PREFIX) {
                 let app_handle = app.clone();
                 let path = std::path::PathBuf::from(path);
@@ -581,6 +587,7 @@ pub fn run() {
             recent::clear_recent_profiles,
             menu::set_run_controls_enabled,
             menu::set_memory_menu_enabled,
+            about::get_about_info,
         ])
         .setup(move |app| {
             let (app_menu, window_menu_state, recent_menu_state, run_menu_state, memory_menu_state) =
