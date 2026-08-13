@@ -80,11 +80,16 @@ type FloatingBounds = { x: number; y: number; width: number; height: number } | 
 /**
  * Default *docked* position (issue #402): the bottom of Disassembly's own
  * column, rather than a `DEFAULT_PANEL_POSITION` entry, because that map has
- * no per-entry way to also carry `RUN_CONTROLS_MIN_HEIGHT` as an
+ * no per-entry way to also carry `RUN_CONTROLS_DEFAULT_HEIGHT` as an
  * `initialHeight` — without it a "below" split would default to a 50/50
  * split, giving this single-row toolbar half of Disassembly's column.
  */
 const RUN_CONTROLS_DEFAULT_POSITION: AddPanelPositionOptions = { referencePanel: "disassembly", direction: "below" };
+
+// Comfortably above RUN_CONTROLS_MIN_HEIGHT (the hard floor its content
+// needs) — from the same tailored arrangement as the other *_DEFAULT_HEIGHT
+// constants (issue #421), giving the toolbar some breathing room by default.
+const RUN_CONTROLS_DEFAULT_HEIGHT = 70;
 
 /**
  * Bounds used by the Run Controls tab's explicit "Float" action (issue
@@ -116,14 +121,14 @@ function closeTerminalPanel(api: DockviewReadyEvent["api"] | null, positionRef: 
 /**
  * Resolves where to re-add the "terminal" panel on reattach: the remembered
  * pre-detach group/index if that group still exists (it won't if Terminal
- * was the last panel in it — dockview removes emptied groups), otherwise the
- * same default bottom-group tab position `addMissingBottomPanels` uses.
+ * was the last panel in it — dockview removes emptied groups), otherwise
+ * Terminal's usual default position, tabbed with Memory (issue #421).
  */
 function positionForReattach(api: DockviewReadyEvent["api"], remembered: DockedPanelPosition | null): AddPanelPositionOptions {
   const groupStillExists = remembered !== null && api.getGroup(remembered.group_id) !== undefined;
   return groupStillExists
     ? { referenceGroup: remembered.group_id, index: remembered.index }
-    : { referencePanel: "trace" };
+    : { referencePanel: "memory" };
 }
 
 /**
@@ -146,7 +151,7 @@ const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: Main
   stack: { referencePanel: "registers", direction: "below" },
   breakpoints: { referencePanel: "stack", direction: "below" },
   log: { referencePanel: "trace" },
-  terminal: { referencePanel: "trace" },
+  terminal: { referencePanel: "memory" },
 };
 
 /**
@@ -252,38 +257,39 @@ const EMMA65_DOCK_THEME_BASE: Omit<DockviewTheme, "colorScheme"> = {
 
 // MemoryPanel always renders a fixed 16-row page (mouse wheel pages through
 // memory rather than scrolling the list), so unlike the other stacked
-// panels it can't shrink and scroll internally — dockview's default 50/50
-// "below" split leaves it too short, clipping the last several rows behind
-// the Watchpoints panel underneath. ~30px header (font-size-btn buttons +
-// padding + border) + 16 rows at font-size-mono/line-height 1.6 (~22px each)
-// + body padding, plus headroom for cross-platform font-metric variance.
-const MEMORY_PANEL_DEFAULT_HEIGHT = 420;
+// panels it can't shrink and scroll internally. This height (and the other
+// *_DEFAULT_HEIGHT/WIDTH constants below) comes from a manually tailored
+// arrangement at the default 1600x900 window size (issue #421) rather than
+// computed pixel math — confirmed against the live app to show the full
+// 16-row page with no clipping. Memory tabs with Terminal in this group, so
+// this height also governs Terminal's default size.
+const MEMORY_PANEL_DEFAULT_HEIGHT = 366;
 
-// RegisterPanel's two-column layout (header + 3 rows on each side): ~25px
-// header row + 3 rows at ~20px + table/panel padding, with headroom.
-const REGISTERS_PANEL_DEFAULT_HEIGHT = 150;
+// RegisterPanel's two-column layout (header + 3 rows on each side).
+const REGISTERS_PANEL_DEFAULT_HEIGHT = 140;
 
 // StackPanel always renders a fixed 8-row page (VISIBLE_PAIRS in
 // StackPanel.tsx), so like Memory it can't shrink and scroll internally.
-// ~30px header + 8 rows at font-size-mono/line-height 1.7 (~23px each) +
-// body padding, with headroom for cross-platform font-metric variance.
-const STACK_PANEL_DEFAULT_HEIGHT = 260;
+const STACK_PANEL_DEFAULT_HEIGHT = 222;
 
 // BreakpointPanel is meant to stay small (issue #413) — a handful of rows at
 // most before it scrolls internally, so it shouldn't compete with Stack or
 // Registers for vertical space in their shared column.
-const BREAKPOINTS_PANEL_DEFAULT_HEIGHT = 140;
+const BREAKPOINTS_PANEL_DEFAULT_HEIGHT = 134;
 
 // Trace/Log form a VS Code-style Output/Problems bottom dock, tabbed against
 // each other. Given as a plain height (not width): both scroll internally,
 // so this just trades off default vertical space against the panels above.
-const BOTTOM_GROUP_DEFAULT_HEIGHT = 260;
+const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
 
 /**
- * Hardcoded default arrangement mirroring today's 3-column layout as
- * **splits, not tabs** — nothing is hidden behind a tab today, and the
- * default shouldn't regress that. Used on first run and as the fallback
- * whenever a persisted layout (issue #382) is missing or fails to restore.
+ * Hardcoded default arrangement (issue #421) mirroring a manually tailored
+ * 3-column layout, captured via the existing `layout.json` persistence at
+ * the default 1600x900 window size: Memory tabbed with Terminal (Watchpoints
+ * below), Disassembly (Run Controls below), and Registers/Stack/Breakpoints
+ * stacked, with Trace/Log tabbed together spanning the bottom. Used on first
+ * run and as the fallback whenever a persisted layout (issue #382) is
+ * missing or fails to restore.
  *
  * `position: {referencePanel, direction}` splits relative to the *group*
  * containing that panel, not the whole row/column it happens to sit in —
@@ -293,7 +299,11 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 260;
  * new column *inside* that row cell rather than splitting the grid's root.
  * Adding a "below" split before the row exists instead nests the next
  * "right" split inside that same cell, collapsing all three columns' heights
- * down to just the top row.
+ * down to just the top row. Tabbing has no such ordering constraint, so
+ * Memory/Terminal's group is established with Terminal added first (anchor)
+ * and Memory tabbed onto it second — `addPanel` makes a newly added panel
+ * active by default, so this order leaves Memory as the foreground tab,
+ * ahead of Terminal in the tab bar.
  *
  * `terminalDetached` skips adding the "terminal" panel — reachable even on a
  * brand-new profile with no saved dockview arrangement yet, since the
@@ -307,9 +317,14 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
     rest: { position?: AddPanelPositionOptions; initialWidth?: number; initialHeight?: number },
   ) => api.addPanel({ id, component: id, title: PANEL_TITLES[id], ...rest });
 
-  add("memory", { initialWidth: 640 });
+  if (!terminalDetached) {
+    add("terminal", { initialWidth: 592 });
+    add("memory", { position: { referencePanel: "terminal" } });
+  } else {
+    add("memory", { initialWidth: 592 });
+  }
   add("disassembly", { position: { referencePanel: "memory", direction: "right" } });
-  add("registers", { position: { referencePanel: "disassembly", direction: "right" }, initialWidth: 220 });
+  add("registers", { position: { referencePanel: "disassembly", direction: "right" }, initialWidth: 202 });
   add("watchpoints", { position: { referencePanel: "memory", direction: "below" } });
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
   add("breakpoints", { position: { referencePanel: "stack", direction: "below" } });
@@ -320,7 +335,7 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
     component: "run-controls",
     title: PANEL_TITLES["run-controls"],
     position: RUN_CONTROLS_DEFAULT_POSITION,
-    initialHeight: RUN_CONTROLS_MIN_HEIGHT,
+    initialHeight: RUN_CONTROLS_DEFAULT_HEIGHT,
     minimumHeight: RUN_CONTROLS_MIN_HEIGHT,
     minimumWidth: RUN_CONTROLS_MIN_WIDTH,
   });
@@ -332,7 +347,6 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   // column's own cell precisely because they *do* reference a panel there.
   add("trace", { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT });
   add("log", { position: { referencePanel: "trace" } });
-  if (!terminalDetached) add("terminal", { position: { referencePanel: "trace" } });
 
   // Reserve Memory's full page height directly rather than sizing
   // Watchpoints (dockview gives the sibling whichever space is left over).
@@ -369,17 +383,17 @@ function persistLayout(api: DockviewReadyEvent["api"], lastPositions: Partial<Re
 }
 
 /**
- * Adds Trace/Log/Terminal as the bottom tabbed group if a just-restored
- * layout is missing any of them — i.e. it was persisted before #383/#384
- * introduced them. Returns whether anything was added, so the caller knows
- * whether to re-persist.
+ * Adds Trace, Log, and Terminal if a just-restored layout is missing any of
+ * them — i.e. it was persisted before #383/#384 introduced Trace/Log, or
+ * before #421 moved Terminal's default home to Memory's tab group. Returns
+ * whether anything was added, so the caller knows whether to re-persist.
  *
  * `api.fromJSON` doesn't error just because the saved JSON has fewer panels
  * than `panelComponents` now registers — it happily restores a valid subset
  * — so restoring an old layout otherwise leaves a since-added panel
  * permanently missing rather than falling back to `addDefaultLayout`, which
- * is the only other place that adds them. Any future addition to this
- * bottom group needs the same kind of reconciliation here.
+ * is the only other place that adds them. Any future addition needs the
+ * same kind of reconciliation here.
  *
  * `terminalDetached` skips adding "terminal" even when it's absent — a
  * missing "terminal" panel is only a stale-layout bug when Terminal isn't
@@ -414,7 +428,7 @@ function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached
       id: "terminal",
       component: "terminal",
       title: PANEL_TITLES.terminal,
-      position: { referencePanel: "trace" },
+      position: { referencePanel: "memory" },
     });
   }
   return !hasTrace || !hasLog || (!hasTerminal && !terminalDetached);
