@@ -2,22 +2,25 @@
 //! in production builds only, a build-info line carrying the git commit hash
 //! and build timestamp captured by `build.rs`.
 
+use crate::menu;
 use tauri::{AppHandle, Emitter};
 
 /// Data backing the About dialog, returned by `get_about_info`.
 #[derive(serde::Serialize)]
 pub struct AboutInfo {
+    /// URL of the project's GitHub repository.
+    pub repo_url: String,
     /// Build-info line (git commit hash and UTC build timestamp), present
     /// only in production (non-`debug_assertions`) builds.
     pub build_info: Option<String>,
 }
 
-/// Returns the About dialog's dynamic content: just the build-info line,
-/// since the app name/description/copyright/license are fixed text owned by
-/// the frontend component itself.
+/// Returns the About dialog's dynamic content: the repo URL and the
+/// build-info line, since the app name/description/copyright/license are
+/// fixed text owned by the frontend component itself.
 #[tauri::command]
 pub fn get_about_info() -> AboutInfo {
-    AboutInfo { build_info: build_info() }
+    AboutInfo { repo_url: menu::GITHUB_REPO_URL.to_string(), build_info: build_info() }
 }
 
 #[cfg(debug_assertions)]

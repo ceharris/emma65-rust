@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import "./styles/modal.scss";
 
 interface AboutInfo {
+  repo_url: string;
   build_info: string | null;
 }
 
@@ -16,17 +17,27 @@ interface AboutInfo {
  */
 export default function AboutDialog() {
   const [open, setOpen] = useState(false);
+  const [repoUrl, setRepoUrl] = useState<string | null>(null);
   const [buildInfo, setBuildInfo] = useState<string | null>(null);
 
   useEffect(() => {
     const unlistenPromise = listen("open-about-dialog", () => {
       setOpen(true);
       invoke<AboutInfo>("get_about_info")
-        .then((info) => setBuildInfo(info.build_info))
+        .then((info) => {
+          setRepoUrl(info.repo_url);
+          setBuildInfo(info.build_info);
+        })
         .catch((e) => console.error("get_about_info failed:", e));
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
+
+  /** Opens the repo link in the user's default browser, mirroring Help > View on GitHub. */
+  const openRepoUrl = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (repoUrl) invoke("plugin:opener|open_url", { url: repoUrl }).catch((err) => console.error("open_url failed:", err));
+  };
 
   const close = () => setOpen(false);
 
@@ -56,6 +67,12 @@ export default function AboutDialog() {
           <br />
           Open-source distribution under the MIT license.
         </div>
+
+        {repoUrl && (
+          <div className="modal-message">
+            <a href={repoUrl} onClick={openRepoUrl}>{repoUrl}</a>
+          </div>
+        )}
 
         {buildInfo && <div className="modal-label">{buildInfo}</div>}
 
