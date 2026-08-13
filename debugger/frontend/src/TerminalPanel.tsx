@@ -6,6 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "@xterm/xterm/css/xterm.css";
 import { APP_KEY_BINDINGS } from "./useAppKeyBindings";
+import { useEditMenuOverride } from "./EditMenuContext";
 import { useTheme } from "./ThemeContext";
 
 const XTERM_DARK_THEME: ITheme = {
@@ -40,6 +41,7 @@ export default function TerminalPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const { resolvedTheme } = useTheme();
+  const editMenu = useEditMenuOverride();
 
   useEffect(() => {
     if (termRef.current) {
@@ -74,6 +76,23 @@ export default function TerminalPanel() {
     });
     termRef.current = term;
 
+    // Shared with the Edit menu's override below (registered further down),
+    // so Ctrl+Shift+C/V and a menu click both end up calling the exact same
+    // code.
+    const copySelection = () => {
+      const selection = term.getSelection();
+      if (selection) {
+        writeText(selection).catch((err) => console.error("copy to clipboard failed:", err));
+      }
+    };
+    const pasteClipboard = () => {
+      readText()
+        .then((text) => {
+          if (text) term.paste(text);
+        })
+        .catch((err) => console.error("paste from clipboard failed:", err));
+    };
+
     // Let app-wide shortcuts (e.g. Ctrl+Shift+T) bypass xterm's own key
     // handling — otherwise xterm treats them as terminal control input and
     // stops the keydown from ever reaching the window-level listener. Ctrl+Q
@@ -90,23 +109,30 @@ export default function TerminalPanel() {
         // key binding (e.g. GTK's own Ctrl+Shift+C/V editing commands) fires
         // in addition to this handler, double-actioning the clipboard.
         e.preventDefault();
-        const selection = term.getSelection();
-        if (selection) {
-          writeText(selection).catch((err) => console.error("copy to clipboard failed:", err));
-        }
+        copySelection();
         return false;
       }
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && e.code === "KeyV") {
         e.preventDefault();
-        readText()
-          .then((text) => {
-            if (text) term.paste(text);
-          })
-          .catch((err) => console.error("paste from clipboard failed:", err));
+        pasteClipboard();
         return false;
       }
       return !APP_KEY_BINDINGS.some((b) => b.matches(e));
     });
+
+    // Registers an Edit-menu override (issue #435) rather than relying on
+    // the generic <input>/<textarea> fallback in `EditMenuContext.tsx`:
+    // xterm's hidden `textarea` is a real `HTMLTextAreaElement` but its
+    // `.value`/selection range don't reflect the terminal's actual content
+    // or selection (xterm owns both internally), and its content is
+    // canvas-rendered so `window.getSelection()` can't see it either. `null`
+    // outside the main window (the detached-Terminal window has no app
+    // menu — see `remove_menu` in `lib.rs`), so this is a no-op there.
+    const unregisterOverride = editMenu?.registerOverride(() => {
+      if (document.activeElement !== term.textarea) return null;
+      return { canCut: false, canCopy: term.hasSelection(), canPaste: true, copy: copySelection, paste: pasteClipboard };
+    }) ?? null;
+    const selectionChangeDisposable = editMenu ? term.onSelectionChange(() => editMenu.notifyChanged()) : null;
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -192,9 +218,16 @@ export default function TerminalPanel() {
       disposed = true;
       unlisten?.();
       resizeObserver.disconnect();
+      unregisterOverride?.();
+      selectionChangeDisposable?.dispose();
       termRef.current = null;
       term.dispose();
     };
+    // `editMenu` (from context) is read once here, same as `resolvedTheme`
+    // above it — both are effectively stable for this effect's lifetime,
+    // and re-running it would tear down and rebuild the whole terminal
+    // (dispose + history replay), which neither value's own updates should
+    // trigger.
   }, []);
 
   return <div ref={containerRef} className="terminal-container" />;

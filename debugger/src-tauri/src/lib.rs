@@ -531,6 +531,12 @@ pub fn run() {
                 // header buttons.
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "memory");
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "memory-menu-action", event.id().as_ref().to_string());
+            } else if matches!(event.id().as_ref(), menu::CUT_ID | menu::COPY_ID | menu::PASTE_ID) {
+                // No panel to reveal here (issue #435) — `EditMenuContext.tsx`
+                // acts against whatever is currently focused/selected in the
+                // main window, wherever that is, rather than a single owning
+                // panel like the Run/Memory menus dispatch to.
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "edit-menu-action", event.id().as_ref().to_string());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -591,10 +597,11 @@ pub fn run() {
             recent::clear_recent_profiles,
             menu::set_run_controls_enabled,
             menu::set_memory_menu_enabled,
+            menu::set_edit_menu_enabled,
             about::get_about_info,
         ])
         .setup(move |app| {
-            let (app_menu, window_menu_state, recent_menu_state, run_menu_state, memory_menu_state) =
+            let (app_menu, window_menu_state, recent_menu_state, run_menu_state, memory_menu_state, edit_menu_state) =
                 menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
@@ -628,6 +635,7 @@ pub fn run() {
             app.manage(recent_menu_state);
             app.manage(run_menu_state);
             app.manage(memory_menu_state);
+            app.manage(edit_menu_state);
 
             // Detached-Terminal window: strip its menu and install the
             // close-hides-and-reattaches lifecycle once, regardless of
