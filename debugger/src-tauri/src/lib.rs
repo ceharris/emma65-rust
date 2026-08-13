@@ -42,7 +42,8 @@ mod cpu_bus;
 mod disassembly;
 
 /// Breakpoint panel: tracked breakpoint set, CRUD commands, and the
-/// `breakpoints-changed` broadcast shared with the Disassembly gutter.
+/// `breakpoints-changed` broadcast shared with the Disassembly gutter;
+/// persists the set to `breakpoints.json` in the active profile.
 mod breakpoints;
 
 /// Memory panel: paged reads, writes, fills, and file loads.
@@ -163,7 +164,8 @@ async fn stop_active_run(app: &AppHandle) {
 
 /// Loads (or reloads) the emulator session from `profile_dir`: builds a fresh
 /// `EmulatorSession`, replaces the console transport and its terminal bridge,
-/// and resets every panel's Tauri-managed state to match the new CPU.
+/// loads `profile_dir`'s watchpoints and breakpoints, and resets every other
+/// panel's Tauri-managed state to match the new CPU.
 ///
 /// Safe to call more than once — this generalizes what `setup()`'s async
 /// block used to do only at startup, so a later profile switch (New Profile,
@@ -258,9 +260,18 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
             }
             *app.state::<watchpoints::WatchState>().0.lock().unwrap() = watch_data;
 
+            // Independent of session readiness, same as watchpoints above:
+            // load the new profile's breakpoints.json, install its enabled
+            // addresses into the CPU so they actually halt execution, and
+            // broadcast breakpoints-changed so the panel and gutter resync
+            // without a dedicated "profile changed" event.
+            let loaded_breakpoints = breakpoints::load_breakpoints_from(profile_dir);
+            breakpoints::install_breakpoints(&mut cpu, &loaded_breakpoints);
+            breakpoints::emit_loaded_breakpoints(app, &loaded_breakpoints, &symbol_table);
+            *app.state::<breakpoints::BreakpointState>().0.lock().unwrap() = loaded_breakpoints;
+
             // Reset the rest of the per-panel state that assumes one
             // long-lived session, so nothing from the previous profile lingers.
-            *app.state::<breakpoints::BreakpointState>().0.lock().unwrap() = std::collections::BTreeMap::new();
             *app.state::<disassembly::SkipBreakpointPc>().0.lock().unwrap() = None;
             *app.state::<disassembly::LiveSnapshotRx>().0.lock().unwrap() = None;
             *app.state::<registers::ChangedFlagsState>().0.lock().unwrap() = 0;
