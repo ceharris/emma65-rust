@@ -26,6 +26,9 @@ pub(crate) const CLEAR_RECENT_ID: &str = "clear-recent";
 /// Menu item id for the File > Exit item.
 pub(crate) const EXIT_ID: &str = "exit";
 
+/// Menu item id for the Help > About item.
+pub(crate) const ABOUT_ID: &str = "about";
+
 /// Menu item id / `run-menu-action` event payload for the Run > Run item.
 pub(crate) const RUN_CPU_ID: &str = "run-cpu";
 /// Menu item id / `run-menu-action` event payload for the Run > Stop item.
@@ -280,7 +283,13 @@ pub fn build_menu(
     let window_menu =
         Submenu::with_items(app, "Window", true, &[&terminal_item, &window_separator, &restore_layout_item])?;
 
-    let about_item = PredefinedMenuItem::about(app, None, None)?;
+    // A plain `MenuItem` rather than `PredefinedMenuItem::about`: the
+    // predefined item delegates to the OS/toolkit's own About box (bare and
+    // unstyled on Linux/GTK), which can't carry the app description,
+    // copyright, license, and production-only build-info line issue #423
+    // asks for. `on_menu_event` in `lib.rs` opens the same kind of custom
+    // modal dialog every other menu item here does.
+    let about_item = MenuItem::with_id(app, ABOUT_ID, "About", true, None::<&str>)?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&about_item])?;
 
     let menu = Menu::with_items(
