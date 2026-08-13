@@ -100,6 +100,7 @@ export default function App() {
       <ClearRecentDialog />
       <RestoreLayoutDialog />
       <ExitConfirmDialog />
+      <AboutDialog />
       <div className="app-shell">
         <header className="app-toolbar">
           <ThemeSelector />
