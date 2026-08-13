@@ -204,29 +204,21 @@ pub fn build_menu(
     // `edit-menu-action` — see that module for why a JS-side context, not
     // more Rust here, owns the focus/selection tracking.
     //
-    // These do carry accelerators, unlike most of this file's other custom
-    // items — Cut/Copy/Paste read as broken without the shortcut a user
-    // expects, and this codebase's convention is a real native accelerator
-    // over a label that only looks like one (see the Ctrl+Shift+T comment
-    // below). Two risks to watch in manual testing, both stemming from this
-    // being registered on the native GTK window — a separate mechanism from
-    // WebKitGTK's own in-page key handling (the thing xterm's
-    // `attachCustomKeyEventHandler` controls, and the thing that already
-    // gives ordinary `<input>`/`<textarea>` fields native Ctrl+X/C/V
-    // without any help from this menu), so it's not certain from source
-    // alone which one wins when the two combos coincide:
-    //   - Pasting into a plain text field could double-insert (WebKitGTK's
-    //     own native paste, plus `EditMenuContext.tsx`'s handler both firing
-    //     on the same keypress) — Copy would only double-write the same
-    //     clipboard text, harmless.
-    //   - Ctrl+C is also the terminal's interrupt (SIGINT) key; if this
-    //     accelerator intercepts it instead, Terminal loses the ability to
-    //     interrupt a running program.
-    // If either shows up, the least invasive fix is dropping just the
-    // affected accelerator (e.g. Ctrl+C alone) rather than all three.
-    let cut_item = MenuItem::with_id(app, CUT_ID, "Cut", false, Some("CmdOrCtrl+X"))?;
-    let copy_item = MenuItem::with_id(app, COPY_ID, "Copy", false, Some("CmdOrCtrl+C"))?;
-    let paste_item = MenuItem::with_id(app, PASTE_ID, "Paste", false, Some("CmdOrCtrl+V"))?;
+    // No accelerators: `CmdOrCtrl+C` here was tried and confirmed (manual
+    // testing, issue #435) to intercept Ctrl+C before it reaches the
+    // terminal, breaking its interrupt (SIGINT) key — this accelerator is
+    // registered on the native GTK window, a separate mechanism from
+    // WebKitGTK's own in-page key handling that wins the conflict. Terminal
+    // already binds its own copy/paste to Ctrl+Shift+C/V specifically to
+    // stay clear of the terminal-control-character combos (see
+    // `TerminalPanel.tsx`), but muda's accelerator API has no way to scope
+    // an accelerator to "everywhere except Terminal", and Ctrl+Shift+C/V
+    // would be a confusing combo to advertise for Cut/Copy/Paste app-wide.
+    // So these are mouse/menu-driven only, same as most of this file's
+    // other custom items (e.g. `restore_layout_item` below).
+    let cut_item = MenuItem::with_id(app, CUT_ID, "Cut", false, None::<&str>)?;
+    let copy_item = MenuItem::with_id(app, COPY_ID, "Copy", false, None::<&str>)?;
+    let paste_item = MenuItem::with_id(app, PASTE_ID, "Paste", false, None::<&str>)?;
     let edit_menu = Submenu::with_items(app, "Edit", true, &[&cut_item, &copy_item, &paste_item])?;
 
     // One item per dockable panel (issue #393), letting a user bring back a
