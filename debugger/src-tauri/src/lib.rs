@@ -6,6 +6,7 @@ use clap::Parser;
 use figment::{Figment, providers::{Env, Format, Toml}};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tauri_plugin_log::{Target, TargetKind};
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
 
 use emma65::disasm::Disassembler;
@@ -406,6 +407,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
@@ -464,6 +466,8 @@ pub fn run() {
                 layout::emit_open_restore_layout_dialog(app);
             } else if event.id() == menu::ABOUT_ID {
                 about::emit_open_about_dialog(app);
+            } else if event.id() == menu::GITHUB_ID {
+                let _ = app.opener().open_url(menu::GITHUB_REPO_URL, None::<&str>);
             } else if let Some(path) = event.id().as_ref().strip_prefix(menu::OPEN_RECENT_ID_PREFIX) {
                 let app_handle = app.clone();
                 let path = std::path::PathBuf::from(path);

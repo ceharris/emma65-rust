@@ -28,6 +28,10 @@ pub(crate) const EXIT_ID: &str = "exit";
 
 /// Menu item id for the Help > About item.
 pub(crate) const ABOUT_ID: &str = "about";
+/// Menu item id for the Help > View on GitHub item.
+pub(crate) const GITHUB_ID: &str = "github";
+/// URL opened in the user's browser by the Help > View on GitHub item.
+pub(crate) const GITHUB_REPO_URL: &str = "https://github.com/ceharris/emma65-rust";
 
 /// Menu item id / `run-menu-action` event payload for the Run > Run item.
 pub(crate) const RUN_CPU_ID: &str = "run-cpu";
@@ -290,7 +294,9 @@ pub fn build_menu(
     // asks for. `on_menu_event` in `lib.rs` opens the same kind of custom
     // modal dialog every other menu item here does.
     let about_item = MenuItem::with_id(app, ABOUT_ID, "About", true, None::<&str>)?;
-    let help_menu = Submenu::with_items(app, "Help", true, &[&about_item])?;
+    let help_separator = PredefinedMenuItem::separator(app)?;
+    let github_item = MenuItem::with_id(app, GITHUB_ID, "View on GitHub", true, None::<&str>)?;
+    let help_menu = Submenu::with_items(app, "Help", true, &[&about_item, &help_separator, &github_item])?;
 
     let menu = Menu::with_items(
         app,

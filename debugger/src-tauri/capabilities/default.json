@@ -7,6 +7,7 @@
     "core:default",
     "dialog:default",
     "log:default",
+    "opener:default",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-text"
   ]
