@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, PhysicalPosition, PhysicalSize, State, WebviewWindow};
 
 use crate::profile;
 
@@ -30,10 +30,30 @@ fn default_terminal_scrollback() -> u32 {
     1000
 }
 
+/// A window's last-known size, screen position, and maximized/fullscreen
+/// state, captured by `capture_window_geometry` and re-applied by
+/// `apply_window_geometry`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WindowGeometry {
+    /// Outer (including window-manager decorations) X position, in physical pixels.
+    pub x: i32,
+    /// Outer Y position, in physical pixels.
+    pub y: i32,
+    /// Outer width, in physical pixels.
+    pub width: u32,
+    /// Outer height, in physical pixels.
+    pub height: u32,
+    /// Whether the window was maximized.
+    pub maximized: bool,
+    /// Whether the window was in OS-level fullscreen.
+    pub fullscreen: bool,
+}
+
 /// Persisted debugger UI preferences that aren't scoped to any profile — see
 /// issue #68 for the original theme-only version, issue #349 for the
-/// exit-confirmation addition, issue #357 for the file dialog directory, and
-/// issue #385 for the terminal scrollback line count.
+/// exit-confirmation addition, issue #357 for the file dialog directory,
+/// issue #385 for the terminal scrollback line count, and issue #419 for the
+/// window geometry fields.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UiConfig {
     /// The user's selected theme mode.
@@ -57,6 +77,16 @@ pub struct UiConfig {
     /// control.
     #[serde(default = "default_terminal_scrollback")]
     pub terminal_scrollback: u32,
+    /// Last-known size, position, and maximized/fullscreen state of the main
+    /// window; `None` before it's ever been captured, in which case
+    /// `tauri.conf.json`'s configured default applies — see issue #419.
+    #[serde(default)]
+    pub main_window_geometry: Option<WindowGeometry>,
+    /// Same as `main_window_geometry`, but for the detached-Terminal window
+    /// (`terminal::TERMINAL_DETACHED_WINDOW_LABEL`). Only updated while that
+    /// window is actually detached (visible) — see issue #419.
+    #[serde(default)]
+    pub terminal_window_geometry: Option<WindowGeometry>,
 }
 
 impl Default for UiConfig {
@@ -66,6 +96,8 @@ impl Default for UiConfig {
             skip_exit_confirmation: false,
             last_file_dialog_dir: None,
             terminal_scrollback: default_terminal_scrollback(),
+            main_window_geometry: None,
+            terminal_window_geometry: None,
         }
     }
 }
@@ -86,6 +118,60 @@ fn save_ui_config_to(dir: &Path, config: &UiConfig) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("Failed to create config directory: {e}"))?;
     let contents = toml::to_string(config).map_err(|e| format!("Failed to serialize UI config: {e}"))?;
     fs::write(dir.join("ui.toml"), contents).map_err(|e| format!("Failed to write UI config: {e}"))
+}
+
+/// Reads `window`'s current outer position/size and maximized/fullscreen
+/// state. Returns `None` if the underlying platform call fails (e.g. the
+/// window has already been destroyed), in which case the caller should leave
+/// whatever geometry was already persisted alone rather than overwrite it
+/// with a default.
+fn capture_window_geometry(window: &WebviewWindow) -> Option<WindowGeometry> {
+    let position = window.outer_position().ok()?;
+    let size = window.outer_size().ok()?;
+    Some(WindowGeometry {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+        maximized: window.is_maximized().unwrap_or(false),
+        fullscreen: window.is_fullscreen().unwrap_or(false),
+    })
+}
+
+/// Applies `geometry` to `window`: position and size first, then
+/// maximized/fullscreen state (applied last so they aren't immediately
+/// undone by the position/size calls). Each call's error is ignored
+/// independently — a platform that rejects one of these (e.g. Wayland's
+/// refusal to reposition top-level windows) should still end up with as much
+/// of the saved geometry as it can honor, rather than none of it.
+pub fn apply_window_geometry(window: &WebviewWindow, geometry: &WindowGeometry) {
+    let _ = window.set_position(PhysicalPosition::new(geometry.x, geometry.y));
+    let _ = window.set_size(PhysicalSize::new(geometry.width, geometry.height));
+    if geometry.maximized {
+        let _ = window.maximize();
+    }
+    if geometry.fullscreen {
+        let _ = window.set_fullscreen(true);
+    }
+}
+
+/// Captures `window`'s current geometry and persists it to `ui.toml`,
+/// writing it into whichever of `UiConfig`'s `main_window_geometry`/
+/// `terminal_window_geometry` field `setter` targets. A no-op (not an error)
+/// if the geometry can't be captured, so a window mid-teardown at exit just
+/// keeps its last-known persisted geometry instead of losing it.
+pub fn save_window_geometry(
+    window: &WebviewWindow,
+    state: &UiConfigState,
+    setter: impl FnOnce(&mut UiConfig, WindowGeometry),
+) -> Result<(), String> {
+    let Some(geometry) = capture_window_geometry(window) else { return Ok(()) };
+    let config = {
+        let mut guard = state.0.lock().unwrap();
+        setter(&mut guard, geometry);
+        guard.clone()
+    };
+    save_ui_config_to(&profile::config_dir()?, &config)
 }
 
 /// Returns the currently active theme mode.
@@ -199,6 +285,23 @@ mod tests {
     fn defaults_last_file_dialog_dir_to_none_when_missing() {
         let config: UiConfig = toml::from_str("").unwrap();
         assert_eq!(config.last_file_dialog_dir, None);
+    }
+
+    #[test]
+    fn defaults_window_geometry_fields_to_none_when_missing() {
+        let config: UiConfig = toml::from_str("").unwrap();
+        assert_eq!(config.main_window_geometry, None);
+        assert_eq!(config.terminal_window_geometry, None);
+    }
+
+    #[test]
+    fn round_trips_window_geometry() {
+        let geometry = WindowGeometry { x: 100, y: 50, width: 1650, height: 1000, maximized: false, fullscreen: true };
+        let config = UiConfig { main_window_geometry: Some(geometry), terminal_window_geometry: Some(geometry), ..Default::default() };
+        let serialized = toml::to_string(&config).unwrap();
+        let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.main_window_geometry, Some(geometry));
+        assert_eq!(deserialized.terminal_window_geometry, Some(geometry));
     }
 
     #[test]

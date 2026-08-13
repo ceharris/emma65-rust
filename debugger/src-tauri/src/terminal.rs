@@ -126,6 +126,13 @@ fn show_detached_terminal(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window(TERMINAL_DETACHED_WINDOW_LABEL)
         .ok_or_else(|| "terminal-detached window not found".to_string())?;
+    // Apply the last-known geometry (issue #419) before showing, so the
+    // window reappears where the user left it rather than at
+    // tauri.conf.json's static default.
+    let geometry = app.state::<crate::preferences::UiConfigState>().0.lock().unwrap().terminal_window_geometry;
+    if let Some(geometry) = geometry {
+        crate::preferences::apply_window_geometry(&window, &geometry);
+    }
     window.show().map_err(|e| e.to_string())?;
     let _ = window.set_focus();
     *app.state::<TerminalTargetWindow>().0.lock().unwrap() = TERMINAL_DETACHED_WINDOW_LABEL.to_string();
@@ -171,6 +178,16 @@ pub fn detach_terminal(app: AppHandle) -> Result<(), String> {
 /// (`lib.rs`'s `on_menu_event`), and the `attach_terminal` command below.
 pub(crate) fn reattach_terminal(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(TERMINAL_DETACHED_WINDOW_LABEL) {
+        // Capture geometry (issue #419) before hiding, so a later detach in
+        // the same session — or the app exiting while docked — restores it
+        // to where the user last left it rather than the stale value (or
+        // none) from before this detach cycle.
+        let state = app.state::<crate::preferences::UiConfigState>();
+        if let Err(e) =
+            crate::preferences::save_window_geometry(&window, &state, |c, g| c.terminal_window_geometry = Some(g))
+        {
+            eprintln!("Failed to save terminal window geometry: {e}");
+        }
         let _ = window.hide();
     }
     if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {

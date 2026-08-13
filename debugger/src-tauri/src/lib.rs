@@ -310,6 +310,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
 /// decision (issue #349). All three are main-window-only (issue #351), but
 /// the focus call is harmless if that ever changes.
 fn request_exit(app: &AppHandle) {
+    persist_window_geometries(app);
     let skip = app.state::<preferences::UiConfigState>().0.lock().unwrap().skip_exit_confirmation;
     if skip {
         app.exit(0);
@@ -319,6 +320,27 @@ fn request_exit(app: &AppHandle) {
         let _ = main_window.set_focus();
     }
     let _ = app.emit("open-exit-confirm-dialog", ());
+}
+
+/// Captures and persists the main window's geometry, plus the
+/// detached-Terminal window's geometry if it's currently detached (visible)
+/// — see issue #419. Called once per exit request rather than on every
+/// resize/move event, so `ui.toml` isn't rewritten continuously while the
+/// user drags a window around.
+fn persist_window_geometries(app: &AppHandle) {
+    let state = app.state::<preferences::UiConfigState>();
+    if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL)
+        && let Err(e) = preferences::save_window_geometry(&main_window, &state, |c, g| c.main_window_geometry = Some(g))
+    {
+        eprintln!("Failed to save main window geometry: {e}");
+    }
+    if let Some(terminal_window) = app.get_webview_window(terminal::TERMINAL_DETACHED_WINDOW_LABEL)
+        && terminal_window.is_visible().unwrap_or(false)
+        && let Err(e) =
+            preferences::save_window_geometry(&terminal_window, &state, |c, g| c.terminal_window_geometry = Some(g))
+    {
+        eprintln!("Failed to save terminal window geometry: {e}");
+    }
 }
 
 /// Exits the application cleanly. Invoked directly by Ctrl+Q (handled
@@ -577,6 +599,19 @@ pub fn run() {
             }
 
             profile::set_main_window_title(app, &profile_name);
+
+            // The main window starts hidden (`visible: false` in
+            // tauri.conf.json) specifically so its saved geometry (issue
+            // #419) can be applied before it's ever shown, avoiding a
+            // visible jump from the configured default size/position to the
+            // restored one.
+            if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                let geometry = app.state::<preferences::UiConfigState>().0.lock().unwrap().main_window_geometry;
+                if let Some(geometry) = geometry {
+                    preferences::apply_window_geometry(&main_window, &geometry);
+                }
+                let _ = main_window.show();
+            }
 
             app.manage(window_menu_state);
             app.manage(recent_menu_state);
