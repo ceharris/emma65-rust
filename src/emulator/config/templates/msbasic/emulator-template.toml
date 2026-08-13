@@ -1,0 +1,21 @@
+# Bundled MS BASIC starter-profile configuration for emma65. This is a
+# TEMPLATE: {{ROM_IMAGE}} and {{LABELS}} are replaced with materialized
+# paths by emma65::emulator::config::templates::msbasic::materialize_msbasic_config.
+
+cpu-variant = "65C02"
+
+[[devices]]
+type = "ram"
+address = 0x0000
+size = 53248
+
+[[devices]]
+type = "rom"
+address = 0xd000
+size = 12288
+image = "{{ROM_IMAGE}}"
+labels = "{{LABELS}}"
+
+[[devices]]
+type = "console"
+address = 0xfff8
