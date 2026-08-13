@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import AboutDialog from "./AboutDialog";
 import ClearRecentDialog from "./ClearRecentDialog";
+import { EditMenuProvider } from "./EditMenuContext";
 import ExitConfirmDialog from "./ExitConfirmDialog";
 import { ExecutionProvider } from "./ExecutionContext";
 import NewProfileDialog from "./NewProfileDialog";
@@ -77,7 +78,7 @@ export default function App() {
 
   if (status === null || !status.ok) {
     return (
-      <>
+      <EditMenuProvider>
         <NewProfileDialog />
         <ClearRecentDialog />
         <RestoreLayoutDialog />
@@ -90,12 +91,12 @@ export default function App() {
             <span className="status-error">{status.message}</span>
           )}
         </div>
-      </>
+      </EditMenuProvider>
     );
   }
 
   return (
-    <>
+    <EditMenuProvider>
       <NewProfileDialog />
       <ClearRecentDialog />
       <RestoreLayoutDialog />
@@ -114,6 +115,6 @@ export default function App() {
           </RunControlsProvider>
         </ExecutionProvider>
       </div>
-    </>
+    </EditMenuProvider>
   );
 }

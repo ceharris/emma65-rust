@@ -13,6 +13,13 @@ pub(crate) const RESTORE_LAYOUT_ID: &str = "restore-layout";
 /// prefix followed by the panel's dockview id (`MainPanelId` in
 /// `panelRegistry.tsx`), e.g. `"view-panel:trace"`.
 pub(crate) const VIEW_PANEL_ID_PREFIX: &str = "view-panel:";
+/// Menu item id / `edit-menu-action` event payload for the Edit > Cut item.
+pub(crate) const CUT_ID: &str = "cut";
+/// Menu item id / `edit-menu-action` event payload for the Edit > Copy item.
+pub(crate) const COPY_ID: &str = "copy";
+/// Menu item id / `edit-menu-action` event payload for the Edit > Paste item.
+pub(crate) const PASTE_ID: &str = "paste";
+
 /// Menu item id for the File > New Profile item.
 pub(crate) const NEW_PROFILE_ID: &str = "new-profile";
 /// Menu item id for the File > Open Profile item.
@@ -113,6 +120,34 @@ pub struct RunControlsEnabled {
     pub toggle_auto_step: bool,
 }
 
+/// Holds the Edit menu's three item handles so `set_edit_menu_enabled` can
+/// toggle each one's enabled state in place, mirroring `RunMenuState`. Unlike
+/// the Run menu, there's no corresponding UI panel with its own `disabled`
+/// buttons to mirror — enabled state here instead tracks where the frontend's
+/// focus/selection currently is (`EditMenuContext.tsx`), since Cut/Copy/Paste
+/// only make sense against a specific editable or selectable target.
+pub struct EditMenuState {
+    /// The Edit > Cut item.
+    pub cut_item: MenuItem<Wry>,
+    /// The Edit > Copy item.
+    pub copy_item: MenuItem<Wry>,
+    /// The Edit > Paste item.
+    pub paste_item: MenuItem<Wry>,
+}
+
+/// Enabled state for the Edit menu's three items, pushed from the frontend
+/// (`EditMenuContext.tsx`) whenever the currently focused/selected target
+/// changes.
+#[derive(serde::Deserialize)]
+pub struct EditMenuEnabled {
+    /// Whether Edit > Cut should be enabled.
+    pub cut: bool,
+    /// Whether Edit > Copy should be enabled.
+    pub copy: bool,
+    /// Whether Edit > Paste should be enabled.
+    pub paste: bool,
+}
+
 /// Holds the Memory menu's four item handles so `set_memory_menu_enabled`
 /// (issue #411) can toggle them all in place — all four share a single
 /// enabled condition (the CPU must be stopped), unlike the Run menu's six
@@ -136,7 +171,7 @@ pub struct MemoryMenuState {
 #[allow(clippy::type_complexity)]
 pub fn build_menu(
     app: &tauri::App,
-) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState, MemoryMenuState)> {
+) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState, MemoryMenuState, EditMenuState)> {
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
     // predefined types on Linux), so the item never appeared at all. The
@@ -158,8 +193,33 @@ pub fn build_menu(
         &[&new_profile_item, &open_profile_item, &open_recent_submenu, &separator, &exit_item],
     )?;
 
-    // Placeholder: no items yet.
-    let edit_menu = Submenu::new(app, "Edit", true)?;
+    // Plain `MenuItem`s rather than `PredefinedMenuItem::cut/copy/paste`:
+    // muda's GTK backend only wires those up through the optional `libxdo`
+    // feature (X11-only — its own source marks Wayland `// TODO`), which
+    // isn't enabled here, so on this app's Linux target they'd be silent
+    // no-ops — the same class of problem that ruled out
+    // `PredefinedMenuItem::quit` for the File menu above. `EditMenuContext.tsx`
+    // tracks enabled state (via `set_edit_menu_enabled` below) and performs
+    // the actual cut/copy/paste in response to `on_menu_event` dispatching
+    // `edit-menu-action` — see that module for why a JS-side context, not
+    // more Rust here, owns the focus/selection tracking.
+    //
+    // No accelerators: `CmdOrCtrl+C` here was tried and confirmed (manual
+    // testing, issue #435) to intercept Ctrl+C before it reaches the
+    // terminal, breaking its interrupt (SIGINT) key — this accelerator is
+    // registered on the native GTK window, a separate mechanism from
+    // WebKitGTK's own in-page key handling that wins the conflict. Terminal
+    // already binds its own copy/paste to Ctrl+Shift+C/V specifically to
+    // stay clear of the terminal-control-character combos (see
+    // `TerminalPanel.tsx`), but muda's accelerator API has no way to scope
+    // an accelerator to "everywhere except Terminal", and Ctrl+Shift+C/V
+    // would be a confusing combo to advertise for Cut/Copy/Paste app-wide.
+    // So these are mouse/menu-driven only, same as most of this file's
+    // other custom items (e.g. `restore_layout_item` below).
+    let cut_item = MenuItem::with_id(app, CUT_ID, "Cut", false, None::<&str>)?;
+    let copy_item = MenuItem::with_id(app, COPY_ID, "Copy", false, None::<&str>)?;
+    let paste_item = MenuItem::with_id(app, PASTE_ID, "Paste", false, None::<&str>)?;
+    let edit_menu = Submenu::with_items(app, "Edit", true, &[&cut_item, &copy_item, &paste_item])?;
 
     // One item per dockable panel (issue #393), letting a user bring back a
     // panel whose dock tab they closed — the old Window-menu "Reveal…" items
@@ -313,7 +373,19 @@ pub fn build_menu(
             edit_item: edit_memory_item,
             fill_item: fill_memory_item,
         },
+        EditMenuState { cut_item, copy_item, paste_item },
     ))
+}
+
+/// Pushes `flags` onto the Edit menu's three items' enabled state
+/// (`EditMenuContext.tsx` calls this whenever the currently focused/selected
+/// target changes), so a menu click never fires against a context that
+/// doesn't support it.
+#[tauri::command]
+pub fn set_edit_menu_enabled(flags: EditMenuEnabled, state: State<EditMenuState>) {
+    let _ = state.cut_item.set_enabled(flags.cut);
+    let _ = state.copy_item.set_enabled(flags.copy);
+    let _ = state.paste_item.set_enabled(flags.paste);
 }
 
 /// Enables or disables all four Memory menu items together — they share a
