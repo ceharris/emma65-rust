@@ -198,18 +198,35 @@ pub fn build_menu(
     // feature (X11-only — its own source marks Wayland `// TODO`), which
     // isn't enabled here, so on this app's Linux target they'd be silent
     // no-ops — the same class of problem that ruled out
-    // `PredefinedMenuItem::quit` for the File menu above. No accelerators are
-    // assigned: the webview already handles Ctrl+X/C/V natively for ordinary
-    // text fields without any help from this menu, so registering the same
-    // combo as a native accelerator here would just double-fire alongside
-    // it. `EditMenuContext.tsx` tracks enabled state (via
-    // `set_edit_menu_enabled` below) and performs the actual cut/copy/paste
-    // in response to `on_menu_event` dispatching `edit-menu-action` — see
-    // that module for why a JS-side context, not more Rust here, owns the
-    // focus/selection tracking.
-    let cut_item = MenuItem::with_id(app, CUT_ID, "Cut", false, None::<&str>)?;
-    let copy_item = MenuItem::with_id(app, COPY_ID, "Copy", false, None::<&str>)?;
-    let paste_item = MenuItem::with_id(app, PASTE_ID, "Paste", false, None::<&str>)?;
+    // `PredefinedMenuItem::quit` for the File menu above. `EditMenuContext.tsx`
+    // tracks enabled state (via `set_edit_menu_enabled` below) and performs
+    // the actual cut/copy/paste in response to `on_menu_event` dispatching
+    // `edit-menu-action` — see that module for why a JS-side context, not
+    // more Rust here, owns the focus/selection tracking.
+    //
+    // These do carry accelerators, unlike most of this file's other custom
+    // items — Cut/Copy/Paste read as broken without the shortcut a user
+    // expects, and this codebase's convention is a real native accelerator
+    // over a label that only looks like one (see the Ctrl+Shift+T comment
+    // below). Two risks to watch in manual testing, both stemming from this
+    // being registered on the native GTK window — a separate mechanism from
+    // WebKitGTK's own in-page key handling (the thing xterm's
+    // `attachCustomKeyEventHandler` controls, and the thing that already
+    // gives ordinary `<input>`/`<textarea>` fields native Ctrl+X/C/V
+    // without any help from this menu), so it's not certain from source
+    // alone which one wins when the two combos coincide:
+    //   - Pasting into a plain text field could double-insert (WebKitGTK's
+    //     own native paste, plus `EditMenuContext.tsx`'s handler both firing
+    //     on the same keypress) — Copy would only double-write the same
+    //     clipboard text, harmless.
+    //   - Ctrl+C is also the terminal's interrupt (SIGINT) key; if this
+    //     accelerator intercepts it instead, Terminal loses the ability to
+    //     interrupt a running program.
+    // If either shows up, the least invasive fix is dropping just the
+    // affected accelerator (e.g. Ctrl+C alone) rather than all three.
+    let cut_item = MenuItem::with_id(app, CUT_ID, "Cut", false, Some("CmdOrCtrl+X"))?;
+    let copy_item = MenuItem::with_id(app, COPY_ID, "Copy", false, Some("CmdOrCtrl+C"))?;
+    let paste_item = MenuItem::with_id(app, PASTE_ID, "Paste", false, Some("CmdOrCtrl+V"))?;
     let edit_menu = Submenu::with_items(app, "Edit", true, &[&cut_item, &copy_item, &paste_item])?;
 
     // One item per dockable panel (issue #393), letting a user bring back a
