@@ -196,6 +196,54 @@ fn run_with_no_args_uses_bundled_default_and_keeps_running() {
 }
 
 #[test]
+fn run_with_profile_msbasic_keeps_running() {
+    ensure_emma_transport_dirs();
+    let mut child = std::process::Command::new(emulator_bin())
+        .args(["--profile", "msbasic"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    match child.try_wait().unwrap() {
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Some(status) => {
+            let mut stderr = String::new();
+            use std::io::Read;
+            let _ = child.stderr.take().unwrap().read_to_string(&mut stderr);
+            panic!("expected --profile msbasic to keep running, but it exited with {status}: {stderr}");
+        }
+    }
+}
+
+#[test]
+fn run_with_unknown_profile_fails_with_useful_message() {
+    let output = std::process::Command::new(emulator_bin())
+        .args(["--profile", "nope"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("nope"), "expected profile id in stderr, got: {stderr}");
+}
+
+#[test]
+fn run_with_profile_and_config_together_is_rejected() {
+    let cfg = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+    let output = std::process::Command::new(emulator_bin())
+        .args(["--profile", "default", "--config", cfg.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
 fn run_with_missing_rom_image() {
     // Point the ROM image attribute at a path that doesn't exist.
     let output = std::process::Command::new(emulator_bin())

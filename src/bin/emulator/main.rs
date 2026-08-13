@@ -4,7 +4,7 @@ mod tty;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
-use crate::config::{AppConfig, apply_default_if_unconfigured};
+use crate::config::{AppConfig, apply_default_if_unconfigured, apply_named_profile};
 use emma65::emulator::cpu::StepResult;
 use emma65::emulator::{InstantiationContext, InternalPipeTransport, Transport, TransportReporter, log_device_event};
 
@@ -19,12 +19,19 @@ async fn main() -> ExitCode {
     let mut log_format = env_logger::fmt::ConfigurableFormat::default();
     log_format.suffix("\r\n");
     env_logger::Builder::from_default_env().format(move |buf, record| log_format.format(buf, record)).init();
-    let mut config = AppConfig::load().unwrap_or_else(|e| {
+    let loaded = AppConfig::load().unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
-    // Hold the tempdir reference until after build so the default config's files aren't deleted too early.
-    let _default_config_dir = apply_default_if_unconfigured(&mut config);
+    let mut config = loaded.app;
+    // Hold the tempdir reference until after build so its files aren't deleted too early.
+    let _profile_dir = match loaded.profile {
+        Some(id) => Some(apply_named_profile(&mut config, &id).unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        })),
+        None => apply_default_if_unconfigured(&mut config),
+    };
     let registry = emma65::emulator::DeviceRegistry::with_builtins();
 
     // Always offer stdin/stdout to the console via the context. If the console has no
