@@ -33,15 +33,24 @@ fn default_terminal_scrollback() -> u32 {
 /// A window's last-known size, screen position, and maximized/fullscreen
 /// state, captured by `capture_window_geometry` and re-applied by
 /// `apply_window_geometry`.
+///
+/// `x`/`y` are the *outer* position (including window-manager decorations,
+/// matching `set_position`'s `set_outer_position` semantics) while
+/// `width`/`height` are the *inner* content-area size (matching
+/// `set_size`'s `set_inner_size` semantics) — mixing outer position with
+/// inner size is intentional and required, not an inconsistency: using
+/// `outer_size` here instead grew the window by one titlebar's height on
+/// every detach/reattach cycle, since each captured outer size got
+/// re-applied as the new *inner* size — caught in #419's own UAT.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WindowGeometry {
-    /// Outer (including window-manager decorations) X position, in physical pixels.
+    /// Outer X position, in physical pixels.
     pub x: i32,
     /// Outer Y position, in physical pixels.
     pub y: i32,
-    /// Outer width, in physical pixels.
+    /// Inner (content area) width, in physical pixels.
     pub width: u32,
-    /// Outer height, in physical pixels.
+    /// Inner (content area) height, in physical pixels.
     pub height: u32,
     /// Whether the window was maximized.
     pub maximized: bool,
@@ -120,14 +129,16 @@ fn save_ui_config_to(dir: &Path, config: &UiConfig) -> Result<(), String> {
     fs::write(dir.join("ui.toml"), contents).map_err(|e| format!("Failed to write UI config: {e}"))
 }
 
-/// Reads `window`'s current outer position/size and maximized/fullscreen
-/// state. Returns `None` if the underlying platform call fails (e.g. the
-/// window has already been destroyed), in which case the caller should leave
-/// whatever geometry was already persisted alone rather than overwrite it
-/// with a default.
+/// Reads `window`'s current outer position, inner size, and
+/// maximized/fullscreen state — matching what `apply_window_geometry`'s
+/// `set_position`/`set_size` calls actually move/resize (see
+/// `WindowGeometry`'s doc comment). Returns `None` if the underlying
+/// platform call fails (e.g. the window has already been destroyed), in
+/// which case the caller should leave whatever geometry was already
+/// persisted alone rather than overwrite it with a default.
 fn capture_window_geometry(window: &WebviewWindow) -> Option<WindowGeometry> {
     let position = window.outer_position().ok()?;
-    let size = window.outer_size().ok()?;
+    let size = window.inner_size().ok()?;
     Some(WindowGeometry {
         x: position.x,
         y: position.y,
