@@ -1,41 +1,17 @@
-//! Bundled default device configuration: a ROM image, its VICE label file,
+//! Bundled default device configuration: a ROM image, its VICE labels file,
 //! and a device-layout template, embedded in the library so both the
 //! `emma65` binary's zero-config fallback and the debugger's `default`
-//! profile share one source of truth.
-use std::fmt::{Display, Formatter};
+//! profile share one source of truth. Registered as the `"default"`
+//! starter-profile template in [`super::templates`].
 use std::path::{Path, PathBuf};
 
-use super::path::portable_path;
+use super::templates::asset;
+
+pub use asset::MaterializeError;
 
 const ROM_IMAGE: &[u8] = include_bytes!("program.bin");
 const LABELS: &[u8] = include_bytes!("program.lbl");
 const TEMPLATE: &str = include_str!("emulator-template.toml");
-
-/// An error that occurred while materializing the bundled default
-/// configuration, naming the file that could not be written.
-#[derive(Debug)]
-pub struct MaterializeError {
-    /// The file that could not be written.
-    path: PathBuf,
-    /// The underlying I/O failure.
-    source: std::io::Error,
-}
-
-impl Display for MaterializeError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "failed to write '{}': {}", self.path.display(), self.source)
-    }
-}
-
-impl std::error::Error for MaterializeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
-}
-
-fn write_file(path: &Path, contents: &[u8]) -> Result<(), MaterializeError> {
-    std::fs::write(path, contents).map_err(|source| MaterializeError { path: path.to_path_buf(), source })
-}
 
 /// Writes the bundled default ROM image, VICE labels file, and a rendered
 /// `emulator.toml` into `dest` (created if missing). Returns the path to
@@ -43,21 +19,7 @@ fn write_file(path: &Path, contents: &[u8]) -> Result<(), MaterializeError> {
 /// `default` profile directory and a CLI-launch tempdir — one source of
 /// truth for the bundled device layout.
 pub fn materialize_default_config(dest: &Path) -> Result<PathBuf, MaterializeError> {
-    std::fs::create_dir_all(dest).map_err(|source| MaterializeError { path: dest.to_path_buf(), source })?;
-
-    let rom_path = dest.join("program.bin");
-    write_file(&rom_path, ROM_IMAGE)?;
-
-    let labels_path = dest.join("program.lbl");
-    write_file(&labels_path, LABELS)?;
-
-    let rendered = TEMPLATE
-        .replace("{{ROM_IMAGE}}", &portable_path(&rom_path))
-        .replace("{{LABELS}}", &portable_path(&labels_path));
-    let toml_path = dest.join("emulator.toml");
-    write_file(&toml_path, rendered.as_bytes())?;
-
-    Ok(toml_path)
+    asset::materialize(dest, ROM_IMAGE, LABELS, TEMPLATE)
 }
 
 #[cfg(test)]
