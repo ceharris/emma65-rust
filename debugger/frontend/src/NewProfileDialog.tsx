@@ -3,10 +3,24 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import "./styles/modal.scss";
 
+/** One bundled starter-profile template, as returned by `list_templates`. */
+interface TemplateInfo {
+  /** Stable identifier passed back to `create_profile` as `template`. */
+  id: string;
+  /** Human-readable name shown in the picker. */
+  name: string;
+  /** One-line description shown alongside `name` in the picker. */
+  description: string;
+}
+
 /** State for the New Profile dialog; null means closed. */
 interface DialogState {
   /** Controlled value of the name input. */
   name: string;
+  /** Id of the currently-selected starter template. */
+  templateId: string;
+  /** Starter templates available to pick from, fetched when the dialog opens. */
+  templates: TemplateInfo[];
   /** Validation or backend error message; empty string means no error. */
   error: string;
   /** True while `create_profile` is in flight, to disable the form. */
@@ -24,10 +38,14 @@ interface DialogState {
 export default function NewProfileDialog() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
 
+  /** Fetches the available templates and opens the dialog with the first one selected. */
+  const openDialog = async () => {
+    const templates = await invoke<TemplateInfo[]>("list_templates");
+    setDialog({ name: "", templateId: templates[0]?.id ?? "default", templates, error: "", submitting: false });
+  };
+
   useEffect(() => {
-    const unlistenPromise = listen("open-new-profile-dialog", () => {
-      setDialog({ name: "", error: "", submitting: false });
-    });
+    const unlistenPromise = listen("open-new-profile-dialog", () => { openDialog(); });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
@@ -36,7 +54,10 @@ export default function NewProfileDialog() {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "n" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        setDialog((d) => d ?? { name: "", error: "", submitting: false });
+        setDialog((d) => {
+          if (!d) openDialog();
+          return d;
+        });
       }
     };
     window.addEventListener("keydown", handler);
@@ -63,7 +84,7 @@ export default function NewProfileDialog() {
     }
     setDialog((d) => d && { ...d, submitting: true, error: "" });
     try {
-      await invoke("create_profile", { name });
+      await invoke("create_profile", { name, template: dialog.templateId });
       setDialog(null);
     } catch (e) {
       setDialog((d) => d && { ...d, error: String(e), submitting: false });
@@ -93,6 +114,27 @@ export default function NewProfileDialog() {
               if (e.key === "Escape") { e.preventDefault(); setDialog(null); }
             }}
           />
+        </div>
+
+        <div className="modal-field modal-template-field">
+          <label className="modal-label">Template</label>
+          <div className="modal-template-list" role="radiogroup" aria-label="Starter template">
+            {dialog.templates.map((t) => (
+              <label key={t.id} className="modal-template-row">
+                <input
+                  type="radio"
+                  name="template"
+                  checked={dialog.templateId === t.id}
+                  disabled={dialog.submitting}
+                  onChange={() => setDialog((d) => d && { ...d, templateId: t.id })}
+                />
+                <div className="modal-template-text">
+                  <span className="modal-template-name">{t.name}</span>
+                  <span className="modal-template-desc">{t.description}</span>
+                </div>
+              </label>
+            ))}
+          </div>
         </div>
 
         {dialog.error && <div className="modal-error">{dialog.error}</div>}

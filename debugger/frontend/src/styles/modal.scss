@@ -122,6 +122,72 @@
   }
 }
 
+.modal-template-field {
+  align-items: flex-start;
+}
+
+.modal-template-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-template-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 3px 4px;
+  border-radius: 3px;
+
+  &:hover {
+    background: var(--color-bg-alt);
+  }
+
+  input[type="radio"] {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: 2px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 50%;
+    background: var(--color-bg-alt);
+    cursor: pointer;
+    flex-shrink: 0;
+    position: relative;
+
+    &:checked {
+      border-color: var(--color-accent);
+
+      &::after {
+        content: "";
+        position: absolute;
+        inset: 2px;
+        border-radius: 50%;
+        background: var(--color-accent);
+      }
+    }
+  }
+}
+
+.modal-template-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.modal-template-name {
+  font-size: var(--font-size-btn);
+  color: var(--color-fg);
+}
+
+.modal-template-desc {
+  font-size: var(--font-size-btn);
+  color: var(--color-muted);
+}
+
 .modal-buttons {
   display: flex;
   justify-content: flex-end;

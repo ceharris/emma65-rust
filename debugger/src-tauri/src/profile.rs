@@ -146,6 +146,41 @@ fn validate_profile_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// One bundled starter-profile template, as sent to the frontend for the
+/// New Profile dialog's template picker.
+#[derive(serde::Serialize)]
+pub struct TemplateInfo {
+    /// Stable identifier passed back to [`create_profile`] as `template`.
+    pub id: String,
+    /// Human-readable name shown in the picker.
+    pub name: String,
+    /// One-line description shown alongside `name` in the picker.
+    pub description: String,
+}
+
+/// Lists the bundled starter-profile templates available to New Profile.
+#[tauri::command]
+pub fn list_templates() -> Vec<TemplateInfo> {
+    emma65::emulator::config::templates::TEMPLATES
+        .iter()
+        .map(|t| TemplateInfo { id: t.id.to_string(), name: t.name.to_string(), description: t.description.to_string() })
+        .collect()
+}
+
+/// Creates a not-yet-existing profile directory named `name`, seeded from
+/// starter template `template_id` (see [`emma65::emulator::config::templates`])
+/// rather than always cloning the `default` profile. Used only by
+/// [`create_profile`] — the `--profile <name>`-at-startup path still goes
+/// through [`ensure_profile_dir`], which is unaffected by this function and
+/// keeps seeding not-yet-existing named profiles from `default`'s files.
+fn create_profile_dir_from_template(name: &str, template_id: &str) -> Result<PathBuf, String> {
+    let dir = profile_dir(name)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create profile directory {}: {e}", dir.display()))?;
+    emma65::emulator::config::templates::materialize(template_id, &dir)
+        .map_err(|e| format!("Failed to seed profile from template '{template_id}': {e}"))?;
+    Ok(dir)
+}
+
 /// Emits `open-new-profile-dialog`, telling the main window's React layer to
 /// open the New Profile modal. Called directly from the File > New Profile
 /// menu item's `on_menu_event` handler; the Ctrl+N shortcut is scoped to the
@@ -155,23 +190,24 @@ pub(crate) fn emit_open_new_profile_dialog(app: &AppHandle) {
     let _ = app.emit("open-new-profile-dialog", ());
 }
 
-/// Validates `name`, creates a new profile directory seeded from the default
-/// profile, and reloads the session against it — the same effect as
-/// launching with `--profile <name>` for a not-yet-existing profile, but
-/// without restarting the app.
+/// Validates `name`, creates a new profile directory seeded from starter
+/// template `template` (see [`list_templates`]), and reloads the session
+/// against it — the same effect as launching with `--profile <name>` for a
+/// not-yet-existing profile seeded from `default`, but with a user-chosen
+/// starter template and without restarting the app.
 ///
 /// Rejects a name that already names an existing profile: New Profile is
 /// expected to create one, not silently switch to an existing one (that's
 /// what Open Profile / Open Recent are for).
 #[tauri::command]
-pub async fn create_profile(app: AppHandle, name: String) -> Result<(), String> {
+pub async fn create_profile(app: AppHandle, name: String, template: String) -> Result<(), String> {
     let name = name.trim();
     validate_profile_name(name)?;
     let dir = profile_dir(name)?;
     if dir.exists() {
         return Err(format!("A profile named \"{name}\" already exists"));
     }
-    let dir = ensure_profile_dir(name)?;
+    let dir = create_profile_dir_from_template(name, &template)?;
     crate::load_or_reload_session(&app, &dir).await;
     Ok(())
 }
@@ -325,6 +361,42 @@ mod tests {
         assert!(dir.join("emulator.toml").exists());
         assert!(dir.join("program.bin").exists());
         assert!(dir.join("program.lbl").exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn list_templates_returns_the_two_bundled_templates() {
+        let templates = list_templates();
+        let ids: Vec<_> = templates.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["default", "msbasic"]);
+        assert!(templates.iter().all(|t| !t.name.is_empty() && !t.description.is_empty()));
+    }
+
+    #[test]
+    fn create_profile_dir_from_template_seeds_from_msbasic() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let home = temp_home("create-from-msbasic-template");
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
+        unsafe { std::env::set_var("HOME", &home) };
+
+        let dir = create_profile_dir_from_template("custom", "msbasic").unwrap();
+
+        assert!(dir.join("emulator.toml").exists());
+        assert!(dir.join("program.bin").exists());
+        assert!(dir.join("program.lbl").exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn create_profile_dir_from_template_rejects_unknown_template_id() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let home = temp_home("create-from-unknown-template");
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
+        unsafe { std::env::set_var("HOME", &home) };
+
+        let err = create_profile_dir_from_template("custom", "nope").unwrap_err();
+
+        assert!(err.contains("nope"), "expected the bad template id in the error: {err}");
         let _ = fs::remove_dir_all(&home);
     }
 
