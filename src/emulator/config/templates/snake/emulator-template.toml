@@ -1,6 +1,6 @@
-# Bundled MS BASIC starter-profile configuration for emma65. This is a
+# Bundled Snake game starter-profile configuration for emma65. This is a
 # TEMPLATE: {{ROM_IMAGE}} and {{LABELS}} are replaced with materialized
-# paths by emma65::emulator::config::templates::msbasic::materialize_msbasic_config.
+# paths by emma65::emulator::config::templates::snake::materialize_snake_config.
 
 cpu-variant = "WDC65C02"
 clock-speed-hz = 1843200
@@ -8,19 +8,24 @@ clock-speed-hz = 1843200
 [[devices]]
 type = "ram"
 address = 0x0000
-size = 49152
+size = 4096
 
 [[devices]]
 type = "rom"
-address = 0xD000
-size = 12288
+address = 0xF000
+size = 4096
 image = "{{ROM_IMAGE}}"
 labels = "{{LABELS}}"
 
 [[devices]]
 type = "via/6522"
-address = 0xCF00
+address = 0xFF80
 transport = "unix:~/.emma/sock/via6522"
+
+[[devices]]
+type = "lfsr"
+address = 0xFFF6
+mode = "step"
 
 [[devices]]
 type = "console"

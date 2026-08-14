@@ -1,0 +1,9 @@
+*.o
+*.bin
+*.hex
+*.s19
+*.lbl
+*.map
+*.lst
+*.tmp
+

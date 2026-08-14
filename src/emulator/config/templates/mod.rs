@@ -6,6 +6,7 @@
 //! files change.
 pub(super) mod asset;
 mod msbasic;
+mod snake;
 
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -39,14 +40,20 @@ pub static TEMPLATES: &[Template] = &[
     Template {
         id: "default",
         name: "TaliForth2",
-        description: "Forth-2012 system for the 65C02 with VIA, ACIA, and PTM I/O devices.",
+        description: "Forth-2012 with 32K RAM, 32K ROM, VIA, and MC6850",
         materialize_fn: super::default::materialize_default_config,
     },
     Template {
         id: "msbasic",
-        name: "MS BASIC",
-        description: "Microsoft 6502 BASIC interpreter with RAM, ROM, and a console device.",
+        name: "Microsoft BASIC",
+        description: "BASIC with 48K RAM, 12K ROM, and VIA",
         materialize_fn: msbasic::materialize_msbasic_config,
+    },
+    Template {
+        id: "snake",
+        name: "Snake",
+        description: "Classic Snake game using the built-in console and VIA",
+        materialize_fn: snake::materialize_snake_config,
     },
 ];
 

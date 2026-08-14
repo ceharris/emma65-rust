@@ -603,7 +603,7 @@ to Unix socket — factor shared code once both exist) → `PipeTransport` →
 - Full draft of this file was produced during design; use it as a
   starting point but re-verify against the final `ChannelRelay<u8>` API
   (§3) once it's actually implemented — some plumbing was referenced but
-  not yet added to `mod.rs` at time of writing this plan.
+  not yet added to `msbasic` at time of writing this plan.
 - Test suite: full rewrite required. Old tests asserting
   `try_recv_tagged() == Some(TransportEvent::Connected(0))` etc. no longer
   apply. New tests should assert against `ChannelRelay<u8>::drain_into`. See
@@ -657,7 +657,7 @@ principles:
     client disconnects during normal operation are unaffected and still
     emit `Disconnected` as today.)
 - `TagAllocator`, `ClientSession`, `pump_outbound`, `run_client_task`
-  remain shared in `mod.rs` as today; only their internals change to match
+  remain shared in `msbasic` as today; only their internals change to match
   the new relay types and drop-counting.
 - `reporter.report_counts()` covers both the outbound and inbound-ingress
   counters (§2.1) — no separate reporter task needed beyond what §2.1
@@ -667,7 +667,7 @@ principles:
   redesign and will remain so after. **Done** (PR #227 review): the two
   listeners' accept loops were identical except for the listener/stream
   types and how a client's peer identity is captured. Extracted a
-  `ClientListener` trait (`mod.rs`) with an `accept` method returning
+  `ClientListener` trait (`msbasic`) with an `accept` method returning
   `(Reader, Writer, PeerInfo)` plus a `format_peer(PeerInfo, conn_tag)`
   associated function, and a single generic `run_listener_task<L:
   ClientListener>` that now owns the whole accept loop (tag allocation,
@@ -1247,7 +1247,7 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
 
 ## 10. Suggested Implementation Order (checklist)
 
-- [x] `ChannelRelay<T>` in `mod.rs` (`pub`, with `drain_into`,
+- [x] `ChannelRelay<T>` in `msbasic` (`pub`, with `drain_into`,
       `from_parts`, and the shared `push_and_park` free function), with
       unit tests (§3). Revised while implementing item 3: gained an
       internal stop signal, replacing the original "senders must be
@@ -1273,7 +1273,7 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       from the literal spec in one deliberate way, confirmed with the user
       via AskUserQuestion: `pump_outbound`/`run_client_task`/`ClientSession`
       are duplicated locally in `unix_socket.rs` (new ring/reporter shapes)
-      rather than changed in place in `mod.rs`, since `mod.rs`'s versions
+      rather than changed in place in `msbasic`, since `msbasic`'s versions
       are still used as-is by `TcpSocketTransport` (item 5, not yet
       converted) and changing them there would break its compile before its
       own item lands. Dedupe once both transports are converted, per this
@@ -1283,11 +1283,11 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       `UnixSocketTransport` closely (same `listen`/`listen_with_capacity`
       shape, same `Transport` impl, same test set). Since both multipoint
       transports are now converted, `pump_outbound`/`ClientSession`/
-      `run_client_task` moved back into `mod.rs` as shared machinery (their
+      `run_client_task` moved back into `msbasic` as shared machinery (their
       new ring/reporter shapes), replacing both the old `ChannelBridge`-based
       versions and item 4's local duplicates in `unix_socket.rs` — the
       deduplication opportunity this section called out. `ChannelBridge`
-      itself stays in `mod.rs`, still used by `PipeTransport` (item 6, not
+      itself stays in `msbasic`, still used by `PipeTransport` (item 6, not
       yet converted).
 - [x] `PipeTransport` rewrite + tests (§4.3) — mirrors `PtyTransport` (§4.1)
       closely: `spawn`/`spawn_with_capacity` return `(Self, ChannelRelay<u8>)`,
@@ -1303,7 +1303,7 @@ site has one yet), so both use `TransportReporter::pending(error_sender)`:
       `TransportReporter::pending(None)` + `std::mem::forget(relay)`
       treatment as the other three arms. Now that all four P2P/multipoint
       transports using it are converted, `ChannelBridge` had no remaining
-      callers and was removed from `mod.rs` (not itself a checklist item,
+      callers and was removed from `msbasic` (not itself a checklist item,
       but trivial once dead).
 - [x] `InternalPipeTransport` rewrite + tests (§4.4). Deviates from the
       literal spec in one respect, confirmed with the user: `try_recv()`
