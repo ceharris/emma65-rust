@@ -1,4 +1,4 @@
-        		.include "ascii.h.s"
+                .include "ascii.h.s"
                 .include "console.h.s"
                 .include "state.h.s"
 
@@ -10,12 +10,12 @@
 ; is available.
 ;
 ; On return:
-;       A = character read
-;  
+; A = character read
+;
 console_getcb:
                 lda CONSOLE_IO
                 beq console_getcb
-        		rts
+                rts
 
 
 ;-----------------------------------------------------------------------
@@ -27,24 +27,24 @@ console_getcb:
 ; in an escape sequence are assumed to arrive much faster than a human
 ; could legitimately press the escape key followed by another key in
 ; a sequence like manner. An input routine can use this routine after
-; reading Escape from console input. If it returns non-zero, the 
+; reading Escape from console input. If it returns non-zero, the
 ; previoulsy read Escape can be assumed to be an escape sequence.
 ;
 ; On return:
-;       A = character read or zero if no character available
-;  
+; A = character read or zero if no character available
+;
 console_getcp:
                 phx
-    		    ldx #$20                ; loop counter
+                ldx #$20                ; loop counter
 @loop:
-		        lda CONSOLE_IO          ; read console input
-		        bne @done               ; go if we got a character
-		        dex                     
-		        bne @loop               ; go if still more passes
+                lda CONSOLE_IO          ; read console input
+                bne @done               ; go if we got a character
+                dex
+                bne @loop               ; go if still more passes
 @done:
                 plx
                 ora #0                  ; set Z if A==0
-        		rts
+                rts
 
 
 ;-----------------------------------------------------------------------
@@ -53,32 +53,32 @@ console_getcp:
 ; console keyboard.
 ;
 ; On return:
-;       Carry clear -- expected key was pressed
-;       Carry set -- Ctrl+C was pressed
+; Carry clear -- expected key was pressed
+; Carry set -- Ctrl+C was pressed
 ;
 console_getcw:
-        		sta B                   ; save character we're awaiting
+                sta B                   ; save character we're awaiting
 @loop:
-        		lda CONSOLE_IO          ; read console input
-        		beq @loop               ; no input yet
-        		cmp #CTRL_C             
-        		bne @compare            ; not Ctrl+C: check for match 
-        		sec                     ; set carry to signal Ctrl+C
-        		rts
+                lda CONSOLE_IO          ; read console input
+                beq @loop               ; no input yet
+                cmp #CTRL_C
+                bne @compare            ; not Ctrl+C: check for match
+                sec                     ; set carry to signal Ctrl+C
+                rts
 @compare:
-        		and #$df                ; flatten character case
-        		cmp B                   
-        		bne @loop               ; go if not our characcter
-        		clc                     ; got our character, not Ctrl+C
-        		rts
+                and #$df                ; flatten character case
+                cmp B
+                bne @loop               ; go if not our characcter
+                clc                     ; got our character, not Ctrl+C
+                rts
 
 
 ;-----------------------------------------------------------------------
 ; console_puts:
 ; Puts a string to the console.
-; 
+;
 ; On entry:
-;       W = pointer to the null-terminated string
+; W = pointer to the null-terminated string
 ;
 console_puts:
                 phy
@@ -97,10 +97,10 @@ console_puts:
 ;-----------------------------------------------------------------------
 ; console_putsw:
 ; Puts a "wide" string to the console -- i.e. a string in which
-; every pair of characters will have an intervening space. 
-; 
+; every pair of characters will have an intervening space.
+;
 ; On entry:
-;       W = pointer to the null-terminated string
+; W = pointer to the null-terminated string
 ;
 console_putsw:
                 phy
@@ -123,14 +123,14 @@ console_putsw:
 
 ;-----------------------------------------------------------------------
 ; console_putsc:
-; Puts a string to the console consisting a repeated character. 
-; 
+; Puts a string to the console consisting a repeated character.
+;
 ; On entry:
-;       A = character to repeat
-;       X = number of times to repeat character (A)
+; A = character to repeat
+; X = number of times to repeat character (A)
 ;
 ; On return
-;       B clobbered
+; B clobbered
 ;
 console_putsc:
                 sta B
@@ -147,6 +147,6 @@ console_putsc:
 ; Drains the console input buffer, discarding any pending input.
 ;
 console_drain:
-		        stz CONSOLE_LATCH
-		        rts
+                stz CONSOLE_LATCH
+                rts
 
