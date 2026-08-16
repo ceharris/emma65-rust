@@ -137,9 +137,9 @@ mod tests {
     }
 
     #[test]
-    fn registered_template_ids_are_exactly_default_and_msbasic() {
+    fn registered_template_ids() {
         let ids: Vec<_> = TEMPLATES.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["default", "msbasic"]);
+        assert_eq!(ids, vec!["default", "msbasic", "snake"]);
     }
 
     #[test]

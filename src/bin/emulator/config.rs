@@ -140,10 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_named_profile_msbasic_merges_three_devices() {
+    fn apply_named_profile_msbasic_merges_four_devices() {
         let mut config = empty_app_config();
         let _dir = apply_named_profile(&mut config, "msbasic").unwrap();
-        assert_eq!(config.emulator.devices.as_ref().map(Vec::len), Some(3));
+        assert_eq!(config.emulator.devices.as_ref().map(Vec::len), Some(4));
     }
 
     #[test]

@@ -53,7 +53,7 @@ mod tests {
             .extract()
             .expect("bundled msbasic config failed to parse");
 
-        assert_eq!(config.devices.as_ref().map(Vec::len), Some(3));
+        assert_eq!(config.devices.as_ref().map(Vec::len), Some(4));
 
         let _ = std::fs::remove_dir_all(&dest);
     }
