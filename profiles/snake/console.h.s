@@ -4,6 +4,7 @@
             CONSOLE_IO = $FFF8
             CONSOLE_LATCH = $FFF9
 
+            .global console_getcb
             .global console_getcp
             .global console_getcw
             

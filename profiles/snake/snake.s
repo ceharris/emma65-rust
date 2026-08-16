@@ -16,6 +16,15 @@ start:
 		jsr timer_start
 		cli
 
+		jsr ui_begin
+		bcc ready
+
+		stp
+
+ready:
+		jsr heap_init
+		jsr model_alloc
+
 play_again:
 		jsr model_init
 next_life:

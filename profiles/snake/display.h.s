@@ -9,6 +9,7 @@
 				UI_QUIT = 5
 				UI_REDRAW = 6
 
+				.global ui_begin
 				.global ui_clear
 				.global ui_redraw
 				.global ui_update

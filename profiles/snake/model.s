@@ -6,8 +6,72 @@
 
 		.segment "CODE"
 
-		GRID_PAGES = GRID_CELLS / 256
-		GRID_REMAINDER = GRID_CELLS - 256*GRID_PAGES
+
+;-----------------------------------------------------------------------
+; model_alloc:
+; Allocates the grid and column vector of row addresses.
+;
+; On entry:
+;	grid_width = width of the grid in cells
+;	grid_height = height of the grid in cells
+;
+model_alloc:
+		; determine size of Y-offset table
+		lda grid_height				; number of grid rows
+		asl							; numbef of Y-offset addresses
+		; set W = number of bytes to allocate
+		sta W			
+		stz W+1
+		jsr heap_alloc
+		; save pointer to Y-offset table
+		sty grid_y_table
+		sta grid_y_table+1
+
+		ldx grid_height
+		ldy #0
+		stz grid_size
+		stz grid_size+1
+@loop1:
+		lda grid_size
+		sta (grid_y_table),y
+		iny
+		clc
+		adc grid_width
+		sta grid_size
+		lda grid_size+1
+		sta (grid_y_table),y
+		iny
+		adc #0
+		sta grid_size+1
+		dex
+		bne @loop1
+
+		; grid_size is now grid_height * grid_width
+		; allocate space for the grid
+		lda grid_size
+		sta W
+		lda grid_size+1
+		sta W+1
+		jsr heap_alloc
+		sty grid_base
+		sta grid_base+1
+
+		ldx grid_height
+		ldy #0
+@loop2:
+		lda (grid_y_table),y
+		clc
+		adc grid_base
+		sta (grid_y_table),y
+		iny
+		lda (grid_y_table),y
+		adc grid_base+1
+		sta (grid_y_table),y
+		iny
+		dex
+		bne @loop2
+		rts
+		
 
 ;-----------------------------------------------------------------------
 ; model_init:
@@ -23,10 +87,18 @@ model_init:
 		sta score+1
 		sta food_last
 		sta food_expires
-		ldx #GAME_START_X
+		lda grid_width
+		lsr
+		tax
 		stx snake_head_x
-		ldy #GAME_START_Y
+		stx prev_head_x
+		stx prev_tail_x
+		lda grid_height
+		lsr
+		tay
 		sty snake_head_y
+		sty prev_head_y
+		sty prev_tail_y
 		jsr _grid_offset
 		stx snake_head_addr
 		sta snake_head_addr+1
@@ -201,27 +273,65 @@ model_key_event:
 		clc
 		rts
 
+
+;-----------------------------------------------------------------------
+; model_get_cell:
+; Gets the content of the cell at (X,Y)
+;
+; On entry:
+;	X = X-coordinate in the grid
+;	Y = Y-coordinate in the gird
+;
+; On return:
+;	A = contents of grid cell at (X,Y)
+;	W clobbered
+;
+model_get_cell:
+		phx
+		phy
+
+		; set W = offset of the cell in the grid
+		jsr _grid_offset
+
+		; fetch the contents of the cell
+		lda (W)				
 		
+		ply
+		plx
+		ora #0				; set Z if A=0
+		rts
+
+
 ;-----------------------------------------------------------------------
 ; _empty_grid:
 ; Initializes the game grid by marking all cells as empty.
 ;
+.global _empty_grid
 _empty_grid:
-		lda #<game_grid
+		lda grid_base
 		sta W
-		lda #>game_grid
+		lda grid_base+1
 		sta W+1
-		lda #EMPTY_CELL
-		ldx #GRID_PAGES
+		ldx grid_size+1					; number of full pages
+		bne @multi_page
+
+		; just one page -- pick up at the remainder case
+		ldx grid_size					; size of partial page
+		bra @remainder_loop
+
+		; multiple-pages
+@multi_page:
 		ldy #0
+		lda #EMPTY_CELL
 @page_loop:		
 		sta (W),y
 		iny
 		bne @page_loop
-		inc W+1			; next page
+		inc W+1							; next page
 		dex
 		bne @page_loop
-		ldx #GRID_REMAINDER
+
+		ldx grid_size					; size of partial page
 @remainder_loop:
 		sta (W),y
 		iny
@@ -411,12 +521,12 @@ _place_food:
 		rts
 @choose:
 		; randomly choose a column
-		lda #GRID_COLUMNS	
+		lda grid_width	
 		jsr rnd_range	
 		sta food_x
 		tax
 		; randomly choose a row
-		lda #GRID_ROWS
+		lda grid_height
 		jsr rnd_range
 		sta food_y0
 		tay
@@ -484,27 +594,28 @@ _place_food:
 ;	W = address offset
 ;
 _grid_offset:
-		; Y = 2*Y to find the offset within _y_offset_addr table
+		; set Y = 2*Y, the offset within the column vector
 		tya
 		asl
 		tay
-		
-		; fetch address of column 0 in row Y and store in W
-		lda _y_offset_addr,y
+
+		; set W = starting address of the row
+		lda (grid_y_table),y
 		sta W
-		lda _y_offset_addr+1,y
+		iny
+		lda (grid_y_table),y
 		sta W+1
 
 		; add the column to get the address of the cell and store in W
-		txa			; A = X
+		txa								; A = X coordinate
 		clc
-		adc W
-		sta W
-		tax			; X = address LSB
+		adc W							; W = column address (LSB only)
+		sta W	
+		tax								; X = column address LSB
 		bcc @no_carry
-		inc W+1
+		inc W+1							; update MSB if needed
 @no_carry:
-		lda W+1
+		lda W+1							; A = column address MSB
 		rts
 
 
@@ -516,11 +627,11 @@ _grid_offset:
 ; On entry:
 ;	X = grid column
 ; On return:
-;	X = (X' + 1) mod GRID_COLUMNS
+;	X = (X' + 1) mod grid_width
 ;
 _incr_horizontal:
 		inx
-		cpx #GRID_COLUMNS
+		cpx grid_width
 		bcc @done
 		ldx #0
 @done:
@@ -535,14 +646,15 @@ _incr_horizontal:
 ; On entry:
 ;	X = grid column
 ; On return:
-;	X = (X' - 1) mod GRID_COLUMNS
+;	X = (X' - 1) mod grid_width
 ;
 _decr_horizontal:
 		dex
 		bmi @wrap
 		rts
 @wrap:
-		ldx #GRID_COLUMNS-1
+		ldx grid_width
+		dex
 		rts	
 
 
@@ -554,11 +666,11 @@ _decr_horizontal:
 ; On entry:
 ;	Y = grid row
 ; On return:
-;	Y = (Y' + 1) mod GRID_ROWS
+;	Y = (Y' + 1) mod grid_height
 ;
 _incr_vertical:
 		iny
-		cpy #GRID_ROWS
+		cpy grid_height
 		bcc @done
 		ldy #0
 @done:
@@ -573,14 +685,15 @@ _incr_vertical:
 ; On entry:
 ;	Y = grid row
 ; On return:
-;	Y = (Y' - 1) mod GRID_ROWS
+;	Y = (Y' - 1) mod grid_height
 ;
 _decr_vertical:
 		dey
 		bmi @wrap
 		rts
 @wrap:
-		ldy #GRID_ROWS-1
+		ldy grid_height
+		dey
 		rts	
 
 
@@ -658,40 +771,3 @@ _set_score_flag:
 		ora #GF_SCORE_CHANGE
 		sta game_flags
 		rts
-
-
-
-		.segment "RODATA"
-
-;-----------------------------------------------------------------------
-; _y_offset_addr:
-; A table of game grid offsets for each row in the grid.
-; Given a vertical grid coordinate in the range 0..GRID_ROWS (23), the
-; corresponding table entry gives the address of the cell that corresponds
-; to X=0 on that row.
-;
-_y_offset_addr:
-		.word game_grid + 0*GRID_COLUMNS
-		.word game_grid + 1*GRID_COLUMNS
-		.word game_grid + 2*GRID_COLUMNS
-		.word game_grid + 3*GRID_COLUMNS
-		.word game_grid + 4*GRID_COLUMNS
-		.word game_grid + 5*GRID_COLUMNS
-		.word game_grid + 6*GRID_COLUMNS
-		.word game_grid + 7*GRID_COLUMNS
-		.word game_grid + 8*GRID_COLUMNS
-		.word game_grid + 9*GRID_COLUMNS
-		.word game_grid + 10*GRID_COLUMNS
-		.word game_grid + 11*GRID_COLUMNS
-		.word game_grid + 12*GRID_COLUMNS
-		.word game_grid + 13*GRID_COLUMNS
-		.word game_grid + 14*GRID_COLUMNS
-		.word game_grid + 15*GRID_COLUMNS
-		.word game_grid + 16*GRID_COLUMNS
-		.word game_grid + 17*GRID_COLUMNS
-		.word game_grid + 18*GRID_COLUMNS
-		.word game_grid + 19*GRID_COLUMNS
-		.word game_grid + 20*GRID_COLUMNS
-		.word game_grid + 21*GRID_COLUMNS
-		.word game_grid + 22*GRID_COLUMNS
-		.word game_grid + 23*GRID_COLUMNS

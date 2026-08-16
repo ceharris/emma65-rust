@@ -5,6 +5,20 @@
                 .segment "CODE"
 
 ;-----------------------------------------------------------------------
+; console_getcb:
+; Gets a character from the console, looping (blocking) until a character
+; is available.
+;
+; On return:
+;       A = character read
+;  
+console_getcb:
+                lda CONSOLE_IO
+                beq console_getcb
+        		rts
+
+
+;-----------------------------------------------------------------------
 ; console_getcp:
 ; Gets a character from the console, waiting over a short time interval
 ; for the character to arrive. This routine is used in distinguishing

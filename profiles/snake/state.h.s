@@ -2,13 +2,6 @@
 	.ifndef STATE_H
 		STATE_H = 1
 
-		GRID_ROWS = 23
-		GRID_COLUMNS = 40
-		GRID_CELLS = GRID_ROWS*GRID_COLUMNS
-
-		GAME_START_X = 20
-		GAME_START_Y = 11
-
 		NUM_LIVES = 3
 
 		EMPTY_CELL = 0
@@ -46,7 +39,12 @@
 
 
 		.globalzp B
+		.globalzp C
 		.globalzp W
+		.globalzp grid_width
+		.globalzp grid_height
+		.globalzp screen_width
+		.globalzp screen_height
 		.globalzp loop_delay
 		.globalzp loop_timer
 		.globalzp snake_head_x
@@ -73,7 +71,13 @@
 		.globalzp food_last
 		.globalzp lives
 		.globalzp score
+		.globalzp grid_size
+		.globalzp grid_y_table
+		.globalzp grid_base
 
-		.global game_grid
+;		.global game_grid
+	
+		.global heap_init
+		.global heap_alloc	
 
 	.endif

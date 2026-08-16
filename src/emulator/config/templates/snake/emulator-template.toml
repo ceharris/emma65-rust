@@ -12,8 +12,8 @@ size = 4096
 
 [[devices]]
 type = "rom"
-address = 0xF000
-size = 4096
+address = 0xE000
+size = 8192
 image = "{{ROM_IMAGE}}"
 labels = "{{LABELS}}"
 

@@ -4,7 +4,7 @@
 EXECUTABLE=snake
 PROFILE=$(HOME)/.emma/debugger/profiles/$(EXECUTABLE)
 TEMPLATE=../../src/emulator/config/templates/$(EXECUTABLE)
-LOAD_OFFSET=0xF000
+LOAD_OFFSET=0xE000
 EXECUTION_START_LABEL=start
 LD_CONFIG=$(EXECUTABLE).cfg
 BIN_IMAGE=$(EXECUTABLE).bin
