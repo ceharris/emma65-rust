@@ -41,19 +41,19 @@ pub static TEMPLATES: &[Template] = &[
         id: "default",
         name: "TaliForth2",
         description: "Forth-2012 with 32K RAM, 32K ROM, VIA, and MC6850",
-        materialize_fn: super::default::materialize_default_config,
+        materialize_fn: super::default::materialize_config,
     },
     Template {
         id: "msbasic",
         name: "Microsoft BASIC",
         description: "BASIC with 48K RAM, 12K ROM, and VIA",
-        materialize_fn: msbasic::materialize_msbasic_config,
+        materialize_fn: msbasic::materialize_config,
     },
     Template {
         id: "snake",
         name: "Snake",
         description: "Classic Snake game using the built-in console and VIA",
-        materialize_fn: snake::materialize_snake_config,
+        materialize_fn: snake::materialize_config,
     },
 ];
 

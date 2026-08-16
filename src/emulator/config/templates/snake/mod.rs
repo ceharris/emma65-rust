@@ -12,7 +12,7 @@ const TEMPLATE: &str = include_str!("emulator-template.toml");
 /// Writes the bundled image, VICE labels file, and a rendered
 /// `emulator.toml` into `dest` (created if missing). Returns the path to
 /// the written `emulator.toml`.
-pub fn materialize_snake_config(dest: &Path) -> Result<PathBuf, MaterializeError> {
+pub fn materialize_config(dest: &Path) -> Result<PathBuf, MaterializeError> {
     asset::materialize(dest, ROM_IMAGE, LABELS, TEMPLATE)
 }
 
@@ -31,7 +31,7 @@ mod tests {
     #[test]
     fn materialize_writes_all_three_files_with_correct_bytes() {
         let dest = temp_dest("writes-files");
-        let toml_path = materialize_snake_config(&dest).unwrap();
+        let toml_path = materialize_config(&dest).unwrap();
 
         assert_eq!(toml_path, dest.join("emulator.toml"));
         assert_eq!(std::fs::read(dest.join("program.bin")).unwrap(), ROM_IMAGE);
@@ -45,7 +45,7 @@ mod tests {
     #[test]
     fn materialize_renders_a_config_that_round_trips_through_figment() {
         let dest = temp_dest("round-trip");
-        let toml_path = materialize_snake_config(&dest).unwrap();
+        let toml_path = materialize_config(&dest).unwrap();
 
         let config: crate::emulator::Config = Figment::new()
             .merge(Toml::file(&toml_path))

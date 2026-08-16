@@ -94,7 +94,7 @@ pub fn ensure_profile_dir(name: &str) -> Result<PathBuf, String> {
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create profile directory {}: {e}", dir.display()))?;
         if name == "default" {
-            emma65::emulator::config::default::materialize_default_config(&dir)
+            emma65::emulator::config::default::materialize_config(&dir)
                 .map_err(|e| format!("Failed to seed default profile: {e}"))?;
         } else {
             copy_missing_files_from_default(&dir)?;
