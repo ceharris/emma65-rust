@@ -24,6 +24,15 @@ pub struct CliArgs {
     /// panels in their default dock locations and sizes (issue #398).
     #[clap(long = "restore-layout")]
     pub restore_layout: bool,
+    /// Overrides the detached-Terminal window's auto-detected display scale
+    /// factor, used when converting the terminal's CSS-px grid size to a
+    /// window `LogicalSize` for the size-preset menu's programmatic resizes
+    /// (issue #462). An escape hatch for hosts where
+    /// `Window::scale_factor()` auto-detection misreports the effective
+    /// display scale — see `doc/debugger-terminal-size-menu-plan.md`'s Work
+    /// Unit 2.
+    #[clap(long = "scale-factor")]
+    pub scale_factor: Option<f64>,
 }
 
 /// Tauri-managed state holding the directory of the currently active
