@@ -5,6 +5,7 @@
 //! [`Template`] entry to [`TEMPLATES`] below. No existing template's code or
 //! files change.
 pub(super) mod asset;
+mod ehbasic;
 mod msbasic;
 mod snake;
 
@@ -48,6 +49,12 @@ pub static TEMPLATES: &[Template] = &[
         name: "Microsoft BASIC",
         description: "BASIC with 48K RAM, 12K ROM, and VIA",
         materialize_fn: msbasic::materialize_config,
+    },
+    Template {
+        id: "ehbasic",
+        name: "EhBASIC",
+        description: "Lee Davison's EhBASIC with 48K RAM, 12K ROM, and VIA",
+        materialize_fn: ehbasic::materialize_config,
     },
     Template {
         id: "snake",
@@ -139,7 +146,7 @@ mod tests {
     #[test]
     fn registered_template_ids() {
         let ids: Vec<_> = TEMPLATES.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["default", "msbasic", "snake"]);
+        assert_eq!(ids, vec!["default", "msbasic", "ehbasic", "snake"]);
     }
 
     #[test]
