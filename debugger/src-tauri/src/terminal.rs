@@ -29,6 +29,25 @@ pub struct TerminalTx(pub Mutex<Option<File>>);
 /// `begin_terminal_detach`/`reattach_terminal`.
 pub struct TerminalTargetWindow(pub Mutex<String>);
 
+/// Holds the `--scale-factor` CLI override (see `profile::CliArgs::scale_factor`),
+/// if one was given at startup. Set once before the app finishes building and
+/// never mutated afterward, unlike the other state in this module — there's
+/// no UI to change it at runtime. `None` means the frontend should trust
+/// `Window::scale_factor()`'s own auto-detection instead — see
+/// `get_terminal_scale_factor_override`.
+#[derive(Default)]
+pub struct TerminalScaleFactorOverride(pub Option<f64>);
+
+/// Tauri command: returns the `--scale-factor` CLI override, if one was
+/// given at startup — see `TerminalScaleFactorOverride`'s doc comment. Read
+/// by `terminalSizing.ts`'s `logicalSizeForCssPixels` in place of
+/// `getCurrentWindow().scaleFactor()` when converting a CSS-px terminal grid
+/// size to a Tauri `LogicalSize` for the detached window's `setSize()`.
+#[tauri::command]
+pub fn get_terminal_scale_factor_override(state: State<TerminalScaleFactorOverride>) -> Option<f64> {
+    state.0
+}
+
 /// Cap, in bytes, on `TerminalHistory`'s rolling buffer — generous for a
 /// low-volume serial console's raw byte stream. Independent of
 /// `preferences::UiConfig::terminal_scrollback` (xterm's own line-based

@@ -422,6 +422,7 @@ pub fn run() {
         .manage(terminal::TerminalHistory::default())
         .manage(terminal::TerminalTx(Mutex::new(None)))
         .manage(terminal::TerminalTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
+        .manage(terminal::TerminalScaleFactorOverride(cli.scale_factor))
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
         .manage(disassembly::DisassemblerState(Mutex::new(None)))
@@ -552,6 +553,7 @@ pub fn run() {
             terminal::get_terminal_history,
             terminal::detach_terminal,
             terminal::attach_terminal,
+            terminal::get_terminal_scale_factor_override,
             trace::record_trace,
             trace::stop_trace,
             trace::get_trace_window,
