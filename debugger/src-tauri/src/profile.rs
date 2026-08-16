@@ -15,9 +15,11 @@ use tauri_plugin_dialog::DialogExt;
 #[derive(Parser)]
 #[clap(name = "emma65-debugger")]
 pub struct CliArgs {
-    /// Name of the configuration profile to use.
-    #[clap(long = "profile", default_value = "default")]
-    pub profile: String,
+    /// Name of the configuration profile to use. When omitted, the debugger
+    /// restores whichever profile was last active (issue #445), falling back
+    /// to `default` if there's no recorded profile or it no longer exists.
+    #[clap(long = "profile")]
+    pub profile: Option<String>,
     /// Discard the persisted dock layout so the debugger starts with all
     /// panels in their default dock locations and sizes (issue #398).
     #[clap(long = "restore-layout")]
@@ -101,6 +103,28 @@ pub fn ensure_profile_dir(name: &str) -> Result<PathBuf, String> {
         }
     }
     Ok(dir)
+}
+
+/// Resolves which profile directory to launch with. An explicit `--profile
+/// NAME` always wins, with the existing create-if-missing behavior of
+/// [`ensure_profile_dir`]. Without the flag, restores the most recently
+/// active profile (issue #445): the front of `recent`, which
+/// `recent::record_recent_profile` keeps in sync with every profile
+/// activation, including the previous run's, so it reflects whatever profile
+/// was open when the debugger last quit. Falls back to `default` if there's
+/// no recent history or the recorded directory no longer exists on disk.
+pub fn resolve_startup_profile(cli_profile: Option<&str>, recent: &[PathBuf]) -> Result<(PathBuf, String), String> {
+    if let Some(name) = cli_profile {
+        let dir = ensure_profile_dir(name)?;
+        return Ok((dir, name.to_string()));
+    }
+    if let Some(dir) = recent.first().filter(|p| p.is_dir()) {
+        copy_missing_files_from_default(dir)?;
+        let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("default").to_string();
+        return Ok((dir.clone(), name));
+    }
+    let dir = ensure_profile_dir("default")?;
+    Ok((dir, "default".to_string()))
 }
 
 /// Sets `window`'s title to `"{base} — {profile}"` (em dash separator), e.g.
@@ -361,6 +385,69 @@ mod tests {
         assert!(dir.join("emulator.toml").exists());
         assert!(dir.join("program.bin").exists());
         assert!(dir.join("program.lbl").exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn resolve_startup_profile_prefers_an_explicit_cli_profile_over_recent_history() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let home = temp_home("resolve-explicit-cli");
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
+        unsafe { std::env::set_var("HOME", &home) };
+        let recent = vec![home.join(".emma/debugger/profiles/other")];
+
+        let (dir, name) = resolve_startup_profile(Some("named"), &recent).unwrap();
+
+        assert_eq!(dir, home.join(".emma/debugger/profiles/named"));
+        assert_eq!(name, "named");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn resolve_startup_profile_restores_the_most_recently_active_profile() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let home = temp_home("resolve-restore-recent");
+        let last_used = home.join(".emma/debugger/profiles/last-used");
+        fs::create_dir_all(&last_used).unwrap();
+        fs::write(last_used.join("emulator.toml"), "config").unwrap();
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
+        unsafe { std::env::set_var("HOME", &home) };
+        let recent = vec![last_used.clone(), home.join(".emma/debugger/profiles/older")];
+
+        let (dir, name) = resolve_startup_profile(None, &recent).unwrap();
+
+        assert_eq!(dir, last_used);
+        assert_eq!(name, "last-used");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn resolve_startup_profile_falls_back_to_default_when_recent_history_is_empty() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let home = temp_home("resolve-fallback-no-history");
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
+        unsafe { std::env::set_var("HOME", &home) };
+
+        let (dir, name) = resolve_startup_profile(None, &[]).unwrap();
+
+        assert_eq!(dir, home.join(".emma/debugger/profiles/default"));
+        assert_eq!(name, "default");
+        assert!(dir.join("emulator.toml").exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn resolve_startup_profile_falls_back_to_default_when_the_last_used_profile_is_gone() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let home = temp_home("resolve-fallback-missing-dir");
+        // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
+        unsafe { std::env::set_var("HOME", &home) };
+        let recent = vec![home.join(".emma/debugger/profiles/deleted")];
+
+        let (dir, name) = resolve_startup_profile(None, &recent).unwrap();
+
+        assert_eq!(dir, home.join(".emma/debugger/profiles/default"));
+        assert_eq!(name, "default");
         let _ = fs::remove_dir_all(&home);
     }
 
