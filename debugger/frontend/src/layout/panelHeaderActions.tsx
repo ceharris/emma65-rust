@@ -59,6 +59,25 @@ export function usePanelHeaderAction(id: MainPanelId, action: PanelHeaderAction)
   }, [register, id, action.title, action.disabled, action.disabledTitle]);
 }
 
+/**
+ * Same as `usePanelHeaderAction`, but a no-op outside a `PanelHeaderActionProvider`
+ * instead of throwing — for a panel that, like Terminal, also mounts in a host with
+ * no provider ancestor (the detached-Terminal window has its own document with no
+ * `DockLayout` around it; see `useEditMenuOverride` in `EditMenuContext.tsx` for the
+ * same pattern applied to the native Edit menu).
+ */
+export function useOptionalPanelHeaderAction(id: MainPanelId, action: PanelHeaderAction) {
+  const ctx = useContext(PanelHeaderActionContext);
+  const register = ctx?.register;
+  const onClickRef = useRef(action.onClick);
+  onClickRef.current = action.onClick;
+  useEffect(() => {
+    if (!register) return;
+    register(id, { ...action, onClick: () => onClickRef.current() });
+    return () => register(id, null);
+  }, [register, id, action.title, action.disabled, action.disabledTitle]);
+}
+
 /** Reads the current id -> action map, for `DockTabActions` to render from. */
 export function usePanelHeaderActions() {
   const ctx = useContext(PanelHeaderActionContext);

@@ -102,6 +102,20 @@ export interface PixelSize {
   height: number;
 }
 
+/** A fixed VT220-style terminal grid size. */
+export interface TerminalSizePreset {
+  cols: number;
+  rows: number;
+}
+
+/** The four standard VT220 grid sizes named in issue #462, in the order the size-preset menu lists them. */
+export const TERMINAL_SIZE_PRESETS: TerminalSizePreset[] = [
+  { cols: 80, rows: 24 },
+  { cols: 132, rows: 24 },
+  { cols: 80, rows: 43 },
+  { cols: 132, rows: 43 },
+];
+
 /**
  * Inverse of `FitAddon.proposeDimensions()`: given a target grid, returns the
  * CSS-px size of `term.element`'s parent (the same element

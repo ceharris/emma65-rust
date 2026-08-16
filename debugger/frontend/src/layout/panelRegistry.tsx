@@ -48,5 +48,9 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   "run-controls": () => <RunControlsPanel />,
   trace: () => <TracePanel />,
   log: () => <LogPanel />,
-  terminal: () => <TerminalPanel />,
+  // Threads the dockview panel API down so the size-preset menu (issue #462
+  // Work Unit 4) can resize this panel via `dockPanelApi.setSize()` — the
+  // detached-window host (`terminal-detached.tsx`) renders `TerminalPanel`
+  // with no such prop, which is how it tells docked and detached apart.
+  terminal: ({ api }) => <TerminalPanel dockPanelApi={api} />,
 };
