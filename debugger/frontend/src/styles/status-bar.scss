@@ -55,6 +55,21 @@ button.status-bar-cell {
   }
 }
 
+// Reset is destructive (drops CPU/device state), so it gets a danger
+// background at rest rather than the subtle borderless look of the other
+// status-bar buttons, to make it harder to miss/misclick.
+button.status-bar-reset {
+  background-color: var(--color-danger-bg);
+
+  &:hover {
+    background-color: var(--color-danger-strong);
+  }
+
+  &:active {
+    background-color: var(--color-indicator-stop);
+  }
+}
+
 .status-bar-label {
   color: var(--color-muted);
 }
