@@ -191,7 +191,11 @@ export default function MemoryPanel() {
     const requestId = ++fetchRequestIdRef.current;
     try {
       const [result, symbols] = await Promise.all([
-        invoke<number[]>("get_memory", { addr }),
+        // `seq` lets the backend's shared MemoryViewAddr (which the free-run
+        // loop samples from) resist being clobbered by this call if it's
+        // still executing after a newer fetchPage call has already finished
+        // on the backend's thread pool (issue #453).
+        invoke<number[]>("get_memory", { addr, seq: requestId }),
         invoke<string[][]>("get_symbols_for_range", { start: addr, count: 256 })
           .catch(() => [] as string[][]),
       ]);

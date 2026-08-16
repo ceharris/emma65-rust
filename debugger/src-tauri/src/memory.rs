@@ -1,7 +1,7 @@
 //! Memory panel: paged reads, writes, fills, and file loads.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 use tauri::{AppHandle, Emitter, State};
 
@@ -13,19 +13,48 @@ use crate::CpuState;
 /// the right page during free-run.
 pub struct MemoryViewAddr(pub Arc<AtomicU16>);
 
+/// Guards `MemoryViewAddr` against being overwritten by a stale `get_memory`
+/// call that happens to finish executing after a more recently issued one.
+///
+/// Tauri dispatches command invocations to a thread pool with no ordering
+/// guarantee between separate calls, so two `get_memory` invocations issued
+/// in one order (e.g. navigating to 0xFF00, then to 0xC000) can run their
+/// command bodies in the other order. Without this guard, whichever call's
+/// `mem_view_addr.store()` executes last would win — even if it was issued
+/// first and the frontend has already moved on and shown the newer page
+/// (issue #453). The frontend passes its own monotonically increasing
+/// per-fetch request ID as `seq`; only the highest `seq` seen so far is
+/// allowed to update `MemoryViewAddr`.
+pub struct MemoryViewSeq(pub AtomicU64);
+
 /// Returns 256 bytes of memory starting at `addr` (address AND'ed with 0xfff0 for paragraph alignment).
 ///
 /// Reads are performed via `Bus::peek_range` so no device side effects occur.
 /// While the CPU is free-running, returns the most recently captured snapshot
 /// page from `LiveSnapshotRx` so the memory panel stays live.
+///
+/// `seq` is the frontend's monotonically increasing request ID for this fetch;
+/// see [`MemoryViewSeq`] for why `MemoryViewAddr` is only updated when it's the
+/// highest `seq` seen so far.
 #[tauri::command]
 pub fn get_memory(
     addr: u16,
+    seq: u64,
     cpu_state: State<CpuState>,
     live_snapshot_rx: State<LiveSnapshotRx>,
     mem_view_addr: State<MemoryViewAddr>,
+    mem_view_seq: State<MemoryViewSeq>,
 ) -> Result<Vec<u8>, String> {
-    mem_view_addr.0.store(addr & 0xfff0, Ordering::Relaxed);
+    let mut last_seq = mem_view_seq.0.load(Ordering::Relaxed);
+    while seq > last_seq {
+        match mem_view_seq.0.compare_exchange_weak(last_seq, seq, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => {
+                mem_view_addr.0.store(addr & 0xfff0, Ordering::Relaxed);
+                break;
+            }
+            Err(actual) => last_seq = actual,
+        }
+    }
     let guard = cpu_state.0.lock().unwrap();
     if let Some(cpu) = guard.as_ref() {
         let page_start = addr & 0xfff0;
@@ -244,6 +273,7 @@ mod tests {
             .manage(CpuState(Mutex::new(None)))
             .manage(LiveSnapshotRx(Mutex::new(None)))
             .manage(MemoryViewAddr(Arc::new(AtomicU16::new(0))))
+            .manage(MemoryViewSeq(AtomicU64::new(0)))
             .build(mock_context(noop_assets()))
             .expect("failed to build mock app");
 
@@ -252,9 +282,11 @@ mod tests {
         // Stopped: user navigates to 0xC000 (direct-peek path).
         let bytes = get_memory(
             0xC000,
+            1,
             app.state::<CpuState>(),
             app.state::<LiveSnapshotRx>(),
             app.state::<MemoryViewAddr>(),
+            app.state::<MemoryViewSeq>(),
         ).unwrap();
         assert_eq!(bytes[0x10], 0xBB, "stopped read of 0xC000 should see its marker byte");
 
@@ -267,17 +299,65 @@ mod tests {
 
         // A handful of debugger-running-tick refreshes (100ms apart) re-requesting
         // the same page; every one must still see 0xC000's content, not 0x0000's.
-        for _ in 0..5 {
+        for i in 0..5u64 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let bytes = get_memory(
                 0xC000,
+                2 + i,
                 app.state::<CpuState>(),
                 app.state::<LiveSnapshotRx>(),
                 app.state::<MemoryViewAddr>(),
+                app.state::<MemoryViewSeq>(),
             ).unwrap();
             assert_eq!(bytes[0x10], 0xBB, "running read of 0xC000 should see its marker byte, not 0x0000's");
         }
 
         handle.take_cpu().await;
+    }
+
+    /// Reproduces the true root cause behind issue #453: two `get_memory` calls
+    /// issued in one order (an earlier navigation to 0xFF00, then a later one to
+    /// 0xC000) can have their command bodies actually *execute* in the opposite
+    /// order, since Tauri dispatches commands to a thread pool with no ordering
+    /// guarantee. Without the `seq` guard, the stale 0xFF00 call finishing last
+    /// would overwrite `MemoryViewAddr` back to 0xFF00 even though the frontend
+    /// has already moved on to 0xC000. Simulates that inversion directly: call
+    /// the newer request (seq 2, addr 0xC000) before the older one (seq 1, addr
+    /// 0xFF00), exactly as they'd execute out of order.
+    #[test]
+    fn get_memory_ignores_late_arriving_stale_seq() {
+        let app = mock_builder()
+            .manage(CpuState(Mutex::new(None)))
+            .manage(LiveSnapshotRx(Mutex::new(None)))
+            .manage(MemoryViewAddr(Arc::new(AtomicU16::new(0))))
+            .manage(MemoryViewSeq(AtomicU64::new(0)))
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app");
+
+        *app.state::<CpuState>().0.lock().unwrap() = Some(make_cpu());
+
+        // The newer request (issued second by the frontend) executes first.
+        get_memory(
+            0xC000,
+            2,
+            app.state::<CpuState>(),
+            app.state::<LiveSnapshotRx>(),
+            app.state::<MemoryViewAddr>(),
+            app.state::<MemoryViewSeq>(),
+        ).unwrap();
+        assert_eq!(app.state::<MemoryViewAddr>().0.load(Ordering::Relaxed), 0xC000);
+
+        // The older, stale request (issued first, but slower) executes second.
+        get_memory(
+            0xFF00,
+            1,
+            app.state::<CpuState>(),
+            app.state::<LiveSnapshotRx>(),
+            app.state::<MemoryViewAddr>(),
+            app.state::<MemoryViewSeq>(),
+        ).unwrap();
+
+        // MemoryViewAddr must still reflect the newer request, not the stale one.
+        assert_eq!(app.state::<MemoryViewAddr>().0.load(Ordering::Relaxed), 0xC000);
     }
 }
