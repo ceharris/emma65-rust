@@ -8,6 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import { APP_KEY_BINDINGS } from "./useAppKeyBindings";
 import { useEditMenuOverride } from "./EditMenuContext";
 import { useTheme } from "./ThemeContext";
+import { resolveTerminalFont } from "./terminalSizing";
 
 const XTERM_DARK_THEME: ITheme = {
   background: "#1e1e1e",
@@ -27,6 +28,11 @@ const XTERM_LIGHT_THEME: ITheme = {
   selectionBackground: "#cce4f7",
 };
 
+/** The platform default monospace font, from the `--font-mono` CSS var. */
+function getFallbackMonoFont(): string {
+  return getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace";
+}
+
 /**
  * The dock panel hosting the emulator's console. Shaped for reuse: it reads
  * the theme via `useTheme()` rather than tracking it independently, so both
@@ -40,6 +46,7 @@ const XTERM_LIGHT_THEME: ITheme = {
 export default function TerminalPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
   const { resolvedTheme } = useTheme();
   const editMenu = useEditMenuOverride();
 
@@ -63,15 +70,32 @@ export default function TerminalPanel() {
       .catch((err) => console.error("get_terminal_scrollback failed:", err));
   }, []);
 
+  // Fetched once and applied to the already-constructed terminal, same
+  // pattern as the scrollback effect above — not yet a live preference (no
+  // picker UI exists yet, see issue #462's Work Unit 1), and xterm.js
+  // supports changing `options.fontFamily`/`fontSize` on a live instance, so
+  // this doesn't need to gate the terminal's initial construction below on
+  // the fetch completing first. Refits afterward since a font-metrics change
+  // invalidates whatever grid the construction effect's own initial fit()
+  // computed against the placeholder font.
   useEffect(() => {
-    const monoFont =
-      getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()
-      || 'monospace';
+    invoke<{ family: string | null; size: number | null }>("get_terminal_font")
+      .then(({ family, size }) => {
+        if (!termRef.current) return;
+        const resolved = resolveTerminalFont(family, size, getFallbackMonoFont());
+        termRef.current.options.fontFamily = resolved.fontFamily;
+        termRef.current.options.fontSize = resolved.fontSize;
+        fitAddonRef.current?.fit();
+      })
+      .catch((err) => console.error("get_terminal_font failed:", err));
+  }, []);
+
+  useEffect(() => {
     const term = new Terminal({
       cols: 80,
       rows: 24,
       theme: resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME,
-      fontFamily: monoFont,
+      fontFamily: getFallbackMonoFont(),
       fontSize: 14,
     });
     termRef.current = term;
@@ -135,6 +159,7 @@ export default function TerminalPanel() {
     const selectionChangeDisposable = editMenu ? term.onSelectionChange(() => editMenu.notifyChanged()) : null;
 
     const fitAddon = new FitAddon();
+    fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
     term.open(containerRef.current!);
     fitAddon.fit();
@@ -221,6 +246,7 @@ export default function TerminalPanel() {
       unregisterOverride?.();
       selectionChangeDisposable?.dispose();
       termRef.current = null;
+      fitAddonRef.current = null;
       term.dispose();
     };
     // `editMenu` (from context) is read once here, same as `resolvedTheme`

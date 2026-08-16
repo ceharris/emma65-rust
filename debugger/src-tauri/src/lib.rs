@@ -588,6 +588,7 @@ pub fn run() {
             preferences::set_theme,
             preferences::get_last_file_dialog_dir,
             preferences::get_terminal_scrollback,
+            preferences::get_terminal_font,
             preferences::set_last_file_dialog_dir,
             layout::get_dock_layout,
             layout::set_dock_layout,
