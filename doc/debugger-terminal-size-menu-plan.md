@@ -151,6 +151,36 @@ where that's been shown to be insufficient:
   this work unit shrinks to "confirm and add a regression test/note," not a
   new fix.
 
+**Outcome (code-audit-driven, no interactive GUI verification tooling
+available in the implementing session — see that unit's PR for the
+manual-UAT caveat):** all three paths already resolve correctly on current
+`main`, no code fix needed.
+
+- The `ResizeObserver` callback: `addon-fit`'s `proposeDimensions()` reads
+  the container's actual `getComputedStyle` box in CSS px, entirely inside
+  the webview's own DOM — there's no Tauri logical/physical conversion in
+  this path to get wrong, so it's correct regardless of display scale.
+- Detached-window native resize: `.terminal-container` is `width: 100%;
+  height: 100%` (`global.scss`) all the way up through `html`/`body`/`#root`
+  in `terminal-detached.html`'s document, which *is* the detached window's
+  viewport — an OS-level resize changes that element's border box directly,
+  so the existing `ResizeObserver` already fires on it with no separate
+  handler needed.
+- Detach/reattach remount: `DockLayout.tsx`'s `closeTerminalPanel`/
+  `terminal-reattached` handler always closes the dock panel and later
+  `addPanel`s a brand new one (never reparents), so every detach/reattach is
+  a full unmount + remount of `TerminalPanel` — a fresh `Terminal` fit
+  against whichever host it lands in next, with no code path that could
+  carry a size measured against the previous host forward. The "docked
+  terminal keeps stale detached dimensions" bug from the original report
+  is architecturally impossible in the current close/`addPanel` + full
+  remount design (confirms the #385 remount redesign already fixed it).
+
+Documented inline as code comments in `TerminalPanel.tsx` (near the
+`ResizeObserver` declaration and the component's top doc comment) rather
+than as a standalone regression test, since the frontend has no test runner
+configured yet.
+
 ### 4. Size-preset context menu + docked header icon
 
 - In `TerminalPanel.tsx`, register a `contextmenu` handler on the terminal
