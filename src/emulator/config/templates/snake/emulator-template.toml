@@ -1,6 +1,6 @@
-# Bundled Snake game starter-profile configuration for emma65. This is a
-# TEMPLATE: {{ROM_IMAGE}} and {{LABELS}} are replaced with materialized
-# paths by emma65::emulator::config::templates::snake::materialize_snake_config.
+# Bundled Snake game starter-profile configuration for emma65. 
+# This is a TEMPLATE: {{ROM_IMAGE}} and {{LABELS}} are replaced 
+# with materialized paths when the profile is instantiated.
 
 cpu-variant = "WDC65C02"
 clock-speed-hz = 1843200
@@ -20,7 +20,6 @@ labels = "{{LABELS}}"
 [[devices]]
 type = "via/6522"
 address = 0xFF80
-transport = "unix:~/.emma/sock/via6522"
 
 [[devices]]
 type = "lfsr"
