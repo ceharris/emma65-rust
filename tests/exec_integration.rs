@@ -362,11 +362,10 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
     let wall_start = std::time::Instant::now();
     let handle = run(cpu);
 
-    let result = tokio::time::timeout(
+    let (result, cpu) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        handle.wait(),
+        handle.take_cpu_with_result(),
     ).await.expect("R6551 19200 baud throughput test timed out");
-
     let elapsed = wall_start.elapsed();
 
     assert!(
@@ -389,9 +388,12 @@ async fn _19200_baud_throughput_at_1_8432_mhz() {
         expected_min_secs * 1000.0,
     );
 
-    // Retrieve CPU to check cycle count.
-    // (handle was consumed by wait(); re-run is not possible — assert cycles via wall time above)
-    let _ = CYCLES_PER_BYTE; // N * CYCLES_PER_BYTE minimum cycles validated indirectly via timing
+    assert!(
+        cpu.cycles() >= N as u64 * CYCLES_PER_BYTE,
+        "expected at least {} cycles (N × cycles-per-byte), got {}",
+        N as u64 * CYCLES_PER_BYTE,
+        cpu.cycles(),
+    );
 }
 
 /// MC6850 has no baud rate selection — it polls the transport on every device tick,

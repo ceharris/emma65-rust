@@ -179,7 +179,10 @@ pub fn run_cpu(
     let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
     let skip_pc = skip_breakpoint_pc.0.lock().unwrap().take();
     let mem_view_addr = Arc::clone(&mem_view_addr.0);
-    let handle = exec_run_from(cpu, skip_pc, Arc::clone(&mem_view_addr));
+    // park_on_stall: true — Run should keep the CPU thread alive through WAI/STP
+    // so a later device- or UI-triggered interrupt/reset resumes it without the
+    // user having to press Run again.
+    let handle = exec_run_from(cpu, skip_pc, Arc::clone(&mem_view_addr), true);
     *run_stopper_state.0.lock().unwrap() = Some(handle.stopper());
     *app.state::<LiveSnapshotRx>().0.lock().unwrap() =
         Some(handle.subscribe_live());
@@ -219,7 +222,7 @@ fn restart_run_after_reset(app: &AppHandle, cpu: Cpu, mem_view_addr: &Arc<Atomic
     *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
     *app.state::<SkipBreakpointPc>().0.lock().unwrap() = None;
 
-    let handle = exec_run_from(cpu, None, Arc::clone(mem_view_addr));
+    let handle = exec_run_from(cpu, None, Arc::clone(mem_view_addr), true);
     *app.state::<RunStopperState>().0.lock().unwrap() = Some(handle.stopper());
     *app.state::<LiveSnapshotRx>().0.lock().unwrap() = Some(handle.subscribe_live());
     handle

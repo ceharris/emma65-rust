@@ -294,7 +294,7 @@ mod tests {
         // subscribe the live snapshot channel).
         let cpu = app.state::<CpuState>().0.lock().unwrap().take().unwrap();
         let mem_view_addr = Arc::clone(&app.state::<MemoryViewAddr>().0);
-        let handle = exec_run_from(cpu, None, Arc::clone(&mem_view_addr));
+        let handle = exec_run_from(cpu, None, Arc::clone(&mem_view_addr), true);
         *app.state::<LiveSnapshotRx>().0.lock().unwrap() = Some(handle.subscribe_live());
 
         // A handful of debugger-running-tick refreshes (100ms apart) re-requesting

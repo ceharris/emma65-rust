@@ -114,7 +114,12 @@ async fn main() -> ExitCode {
         None
     };
 
-    let run_handle = emma65::emulator::run(cpu);
+    let run_handle = emma65::emulator::run_from(
+        cpu,
+        None,
+        Arc::new(std::sync::atomic::AtomicU16::new(0)),
+        config.park_on_halt,
+    );
     let (cpu_done_tx, mut cpu_done_rx) = tokio::sync::oneshot::channel::<StepResult>();
     tokio::spawn(async move {
        let _ = cpu_done_tx.send(run_handle.wait().await);

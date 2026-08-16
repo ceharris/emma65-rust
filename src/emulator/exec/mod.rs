@@ -67,6 +67,13 @@ const JSR_BYTE_LEN: u16 = 3;
 const UNLIMITED_SENTINEL: u64 = 0;
 const BATCH_SIZE: u32 = 1000;
 
+/// How often [`run_loop`] re-polls `cpu.step()` while the CPU is parked in WAI
+/// or STP with nothing to service yet. Keeps the background thread from
+/// busy-spinning a full OS thread core while it waits for a device- or
+/// UI-triggered interrupt/reset — `cpu.step()` doesn't advance `cycles` while
+/// parked, so the normal clock-speed throttling below has nothing to pace on.
+const PARKED_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
 /// A command that mutates a running CPU's interrupt state, applied by
 /// [`run_loop`], [`step_over_subroutine`], or [`step_return`].
 ///
@@ -219,7 +226,8 @@ impl RunStopper {
 ///
 /// Dropping the handle without calling [`stop`](RunHandle::stop) or
 /// [`take_cpu`](RunHandle::take_cpu) will leave the CPU thread running until it
-/// stops on its own (breakpoint, watch trigger, error, or STP/WAI with no interrupt).
+/// stops on its own (breakpoint, watch trigger, error, or STP/WAI with no
+/// interrupt — unless started with `park_on_stall: true`, see [`run_from`]).
 pub struct RunHandle {
     /// Sends `true` to ask the CPU thread to stop after the current instruction.
     stop_tx: watch::Sender<bool>,
@@ -494,7 +502,7 @@ pub fn step_return(
 /// match the target frequency. Throttling is batched over ~1000 instructions
 /// to avoid per-instruction syscall overhead.
 pub fn run(cpu: Cpu) -> RunHandle {
-    run_from(cpu, None, Arc::new(AtomicU16::new(0)))
+    run_from(cpu, None, Arc::new(AtomicU16::new(0)), false)
 }
 
 /// Like [`run`], but skips the breakpoint/watch check at `skip_pc` on the
@@ -505,7 +513,19 @@ pub fn run(cpu: Cpu) -> RunHandle {
 /// memory page is captured in each live snapshot. The caller should store the
 /// paragraph-aligned address currently shown in the memory panel, and may update
 /// it at any time while running.
-pub fn run_from(cpu: Cpu, skip_pc: Option<u16>, mem_view_addr: Arc<AtomicU16>) -> RunHandle {
+///
+/// `park_on_stall` selects what happens when the CPU executes WAI or STP with
+/// nothing yet to wake it: `false` (the default via [`run`]) halts the loop
+/// immediately, same as a breakpoint — the natural behavior for a headless run
+/// where a halted CPU means the program is done. `true` keeps the background
+/// thread alive instead, calling `cpu.step()` at a throttled poll rate (see
+/// [`PARKED_POLL_INTERVAL`]) so devices keep ticking and a later device- or
+/// UI-triggered interrupt/reset is picked up with no caller action needed —
+/// used by the debugger's Run command, where landing back in the halted state
+/// on every WAI/STP would defeat the point of pressing Run. WAI resumes
+/// transparently (execution just continues); STP still halts the loop once
+/// serviced, via [`StepResult::Reset`], same as a manually-triggered reset.
+pub fn run_from(cpu: Cpu, skip_pc: Option<u16>, mem_view_addr: Arc<AtomicU16>, park_on_stall: bool) -> RunHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
@@ -513,7 +533,7 @@ pub fn run_from(cpu: Cpu, skip_pc: Option<u16>, mem_view_addr: Arc<AtomicU16>) -
     let (live_tx, live_rx) = watch::channel(None);
 
     std::thread::spawn(move || {
-        run_loop(cpu, skip_pc, mem_view_addr, stop_rx, cmd_rx, live_tx, result_tx, cpu_tx);
+        run_loop(cpu, skip_pc, mem_view_addr, stop_rx, cmd_rx, live_tx, result_tx, cpu_tx, park_on_stall);
     });
 
     RunHandle { stop_tx, cmd_tx, result_rx, cpu_rx, live_rx }
@@ -529,6 +549,7 @@ fn run_loop(
     live_tx: watch::Sender<Option<CpuLiveSnapshot>>,
     result_tx: oneshot::Sender<StepResult>,
     cpu_tx: oneshot::Sender<Cpu>,
+    park_on_stall: bool,
 ) {
     let start_cycles = cpu.cycles();
     let start_timestamp = Instant::now();
@@ -544,6 +565,7 @@ fn run_loop(
         // worth of delay (≤1000 instructions, sub-millisecond even at
         // throttled clock speeds) is imperceptible for a UI-driven command.
         drain_interrupt_commands(&mut cpu, &mut cmd_rx);
+        let mut parked = false;
         for _ in 0..BATCH_SIZE {
             if *stop_rx.borrow() {
                 break 'outer None;
@@ -556,6 +578,14 @@ fn run_loop(
             };
             match res {
                 StepResult::Executed(_) => {}
+                StepResult::Waiting | StepResult::Stopped if park_on_stall => {
+                    // Parked with nothing to service yet; break out of the batch
+                    // so a queued interrupt command gets drained and the poll
+                    // rate gets throttled below, rather than spinning through
+                    // the rest of this batch doing nothing.
+                    parked = true;
+                    break;
+                }
                 other => break 'outer Some(other),
             }
         }
@@ -565,6 +595,14 @@ fn run_loop(
         let snapshot = build_live_snapshot(
             &cpu, mem_view_addr.load(Ordering::Relaxed), start_cycles, start_timestamp);
         let _ = live_tx.send(Some(snapshot));
+
+        if parked {
+            // Keep polling — a device driven by `cpu.step()`'s tick may still
+            // assert IRQ/NMI/RESET, and a UI-driven command may still arrive on
+            // the next batch's drain.
+            std::thread::sleep(PARKED_POLL_INTERVAL);
+            continue;
+        }
 
         if let Some(hz) = hz {
             let elapsed_ns = start_timestamp.elapsed().as_nanos() as u64;
@@ -749,13 +787,92 @@ mod tests {
         write(&mut cpu, 0x0200, &[0xEA, 0xEA, 0xDB]); // NOP, NOP, STP
         cpu.add_breakpoint(0x0200);
 
-        let handle = run_from(cpu, Some(0x0200), no_mem());
+        let handle = run_from(cpu, Some(0x0200), no_mem(), false);
         let (result, cpu) = handle.take_cpu_with_result().await;
 
         assert!(matches!(result, StepResult::Stopped), "expected Stopped result");
         assert!(cpu.registers().pc > 0x0200, "PC should have advanced past the breakpoint");
         // Breakpoint must still be present after the run.
         assert!(cpu.breakpoints().contains(&0x0200));
+    }
+
+    #[tokio::test]
+    async fn run_does_not_halt_on_stp_alone_when_parked() {
+        // With park_on_stall: true (the debugger's Run command), a free run must
+        // not stop just because the CPU executed STP: the background thread
+        // should stay alive polling for a device- or UI-triggered RESET rather
+        // than handing the CPU back immediately.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xDB]); // STP
+        let handle = run_from(cpu, None, no_mem(), true);
+        let stopper = handle.stopper();
+        // Give the parked poll loop time to run for a while without a reset.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        stopper.trigger_reset();
+        let (result, cpu) = handle.take_cpu_with_result().await;
+        assert!(matches!(result, StepResult::Reset), "expected Reset");
+        assert!(!cpu.is_stopped());
+    }
+
+    #[tokio::test]
+    async fn run_halts_on_stp_by_default() {
+        // Without park_on_stall (plain `run`, used by the standalone binary),
+        // STP must halt the free run immediately, same as before — the CLI
+        // relies on this to exit once a headless program has finished.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xDB]); // STP
+        let handle = run(cpu);
+        let (result, cpu) = handle.take_cpu_with_result().await;
+        assert!(matches!(result, StepResult::Stopped), "expected Stopped result");
+        assert!(cpu.is_stopped());
+    }
+
+    #[tokio::test]
+    async fn run_resumes_transparently_from_wai_on_irq_when_parked() {
+        // With park_on_stall: true, a free run parked in WAI should service a
+        // subsequent IRQ and keep running, rather than requiring the caller to
+        // restart it.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0x58, 0xCB, 0x80, 0xFE]); // CLI, WAI, BRA -2 (spins after waking)
+        write(&mut cpu, 0x0300, &[0xA9, 0x42, 0x8D, 0x00, 0x00, 0x40]); // LDA #$42, STA $0000, RTI
+        cpu.bus_mut().write(0xFFFE, 0x00).unwrap(); // IRQ vector lo -> $0300
+        cpu.bus_mut().write(0xFFFF, 0x03).unwrap(); // IRQ vector hi
+        let handle = run_from(cpu, None, no_mem(), true);
+        let stopper = handle.stopper();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        stopper.assert_irq(IrqSource(0));
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let cpu = handle.take_cpu().await;
+        assert_eq!(read_marker(&cpu), 0x42, "IRQ ISR should have run after waking from WAI");
+        assert!(!cpu.is_waiting());
+    }
+
+    #[tokio::test]
+    async fn run_wakes_from_wai_on_reset_when_parked() {
+        // With park_on_stall: true, a free run parked in WAI must also wake on
+        // a RESET (device- or UI-triggered), not just IRQ/NMI — same as real
+        // 65C02 hardware.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xCB]); // WAI
+        let handle = run_from(cpu, None, no_mem(), true);
+        let stopper = handle.stopper();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        stopper.trigger_reset();
+        let (result, cpu) = handle.take_cpu_with_result().await;
+        assert!(matches!(result, StepResult::Reset), "expected Reset");
+        assert!(!cpu.is_waiting());
+    }
+
+    #[tokio::test]
+    async fn run_halts_on_wai_by_default() {
+        // Without park_on_stall (plain `run`), a WAI with nothing pending must
+        // halt the free run immediately, same as before.
+        let mut cpu = make_cpu_at(0x0200);
+        write(&mut cpu, 0x0200, &[0xCB]); // WAI
+        let handle = run(cpu);
+        let (result, cpu) = handle.take_cpu_with_result().await;
+        assert!(matches!(result, StepResult::Waiting), "expected Waiting result");
+        assert!(cpu.is_waiting());
     }
 
     #[tokio::test]
