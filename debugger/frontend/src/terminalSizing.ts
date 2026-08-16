@@ -14,19 +14,13 @@ export interface ResolvedTerminalFont {
 }
 
 /**
- * Font size used when falling back to the platform default monospace font,
- * per issue #462's requirement — independent of any configured
- * `terminal_font_size`, since a size chosen for a since-rejected font family
- * isn't meaningful once that family is discarded.
+ * Font size used whenever `terminal_font_size` isn't in play — either because
+ * the family fell back to the platform default, or because the family
+ * validated but no size was configured. Matches the terminal's pre-#462
+ * hardcoded size, so leaving these preferences unconfigured is a no-op for
+ * existing users.
  */
-const FALLBACK_FONT_SIZE = 12;
-
-/**
- * Font size used when `terminal_font_family` validates but
- * `terminal_font_size` is unset — matches the terminal's pre-#462 hardcoded
- * size, so leaving size unconfigured is a no-op for existing users.
- */
-const DEFAULT_CONFIGURED_FONT_SIZE = 14;
+const DEFAULT_FONT_SIZE = 14;
 
 /**
  * Reports whether `fontFamily` renders as a genuinely monospace font, by
@@ -51,20 +45,18 @@ export function isMonospaceFont(fontFamily: string, probeSize = 32): boolean {
 /**
  * Resolves the terminal's configured font family/size (from
  * `get_terminal_font`) against `fallbackFamily` (the platform default
- * monospace font, e.g. the `--font-mono` CSS var). Falls back entirely —
- * family and size both — when `configuredFamily` is unset or fails the
- * `isMonospaceFont` probe; otherwise uses the configured family, and the
- * configured size if set (falling back only the size to
- * `DEFAULT_CONFIGURED_FONT_SIZE` when the family is valid but no size was
- * configured).
+ * monospace font, e.g. the `--font-mono` CSS var). Falls back the family to
+ * `fallbackFamily` when `configuredFamily` is unset or fails the
+ * `isMonospaceFont` probe; falls back the size to `DEFAULT_FONT_SIZE`
+ * whenever `configuredSize` is unset, independent of whether the family
+ * itself fell back.
  */
 export function resolveTerminalFont(
   configuredFamily: string | null | undefined,
   configuredSize: number | null | undefined,
   fallbackFamily: string,
 ): ResolvedTerminalFont {
-  if (!configuredFamily || !isMonospaceFont(configuredFamily)) {
-    return { fontFamily: fallbackFamily, fontSize: FALLBACK_FONT_SIZE };
-  }
-  return { fontFamily: configuredFamily, fontSize: configuredSize ?? DEFAULT_CONFIGURED_FONT_SIZE };
+  const fontFamily =
+    configuredFamily && isMonospaceFont(configuredFamily) ? configuredFamily : fallbackFamily;
+  return { fontFamily, fontSize: configuredSize ?? DEFAULT_FONT_SIZE };
 }

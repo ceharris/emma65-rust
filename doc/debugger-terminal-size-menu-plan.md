@@ -87,8 +87,9 @@ user a way to pick a size" as new, well-scoped feature work.
   glyph-width probe shows it isn't actually monospace (render `"i"` and
   `"M"`/`"W"` at the candidate font and compare advance widths; unequal
   means non-monospace), fall back to the platform default monospace font
-  (the existing `--font-mono` CSS var) at 12px per the issue's requirement.
-  Otherwise use the configured family/size.
+  (the existing `--font-mono` CSS var) at 14px, matching the terminal's
+  pre-#462 hardcoded size so leaving the preference unconfigured is a no-op
+  for existing users. Otherwise use the configured family/size.
 - This validation helper is also what Work Unit 2's cell-metrics code needs
   to trust the font it's measuring, so implement it in the shared
   `terminalSizing.ts` module (Work Unit 2) rather than inline in the panel.
