@@ -96,6 +96,18 @@ pub struct UiConfig {
     /// window is actually detached (visible) — see issue #419.
     #[serde(default)]
     pub terminal_window_geometry: Option<WindowGeometry>,
+    /// Terminal font family, by CSS font-family name. `None` means "use the
+    /// platform default monospace font" — there's no hardcoded fallback name
+    /// here because only the webview knows what fonts are actually installed
+    /// on the host; the frontend resolves the fallback. Not yet exposed via
+    /// any UI control — edit `ui.toml` directly to change it — see issue #462.
+    #[serde(default)]
+    pub terminal_font_family: Option<String>,
+    /// Terminal font size, in pixels. `None` means "use the platform
+    /// default". Not yet exposed via any UI control — edit `ui.toml` directly
+    /// to change it — see issue #462.
+    #[serde(default)]
+    pub terminal_font_size: Option<u32>,
 }
 
 impl Default for UiConfig {
@@ -107,8 +119,17 @@ impl Default for UiConfig {
             terminal_scrollback: default_terminal_scrollback(),
             main_window_geometry: None,
             terminal_window_geometry: None,
+            terminal_font_family: None,
+            terminal_font_size: None,
         }
     }
+}
+
+/// The terminal font family and size, as returned by `get_terminal_font`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TerminalFont {
+    pub family: Option<String>,
+    pub size: Option<u32>,
 }
 
 /// Managed state wrapping the current [`UiConfig`].
@@ -210,6 +231,16 @@ pub fn set_theme(mode: ThemeMode, state: State<UiConfigState>, app: AppHandle) -
 #[tauri::command]
 pub fn get_terminal_scrollback(state: State<UiConfigState>) -> u32 {
     state.0.lock().unwrap().terminal_scrollback
+}
+
+/// Returns the terminal's configured font family and size — see
+/// `UiConfig::terminal_font_family`/`terminal_font_size`'s doc comments for
+/// how to change them. Either or both may be `None`, in which case the
+/// frontend resolves its own platform-default fallback.
+#[tauri::command]
+pub fn get_terminal_font(state: State<UiConfigState>) -> TerminalFont {
+    let guard = state.0.lock().unwrap();
+    TerminalFont { family: guard.terminal_font_family.clone(), size: guard.terminal_font_size }
 }
 
 /// Persists `skip` as the "Don't ask again" exit-confirmation preference.
@@ -327,6 +358,26 @@ mod tests {
         let serialized = toml::to_string(&config).unwrap();
         let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.terminal_scrollback, 5000);
+    }
+
+    #[test]
+    fn defaults_terminal_font_fields_to_none_when_missing() {
+        let config: UiConfig = toml::from_str("").unwrap();
+        assert_eq!(config.terminal_font_family, None);
+        assert_eq!(config.terminal_font_size, None);
+    }
+
+    #[test]
+    fn round_trips_terminal_font_fields() {
+        let config = UiConfig {
+            terminal_font_family: Some("Fira Code".to_string()),
+            terminal_font_size: Some(16),
+            ..Default::default()
+        };
+        let serialized = toml::to_string(&config).unwrap();
+        let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.terminal_font_family, Some("Fira Code".to_string()));
+        assert_eq!(deserialized.terminal_font_size, Some(16));
     }
 
     #[test]
