@@ -47,6 +47,7 @@ $dark-palette: (
   warning-bg: #6e5a1e,
   idle: #444444,
   btn-bg: #2d2d30,
+  reset-bg: #4a197a,
 );
 
 $light-palette: (
@@ -83,6 +84,7 @@ $light-palette: (
   warning-bg: #fff2c7,
   idle: #b0b0b0,
   btn-bg: #f0f0f0,
+  reset-bg: #4a197a,
 );
 
 @mixin theme-vars($palette) {
