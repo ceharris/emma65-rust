@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { MainPanelId } from "./panelRegistry";
 
 /** A single tab-header action button a panel wants dockview to render in its tab bar. */
@@ -39,15 +39,24 @@ export function PanelHeaderActionProvider({ children }: { children: React.ReactN
   return <PanelHeaderActionContext.Provider value={{ actions, register }}>{children}</PanelHeaderActionContext.Provider>;
 }
 
-/** Registers `id`'s single tab-header action, replacing it on every change and clearing it on unmount. */
+/**
+ * Registers `id`'s single tab-header action, replacing it on every change and clearing it on
+ * unmount. `action.onClick` is read through a ref rather than listed in the effect's dependency
+ * array: callers idiomatically pass an inline `{ ..., onClick: () => ... }` object literal, which
+ * is a new function identity on every render — depending on it directly would re-run this effect,
+ * and thus `register`'s provider-state update, on every render of every panel using this hook,
+ * which (since the provider re-render fans back out to every consumer) never settles.
+ */
 export function usePanelHeaderAction(id: MainPanelId, action: PanelHeaderAction) {
   const ctx = useContext(PanelHeaderActionContext);
   if (!ctx) throw new Error("usePanelHeaderAction must be used within a PanelHeaderActionProvider");
   const { register } = ctx;
+  const onClickRef = useRef(action.onClick);
+  onClickRef.current = action.onClick;
   useEffect(() => {
-    register(id, action);
+    register(id, { ...action, onClick: () => onClickRef.current() });
     return () => register(id, null);
-  }, [register, id, action.title, action.onClick, action.disabled, action.disabledTitle]);
+  }, [register, id, action.title, action.disabled, action.disabledTitle]);
 }
 
 /** Reads the current id -> action map, for `DockTabActions` to render from. */
