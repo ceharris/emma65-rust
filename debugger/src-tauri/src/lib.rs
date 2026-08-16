@@ -392,7 +392,7 @@ fn emit_status(app: &AppHandle, status: SessionStatus) {
 pub fn run() {
     let cli = profile::CliArgs::parse();
     let config_dir = profile::config_dir().expect("Failed to resolve debugger config directory");
-    let recent_profiles = recent::load_recent_from(&config_dir);
+    let recent_profiles = recent::load_and_prune_recent(&config_dir);
     let (profile_dir, profile_name) = profile::resolve_startup_profile(cli.profile.as_deref(), &recent_profiles)
         .expect("Failed to prepare profile directory");
     // `--restore-layout` (issue #398) skips loading the persisted arrangement

@@ -36,6 +36,23 @@ pub fn load_recent_from(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// Loads `recent.toml` from `dir` and drops entries whose profile directory
+/// no longer exists on disk, re-persisting the pruned list if anything was
+/// removed. Called once at startup: a profile directory can disappear
+/// between runs (deleted or moved outside the debugger, e.g. `rm -rf` on
+/// `~/.emma/debugger/profiles/foo`), and there's no in-app deletion path to
+/// prune the entry at removal time instead.
+pub fn load_and_prune_recent(dir: &Path) -> Vec<PathBuf> {
+    let paths = load_recent_from(dir);
+    let pruned: Vec<PathBuf> = paths.iter().filter(|p| p.is_dir()).cloned().collect();
+    if pruned.len() != paths.len()
+        && let Err(e) = save_recent_to(dir, &pruned)
+    {
+        eprintln!("Failed to save pruned recent profiles: {e}");
+    }
+    pruned
+}
+
 /// Writes `paths` to `recent.toml` under `dir`, creating the directory if it doesn't exist.
 fn save_recent_to(dir: &Path, paths: &[PathBuf]) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("Failed to create config directory: {e}"))?;
@@ -179,6 +196,38 @@ mod tests {
     fn load_recent_from_returns_empty_when_missing() {
         let dir = std::env::temp_dir().join(format!("emma65-recent-missing-test-{:?}", std::thread::current().id()));
         assert!(load_recent_from(&dir).is_empty());
+    }
+
+    #[test]
+    fn load_and_prune_recent_drops_entries_for_missing_directories() {
+        let dir = std::env::temp_dir()
+            .join(format!("emma65-recent-prune-test-{:?}", std::thread::current().id()));
+        let _ = fs::remove_dir_all(&dir);
+        let existing = dir.join("profiles/exists");
+        fs::create_dir_all(&existing).unwrap();
+        let missing = dir.join("profiles/gone");
+        save_recent_to(&dir, &[existing.clone(), missing]).unwrap();
+
+        let pruned = load_and_prune_recent(&dir);
+
+        assert_eq!(pruned, vec![existing]);
+        assert_eq!(load_recent_from(&dir), pruned);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_and_prune_recent_leaves_recent_toml_untouched_when_nothing_is_missing() {
+        let dir = std::env::temp_dir()
+            .join(format!("emma65-recent-prune-noop-test-{:?}", std::thread::current().id()));
+        let _ = fs::remove_dir_all(&dir);
+        let existing = dir.join("profiles/exists");
+        fs::create_dir_all(&existing).unwrap();
+        save_recent_to(&dir, std::slice::from_ref(&existing)).unwrap();
+
+        let pruned = load_and_prune_recent(&dir);
+
+        assert_eq!(pruned, vec![existing]);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
