@@ -42,6 +42,16 @@ function getFallbackMonoFont(): string {
  * (`useAppKeyBindings`) are installed by the host document, not here — the
  * main window installs them once at `App.tsx`'s root, and
  * `terminal-detached.tsx` does the same for its own window.
+ *
+ * Detach/reattach (`DockLayout.tsx`'s `closeTerminalPanel`/`terminal-reattached`
+ * handler) always closes this component's dock panel and later re-`addPanel`s
+ * a brand new one, rather than reparenting an existing instance — so every
+ * detach/reattach cycle fully unmounts and remounts this component, tearing
+ * down its `Terminal` and rebuilding one from scratch against whichever host
+ * (docked panel or detached window) it lands in next. Confirmed by issue
+ * #462's Work Unit 3 audit: this is what makes a freshly remounted
+ * terminal's grid always match its *current* host's actual size, with no way
+ * for a size measured against a previous host to leak into the next one.
  */
 export default function TerminalPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -176,6 +186,13 @@ export default function TerminalPanel() {
     // both split-drag and inactive→active tab transitions. Not started
     // watching until after the history replay below has fully completed —
     // see that block's comment for why.
+    //
+    // This same observer also covers the detached window's native OS
+    // resize, with no separate handler needed (issue #462 Work Unit 3
+    // audit): `.terminal-container` is sized to 100% of its document's
+    // `html`/`body`/`#root` chain (`global.scss`), which is exactly the
+    // detached window's viewport, so an OS-level resize changes this
+    // element's observed border box directly.
     const resizeObserver = new ResizeObserver(() => fitAddon.fit());
 
     term.onData((data) => {
