@@ -172,8 +172,14 @@ export default function MemoryPanel() {
   /** Symbol names indexed by page offset (0–255); empty array means no symbols at that address. */
   const [pageSymbols, setPageSymbols] = useState<string[][]>([]);
 
-  /** Fetch the 256-byte page starting at `addr` (must be paragraph-aligned). */
-  const fetchPage = useCallback(async (addr: number) => {
+  /**
+   * Fetch the 256-byte page starting at `addr` (must be paragraph-aligned).
+   * `updateInput` syncs the address input field to `addr`; pass false for
+   * background refreshes of the already-displayed page (halt/tick events)
+   * so an in-progress edit in the address field isn't clobbered while the
+   * CPU is running (issue #453).
+   */
+  const fetchPage = useCallback(async (addr: number, updateInput: boolean = true) => {
     try {
       const [result, symbols] = await Promise.all([
         invoke<number[]>("get_memory", { addr }),
@@ -184,7 +190,7 @@ export default function MemoryPanel() {
       setPageSymbols(symbols);
       pageAddrRef.current = addr;
       setPageAddr(addr);
-      setInputValue(fmtAddr(addr));
+      if (updateInput) setInputValue(fmtAddr(addr));
     } catch (e) {
       console.error("get_memory failed:", e);
     }
@@ -204,10 +210,10 @@ export default function MemoryPanel() {
     fetchPage(0x0000).then(() => setReady(true));
 
     const unlistenHalted = listen("debugger-halted", () => {
-      fetchPage(pageAddrRef.current);
+      fetchPage(pageAddrRef.current, false);
     });
     const unlistenTick = listen("debugger-running-tick", () => {
-      fetchPage(pageAddrRef.current);
+      fetchPage(pageAddrRef.current, false);
     });
 
     return () => {
