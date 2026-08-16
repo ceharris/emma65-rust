@@ -261,6 +261,7 @@ export default function DisassemblyPanel() {
 
   const handleAddrInputKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
+      if (!isStopped) return;
       let addr: number | null = null;
       try {
         addr = await invoke<number | null>("resolve_symbol", { name: addrInputValue.trim() });
@@ -270,7 +271,7 @@ export default function DisassemblyPanel() {
       if (addr === null) addr = parseAddressInput(addrInputValue);
       if (addr !== null) fetchFrom(addr);
     }
-  }, [addrInputValue, fetchFrom]);
+  }, [addrInputValue, fetchFrom, isStopped]);
 
   const formatAddr = (addr: number) =>
     addr.toString(16).toUpperCase().padStart(4, "0");
@@ -289,7 +290,8 @@ export default function DisassemblyPanel() {
             onKeyDown={handleAddrInputKeyDown}
             spellCheck={false}
             placeholder="0000"
-            title="Enter hex address and press Enter"
+            disabled={!isStopped}
+            title={isStopped ? "Enter hex address and press Enter" : "Stop the CPU to navigate the disassembly"}
           />
         </div>
       </div>
