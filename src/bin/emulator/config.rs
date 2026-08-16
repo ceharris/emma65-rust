@@ -105,7 +105,7 @@ pub fn apply_named_profile(config: &mut AppConfig, id: &str) -> Result<tempfile:
 pub fn apply_default_if_unconfigured(config: &mut AppConfig) -> Option<tempfile::TempDir> {
     if config.emulator.devices.as_ref().is_none_or(|d| d.is_empty()) {
         let dir = tempfile::tempdir().expect("failed to create tempdir for default config");
-        let toml_path = emma65::emulator::config::default::materialize_default_config(dir.path())
+        let toml_path = emma65::emulator::config::default::materialize_config(dir.path())
             .expect("failed to materialize default config");
         let default: emma65::emulator::Config = Figment::new()
             .merge(Toml::file(&toml_path))
@@ -140,10 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_named_profile_msbasic_merges_three_devices() {
+    fn apply_named_profile_msbasic_merges_four_devices() {
         let mut config = empty_app_config();
         let _dir = apply_named_profile(&mut config, "msbasic").unwrap();
-        assert_eq!(config.emulator.devices.as_ref().map(Vec::len), Some(3));
+        assert_eq!(config.emulator.devices.as_ref().map(Vec::len), Some(4));
     }
 
     #[test]

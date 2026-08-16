@@ -1,6 +1,5 @@
-//! Bundled Microsoft BASIC starter-profile template: Microsoft 6502 BASIC's ROM
-//! image, its VICE labels file, and a device-layout template (RAM, ROM, VIA,
-//! console). Registered as the `"msbasic"` starter-profile template in
+//! Bundled Snake game starter-profile template.
+//! Registered as the `"snake"` starter-profile template in
 //! [`super`](super).
 use std::path::{Path, PathBuf};
 
@@ -10,7 +9,7 @@ const ROM_IMAGE: &[u8] = include_bytes!("program.bin");
 const LABELS: &[u8] = include_bytes!("program.lbl");
 const TEMPLATE: &str = include_str!("emulator-template.toml");
 
-/// Writes the bundled MS BASIC ROM image, VICE labels file, and a rendered
+/// Writes the bundled image, VICE labels file, and a rendered
 /// `emulator.toml` into `dest` (created if missing). Returns the path to
 /// the written `emulator.toml`.
 pub fn materialize_config(dest: &Path) -> Result<PathBuf, MaterializeError> {
@@ -51,9 +50,9 @@ mod tests {
         let config: crate::emulator::Config = Figment::new()
             .merge(Toml::file(&toml_path))
             .extract()
-            .expect("bundled msbasic config failed to parse");
+            .expect("bundled snake config failed to parse");
 
-        assert_eq!(config.devices.as_ref().map(Vec::len), Some(4));
+        assert_eq!(config.devices.as_ref().map(Vec::len), Some(5));
 
         let _ = std::fs::remove_dir_all(&dest);
     }

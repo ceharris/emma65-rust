@@ -1,0 +1,31 @@
+# Bundled Snake game starter-profile configuration for emma65. 
+# This is a TEMPLATE: {{ROM_IMAGE}} and {{LABELS}} are replaced 
+# with materialized paths when the profile is instantiated.
+
+cpu-variant = "WDC65C02"
+clock-speed-hz = 1843200
+
+[[devices]]
+type = "ram"
+address = 0x0000
+size = 4096
+
+[[devices]]
+type = "rom"
+address = 0xE000
+size = 8192
+image = "{{ROM_IMAGE}}"
+labels = "{{LABELS}}"
+
+[[devices]]
+type = "via/6522"
+address = 0xFF80
+
+[[devices]]
+type = "lfsr"
+address = 0xFFF6
+mode = "step"
+
+[[devices]]
+type = "console"
+address = 0xFFF8

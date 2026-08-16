@@ -1,6 +1,6 @@
-# Bundled default configuration for emma65. This is a TEMPLATE: {{ROM_IMAGE}}
-# and {{LABELS}} are replaced with materialized paths by
-# emma65::emulator::config::default::materialize_default_config.
+# Bundled TaliForth starter-profile configuration for emma65.
+# This is a TEMPLATE: {{ROM_IMAGE}} and {{LABELS}} are replaced with
+# materialized paths when the profile is instantiated.
 
 cpu-variant = "WDC65C02"
 clock-speed-hz = 1843200

@@ -18,7 +18,7 @@ const TEMPLATE: &str = include_str!("emulator-template.toml");
 /// the written `emulator.toml`. Used both for the debugger's persistent
 /// `default` profile directory and a CLI-launch tempdir — one source of
 /// truth for the bundled device layout.
-pub fn materialize_default_config(dest: &Path) -> Result<PathBuf, MaterializeError> {
+pub fn materialize_config(dest: &Path) -> Result<PathBuf, MaterializeError> {
     asset::materialize(dest, ROM_IMAGE, LABELS, TEMPLATE)
 }
 
@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn materialize_writes_all_three_files_with_correct_bytes() {
         let dest = temp_dest("writes-files");
-        let toml_path = materialize_default_config(&dest).unwrap();
+        let toml_path = materialize_config(&dest).unwrap();
 
         assert_eq!(toml_path, dest.join("emulator.toml"));
         assert_eq!(std::fs::read(dest.join("program.bin")).unwrap(), ROM_IMAGE);
@@ -52,7 +52,7 @@ mod tests {
     #[test]
     fn materialize_renders_a_config_that_round_trips_through_figment() {
         let dest = temp_dest("round-trip");
-        let toml_path = materialize_default_config(&dest).unwrap();
+        let toml_path = materialize_config(&dest).unwrap();
 
         let config: crate::emulator::Config = Figment::new()
             .merge(Toml::file(&toml_path))
@@ -71,7 +71,7 @@ mod tests {
         // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", dest.parent().unwrap()) };
 
-        let toml_path = materialize_default_config(&dest).unwrap();
+        let toml_path = materialize_config(&dest).unwrap();
         let rendered = std::fs::read_to_string(&toml_path).unwrap();
         let dest_name = dest.file_name().unwrap().to_str().unwrap();
         assert!(rendered.contains(&format!("~/{dest_name}/program.bin")), "expected tilde-shorthand path: {rendered}");
@@ -87,7 +87,7 @@ mod tests {
         // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", "/nonexistent-home-for-this-test") };
 
-        let toml_path = materialize_default_config(&dest).unwrap();
+        let toml_path = materialize_config(&dest).unwrap();
         let rendered = std::fs::read_to_string(&toml_path).unwrap();
         assert!(rendered.contains(&format!("\"{}\"", dest.join("program.bin").display())), "expected absolute path: {rendered}");
         assert!(rendered.contains(&format!("\"{}\"", dest.join("program.lbl").display())), "expected absolute path: {rendered}");
