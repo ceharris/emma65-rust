@@ -171,6 +171,14 @@ export default function MemoryPanel() {
   const [fillDialog, setFillDialog] = useState<FillDialogState | null>(null);
   /** Symbol names indexed by page offset (0–255); empty array means no symbols at that address. */
   const [pageSymbols, setPageSymbols] = useState<string[][]>([]);
+  /**
+   * Monotonically increasing ID of the most recently issued `fetchPage` call.
+   * Lets a resolved request detect whether a newer one has since superseded
+   * it, so an older in-flight response (e.g. a periodic running-tick refresh
+   * issued before the user navigated) can't overwrite a newer one that
+   * happens to resolve first (issue #453).
+   */
+  const fetchRequestIdRef = useRef(0);
 
   /**
    * Fetch the 256-byte page starting at `addr` (must be paragraph-aligned).
@@ -180,12 +188,16 @@ export default function MemoryPanel() {
    * CPU is running (issue #453).
    */
   const fetchPage = useCallback(async (addr: number, updateInput: boolean = true) => {
+    const requestId = ++fetchRequestIdRef.current;
     try {
       const [result, symbols] = await Promise.all([
         invoke<number[]>("get_memory", { addr }),
         invoke<string[][]>("get_symbols_for_range", { start: addr, count: 256 })
           .catch(() => [] as string[][]),
       ]);
+      // A newer fetchPage call was issued while this one was in flight;
+      // its result is stale, so don't let it clobber the newer one.
+      if (requestId !== fetchRequestIdRef.current) return;
       setBytes(new Uint8Array(result));
       setPageSymbols(symbols);
       pageAddrRef.current = addr;
