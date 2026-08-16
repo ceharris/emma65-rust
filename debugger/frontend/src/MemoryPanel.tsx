@@ -158,6 +158,8 @@ export default function MemoryPanel() {
   const [bytes, setBytes] = useState<Uint8Array>(new Uint8Array(256));
   /** Controlled value of the address input field. */
   const [inputValue, setInputValue] = useState<string>("0000");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const isInputFocusedRef = useRef(false);
   const [ready, setReady] = useState(false);
   /** Edit-memory dialog state; null when closed. */
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
@@ -184,7 +186,9 @@ export default function MemoryPanel() {
       setPageSymbols(symbols);
       pageAddrRef.current = addr;
       setPageAddr(addr);
-      setInputValue(fmtAddr(addr));
+      if (!isInputFocusedRef.current) {
+        setInputValue(fmtAddr(addr));
+      }
     } catch (e) {
       console.error("get_memory failed:", e);
     }
@@ -654,8 +658,16 @@ export default function MemoryPanel() {
     <div className="memory-panel" onWheel={handleWheel}>
       <div className="memory-header">
         <input
+          ref={inputRef}
           className="mem-addr-input"
           value={inputValue}
+          onFocus={() => {
+            isInputFocusedRef.current = true;
+          }}
+          onBlur={() => {
+            isInputFocusedRef.current = false;
+            setInputValue(fmtAddr(pageAddrRef.current));
+          }}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleInputKeyDown}
           spellCheck={false}
