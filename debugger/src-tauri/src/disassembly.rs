@@ -1,5 +1,6 @@
 //! Disassembly panel: run/step/stop controls and disassembly listing.
 
+use std::sync::atomic::AtomicU16;
 use std::sync::{Arc, Mutex};
 
 use crate::CpuState;
@@ -8,7 +9,7 @@ use crate::memory::MemoryViewAddr;
 use crate::registers::{ChangedFlagsState, RegisterSnapshot};
 use emma65::disasm::Disassembler;
 use emma65::emulator::cpu::StepResult;
-use emma65::emulator::{Cpu, CpuLiveSnapshot, RunStopper, run_from as exec_run_from, step_into as exec_step_into, step_over_breakpoint as exec_step_over_breakpoint, step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return};
+use emma65::emulator::{Cpu, CpuLiveSnapshot, RunHandle, RunStopper, run_from as exec_run_from, step_into as exec_step_into, step_over_breakpoint as exec_step_over_breakpoint, step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Interval between `debugger-running-tick` events emitted during free-run.
@@ -160,6 +161,13 @@ fn spawn_running_tick(app: AppHandle) {
 /// background task that awaits the run completing, then restores the CPU to
 /// `CpuState`, emits `debugger-halted` with the final PC, and emits
 /// `debugger-run-stopped` with a full register snapshot.
+///
+/// If the run halts because of a mid-run Reset (the Reset control while the
+/// CPU is free-running via Run), the run is restarted from the reset vector
+/// instead of finishing (#448): the user pressed Run, so a Reset during that
+/// run is naturally followed by resuming, not by landing back in the stopped
+/// state. `step_over`/`step_return` don't get this treatment — those are
+/// point-to-point operations, not open-ended running.
 #[tauri::command]
 pub fn run_cpu(
     app: AppHandle,
@@ -170,24 +178,51 @@ pub fn run_cpu(
 ) -> Result<(), String> {
     let cpu = cpu_state.0.lock().unwrap().take().ok_or("CPU not ready")?;
     let skip_pc = skip_breakpoint_pc.0.lock().unwrap().take();
-    let handle = exec_run_from(cpu, skip_pc, Arc::clone(&mem_view_addr.0));
-    let stopper = handle.stopper();
-    *run_stopper_state.0.lock().unwrap() = Some(stopper);
+    let mem_view_addr = Arc::clone(&mem_view_addr.0);
+    let handle = exec_run_from(cpu, skip_pc, Arc::clone(&mem_view_addr));
+    *run_stopper_state.0.lock().unwrap() = Some(handle.stopper());
     *app.state::<LiveSnapshotRx>().0.lock().unwrap() =
         Some(handle.subscribe_live());
 
     spawn_running_tick(app.clone());
 
     tauri::async_runtime::spawn(async move {
-        let (result, mut cpu) = handle.take_cpu_with_result().await;
-        let pc = cpu.registers().pc;
-        let result = Some(result);
-        clear_ui_interrupts_on_reset(&app, &mut cpu, &result);
-        let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
-        finish_run(&app, cpu, 0, cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc);
+        let mut handle = handle;
+        loop {
+            let (result, mut cpu) = handle.take_cpu_with_result().await;
+            let pc = cpu.registers().pc;
+            let result = Some(result);
+            clear_ui_interrupts_on_reset(&app, &mut cpu, &result);
+            if matches!(result, Some(StepResult::Reset)) {
+                let _ = app.emit("debugger-halted", cpu.registers().pc);
+                handle = restart_run_after_reset(&app, cpu, &mem_view_addr);
+                continue;
+            }
+            let (cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc) = flags_from_result(&result, pc);
+            finish_run(&app, cpu, 0, cpu_stopped, cpu_waiting, breakpoint_hit, skip_pc);
+            break;
+        }
     });
 
     Ok(())
+}
+
+/// Restarts free-run execution after a mid-run Reset, so `run_cpu`'s
+/// completion loop can keep going instead of finishing (see `run_cpu`).
+///
+/// Mirrors the state updates `reset_cpu` makes for the stopped-CPU case
+/// (clearing changed flags, the skip-breakpoint PC, and refreshing the
+/// CPU/bus cache) plus the `run_cpu`/`finish_run` bookkeeping needed to keep
+/// the new run's stopper and live-snapshot channel current.
+fn restart_run_after_reset(app: &AppHandle, cpu: Cpu, mem_view_addr: &Arc<AtomicU16>) -> RunHandle {
+    *app.state::<ChangedFlagsState>().0.lock().unwrap() = 0;
+    *app.state::<CpuBusCache>().0.lock().unwrap() = snapshot_cpu_bus(&cpu);
+    *app.state::<SkipBreakpointPc>().0.lock().unwrap() = None;
+
+    let handle = exec_run_from(cpu, None, Arc::clone(mem_view_addr));
+    *app.state::<RunStopperState>().0.lock().unwrap() = Some(handle.stopper());
+    *app.state::<LiveSnapshotRx>().0.lock().unwrap() = Some(handle.subscribe_live());
+    handle
 }
 
 /// Signals the free-running CPU thread to stop.
