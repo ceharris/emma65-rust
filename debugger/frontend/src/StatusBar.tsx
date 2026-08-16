@@ -171,18 +171,30 @@ export default function StatusBar() {
 
   // Determine Run/Stop/Step/STP/WAI indicator label and color class.
   // STP and WAI override the normal "Stop" state when the CPU has halted
-  // due to a STP or WAI instruction.
+  // due to a STP or WAI instruction. They also override "Run": with
+  // park_on_stall enabled, Run keeps the CPU thread alive (polling for a
+  // device- or UI-triggered interrupt/reset) instead of stopping when the
+  // CPU executes STP or WAI, so cpuBus.cpu_stopped/cpu_waiting can go true
+  // while displayExecState is still "running".
   let runStopLabel: string;
   let runStopClass: string;
   if (displayExecState === "running") {
-    runStopLabel = "Run";
-    runStopClass = "indicator-run";
+    if (cpuBus?.cpu_stopped) {
+      runStopLabel = "STP Executed";
+      runStopClass = "indicator-stp";
+    } else if (cpuBus?.cpu_waiting) {
+      runStopLabel = "WAI Executed";
+      runStopClass = "indicator-wai";
+    } else {
+      runStopLabel = "Run";
+      runStopClass = "indicator-run";
+    }
   } else if (displayExecState === "stepping") {
     runStopLabel = "Stop";
     runStopClass = "indicator-step";
   } else if (cpuBus?.cpu_stopped) {
     runStopLabel = "STP Executed";
-    runStopClass = "indicator-idle";
+    runStopClass = "indicator-stp";
   } else if (cpuBus?.cpu_waiting) {
     runStopLabel = "WAI Executed";
     runStopClass = "indicator-wai";

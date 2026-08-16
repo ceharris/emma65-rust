@@ -118,3 +118,8 @@ button.status-bar-cell .status-bar-label,
 .indicator-wai { color: var(--color-warning); }
 
 .indicator-idle { color: var(--color-idle); }
+
+// STP shares the Reset button's color (--color-reset-bg) rather than the
+// muted --color-idle: it's easy to miss otherwise, and like Reset it means
+// "the CPU is halted and needs attention".
+.indicator-stp { color: var(--color-reset-bg); }

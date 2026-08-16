@@ -277,19 +277,27 @@ impl Cpu {
     /// Skips a breakpoint at `skip_pc` if specified.
     pub fn step(&mut self, skip_pc: Option<u16>, check_breakpoints: bool) -> StepResult {
         if self.stopped {
-            return StepResult::Stopped;
+            // Tick devices and poll for a device-triggered reset; unlike WAI, only
+            // RESET wakes STP — real 65C02 hardware ignores IRQ/NMI while stopped.
+            self.bus.tick_devices(1);
+            self.interrupts.poll_devices(self.bus.device_interrupt_states());
+            if !self.interrupts.reset_pending() {
+                return StepResult::Stopped;
+            }
+            // Fall through to service the reset below.
         }
 
         if self.waiting {
             // Tick devices and poll for interrupts; stay in WAI until one arrives.
+            // RESET wakes WAI too, same as real 65C02 hardware.
             self.bus.tick_devices(1);
             self.interrupts.poll_devices(self.bus.device_interrupt_states());
-            if !self.irq_recognized() && !self.interrupts.nmi_pending() {
+            if !self.interrupts.reset_pending() && !self.irq_recognized() && !self.interrupts.nmi_pending() {
                 return StepResult::Waiting;
             }
             self.waiting = false;
             log_msg!(self.log_sender, LogLevel::Info, LogCategory::Cpu, "CPU resumed from WAI at 0x{:04x}", self.regs.pc);
-            // Fall through to service the interrupt below.
+            // Fall through to service the reset/interrupt below.
         }
 
         if self.tracing {
@@ -1834,6 +1842,43 @@ mod tests {
     }
 
     #[test]
+    fn stp_wakes_on_device_triggered_reset() {
+        use crate::emulator::device::{DeviceId, IoDevice};
+
+        struct ResetOnce {
+            pending: bool,
+        }
+        impl IoDevice for ResetOnce {
+            fn read(&mut self, _address: u16) -> u8 { 0 }
+            fn write(&mut self, _address: u16, _value: u8) {}
+            fn peek(&self, _address: u16) -> u8 { 0 }
+            fn identity_address(&self) -> u16 { 0x9000 }
+            fn take_reset(&mut self) -> bool { std::mem::take(&mut self.pending) }
+        }
+
+        let mut bus = Bus::config()
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
+            .unwrap()
+            .device(AddressRange::new(0x9000, 0x9000), DeviceId(1), Box::new(ResetOnce { pending: true }))
+            .unwrap()
+            .build();
+        bus.write(RESET_VECTOR, 0x00).unwrap();
+        bus.write(RESET_VECTOR + 1, 0x04).unwrap();
+        let mut cpu = Cpu::builder(CpuVariant::Wdc65C02).bus(bus).build().unwrap();
+        cpu.reset().unwrap();
+
+        write_program(&mut cpu, 0x0400, &[0xDB]); // STP
+        cpu.step(None, true); // execute STP
+        assert!(cpu.is_stopped());
+
+        // The device's pending reset request should wake the CPU on the next step.
+        let result = cpu.step(None, true);
+        assert!(matches!(result, StepResult::Reset), "expected Reset, got a different result");
+        assert!(!cpu.is_stopped());
+        assert_eq!(cpu.regs.pc, 0x0400); // back at the reset vector target
+    }
+
+    #[test]
     fn stp_logs_message() {
         let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
         let mut cpu = make_cpu(0x0200);
@@ -2217,6 +2262,58 @@ mod tests {
         cpu.step(None, true); // wakes and services NMI
         assert_eq!(cpu.regs.pc, 0x0300);
         assert!(!cpu.is_waiting());
+    }
+
+    #[test]
+    fn wai_wakes_on_reset() {
+        // RESET must wake WAI too, same as real 65C02 hardware — matches the
+        // priority already given to RESET over NMI/IRQ once WAI has woken up.
+        let mut cpu = make_cpu(0x0200);
+        write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
+        cpu.step(None, true); // execute WAI — sets waiting=true
+        assert!(matches!(cpu.step(None, true), StepResult::Waiting)); // no interrupt yet
+        cpu.interrupts_mut().signal_reset();
+        let result = cpu.step(None, true); // wakes and services RESET
+        assert!(matches!(result, StepResult::Reset), "expected Reset, got a different result");
+        assert!(!cpu.is_waiting());
+        assert_eq!(cpu.regs.pc, 0x0200); // back at the reset vector target
+    }
+
+    #[test]
+    fn wai_wakes_on_device_triggered_reset() {
+        use crate::emulator::device::{DeviceId, IoDevice};
+
+        struct ResetOnce {
+            pending: bool,
+        }
+        impl IoDevice for ResetOnce {
+            fn read(&mut self, _address: u16) -> u8 { 0 }
+            fn write(&mut self, _address: u16, _value: u8) {}
+            fn peek(&self, _address: u16) -> u8 { 0 }
+            fn identity_address(&self) -> u16 { 0x9000 }
+            fn take_reset(&mut self) -> bool { std::mem::take(&mut self.pending) }
+        }
+
+        let mut bus = Bus::config()
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
+            .unwrap()
+            .device(AddressRange::new(0x9000, 0x9000), DeviceId(1), Box::new(ResetOnce { pending: true }))
+            .unwrap()
+            .build();
+        bus.write(RESET_VECTOR, 0x00).unwrap();
+        bus.write(RESET_VECTOR + 1, 0x04).unwrap();
+        let mut cpu = Cpu::builder(CpuVariant::Wdc65C02).bus(bus).build().unwrap();
+        cpu.reset().unwrap();
+
+        write_program(&mut cpu, 0x0400, &[0xCB]); // WAI
+        cpu.step(None, true); // execute WAI
+        assert!(cpu.is_waiting());
+
+        // The device's pending reset request should wake the CPU on the next step.
+        let result = cpu.step(None, true);
+        assert!(matches!(result, StepResult::Reset), "expected Reset, got a different result");
+        assert!(!cpu.is_waiting());
+        assert_eq!(cpu.regs.pc, 0x0400); // back at the reset vector target
     }
 
     // --- CpuWatchContext reads ---

@@ -38,6 +38,15 @@ pub struct AppConfig {
     /// Path to write structured device/CPU log messages to.
     #[clap(long = "log-file")]
     pub log_file: Option<emma65::emulator::ExpandedPathBuf>,
+
+    /// Keep running when the CPU executes STP or WAI with nothing yet to wake
+    /// it, instead of exiting. While parked, a device-triggered interrupt or
+    /// reset (e.g. a watchdog device's `IoDevice::take_reset`) can still wake
+    /// it. By default the emulator exits as soon as the CPU halts this way,
+    /// since a headless run has nothing left to do at that point.
+    #[clap(long = "park-on-halt")]
+    #[serde(default)]
+    pub park_on_halt: bool,
 }
 
 /// The parsed `AppConfig` plus the raw `--profile` value, if given. The
@@ -129,6 +138,7 @@ mod tests {
             emulator: emma65::emulator::Config { cpu_variant_spec: None, clock_speed_hz: None, devices: None },
             trace_file: None,
             log_file: None,
+            park_on_halt: false,
         }
     }
 
