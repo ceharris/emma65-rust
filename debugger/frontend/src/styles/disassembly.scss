@@ -197,4 +197,10 @@
   &:focus {
     border-color: var(--color-accent);
   }
+
+  &:disabled {
+    background: var(--color-bg-alt);
+    border-color: var(--color-border);
+    color: var(--color-muted-2);
+  }
 }
