@@ -208,3 +208,76 @@ pub fn get_symbols_for_range(start: u16, count: usize, cpu_state: State<CpuState
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CpuState;
+    use emma65::emulator::{run_from as exec_run_from, AddressRange, Bus, ClockSpeed, Cpu, CpuBuilder, CpuVariant};
+    use std::sync::Mutex;
+    use tauri::Manager;
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+
+    fn make_cpu() -> Cpu {
+        let mut bus = Bus::config()
+            .ram_with_fill(AddressRange::new(0x0000, 0xFFFF), 0)
+            .unwrap()
+            .build();
+        bus.write(0x0010, 0xAA).unwrap();
+        bus.write(0xC010, 0xBB).unwrap();
+        let mut cpu = CpuBuilder::new(CpuVariant::Wdc65C02)
+            .clock_speed(ClockSpeed::mhz(1.8432))
+            .bus(bus)
+            .build()
+            .unwrap();
+        cpu.reset().unwrap();
+        cpu
+    }
+
+    /// Reproduces issue #453 (navigate to a page while stopped, then Run): the page
+    /// `get_memory` reports while free-running must always match the address it was
+    /// asked for, both immediately after `run_cpu` starts and on every subsequent
+    /// `debugger-running-tick` refresh — never a stale, previously-viewed page.
+    #[tokio::test]
+    async fn get_memory_matches_requested_addr_throughout_free_run() {
+        let app = mock_builder()
+            .manage(CpuState(Mutex::new(None)))
+            .manage(LiveSnapshotRx(Mutex::new(None)))
+            .manage(MemoryViewAddr(Arc::new(AtomicU16::new(0))))
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app");
+
+        *app.state::<CpuState>().0.lock().unwrap() = Some(make_cpu());
+
+        // Stopped: user navigates to 0xC000 (direct-peek path).
+        let bytes = get_memory(
+            0xC000,
+            app.state::<CpuState>(),
+            app.state::<LiveSnapshotRx>(),
+            app.state::<MemoryViewAddr>(),
+        ).unwrap();
+        assert_eq!(bytes[0x10], 0xBB, "stopped read of 0xC000 should see its marker byte");
+
+        // Run: mirrors run_cpu's core logic (take the CPU, start the run loop,
+        // subscribe the live snapshot channel).
+        let cpu = app.state::<CpuState>().0.lock().unwrap().take().unwrap();
+        let mem_view_addr = Arc::clone(&app.state::<MemoryViewAddr>().0);
+        let handle = exec_run_from(cpu, None, Arc::clone(&mem_view_addr));
+        *app.state::<LiveSnapshotRx>().0.lock().unwrap() = Some(handle.subscribe_live());
+
+        // A handful of debugger-running-tick refreshes (100ms apart) re-requesting
+        // the same page; every one must still see 0xC000's content, not 0x0000's.
+        for _ in 0..5 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let bytes = get_memory(
+                0xC000,
+                app.state::<CpuState>(),
+                app.state::<LiveSnapshotRx>(),
+                app.state::<MemoryViewAddr>(),
+            ).unwrap();
+            assert_eq!(bytes[0x10], 0xBB, "running read of 0xC000 should see its marker byte, not 0x0000's");
+        }
+
+        handle.take_cpu().await;
+    }
+}
