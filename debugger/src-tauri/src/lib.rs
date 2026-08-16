@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
@@ -281,6 +281,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
             *app.state::<disassembly::LiveSnapshotRx>().0.lock().unwrap() = None;
             *app.state::<registers::ChangedFlagsState>().0.lock().unwrap() = 0;
             app.state::<memory::MemoryViewAddr>().0.store(0, Ordering::Relaxed);
+            app.state::<memory::MemoryViewSeq>().0.store(0, Ordering::Relaxed);
 
             *app.state::<cpu_bus::CpuBusCache>().0.lock().unwrap() = cpu_bus::snapshot_cpu_bus(&cpu);
             *app.state::<cpu_bus::UiIrqSourceState>().0.lock().unwrap() = Some(ui_irq_source);
@@ -430,6 +431,7 @@ pub fn run() {
         .manage(breakpoints::BreakpointState(Mutex::new(std::collections::BTreeMap::new())))
         .manage(disassembly::LiveSnapshotRx(Mutex::new(None)))
         .manage(memory::MemoryViewAddr(Arc::new(AtomicU16::new(0))))
+        .manage(memory::MemoryViewSeq(AtomicU64::new(0)))
         .manage(cpu_bus::CpuBusCache(Mutex::new(cpu_bus::CpuBusSnapshot {
             irq_active: false,
             nmi_pending: false,

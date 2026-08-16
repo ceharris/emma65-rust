@@ -171,20 +171,42 @@ export default function MemoryPanel() {
   const [fillDialog, setFillDialog] = useState<FillDialogState | null>(null);
   /** Symbol names indexed by page offset (0–255); empty array means no symbols at that address. */
   const [pageSymbols, setPageSymbols] = useState<string[][]>([]);
+  /**
+   * Monotonically increasing ID of the most recently issued `fetchPage` call.
+   * Lets a resolved request detect whether a newer one has since superseded
+   * it, so an older in-flight response (e.g. a periodic running-tick refresh
+   * issued before the user navigated) can't overwrite a newer one that
+   * happens to resolve first (issue #453).
+   */
+  const fetchRequestIdRef = useRef(0);
 
-  /** Fetch the 256-byte page starting at `addr` (must be paragraph-aligned). */
-  const fetchPage = useCallback(async (addr: number) => {
+  /**
+   * Fetch the 256-byte page starting at `addr` (must be paragraph-aligned).
+   * `updateInput` syncs the address input field to `addr`; pass false for
+   * background refreshes of the already-displayed page (halt/tick events)
+   * so an in-progress edit in the address field isn't clobbered while the
+   * CPU is running (issue #453).
+   */
+  const fetchPage = useCallback(async (addr: number, updateInput: boolean = true) => {
+    const requestId = ++fetchRequestIdRef.current;
     try {
       const [result, symbols] = await Promise.all([
-        invoke<number[]>("get_memory", { addr }),
+        // `seq` lets the backend's shared MemoryViewAddr (which the free-run
+        // loop samples from) resist being clobbered by this call if it's
+        // still executing after a newer fetchPage call has already finished
+        // on the backend's thread pool (issue #453).
+        invoke<number[]>("get_memory", { addr, seq: requestId }),
         invoke<string[][]>("get_symbols_for_range", { start: addr, count: 256 })
           .catch(() => [] as string[][]),
       ]);
+      // A newer fetchPage call was issued while this one was in flight;
+      // its result is stale, so don't let it clobber the newer one.
+      if (requestId !== fetchRequestIdRef.current) return;
       setBytes(new Uint8Array(result));
       setPageSymbols(symbols);
       pageAddrRef.current = addr;
       setPageAddr(addr);
-      setInputValue(fmtAddr(addr));
+      if (updateInput) setInputValue(fmtAddr(addr));
     } catch (e) {
       console.error("get_memory failed:", e);
     }
@@ -204,10 +226,10 @@ export default function MemoryPanel() {
     fetchPage(0x0000).then(() => setReady(true));
 
     const unlistenHalted = listen("debugger-halted", () => {
-      fetchPage(pageAddrRef.current);
+      fetchPage(pageAddrRef.current, false);
     });
     const unlistenTick = listen("debugger-running-tick", () => {
-      fetchPage(pageAddrRef.current);
+      fetchPage(pageAddrRef.current, false);
     });
 
     return () => {
