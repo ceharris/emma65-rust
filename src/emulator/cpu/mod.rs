@@ -288,6 +288,7 @@ impl Cpu {
                 return StepResult::Waiting;
             }
             self.waiting = false;
+            log_msg!(self.log_sender, LogLevel::Info, LogCategory::Cpu, "CPU resumed from WAI at 0x{:04x}", self.regs.pc);
             // Fall through to service the interrupt below.
         }
 
@@ -683,8 +684,14 @@ impl Cpu {
             Mnemonic::Nop => {}
 
             // --- WDC-only: WAI / STP ---
-            Mnemonic::Wai => { self.waiting = true; }
-            Mnemonic::Stp => { self.stopped = true; }
+            Mnemonic::Wai => {
+                self.waiting = true;
+                log_msg!(self.log_sender, LogLevel::Info, LogCategory::Cpu, "WAI executed at 0x{pc:04x}; CPU waiting for interrupt");
+            }
+            Mnemonic::Stp => {
+                self.stopped = true;
+                log_msg!(self.log_sender, LogLevel::Info, LogCategory::Cpu, "STP executed at 0x{pc:04x}; CPU stopped");
+            }
 
             // --- WDC-only: RMB / SMB ---
             Mnemonic::Rmb0 => self.rmb(pc, 0)?,
@@ -1813,6 +1820,32 @@ mod tests {
         assert!(matches!(cpu.step(None, true), StepResult::Stopped));
     }
 
+    #[test]
+    fn wai_logs_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut cpu = make_cpu(0x0200);
+        cpu.set_log_sender(sender);
+        write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
+        cpu.step(None, true);
+
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Cpu);
+        assert_eq!(received.message, "WAI executed at 0x0200; CPU waiting for interrupt");
+    }
+
+    #[test]
+    fn stp_logs_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut cpu = make_cpu(0x0200);
+        cpu.set_log_sender(sender);
+        write_program(&mut cpu, 0x0200, &[0xDB]); // STP
+        cpu.step(None, true);
+
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Cpu);
+        assert_eq!(received.message, "STP executed at 0x0200; CPU stopped");
+    }
+
     // --- WDC: RMB / SMB ---
 
     #[test]
@@ -2151,6 +2184,25 @@ mod tests {
         cpu.step(None, true); // wakes and services IRQ
         assert_eq!(cpu.regs.pc, 0x0400);
         assert!(!cpu.is_waiting());
+    }
+
+    #[test]
+    fn wai_resume_logs_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(8);
+        let mut cpu = make_cpu(0x0200);
+        cpu.set_log_sender(sender);
+        cpu.bus.write(IRQ_VECTOR, 0x00).unwrap();
+        cpu.bus.write(IRQ_VECTOR + 1, 0x04).unwrap();
+        cpu.regs.p.remove(StatusRegister::I);
+        write_program(&mut cpu, 0x0200, &[0xCB]); // WAI
+        cpu.step(None, true); // execute WAI — sets waiting=true, logs "WAI executed..."
+        cpu.interrupts_mut().assert_irq(crate::emulator::bus::IrqSource(1));
+        cpu.step(None, true); // wakes and services IRQ
+
+        rx.recv().unwrap(); // "WAI executed..." from executing the instruction
+        let resumed = rx.recv().unwrap();
+        assert_eq!(resumed.category, LogCategory::Cpu);
+        assert_eq!(resumed.message, "CPU resumed from WAI at 0x0201");
     }
 
     #[test]
