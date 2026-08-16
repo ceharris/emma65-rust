@@ -151,10 +151,16 @@ where that's been shown to be insufficient:
   this work unit shrinks to "confirm and add a regression test/note," not a
   new fix.
 
-**Outcome (code-audit-driven, no interactive GUI verification tooling
-available in the implementing session — see that unit's PR for the
-manual-UAT caveat):** all three paths already resolve correctly on current
-`main`, no code fix needed.
+**Outcome:** all three paths already resolve correctly on current `main`, no
+code fix needed — confirmed both by code audit and by live interactive
+testing (dock-split drag, detached-window native resize, and a
+detach/reattach cycle, all against the running `snake` profile) once GUI
+automation tooling (`xdotool`/`imagemagick`) became available; see that
+unit's PR for the full verification notes, including one incidental,
+non-app finding about this environment's window manager not honoring
+low-level `XResizeWindow` requests (a properly-negotiated EWMH resize —
+what a real user drag or Tauri's own `window.set_size()` both produce —
+worked cleanly).
 
 - The `ResizeObserver` callback: `addon-fit`'s `proposeDimensions()` reads
   the container's actual `getComputedStyle` box in CSS px, entirely inside
