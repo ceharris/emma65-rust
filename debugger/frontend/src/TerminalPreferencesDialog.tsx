@@ -9,7 +9,9 @@ import {
   ANSI_PALETTE_FIELDS,
   CursorInactiveShape,
   CursorShape,
+  TerminalCompatibilityPreferences,
   TerminalCursorPreferences,
+  TerminalKeyAction,
   TerminalPreferences,
   TerminalTextPreferences,
 } from "./terminalPreferences";
@@ -26,6 +28,12 @@ const INACTIVE_SHAPE_OPTIONS: { value: CursorInactiveShape; label: string }[] = 
   { value: "underline", label: "Underline" },
   { value: "bar", label: "Bar" },
   { value: "none", label: "None" },
+];
+
+const KEY_ACTION_OPTIONS: { value: TerminalKeyAction; label: string }[] = [
+  { value: "bs", label: "ASCII Backspace (BS)" },
+  { value: "del", label: "ASCII Delete (DEL)" },
+  { value: "dch", label: "ANSI Delete Character (DCH)" },
 ];
 
 interface TerminalPreferencesDialogProps {
@@ -56,15 +64,11 @@ interface TerminalPreferencesDialogProps {
   defaultCursorAccentColor: string;
 }
 
-/**
- * Work Unit 4 adds a "compatibility" entry here (and a corresponding
- * tab-panel branch below) without needing to touch the tab-strip rendering
- * itself.
- */
-type TabId = "text" | "cursor";
+type TabId = "text" | "cursor" | "compatibility";
 const TABS: { id: TabId; label: string }[] = [
   { id: "text", label: "Text" },
   { id: "cursor", label: "Cursor" },
+  { id: "compatibility", label: "Compatibility" },
 ];
 
 /**
@@ -108,6 +112,10 @@ export default function TerminalPreferencesDialog({
     setPreferences((p) => p && { ...p, cursor: { ...p.cursor, ...patch } });
   };
 
+  const updateCompatibility = (patch: Partial<TerminalCompatibilityPreferences>) => {
+    setPreferences((p) => p && { ...p, compatibility: { ...p.compatibility, ...patch } });
+  };
+
   /**
    * Validates the font family (per the plan's "Font face" decision: an
    * unknown/non-monospace name blocks Save with an inline error rather than
@@ -136,7 +144,7 @@ export default function TerminalPreferencesDialog({
 
   if (!open || !preferences) return null;
 
-  const { text, cursor } = preferences;
+  const { text, cursor, compatibility } = preferences;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -287,6 +295,30 @@ export default function TerminalPreferencesDialog({
                   onChange={(v) => updateCursor({ accent_color: v })}
                 />
               </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "compatibility" && (
+          <div className="modal-tab-panel">
+            <div className="modal-field">
+              <label className="modal-label">Backspace key</label>
+              <SelectPopover
+                label="Backspace key"
+                value={compatibility.backspace_key}
+                options={KEY_ACTION_OPTIONS}
+                onChange={(v) => updateCompatibility({ backspace_key: v })}
+              />
+            </div>
+
+            <div className="modal-field">
+              <label className="modal-label">Delete key</label>
+              <SelectPopover
+                label="Delete key"
+                value={compatibility.delete_key}
+                options={KEY_ACTION_OPTIONS}
+                onChange={(v) => updateCompatibility({ delete_key: v })}
+              />
             </div>
           </div>
         )}

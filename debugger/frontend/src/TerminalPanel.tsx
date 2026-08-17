@@ -15,8 +15,10 @@ import { useOptionalPanelHeaderAction } from "./layout/panelHeaderActions";
 import { resolveTerminalFont, pixelSizeForGrid, logicalSizeForCssPixels, TERMINAL_SIZE_PRESETS } from "./terminalSizing";
 import {
   DEFAULT_CURSOR_ACCENT_COLOR,
+  terminalKeyActionBytes,
   themeWithCursorOverrides,
   themeWithTextOverrides,
+  TerminalCompatibilityPreferences,
   TerminalCursorPreferences,
   TerminalPreferences,
   TerminalTextPreferences,
@@ -88,6 +90,13 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
   // light/dark switch without needing its own separate fetch.
   const textPreferencesRef = useRef<TerminalTextPreferences | null>(null);
   const cursorPreferencesRef = useRef<TerminalCursorPreferences | null>(null);
+  // Holds the Compatibility-tab preferences currently applied — read
+  // directly by the construction effect's `attachCustomKeyEventHandler`
+  // below, since there's no live xterm option for Backspace/Delete
+  // behavior; a ref rather than state so a saved change is picked up
+  // without re-running that effect (which would tear down and rebuild the
+  // whole terminal).
+  const compatibilityPreferencesRef = useRef<TerminalCompatibilityPreferences | null>(null);
   const { resolvedTheme } = useTheme();
   const editMenu = useEditMenuOverride();
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -222,11 +231,19 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     applyTheme();
   };
 
+  // Stores a fetched/saved Compatibility-tab preferences struct in the ref
+  // the construction effect's key handler reads from — nothing to apply to
+  // a live xterm option, unlike the Text/Cursor tabs.
+  const applyCompatibilityPreferences = (compatibility: TerminalCompatibilityPreferences) => {
+    compatibilityPreferencesRef.current = compatibility;
+  };
+
   const fetchAndApplyPreferences = () => {
     invoke<TerminalPreferences>("get_terminal_preferences")
-      .then(({ text, cursor }) => {
+      .then(({ text, cursor, compatibility }) => {
         applyTextPreferences(text);
         applyCursorPreferences(cursor);
+        applyCompatibilityPreferences(compatibility);
       })
       .catch((err) => console.error("get_terminal_preferences failed:", err));
   };
@@ -305,6 +322,22 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
         e.preventDefault();
         pasteClipboard();
         return false;
+      }
+      // Compatibility tab (issue #467 Work Unit 4): sends the configured
+      // byte(s) for Backspace/Delete instead of whatever xterm's own default
+      // encoding would send, intercepted here (before that default encoding
+      // runs) rather than in `onData`, which only ever sees xterm's already
+      //-encoded output.
+      if (e.type === "keydown" && (e.code === "Backspace" || e.code === "Delete")) {
+        const action =
+          e.code === "Backspace"
+            ? compatibilityPreferencesRef.current?.backspace_key
+            : compatibilityPreferencesRef.current?.delete_key;
+        if (action) {
+          e.preventDefault();
+          invoke("write_terminal", { bytes: terminalKeyActionBytes(action) }).catch(() => {});
+          return false;
+        }
       }
       return !APP_KEY_BINDINGS.some((b) => b.matches(e));
     });
@@ -450,6 +483,7 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
         onSaved={(preferences) => {
           applyTextPreferences(preferences.text);
           applyCursorPreferences(preferences.cursor);
+          applyCompatibilityPreferences(preferences.compatibility);
         }}
         defaultForeground={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).foreground!}
         defaultBackground={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).background!}
