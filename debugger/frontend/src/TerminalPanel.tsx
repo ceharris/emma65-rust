@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { Menu } from "@tauri-apps/api/menu";
+import { Menu, type CheckMenuItemOptions, type PredefinedMenuItemOptions } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DockviewPanelApi } from "dockview-react";
 import { Terminal, ITheme } from "@xterm/xterm";
@@ -13,6 +13,8 @@ import { useEditMenuOverride } from "./EditMenuContext";
 import { useTheme } from "./ThemeContext";
 import { useOptionalPanelHeaderAction } from "./layout/panelHeaderActions";
 import { resolveTerminalFont, pixelSizeForGrid, logicalSizeForCssPixels, TERMINAL_SIZE_PRESETS } from "./terminalSizing";
+import { themeWithTextOverrides, TerminalPreferences, TerminalTextPreferences } from "./terminalPreferences";
+import TerminalPreferencesDialog from "./TerminalPreferencesDialog";
 
 const XTERM_DARK_THEME: ITheme = {
   background: "#1e1e1e",
@@ -74,8 +76,13 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  // Holds the Text-tab preferences currently applied to the live terminal,
+  // so the theme-sync effect below can recompute overrides on a light/dark
+  // switch without needing its own separate fetch.
+  const textPreferencesRef = useRef<TerminalTextPreferences | null>(null);
   const { resolvedTheme } = useTheme();
   const editMenu = useEditMenuOverride();
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   // Resizes the terminal to `cols`x`rows` by resizing its *host* (the dock
   // panel, or the detached OS window) rather than the `Terminal` instance
@@ -127,7 +134,7 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
   const openSizeMenu = async () => {
     const term = termRef.current;
     if (!term) return;
-    const items = TERMINAL_SIZE_PRESETS.map((preset) => ({
+    const items: Array<CheckMenuItemOptions | PredefinedMenuItemOptions> = TERMINAL_SIZE_PRESETS.map((preset) => ({
       id: `${preset.cols}x${preset.rows}`,
       text: `${preset.cols} x ${preset.rows}`,
       checked: term.cols === preset.cols && term.rows === preset.rows,
@@ -135,6 +142,12 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
         resizeToGrid(preset.cols, preset.rows).catch((err) => console.error("resizeToGrid failed:", err));
       },
     }));
+    items.push({ item: "Separator" });
+    items.push({
+      id: "preferences",
+      text: "Preferences…",
+      action: () => setPreferencesOpen(true),
+    });
     const menu = await Menu.new({ items });
     await menu.popup();
   };
@@ -150,32 +163,62 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
   });
 
   useEffect(() => {
-    if (termRef.current) {
-      termRef.current.options.theme = resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
-    }
+    if (!termRef.current) return;
+    const base = resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
+    termRef.current.options.theme = textPreferencesRef.current
+      ? themeWithTextOverrides(base, textPreferencesRef.current)
+      : base;
   }, [resolvedTheme]);
 
-  // Not yet a live preference (no dialog UI exists yet, see issue #467's
-  // Work Unit 2) — fetched once and applied to the already-constructed
-  // terminal, same pattern as the theme-sync effect above. xterm.js supports
-  // changing `options.scrollback`/`fontFamily`/`fontSize` on a live
-  // instance, so this doesn't need to gate the terminal's initial
-  // construction below on the fetch completing first. Refits afterward
-  // since a font-metrics change invalidates whatever grid the construction
-  // effect's own initial fit() computed against the placeholder font.
-  useEffect(() => {
-    invoke<{ text: { font_family: string | null; font_size: number | null; scrollback: number } }>(
-      "get_terminal_preferences",
-    )
-      .then(({ text }) => {
-        if (!termRef.current) return;
-        termRef.current.options.scrollback = text.scrollback;
-        const resolved = resolveTerminalFont(text.font_family, text.font_size, getFallbackMonoFont());
-        termRef.current.options.fontFamily = resolved.fontFamily;
-        termRef.current.options.fontSize = resolved.fontSize;
-        fitAddonRef.current?.fit();
-      })
+  // Applies a fetched/saved Text-tab preferences struct to the
+  // already-constructed terminal: scrollback, font, and the
+  // foreground/background/16-palette theme overrides. Used both by the
+  // fetch-on-mount effect below and by the Preferences dialog's `onSaved`
+  // callback. xterm.js supports changing `options.scrollback`/`fontFamily`/
+  // `fontSize`/`theme` on a live instance, so neither caller needs to gate
+  // the terminal's initial construction on this running first.
+  const applyTextPreferences = (text: TerminalTextPreferences) => {
+    const term = termRef.current;
+    if (!term) return;
+    textPreferencesRef.current = text;
+    term.options.scrollback = text.scrollback;
+    const resolved = resolveTerminalFont(text.font_family, text.font_size, getFallbackMonoFont());
+    term.options.fontFamily = resolved.fontFamily;
+    term.options.fontSize = resolved.fontSize;
+    const base = resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
+    term.options.theme = themeWithTextOverrides(base, text);
+    // A font-metrics change invalidates whatever grid the construction
+    // effect's own initial fit() computed against the placeholder font.
+    fitAddonRef.current?.fit();
+  };
+
+  const fetchAndApplyTextPreferences = () => {
+    invoke<TerminalPreferences>("get_terminal_preferences")
+      .then(({ text }) => applyTextPreferences(text))
       .catch((err) => console.error("get_terminal_preferences failed:", err));
+  };
+
+  useEffect(() => {
+    fetchAndApplyTextPreferences();
+    // Only the initial fetch belongs in this effect — `applyTextPreferences`
+    // is also called directly (not via a dependency-triggered re-run) by the
+    // Preferences dialog's `onSaved` below.
+  }, []);
+
+  // The detached-Terminal window's own `TerminalPanel` mounts exactly once,
+  // when its statically-declared hidden webview first loads at app startup
+  // (`terminal.rs`'s `install_detached_window`) — unlike the docked panel,
+  // it's never unmounted/remounted on later detach/reattach cycles, so the
+  // mount-time fetch above only ever reflects preferences as of that one
+  // startup moment. `terminal.rs`'s `show_detached_terminal` emits
+  // "terminal-shown" to this window specifically every time it's about to
+  // become visible, so a preference change made while docked (after this
+  // window's one-time mount) still shows up here. Harmless no-op for the
+  // docked host — this event is only ever `emit_to`'d to the detached
+  // window's label, so the docked instance's listener never fires.
+  useEffect(() => {
+    const unlistenPromise = listen("terminal-shown", () => fetchAndApplyTextPreferences());
+    return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
   useEffect(() => {
@@ -364,5 +407,16 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     // trigger.
   }, []);
 
-  return <div ref={containerRef} className="terminal-container" />;
+  return (
+    <>
+      <div ref={containerRef} className="terminal-container" />
+      <TerminalPreferencesDialog
+        open={preferencesOpen}
+        onClose={() => setPreferencesOpen(false)}
+        onSaved={(preferences) => applyTextPreferences(preferences.text)}
+        defaultForeground={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).foreground!}
+        defaultBackground={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).background!}
+      />
+    </>
+  );
 }

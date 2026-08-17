@@ -26,6 +26,13 @@
   font-family: var(--font-ui);
 }
 
+// Wider variant for dialogs with multi-column content (e.g. the terminal
+// Preferences dialog's palette grid) — the base 320px min-width otherwise
+// forces those onto multiple awkward rows.
+.modal-dialog-wide {
+  min-width: 420px;
+}
+
 .modal-title {
   font-size: var(--font-size-btn);
   font-weight: bold;
@@ -71,9 +78,166 @@
   }
 }
 
+.modal-input-narrow {
+  flex: 0 0 auto;
+  width: 80px;
+}
+
 .modal-error {
   font-size: var(--font-size-btn);
   color: var(--color-danger-strong);
+}
+
+// Tab strip for the terminal Preferences dialog — no shared tab component
+// exists elsewhere in this codebase, so this is a minimal one built for
+// issue #467.
+.modal-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+.modal-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-muted);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 4px 10px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--color-fg);
+  }
+
+  &.active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+  }
+}
+
+.modal-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal-palette-field {
+  align-items: flex-start;
+}
+
+// Color-swatch popover (issue #467) — a labeled swatch button that opens a
+// small popover of ANSI presets plus a native <input type="color"> for
+// arbitrary RGB. Used labeled, inline, for foreground/background, and
+// unlabeled ("compact") in the 16-color palette grid (the name is still
+// available via `title`/`aria-label`).
+.color-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+// Fixed at 8 columns (16 palette entries -> 2 rows), each just wide enough
+// for a bare swatch — labels are dropped in this (compact) grid specifically
+// so 8 columns don't force the dialog wide.
+.color-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 18px);
+  gap: 8px 10px;
+}
+
+.color-picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.color-picker-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--color-accent);
+  }
+}
+
+.color-picker-label {
+  font-size: var(--font-size-btn);
+  color: var(--color-muted);
+}
+
+.color-picker-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1001;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 148px;
+}
+
+.color-picker-default-option {
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 3px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover {
+    border-color: var(--color-accent);
+  }
+}
+
+.color-picker-presets {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+}
+
+.color-picker-preset {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 2px;
+  padding: 0;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--color-accent);
+  }
+}
+
+.color-picker-custom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-btn);
+  color: var(--color-muted);
+  cursor: pointer;
+
+  input[type="color"] {
+    width: 24px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 3px;
+    cursor: pointer;
+  }
 }
 
 .modal-message {
