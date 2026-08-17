@@ -40,6 +40,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Looks ahead `offset` tokens past the current position (`offset` 0 is
+    /// equivalent to [`Self::peek`]), for callers (the operand/statement
+    /// grammar) that need to disambiguate syntax before consuming tokens.
+    pub fn peek_at(&self, offset: usize) -> Option<&Token<'a>> {
+        self.tokens.get(self.current + offset)
+    }
+
     fn parse_logical_or(&mut self) -> Result<Expr<'a>, Error> {
         let mut left = self.parse_logical_and()?;
         while let Some(op) = self.match_token(&[TokenType::BarBar]) {
@@ -197,7 +204,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn advance(&mut self) -> Option<Token<'a>> {
+    /// Consumes and returns the current token, or `None` at end of input.
+    /// Public for the operand/statement grammar (later units), which parses
+    /// syntax `parse_expr` doesn't cover (e.g. `#`, `(`, `,`, index registers).
+    pub fn advance(&mut self) -> Option<Token<'a>> {
         if self.is_at_end() {
             None
         } else {
