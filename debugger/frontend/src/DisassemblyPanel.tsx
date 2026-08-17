@@ -378,7 +378,7 @@ export default function DisassemblyPanel() {
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="disasm-context-menu"
+          className="context-menu disasm-context-menu"
           style={{ top: contextMenu.y, left: contextMenu.x }}
         >
           {addressInputOpen ? (
@@ -399,7 +399,7 @@ export default function DisassemblyPanel() {
             <>
               {breakpoints.get(contextMenu.addr) === undefined && (
                 <div
-                  className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                  className={`context-menu-item${isStopped ? "" : " disabled"}`}
                   title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
                   onClick={isStopped ? () => { runBreakpointCommand("set_breakpoint", contextMenu.addr); closeContextMenu(); } : undefined}
                 >
@@ -408,7 +408,7 @@ export default function DisassemblyPanel() {
               )}
               {breakpoints.get(contextMenu.addr) === true && (
                 <div
-                  className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                  className={`context-menu-item${isStopped ? "" : " disabled"}`}
                   title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
                   onClick={isStopped ? () => { runBreakpointCommand("disable_breakpoint", contextMenu.addr); closeContextMenu(); } : undefined}
                 >
@@ -417,7 +417,7 @@ export default function DisassemblyPanel() {
               )}
               {breakpoints.get(contextMenu.addr) === false && (
                 <div
-                  className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                  className={`context-menu-item${isStopped ? "" : " disabled"}`}
                   title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
                   onClick={isStopped ? () => { runBreakpointCommand("enable_breakpoint", contextMenu.addr); closeContextMenu(); } : undefined}
                 >
@@ -426,7 +426,7 @@ export default function DisassemblyPanel() {
               )}
               {breakpoints.get(contextMenu.addr) !== undefined && (
                 <div
-                  className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                  className={`context-menu-item${isStopped ? "" : " disabled"}`}
                   title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
                   onClick={isStopped ? () => { runBreakpointCommand("remove_breakpoint", contextMenu.addr); closeContextMenu(); } : undefined}
                 >
@@ -434,7 +434,7 @@ export default function DisassemblyPanel() {
                 </div>
               )}
               <div
-                className={`disasm-context-menu-item${isStopped ? "" : " disabled"}`}
+                className={`context-menu-item${isStopped ? "" : " disabled"}`}
                 title={isStopped ? undefined : "Stop the CPU to edit breakpoints"}
                 onClick={isStopped ? openAddressInput : undefined}
               >

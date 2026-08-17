@@ -104,35 +104,12 @@
   }
 }
 
+// Menu items here (e.g. "Set Breakpoint at Address…") run wider than the
+// shared .context-menu's shrink-to-fit default, and the address-input row
+// below needs a floor to size its own `calc(100% - 16px)` against — unlike
+// the Terminal size menu, which shrinks fine on its own.
 .disasm-context-menu {
-  position: fixed;
-  z-index: 1000;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border-strong);
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  padding: 4px 0;
   min-width: 180px;
-  font-family: var(--font-ui);
-}
-
-.disasm-context-menu-item {
-  padding: 6px 12px;
-  cursor: pointer;
-  white-space: nowrap;
-
-  &:hover {
-    background: var(--color-bg-hover);
-  }
-
-  &.disabled {
-    cursor: default;
-    opacity: 0.5;
-
-    &:hover {
-      background: none;
-    }
-  }
 }
 
 .disasm-context-menu-input {
