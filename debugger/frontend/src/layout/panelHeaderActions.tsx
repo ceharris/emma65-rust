@@ -4,7 +4,7 @@ import { MainPanelId } from "./panelRegistry";
 /** A single tab-header action button a panel wants dockview to render in its tab bar. */
 export interface PanelHeaderAction {
   title: string;
-  onClick: () => void;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
   disabledTitle?: string;
 }
@@ -54,7 +54,7 @@ export function usePanelHeaderAction(id: MainPanelId, action: PanelHeaderAction)
   const onClickRef = useRef(action.onClick);
   onClickRef.current = action.onClick;
   useEffect(() => {
-    register(id, { ...action, onClick: () => onClickRef.current() });
+    register(id, { ...action, onClick: (e) => onClickRef.current(e) });
     return () => register(id, null);
   }, [register, id, action.title, action.disabled, action.disabledTitle]);
 }
@@ -73,7 +73,7 @@ export function useOptionalPanelHeaderAction(id: MainPanelId, action: PanelHeade
   onClickRef.current = action.onClick;
   useEffect(() => {
     if (!register) return;
-    register(id, { ...action, onClick: () => onClickRef.current() });
+    register(id, { ...action, onClick: (e) => onClickRef.current(e) });
     return () => register(id, null);
   }, [register, id, action.title, action.disabled, action.disabledTitle]);
 }

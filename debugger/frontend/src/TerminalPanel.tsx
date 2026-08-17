@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { Menu, type CheckMenuItemOptions, type PredefinedMenuItemOptions } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DockviewPanelApi } from "dockview-react";
 import { Terminal, ITheme } from "@xterm/xterm";
@@ -100,6 +99,13 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
   const { resolvedTheme } = useTheme();
   const editMenu = useEditMenuOverride();
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  // Position of the open size-preset menu — `null` when closed. Hand-drawn
+  // (issue #472) rather than a native `Menu.new()`/`popup()` call so it
+  // picks up the app's light/dark theme, the same fix shape as
+  // `DisassemblyPanel.tsx`'s row context menu, whose `.context-menu`/
+  // `-item` CSS this reuses (lifted into global.scss for that reason).
+  const [sizeMenu, setSizeMenu] = useState<{ x: number; y: number } | null>(null);
+  const sizeMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Resizes the terminal to `cols`x`rows` by resizing its *host* (the dock
   // panel, or the detached OS window) rather than the `Terminal` instance
@@ -141,41 +147,48 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     await getCurrentWindow().setSize(logical);
   };
 
-  // Builds and pops up the size-preset context menu — shared by the
+  // Opens the size-preset menu at a given viewport position — shared by the
   // terminal container's own `contextmenu` handler (registered in the
   // construction effect below) and the docked panel header's hamburger
   // icon (`usePanelHeaderAction` below, rendered by `DockLayout.tsx`'s
-  // `DockTabActions`), both in both docked and detached hosts. Built fresh
-  // on every popup so the checkmark reflects whichever preset (if any)
-  // matches the terminal's *current* grid.
-  const openSizeMenu = async () => {
-    const term = termRef.current;
-    if (!term) return;
-    const items: Array<CheckMenuItemOptions | PredefinedMenuItemOptions> = TERMINAL_SIZE_PRESETS.map((preset) => ({
-      id: `${preset.cols}x${preset.rows}`,
-      text: `${preset.cols} x ${preset.rows}`,
-      checked: term.cols === preset.cols && term.rows === preset.rows,
-      action: () => {
-        resizeToGrid(preset.cols, preset.rows).catch((err) => console.error("resizeToGrid failed:", err));
-      },
-    }));
-    items.push({ item: "Separator" });
-    items.push({
-      id: "preferences",
-      text: "Preferences…",
-      action: () => setPreferencesOpen(true),
-    });
-    const menu = await Menu.new({ items });
-    await menu.popup();
+  // `DockTabActions`), both in both docked and detached hosts. The render
+  // below reads `termRef.current` fresh on every render, so the checkmark
+  // always reflects whichever preset (if any) matches the terminal's
+  // *current* grid, same as the native menu this replaced.
+  const openSizeMenuAt = (x: number, y: number) => {
+    if (!termRef.current) return;
+    setSizeMenu({ x, y });
   };
+  const closeSizeMenu = () => setSizeMenu(null);
+
+  // Close the size menu on outside click or Escape — same pattern as
+  // `DisassemblyPanel.tsx`'s row context menu.
+  useEffect(() => {
+    if (sizeMenu === null) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (sizeMenuRef.current && !sizeMenuRef.current.contains(e.target as Node)) closeSizeMenu();
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeSizeMenu();
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [sizeMenu]);
 
   // No-op outside the docked host (see `useOptionalPanelHeaderAction`'s doc
   // comment) — the detached window has no dock tab header to add an icon
-  // to; its size menu is reachable only via right-click.
+  // to; its size menu is reachable only via right-click. Anchored just
+  // below the button, the same way `SelectPopover`'s list anchors under
+  // its own trigger.
   useOptionalPanelHeaderAction("terminal", {
     title: "Terminal Size…",
-    onClick: () => {
-      openSizeMenu().catch((err) => console.error("openSizeMenu failed:", err));
+    onClick: (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      openSizeMenuAt(r.left, r.bottom);
     },
   });
 
@@ -372,11 +385,10 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     // docked and detached hosts, so a right-click anywhere in the terminal
     // area reaches it the same way regardless of which host this mount
     // landed in. The docked panel additionally gets a header hamburger icon
-    // reaching the same `openSizeMenu` (see `useOptionalPanelHeaderAction`
-    // above).
+    // reaching the same menu (see `useOptionalPanelHeaderAction` above).
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
-      openSizeMenu().catch((err) => console.error("openSizeMenu failed:", err));
+      openSizeMenuAt(e.clientX, e.clientY);
     };
     containerRef.current!.addEventListener("contextmenu", handleContextMenu);
 
@@ -477,6 +489,38 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
   return (
     <>
       <div ref={containerRef} className="terminal-container" />
+      {sizeMenu && (
+        <div ref={sizeMenuRef} className="context-menu" style={{ top: sizeMenu.y, left: sizeMenu.x }}>
+          {TERMINAL_SIZE_PRESETS.map((preset) => {
+            const term = termRef.current;
+            const checked = term ? term.cols === preset.cols && term.rows === preset.rows : false;
+            return (
+              <div
+                key={`${preset.cols}x${preset.rows}`}
+                className="context-menu-item"
+                onClick={() => {
+                  closeSizeMenu();
+                  resizeToGrid(preset.cols, preset.rows).catch((err) => console.error("resizeToGrid failed:", err));
+                }}
+              >
+                <span className="context-menu-item-check">{checked && <i className="codicon codicon-check" />}</span>
+                {preset.cols} x {preset.rows}
+              </div>
+            );
+          })}
+          <div className="context-menu-separator" />
+          <div
+            className="context-menu-item"
+            onClick={() => {
+              closeSizeMenu();
+              setPreferencesOpen(true);
+            }}
+          >
+            <span className="context-menu-item-check" />
+            Preferences…
+          </div>
+        </div>
+      )}
       <TerminalPreferencesDialog
         open={preferencesOpen}
         onClose={() => setPreferencesOpen(false)}
