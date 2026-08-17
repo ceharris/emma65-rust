@@ -378,7 +378,7 @@ export default function DisassemblyPanel() {
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="context-menu"
+          className="context-menu disasm-context-menu"
           style={{ top: contextMenu.y, left: contextMenu.x }}
         >
           {addressInputOpen ? (

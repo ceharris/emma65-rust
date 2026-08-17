@@ -104,6 +104,14 @@
   }
 }
 
+// Menu items here (e.g. "Set Breakpoint at Address…") run wider than the
+// shared .context-menu's shrink-to-fit default, and the address-input row
+// below needs a floor to size its own `calc(100% - 16px)` against — unlike
+// the Terminal size menu, which shrinks fine on its own.
+.disasm-context-menu {
+  min-width: 180px;
+}
+
 .disasm-context-menu-input {
   display: block;
   width: calc(100% - 16px);
