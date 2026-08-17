@@ -1,8 +1,6 @@
 //! Support for watchpoint expressions. pre
-mod location;
 mod error;
 mod scanner;
-mod text;
 mod token;
 mod expr;
 mod parser;
