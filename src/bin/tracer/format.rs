@@ -4,7 +4,7 @@
 //! issue #268 and are not derivable from any single width constant, so
 //! each field is placed at its own absolute column via [`Row::put`].
 
-use emma65::disasm::{DisassembledLine, Disassembler};
+use emma65::disassembler::{DisassembledLine, Disassembler};
 use emma65::emulator::{Registers, StatusRegister};
 
 /// Header line labeling each column.

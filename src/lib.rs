@@ -1,4 +1,4 @@
-pub mod disasm;
+pub mod disassembler;
 pub mod emulator;
 pub mod watch;
 

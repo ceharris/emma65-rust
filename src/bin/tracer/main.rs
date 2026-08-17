@@ -8,7 +8,7 @@ use std::io::{self, BufWriter, Read, Write};
 use std::process::ExitCode;
 
 use clap::Parser;
-use emma65::disasm::{TraceBusOp, TraceRow, TraceRowAssembler};
+use emma65::disassembler::{TraceBusOp, TraceRow, TraceRowAssembler};
 use emma65::emulator::bus::symbol::load_vice_labels;
 use emma65::emulator::{BinaryTraceReader, ExpandedPathBuf, SymbolTable};
 

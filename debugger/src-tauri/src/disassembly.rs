@@ -7,7 +7,7 @@ use crate::CpuState;
 use crate::cpu_bus::{CpuBusCache, UiIrqSourceState, snapshot_cpu_bus};
 use crate::memory::MemoryViewAddr;
 use crate::registers::{ChangedFlagsState, RegisterSnapshot};
-use emma65::disasm::Disassembler;
+use emma65::disassembler::Disassembler;
 use emma65::emulator::cpu::StepResult;
 use emma65::emulator::{Cpu, CpuLiveSnapshot, RunHandle, RunStopper, run_from as exec_run_from, step_into as exec_step_into, step_over_breakpoint as exec_step_over_breakpoint, step_over_subroutine as exec_step_over_subroutine, step_return as exec_step_return};
 use tauri::{AppHandle, Emitter, Manager, State};

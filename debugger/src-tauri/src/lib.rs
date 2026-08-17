@@ -9,7 +9,7 @@ use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
 
-use emma65::disasm::Disassembler;
+use emma65::disassembler::Disassembler;
 use emma65::emulator::bus::MAX_IRQ_SOURCES;
 use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, LogSender, Transport, TransportReporter, TransportSlot};
 

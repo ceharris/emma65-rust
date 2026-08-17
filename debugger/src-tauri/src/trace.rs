@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 
 use tauri::State;
 
-use emma65::disasm::{Disassembler, TraceBusOp, TraceRowAssembler};
+use emma65::disassembler::{Disassembler, TraceBusOp, TraceRowAssembler};
 use emma65::emulator::{
     BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback, OverflowPolicy,
     TraceCallback, TraceKind, TraceRecord, spawn_trace_writer,
