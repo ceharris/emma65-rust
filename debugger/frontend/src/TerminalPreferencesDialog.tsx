@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import "./styles/modal.scss";
 import { isMonospaceFont } from "./terminalSizing";
 import ColorPickerPopover from "./ColorPickerPopover";
+import SelectPopover from "./SelectPopover";
 import {
   ANSI_PALETTE_FIELDS,
   CursorInactiveShape,
@@ -11,6 +12,20 @@ import {
   TerminalPreferences,
   TerminalTextPreferences,
 } from "./terminalPreferences";
+
+const ACTIVE_SHAPE_OPTIONS: { value: CursorShape; label: string }[] = [
+  { value: "block", label: "Block" },
+  { value: "underline", label: "Underline" },
+  { value: "bar", label: "Bar" },
+];
+
+const INACTIVE_SHAPE_OPTIONS: { value: CursorInactiveShape; label: string }[] = [
+  { value: "outline", label: "Outline" },
+  { value: "block", label: "Block" },
+  { value: "underline", label: "Underline" },
+  { value: "bar", label: "Bar" },
+  { value: "none", label: "None" },
+];
 
 interface TerminalPreferencesDialogProps {
   open: boolean;
@@ -232,30 +247,22 @@ export default function TerminalPreferencesDialog({
           <div className="modal-tab-panel">
             <div className="modal-field">
               <label className="modal-label">Active shape</label>
-              <select
-                className="modal-input modal-input-narrow"
+              <SelectPopover
+                label="Active cursor shape"
                 value={cursor.active_shape}
-                onChange={(e) => updateCursor({ active_shape: e.target.value as CursorShape })}
-              >
-                <option value="block">Block</option>
-                <option value="underline">Underline</option>
-                <option value="bar">Bar</option>
-              </select>
+                options={ACTIVE_SHAPE_OPTIONS}
+                onChange={(v) => updateCursor({ active_shape: v })}
+              />
             </div>
 
             <div className="modal-field">
               <label className="modal-label">Inactive shape</label>
-              <select
-                className="modal-input modal-input-narrow"
+              <SelectPopover
+                label="Inactive cursor shape"
                 value={cursor.inactive_shape}
-                onChange={(e) => updateCursor({ inactive_shape: e.target.value as CursorInactiveShape })}
-              >
-                <option value="outline">Outline</option>
-                <option value="block">Block</option>
-                <option value="underline">Underline</option>
-                <option value="bar">Bar</option>
-                <option value="none">None</option>
-              </select>
+                options={INACTIVE_SHAPE_OPTIONS}
+                onChange={(v) => updateCursor({ inactive_shape: v })}
+              />
             </div>
 
             <label className="modal-checkbox-row">

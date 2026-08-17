@@ -240,6 +240,81 @@
   }
 }
 
+// Popover-based replacement for a native <select> (issue #467) — see
+// `SelectPopover.tsx`'s doc comment for why: WebKitGTK renders a plain
+// <select>'s open dropdown list as unstyleable OS-native chrome, so the
+// closed trigger and the open list are both hand-drawn here instead,
+// matching the color-picker-* popover styles just above.
+.select-popover {
+  position: relative;
+  display: inline-flex;
+}
+
+.select-popover-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 110px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--color-accent);
+  }
+}
+
+.select-popover-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--color-muted);
+  flex-shrink: 0;
+}
+
+.select-popover-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1001;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 130px;
+}
+
+.select-popover-option {
+  background: none;
+  border: none;
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-btn);
+  text-align: left;
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-bg-alt);
+  }
+
+  &.active {
+    color: var(--color-accent);
+  }
+}
+
 .modal-message {
   font-size: var(--font-size-btn);
   color: var(--color-fg);
