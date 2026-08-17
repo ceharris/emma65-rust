@@ -192,13 +192,33 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     fitAddonRef.current?.fit();
   };
 
-  useEffect(() => {
+  const fetchAndApplyTextPreferences = () => {
     invoke<TerminalPreferences>("get_terminal_preferences")
       .then(({ text }) => applyTextPreferences(text))
       .catch((err) => console.error("get_terminal_preferences failed:", err));
+  };
+
+  useEffect(() => {
+    fetchAndApplyTextPreferences();
     // Only the initial fetch belongs in this effect — `applyTextPreferences`
     // is also called directly (not via a dependency-triggered re-run) by the
     // Preferences dialog's `onSaved` below.
+  }, []);
+
+  // The detached-Terminal window's own `TerminalPanel` mounts exactly once,
+  // when its statically-declared hidden webview first loads at app startup
+  // (`terminal.rs`'s `install_detached_window`) — unlike the docked panel,
+  // it's never unmounted/remounted on later detach/reattach cycles, so the
+  // mount-time fetch above only ever reflects preferences as of that one
+  // startup moment. `terminal.rs`'s `show_detached_terminal` emits
+  // "terminal-shown" to this window specifically every time it's about to
+  // become visible, so a preference change made while docked (after this
+  // window's one-time mount) still shows up here. Harmless no-op for the
+  // docked host — this event is only ever `emit_to`'d to the detached
+  // window's label, so the docked instance's listener never fires.
+  useEffect(() => {
+    const unlistenPromise = listen("terminal-shown", () => fetchAndApplyTextPreferences());
+    return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
   useEffect(() => {

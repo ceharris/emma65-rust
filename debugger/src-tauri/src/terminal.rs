@@ -155,6 +155,17 @@ fn show_detached_terminal(app: &AppHandle) -> Result<(), String> {
     window.show().map_err(|e| e.to_string())?;
     let _ = window.set_focus();
     *app.state::<TerminalTargetWindow>().0.lock().unwrap() = TERMINAL_DETACHED_WINDOW_LABEL.to_string();
+    // The detached window's own `TerminalPanel` is mounted exactly once,
+    // when this statically-declared (see `install_detached_window`) window's
+    // hidden webview first loads at app startup — unlike the docked panel,
+    // it is never unmounted/remounted on later detach/reattach cycles, so it
+    // never gets a fresh `get_terminal_preferences` fetch on its own. Tell it
+    // to re-fetch and re-apply Text-tab preferences (issue #467) now, so a
+    // preference change made while docked (after this window's one-time
+    // mount) actually shows up the next time it's shown — deliberately not
+    // touching window size here, only what `TerminalPanel.tsx`'s
+    // `applyTextPreferences` covers (font/colors/scrollback).
+    let _ = app.emit_to(TERMINAL_DETACHED_WINDOW_LABEL, "terminal-shown", ());
     Ok(())
 }
 
