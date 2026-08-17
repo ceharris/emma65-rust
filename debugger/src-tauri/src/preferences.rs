@@ -61,9 +61,10 @@ pub struct WindowGeometry {
 /// Persisted debugger UI preferences that aren't scoped to any profile — see
 /// issue #68 for the original theme-only version, issue #349 for the
 /// exit-confirmation addition, issue #357 for the file dialog directory,
-/// issue #385 for the terminal scrollback line count, and issue #419 for the
-/// window geometry fields.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// issue #385 for the terminal scrollback line count, issue #419 for the
+/// window geometry fields, and issue #467 for the structured terminal
+/// preferences block.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct UiConfig {
     /// The user's selected theme mode.
     #[serde(default)]
@@ -79,13 +80,6 @@ pub struct UiConfig {
     /// issue #357.
     #[serde(default)]
     pub last_file_dialog_dir: Option<String>,
-    /// Number of lines the terminal (docked or detached — see issue #385)
-    /// keeps in its scrollback buffer beyond its visible rows. Not yet
-    /// exposed via any UI control — edit `ui.toml` directly to change it,
-    /// per UAT feedback on #385; a future story may add a proper preference
-    /// control.
-    #[serde(default = "default_terminal_scrollback")]
-    pub terminal_scrollback: u32,
     /// Last-known size, position, and maximized/fullscreen state of the main
     /// window; `None` before it's ever been captured, in which case
     /// `tauri.conf.json`'s configured default applies — see issue #419.
@@ -96,40 +90,209 @@ pub struct UiConfig {
     /// window is actually detached (visible) — see issue #419.
     #[serde(default)]
     pub terminal_window_geometry: Option<WindowGeometry>,
+    /// Structured terminal preferences (text/cursor/compatibility) — see
+    /// issue #467. Replaces the formerly flat `terminal_font_family`/
+    /// `terminal_font_size`/`terminal_scrollback` fields; a `ui.toml`
+    /// written before #467 simply has these values reset to their defaults
+    /// the first time it's loaded, since this is single-user local state.
+    #[serde(default)]
+    pub terminal_preferences: TerminalPreferences,
+}
+
+/// Active-cursor shape, mapping directly onto xterm.js's `cursorStyle`
+/// option — see issue #467.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Underline,
+    Bar,
+}
+
+/// Inactive-cursor shape, mapping directly onto xterm.js's
+/// `cursorInactiveStyle` option — see issue #467.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorInactiveShape {
+    #[default]
+    Outline,
+    Block,
+    Underline,
+    Bar,
+    None,
+}
+
+/// What a compatibility-remapped key (Backspace or Delete) sends: the ASCII
+/// Backspace control code, the ASCII Delete control code, or the ANSI
+/// Delete Character (DCH) escape sequence — see issue #467.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalKeyAction {
+    Bs,
+    Del,
+    Dch,
+}
+
+fn default_backspace_key() -> TerminalKeyAction {
+    TerminalKeyAction::Del
+}
+
+fn default_delete_key() -> TerminalKeyAction {
+    TerminalKeyAction::Dch
+}
+
+/// Text-tab terminal preferences: font, the 16-color ANSI palette, and
+/// scrollback length — see issue #467.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TerminalTextPreferences {
     /// Terminal font family, by CSS font-family name. `None` means "use the
     /// platform default monospace font" — there's no hardcoded fallback name
     /// here because only the webview knows what fonts are actually installed
-    /// on the host; the frontend resolves the fallback. Not yet exposed via
-    /// any UI control — edit `ui.toml` directly to change it — see issue #462.
+    /// on the host; the frontend resolves the fallback.
     #[serde(default)]
-    pub terminal_font_family: Option<String>,
+    pub font_family: Option<String>,
     /// Terminal font size, in pixels. `None` means "use the platform
-    /// default". Not yet exposed via any UI control — edit `ui.toml` directly
-    /// to change it — see issue #462.
+    /// default".
     #[serde(default)]
-    pub terminal_font_size: Option<u32>,
+    pub font_size: Option<u32>,
+    /// Number of lines the terminal (docked or detached — see issue #385)
+    /// keeps in its scrollback buffer beyond its visible rows.
+    #[serde(default = "default_terminal_scrollback")]
+    pub scrollback: u32,
+    /// Foreground color (hex). `None` follows the current light/dark theme.
+    #[serde(default)]
+    pub foreground: Option<String>,
+    /// Background color (hex). `None` follows the current light/dark theme.
+    #[serde(default)]
+    pub background: Option<String>,
+    #[serde(default)]
+    pub black: Option<String>,
+    #[serde(default)]
+    pub red: Option<String>,
+    #[serde(default)]
+    pub green: Option<String>,
+    #[serde(default)]
+    pub yellow: Option<String>,
+    #[serde(default)]
+    pub blue: Option<String>,
+    #[serde(default)]
+    pub magenta: Option<String>,
+    #[serde(default)]
+    pub cyan: Option<String>,
+    #[serde(default)]
+    pub white: Option<String>,
+    #[serde(default)]
+    pub bright_black: Option<String>,
+    #[serde(default)]
+    pub bright_red: Option<String>,
+    #[serde(default)]
+    pub bright_green: Option<String>,
+    #[serde(default)]
+    pub bright_yellow: Option<String>,
+    #[serde(default)]
+    pub bright_blue: Option<String>,
+    #[serde(default)]
+    pub bright_magenta: Option<String>,
+    #[serde(default)]
+    pub bright_cyan: Option<String>,
+    #[serde(default)]
+    pub bright_white: Option<String>,
 }
 
-impl Default for UiConfig {
+impl Default for TerminalTextPreferences {
     fn default() -> Self {
         Self {
-            theme: ThemeMode::default(),
-            skip_exit_confirmation: false,
-            last_file_dialog_dir: None,
-            terminal_scrollback: default_terminal_scrollback(),
-            main_window_geometry: None,
-            terminal_window_geometry: None,
-            terminal_font_family: None,
-            terminal_font_size: None,
+            font_family: None,
+            font_size: None,
+            scrollback: default_terminal_scrollback(),
+            foreground: None,
+            background: None,
+            black: None,
+            red: None,
+            green: None,
+            yellow: None,
+            blue: None,
+            magenta: None,
+            cyan: None,
+            white: None,
+            bright_black: None,
+            bright_red: None,
+            bright_green: None,
+            bright_yellow: None,
+            bright_blue: None,
+            bright_magenta: None,
+            bright_cyan: None,
+            bright_white: None,
         }
     }
 }
 
-/// The terminal font family and size, as returned by `get_terminal_font`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct TerminalFont {
-    pub family: Option<String>,
-    pub size: Option<u32>,
+/// Cursor-tab terminal preferences: active/inactive shape, blink, and
+/// color/accent color — see issue #467.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TerminalCursorPreferences {
+    /// Maps directly to xterm.js's `cursorStyle` option.
+    #[serde(default)]
+    pub active_shape: CursorShape,
+    /// Maps directly to xterm.js's `cursorInactiveStyle` option.
+    #[serde(default)]
+    pub inactive_shape: CursorInactiveShape,
+    /// Maps to xterm.js's `cursorBlink` option. On/off only — see the
+    /// terminal-preferences plan doc's "Blink" decision for why there's no
+    /// rate control.
+    #[serde(default)]
+    pub blink: bool,
+    /// Cursor color (hex, `ITheme.cursor`). `None` follows the current
+    /// light/dark theme.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Cursor accent color (hex, `ITheme.cursorAccent`). `None` follows the
+    /// current light/dark theme.
+    #[serde(default)]
+    pub accent_color: Option<String>,
+}
+
+impl Default for TerminalCursorPreferences {
+    fn default() -> Self {
+        Self {
+            active_shape: CursorShape::Block,
+            inactive_shape: CursorInactiveShape::Outline,
+            blink: false,
+            color: None,
+            accent_color: None,
+        }
+    }
+}
+
+/// Compatibility-tab terminal preferences: what the Backspace and Delete
+/// keys send — see issue #467.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TerminalCompatibilityPreferences {
+    #[serde(default = "default_backspace_key")]
+    pub backspace_key: TerminalKeyAction,
+    #[serde(default = "default_delete_key")]
+    pub delete_key: TerminalKeyAction,
+}
+
+impl Default for TerminalCompatibilityPreferences {
+    fn default() -> Self {
+        Self { backspace_key: default_backspace_key(), delete_key: default_delete_key() }
+    }
+}
+
+/// Structured terminal preferences, grouped the same way the Preferences
+/// dialog's tabs are (Text/Cursor/Compatibility) — see issue #467. Its own
+/// top-level field on `UiConfig` (not flattened) so it can be lifted into a
+/// future profile-level override layer without a reshape.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct TerminalPreferences {
+    #[serde(default)]
+    pub text: TerminalTextPreferences,
+    #[serde(default)]
+    pub cursor: TerminalCursorPreferences,
+    #[serde(default)]
+    pub compatibility: TerminalCompatibilityPreferences,
 }
 
 /// Managed state wrapping the current [`UiConfig`].
@@ -226,21 +389,23 @@ pub fn set_theme(mode: ThemeMode, state: State<UiConfigState>, app: AppHandle) -
     Ok(())
 }
 
-/// Returns the terminal's configured scrollback line count — see
-/// `UiConfig::terminal_scrollback`'s doc comment for how to change it.
+/// Returns the terminal's configured preferences (text/cursor/compatibility)
+/// — see `TerminalPreferences`'s doc comment.
 #[tauri::command]
-pub fn get_terminal_scrollback(state: State<UiConfigState>) -> u32 {
-    state.0.lock().unwrap().terminal_scrollback
+pub fn get_terminal_preferences(state: State<UiConfigState>) -> TerminalPreferences {
+    state.0.lock().unwrap().terminal_preferences.clone()
 }
 
-/// Returns the terminal's configured font family and size — see
-/// `UiConfig::terminal_font_family`/`terminal_font_size`'s doc comments for
-/// how to change them. Either or both may be `None`, in which case the
-/// frontend resolves its own platform-default fallback.
+/// Replaces the terminal's configured preferences wholesale and persists them
+/// to `~/.emma/debugger/config/ui.toml`.
 #[tauri::command]
-pub fn get_terminal_font(state: State<UiConfigState>) -> TerminalFont {
-    let guard = state.0.lock().unwrap();
-    TerminalFont { family: guard.terminal_font_family.clone(), size: guard.terminal_font_size }
+pub fn set_terminal_preferences(preferences: TerminalPreferences, state: State<UiConfigState>) -> Result<(), String> {
+    let config = {
+        let mut guard = state.0.lock().unwrap();
+        guard.terminal_preferences = preferences;
+        guard.clone()
+    };
+    save_ui_config_to(&profile::config_dir()?, &config)
 }
 
 /// Persists `skip` as the "Don't ask again" exit-confirmation preference.
@@ -347,37 +512,55 @@ mod tests {
     }
 
     #[test]
-    fn defaults_terminal_scrollback_to_1000_when_missing() {
+    fn defaults_terminal_preferences_when_missing() {
         let config: UiConfig = toml::from_str("").unwrap();
-        assert_eq!(config.terminal_scrollback, 1000);
+        assert_eq!(config.terminal_preferences, TerminalPreferences::default());
+        assert_eq!(config.terminal_preferences.text.scrollback, 1000);
+        assert_eq!(config.terminal_preferences.text.font_family, None);
+        assert_eq!(config.terminal_preferences.text.font_size, None);
+        assert_eq!(config.terminal_preferences.cursor.active_shape, CursorShape::Block);
+        assert_eq!(config.terminal_preferences.cursor.inactive_shape, CursorInactiveShape::Outline);
+        assert!(!config.terminal_preferences.cursor.blink);
+        assert_eq!(config.terminal_preferences.compatibility.backspace_key, TerminalKeyAction::Del);
+        assert_eq!(config.terminal_preferences.compatibility.delete_key, TerminalKeyAction::Dch);
     }
 
     #[test]
-    fn round_trips_terminal_scrollback() {
-        let config = UiConfig { terminal_scrollback: 5000, ..Default::default() };
-        let serialized = toml::to_string(&config).unwrap();
-        let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.terminal_scrollback, 5000);
+    fn defaults_terminal_preferences_fields_when_partially_specified() {
+        let config: UiConfig = toml::from_str("[terminal_preferences.text]\nscrollback = 5000\n").unwrap();
+        assert_eq!(config.terminal_preferences.text.scrollback, 5000);
+        assert_eq!(config.terminal_preferences.text.font_family, None);
+        assert_eq!(config.terminal_preferences.cursor.active_shape, CursorShape::Block);
     }
 
     #[test]
-    fn defaults_terminal_font_fields_to_none_when_missing() {
-        let config: UiConfig = toml::from_str("").unwrap();
-        assert_eq!(config.terminal_font_family, None);
-        assert_eq!(config.terminal_font_size, None);
-    }
-
-    #[test]
-    fn round_trips_terminal_font_fields() {
-        let config = UiConfig {
-            terminal_font_family: Some("Fira Code".to_string()),
-            terminal_font_size: Some(16),
-            ..Default::default()
+    fn round_trips_terminal_preferences() {
+        let preferences = TerminalPreferences {
+            text: TerminalTextPreferences {
+                font_family: Some("Fira Code".to_string()),
+                font_size: Some(16),
+                scrollback: 5000,
+                foreground: Some("#d4d4d4".to_string()),
+                background: Some("#1e1e1e".to_string()),
+                red: Some("#ff0000".to_string()),
+                ..Default::default()
+            },
+            cursor: TerminalCursorPreferences {
+                active_shape: CursorShape::Bar,
+                inactive_shape: CursorInactiveShape::None,
+                blink: true,
+                color: Some("#ffffff".to_string()),
+                accent_color: Some("#000000".to_string()),
+            },
+            compatibility: TerminalCompatibilityPreferences {
+                backspace_key: TerminalKeyAction::Bs,
+                delete_key: TerminalKeyAction::Del,
+            },
         };
+        let config = UiConfig { terminal_preferences: preferences.clone(), ..Default::default() };
         let serialized = toml::to_string(&config).unwrap();
         let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.terminal_font_family, Some("Fira Code".to_string()));
-        assert_eq!(deserialized.terminal_font_size, Some(16));
+        assert_eq!(deserialized.terminal_preferences, preferences);
     }
 
     #[test]
