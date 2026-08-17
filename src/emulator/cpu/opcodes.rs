@@ -3,7 +3,7 @@
 use crate::emulator::cpu::variant::CpuVariant;
 
 /// All instruction mnemonics for the 65C02 family, including WDC-only additions.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mnemonic {
     Adc, And, Asl, Bbc, Bbr0, Bbr1, Bbr2, Bbr3, Bbr4, Bbr5, Bbr6, Bbr7,
     Bbs0, Bbs1, Bbs2, Bbs3, Bbs4, Bbs5, Bbs6, Bbs7,
@@ -25,7 +25,7 @@ pub enum Mnemonic {
 }
 
 /// All addressing modes supported by the 65C02 family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AddressingMode {
     Implied,
     Accumulator,

@@ -8,6 +8,8 @@
 mod error;
 mod eval;
 mod expr;
+mod instructions;
+mod operand;
 mod parser;
 mod scanner;
 mod token;
