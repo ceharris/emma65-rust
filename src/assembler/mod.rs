@@ -6,5 +6,8 @@
 #![allow(dead_code)]
 
 mod error;
+mod eval;
+mod expr;
+mod parser;
 mod scanner;
 mod token;
