@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import "./styles/modal.scss";
 import { isMonospaceFont } from "./terminalSizing";
 import ColorPickerPopover from "./ColorPickerPopover";
+import NumberStepper from "./NumberStepper";
 import SelectPopover from "./SelectPopover";
 import {
   ANSI_PALETTE_FIELDS,
@@ -184,26 +185,22 @@ export default function TerminalPreferencesDialog({
 
             <div className="modal-field">
               <label className="modal-label">Font size</label>
-              <input
-                type="number"
-                className="modal-input modal-input-narrow"
+              <NumberStepper
                 min={6}
                 max={72}
                 placeholder="default"
-                value={text.font_size ?? ""}
-                onChange={(e) => updateText({ font_size: e.target.value ? Number(e.target.value) : null })}
+                value={text.font_size}
+                onChange={(v) => updateText({ font_size: v })}
               />
             </div>
 
             <div className="modal-field">
               <label className="modal-label">Scrollback</label>
-              <input
-                type="number"
-                className="modal-input modal-input-narrow"
+              <NumberStepper
                 min={0}
                 max={100000}
                 value={text.scrollback}
-                onChange={(e) => updateText({ scrollback: Math.max(0, Number(e.target.value) || 0) })}
+                onChange={(v) => updateText({ scrollback: v ?? 0 })}
               />
             </div>
 

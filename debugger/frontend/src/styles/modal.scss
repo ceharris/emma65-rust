@@ -240,6 +240,66 @@
   }
 }
 
+// Hand-drawn +/- replacement for a native <input type="number">'s
+// increment/decrement spinner (issue #467) — see `NumberStepper.tsx`'s doc
+// comment for why: that spinner is unstyleable OS-native chrome in
+// WebKitGTK, same as the other native-control fixes below.
+.number-stepper {
+  display: inline-flex;
+  align-items: stretch;
+
+  // The `<input>` itself keeps `.modal-input`'s styling; only the corners
+  // flush against the button stack and the native spinner need overriding.
+  .modal-input {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    -moz-appearance: textfield;
+
+    &::-webkit-inner-spin-button,
+    &::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+  }
+}
+
+.number-stepper-buttons {
+  display: flex;
+  flex-direction: column;
+  margin-left: -1px; // sit flush against the input's own right border
+}
+
+.number-stepper-btn {
+  flex: 1;
+  width: 16px;
+  background: var(--color-btn-bg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg);
+  font-size: 7px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+
+  &:first-child {
+    border-top-right-radius: 3px;
+    border-bottom: none;
+  }
+
+  &:last-child {
+    border-bottom-right-radius: 3px;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+  }
+
+  &:disabled {
+    color: var(--color-muted-2);
+    cursor: default;
+  }
+}
+
 // Popover-based replacement for a native <select> (issue #467) — see
 // `SelectPopover.tsx`'s doc comment for why: WebKitGTK renders a plain
 // <select>'s open dropdown list as unstyleable OS-native chrome, so the
