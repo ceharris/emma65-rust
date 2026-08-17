@@ -13,7 +13,14 @@ import { useEditMenuOverride } from "./EditMenuContext";
 import { useTheme } from "./ThemeContext";
 import { useOptionalPanelHeaderAction } from "./layout/panelHeaderActions";
 import { resolveTerminalFont, pixelSizeForGrid, logicalSizeForCssPixels, TERMINAL_SIZE_PRESETS } from "./terminalSizing";
-import { themeWithTextOverrides, TerminalPreferences, TerminalTextPreferences } from "./terminalPreferences";
+import {
+  DEFAULT_CURSOR_ACCENT_COLOR,
+  themeWithCursorOverrides,
+  themeWithTextOverrides,
+  TerminalCursorPreferences,
+  TerminalPreferences,
+  TerminalTextPreferences,
+} from "./terminalPreferences";
 import TerminalPreferencesDialog from "./TerminalPreferencesDialog";
 
 const XTERM_DARK_THEME: ITheme = {
@@ -76,10 +83,11 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  // Holds the Text-tab preferences currently applied to the live terminal,
-  // so the theme-sync effect below can recompute overrides on a light/dark
-  // switch without needing its own separate fetch.
+  // Holds the Text-tab/Cursor-tab preferences currently applied to the live
+  // terminal, so the theme-sync effect below can recompute overrides on a
+  // light/dark switch without needing its own separate fetch.
   const textPreferencesRef = useRef<TerminalTextPreferences | null>(null);
+  const cursorPreferencesRef = useRef<TerminalCursorPreferences | null>(null);
   const { resolvedTheme } = useTheme();
   const editMenu = useEditMenuOverride();
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -162,17 +170,26 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     },
   });
 
-  useEffect(() => {
-    if (!termRef.current) return;
+  // Recomputes `term.options.theme` from the current light/dark base theme
+  // plus whatever Text-tab/Cursor-tab overrides are currently applied
+  // (`null` refs — preferences not fetched yet — leave the base theme
+  // untouched, same as before either tab existed).
+  const applyTheme = () => {
+    const term = termRef.current;
+    if (!term) return;
     const base = resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
-    termRef.current.options.theme = textPreferencesRef.current
-      ? themeWithTextOverrides(base, textPreferencesRef.current)
-      : base;
+    let theme = textPreferencesRef.current ? themeWithTextOverrides(base, textPreferencesRef.current) : base;
+    if (cursorPreferencesRef.current) theme = themeWithCursorOverrides(theme, cursorPreferencesRef.current);
+    term.options.theme = theme;
+  };
+
+  useEffect(() => {
+    applyTheme();
   }, [resolvedTheme]);
 
   // Applies a fetched/saved Text-tab preferences struct to the
-  // already-constructed terminal: scrollback, font, and the
-  // foreground/background/16-palette theme overrides. Used both by the
+  // already-constructed terminal: scrollback, font, and (via `applyTheme`)
+  // the foreground/background/16-palette theme overrides. Used both by the
   // fetch-on-mount effect below and by the Preferences dialog's `onSaved`
   // callback. xterm.js supports changing `options.scrollback`/`fontFamily`/
   // `fontSize`/`theme` on a live instance, so neither caller needs to gate
@@ -185,24 +202,41 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     const resolved = resolveTerminalFont(text.font_family, text.font_size, getFallbackMonoFont());
     term.options.fontFamily = resolved.fontFamily;
     term.options.fontSize = resolved.fontSize;
-    const base = resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
-    term.options.theme = themeWithTextOverrides(base, text);
+    applyTheme();
     // A font-metrics change invalidates whatever grid the construction
     // effect's own initial fit() computed against the placeholder font.
     fitAddonRef.current?.fit();
   };
 
-  const fetchAndApplyTextPreferences = () => {
+  // Applies a fetched/saved Cursor-tab preferences struct to the
+  // already-constructed terminal: shape/blink options plus (via
+  // `applyTheme`) the cursor/accent-color theme overrides. Same two callers
+  // as `applyTextPreferences` above.
+  const applyCursorPreferences = (cursor: TerminalCursorPreferences) => {
+    const term = termRef.current;
+    if (!term) return;
+    cursorPreferencesRef.current = cursor;
+    term.options.cursorStyle = cursor.active_shape;
+    term.options.cursorInactiveStyle = cursor.inactive_shape;
+    term.options.cursorBlink = cursor.blink;
+    applyTheme();
+  };
+
+  const fetchAndApplyPreferences = () => {
     invoke<TerminalPreferences>("get_terminal_preferences")
-      .then(({ text }) => applyTextPreferences(text))
+      .then(({ text, cursor }) => {
+        applyTextPreferences(text);
+        applyCursorPreferences(cursor);
+      })
       .catch((err) => console.error("get_terminal_preferences failed:", err));
   };
 
   useEffect(() => {
-    fetchAndApplyTextPreferences();
-    // Only the initial fetch belongs in this effect — `applyTextPreferences`
-    // is also called directly (not via a dependency-triggered re-run) by the
-    // Preferences dialog's `onSaved` below.
+    fetchAndApplyPreferences();
+    // Only the initial fetch belongs in this effect — `applyTextPreferences`/
+    // `applyCursorPreferences` are also called directly (not via a
+    // dependency-triggered re-run) by the Preferences dialog's `onSaved`
+    // below.
   }, []);
 
   // The detached-Terminal window's own `TerminalPanel` mounts exactly once,
@@ -217,7 +251,7 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
   // docked host — this event is only ever `emit_to`'d to the detached
   // window's label, so the docked instance's listener never fires.
   useEffect(() => {
-    const unlistenPromise = listen("terminal-shown", () => fetchAndApplyTextPreferences());
+    const unlistenPromise = listen("terminal-shown", () => fetchAndApplyPreferences());
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
@@ -413,9 +447,14 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
       <TerminalPreferencesDialog
         open={preferencesOpen}
         onClose={() => setPreferencesOpen(false)}
-        onSaved={(preferences) => applyTextPreferences(preferences.text)}
+        onSaved={(preferences) => {
+          applyTextPreferences(preferences.text);
+          applyCursorPreferences(preferences.cursor);
+        }}
         defaultForeground={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).foreground!}
         defaultBackground={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).background!}
+        defaultCursorColor={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).cursor!}
+        defaultCursorAccentColor={DEFAULT_CURSOR_ACCENT_COLOR}
       />
     </>
   );

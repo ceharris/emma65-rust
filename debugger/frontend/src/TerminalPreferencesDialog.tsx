@@ -3,7 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import "./styles/modal.scss";
 import { isMonospaceFont } from "./terminalSizing";
 import ColorPickerPopover from "./ColorPickerPopover";
-import { ANSI_PALETTE_FIELDS, TerminalPreferences, TerminalTextPreferences } from "./terminalPreferences";
+import {
+  ANSI_PALETTE_FIELDS,
+  CursorInactiveShape,
+  CursorShape,
+  TerminalCursorPreferences,
+  TerminalPreferences,
+  TerminalTextPreferences,
+} from "./terminalPreferences";
 
 interface TerminalPreferencesDialogProps {
   open: boolean;
@@ -22,15 +29,27 @@ interface TerminalPreferencesDialogProps {
    */
   defaultForeground: string;
   defaultBackground: string;
+  /**
+   * Same idea as `defaultForeground`/`defaultBackground`, for the Cursor
+   * tab's color/accent-color swatches: the current light/dark base theme's
+   * `cursor` value, and `@xterm/xterm`'s own built-in `cursorAccent` default
+   * (`DEFAULT_CURSOR_ACCENT_COLOR` — independent of theme, see its doc
+   * comment in `terminalPreferences.ts`).
+   */
+  defaultCursorColor: string;
+  defaultCursorAccentColor: string;
 }
 
 /**
- * Only "text" exists so far — Work Units 3/4 add "cursor"/"compatibility"
- * entries here (and a corresponding tab-panel branch below) without needing
- * to touch the tab-strip rendering itself.
+ * Work Unit 4 adds a "compatibility" entry here (and a corresponding
+ * tab-panel branch below) without needing to touch the tab-strip rendering
+ * itself.
  */
-type TabId = "text";
-const TABS: { id: TabId; label: string }[] = [{ id: "text", label: "Text" }];
+type TabId = "text" | "cursor";
+const TABS: { id: TabId; label: string }[] = [
+  { id: "text", label: "Text" },
+  { id: "cursor", label: "Cursor" },
+];
 
 /**
  * The terminal's "Preferences…" modal (issue #467), opened from
@@ -47,6 +66,8 @@ export default function TerminalPreferencesDialog({
   onSaved,
   defaultForeground,
   defaultBackground,
+  defaultCursorColor,
+  defaultCursorAccentColor,
 }: TerminalPreferencesDialogProps) {
   const [preferences, setPreferences] = useState<TerminalPreferences | null>(null);
   const [fontError, setFontError] = useState("");
@@ -65,6 +86,10 @@ export default function TerminalPreferencesDialog({
   const updateText = (patch: Partial<TerminalTextPreferences>) => {
     setPreferences((p) => p && { ...p, text: { ...p.text, ...patch } });
     if ("font_family" in patch) setFontError("");
+  };
+
+  const updateCursor = (patch: Partial<TerminalCursorPreferences>) => {
+    setPreferences((p) => p && { ...p, cursor: { ...p.cursor, ...patch } });
   };
 
   /**
@@ -95,7 +120,7 @@ export default function TerminalPreferencesDialog({
 
   if (!open || !preferences) return null;
 
-  const { text } = preferences;
+  const { text, cursor } = preferences;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -198,6 +223,65 @@ export default function TerminalPreferencesDialog({
                     onChange={(v) => updateText({ [field]: v } as Partial<TerminalTextPreferences>)}
                   />
                 ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "cursor" && (
+          <div className="modal-tab-panel">
+            <div className="modal-field">
+              <label className="modal-label">Active shape</label>
+              <select
+                className="modal-input modal-input-narrow"
+                value={cursor.active_shape}
+                onChange={(e) => updateCursor({ active_shape: e.target.value as CursorShape })}
+              >
+                <option value="block">Block</option>
+                <option value="underline">Underline</option>
+                <option value="bar">Bar</option>
+              </select>
+            </div>
+
+            <div className="modal-field">
+              <label className="modal-label">Inactive shape</label>
+              <select
+                className="modal-input modal-input-narrow"
+                value={cursor.inactive_shape}
+                onChange={(e) => updateCursor({ inactive_shape: e.target.value as CursorInactiveShape })}
+              >
+                <option value="outline">Outline</option>
+                <option value="block">Block</option>
+                <option value="underline">Underline</option>
+                <option value="bar">Bar</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+
+            <label className="modal-checkbox-row">
+              <input
+                type="checkbox"
+                checked={cursor.blink}
+                onChange={(e) => updateCursor({ blink: e.target.checked })}
+              />
+              Blinking cursor
+            </label>
+
+            <div className="modal-field">
+              <label className="modal-label">Colors</label>
+              <div className="color-picker-row">
+                <ColorPickerPopover
+                  label="Cursor"
+                  value={cursor.color}
+                  defaultColor={defaultCursorColor}
+                  onChange={(v) => updateCursor({ color: v })}
+                />
+                <ColorPickerPopover
+                  label="Accent"
+                  value={cursor.accent_color}
+                  defaultColor={defaultCursorAccentColor}
+                  onChange={(v) => updateCursor({ accent_color: v })}
+                />
               </div>
             </div>
           </div>

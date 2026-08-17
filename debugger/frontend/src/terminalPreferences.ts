@@ -135,3 +135,31 @@ export function themeWithTextOverrides(base: ITheme, text: TerminalTextPreferenc
   }
   return theme;
 }
+
+/**
+ * `@xterm/xterm`'s own built-in default for `ITheme.cursorAccent` (verified
+ * directly against the installed package's bundle: an unset `cursorAccent`
+ * falls back to a hardcoded opaque black, independent of `background` or any
+ * other theme field) — what a Cursor-tab accent-color swatch actually
+ * previews when left unset, since neither `XTERM_DARK_THEME` nor
+ * `XTERM_LIGHT_THEME` sets `cursorAccent` itself. `cursor` gets the same
+ * hardcoded-default treatment when unset, but both base themes already set
+ * it explicitly, so `TerminalPanel.tsx` previews that value directly instead
+ * of needing an equivalent `DEFAULT_CURSOR_COLOR` constant here.
+ */
+export const DEFAULT_CURSOR_ACCENT_COLOR = "#000000";
+
+/**
+ * Merges `cursor`'s color/accent-color overrides onto `theme` (already
+ * merged with any Text-tab overrides via `themeWithTextOverrides`), matching
+ * that function's unset-field-keeps-base-value pattern: `null` leaves
+ * `theme`'s existing `cursor`/`cursorAccent` (the current light/dark base
+ * theme's values) untouched.
+ */
+export function themeWithCursorOverrides(theme: ITheme, cursor: TerminalCursorPreferences): ITheme {
+  return {
+    ...theme,
+    cursor: cursor.color ?? theme.cursor,
+    cursorAccent: cursor.accent_color ?? theme.cursorAccent,
+  };
+}
