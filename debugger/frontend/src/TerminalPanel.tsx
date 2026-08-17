@@ -93,7 +93,18 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     const size = pixelSizeForGrid(term, cols, rows);
     if (!size) return;
     if (dockPanelApi) {
-      dockPanelApi.setSize({ width: size.width, height: size.height });
+      // `dockPanelApi.setSize()` forwards to the *group's* setSize
+      // (dockview-core's `DockviewPanel` constructor wires
+      // `panel.api.onDidSizeChange` straight to `this.group.api.setSize`),
+      // i.e. it resizes the whole tab group Terminal is tabbed into —
+      // header/tab-strip included — not just this panel's own content box.
+      // `dockPanelApi.height` (read) is the content-box height (what this
+      // panel's `layout()` actually receives, post-header), so the gap
+      // between it and the group's own total height is exactly the
+      // tab-strip's height, which has to be added back in or the requested
+      // grid comes up short by however many rows that strip is tall.
+      const headerOverhead = dockPanelApi.group.height - dockPanelApi.height;
+      dockPanelApi.setSize({ width: size.width, height: size.height + headerOverhead });
       return;
     }
     let scaleFactorOverride: number | null = null;
