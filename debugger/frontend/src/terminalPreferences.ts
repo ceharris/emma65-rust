@@ -48,7 +48,7 @@ export interface TerminalCursorPreferences {
 
 export type TerminalKeyAction = "bs" | "del" | "dch";
 
-/** Compatibility-tab terminal preferences — not yet editable (issue #467 Work Unit 4), round-tripped as-is. */
+/** Compatibility-tab terminal preferences — what the Backspace and Delete keys send. */
 export interface TerminalCompatibilityPreferences {
   backspace_key: TerminalKeyAction;
   delete_key: TerminalKeyAction;
@@ -162,4 +162,22 @@ export function themeWithCursorOverrides(theme: ITheme, cursor: TerminalCursorPr
     cursor: cursor.color ?? theme.cursor,
     cursorAccent: cursor.accent_color ?? theme.cursorAccent,
   };
+}
+
+/**
+ * The bytes a compatibility-remapped Backspace/Delete key should send: the
+ * ASCII Backspace control code (`\x08`), the ASCII Delete control code
+ * (`\x7f`), or the literal ANSI Delete Character (DCH) escape sequence
+ * `CSI P` (`\x1b[P`) — per the terminal-preferences plan doc's Compatibility
+ * tab section, deliberately not the VT220 Delete keycode `\x1b[3~`.
+ */
+export function terminalKeyActionBytes(action: TerminalKeyAction): number[] {
+  switch (action) {
+    case "bs":
+      return [0x08];
+    case "del":
+      return [0x7f];
+    case "dch":
+      return [0x1b, 0x5b, 0x50]; // ESC [ P
+  }
 }
