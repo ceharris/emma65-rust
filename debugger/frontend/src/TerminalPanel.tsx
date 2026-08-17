@@ -155,38 +155,27 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
     }
   }, [resolvedTheme]);
 
-  // Not yet a live preference (see `UiConfig::terminal_scrollback`'s doc
-  // comment) — fetched once and applied to the already-constructed
-  // terminal, same pattern as the theme-sync effect above. xterm.js
-  // supports changing `options.scrollback` on a live instance, trimming or
-  // growing its buffer accordingly, so this doesn't need to gate the
-  // terminal's initial construction below on the fetch completing first.
+  // Not yet a live preference (no dialog UI exists yet, see issue #467's
+  // Work Unit 2) — fetched once and applied to the already-constructed
+  // terminal, same pattern as the theme-sync effect above. xterm.js supports
+  // changing `options.scrollback`/`fontFamily`/`fontSize` on a live
+  // instance, so this doesn't need to gate the terminal's initial
+  // construction below on the fetch completing first. Refits afterward
+  // since a font-metrics change invalidates whatever grid the construction
+  // effect's own initial fit() computed against the placeholder font.
   useEffect(() => {
-    invoke<number>("get_terminal_scrollback")
-      .then((lines) => {
-        if (termRef.current) termRef.current.options.scrollback = lines;
-      })
-      .catch((err) => console.error("get_terminal_scrollback failed:", err));
-  }, []);
-
-  // Fetched once and applied to the already-constructed terminal, same
-  // pattern as the scrollback effect above — not yet a live preference (no
-  // picker UI exists yet, see issue #462's Work Unit 1), and xterm.js
-  // supports changing `options.fontFamily`/`fontSize` on a live instance, so
-  // this doesn't need to gate the terminal's initial construction below on
-  // the fetch completing first. Refits afterward since a font-metrics change
-  // invalidates whatever grid the construction effect's own initial fit()
-  // computed against the placeholder font.
-  useEffect(() => {
-    invoke<{ family: string | null; size: number | null }>("get_terminal_font")
-      .then(({ family, size }) => {
+    invoke<{ text: { font_family: string | null; font_size: number | null; scrollback: number } }>(
+      "get_terminal_preferences",
+    )
+      .then(({ text }) => {
         if (!termRef.current) return;
-        const resolved = resolveTerminalFont(family, size, getFallbackMonoFont());
+        termRef.current.options.scrollback = text.scrollback;
+        const resolved = resolveTerminalFont(text.font_family, text.font_size, getFallbackMonoFont());
         termRef.current.options.fontFamily = resolved.fontFamily;
         termRef.current.options.fontSize = resolved.fontSize;
         fitAddonRef.current?.fit();
       })
-      .catch((err) => console.error("get_terminal_font failed:", err));
+      .catch((err) => console.error("get_terminal_preferences failed:", err));
   }, []);
 
   useEffect(() => {
