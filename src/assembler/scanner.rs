@@ -41,6 +41,8 @@ impl <'a> Scanner<'a> {
         }
     }
 
+    /// Skips spaces, tabs, carriage returns, and `;`-to-end-of-line comments.
+    /// Newlines are significant statement terminators and are not consumed here.
     fn consume_whitespace(&mut self) {
         loop {
             match self.source.peek() {
@@ -48,22 +50,20 @@ impl <'a> Scanner<'a> {
                     self.source.skip();
                     self.column += TAB_SIZE;
                 }
-                Some(b'\n') => {
-                    self.source.skip();
-                    self.column = 1;
-                    self.line += 1;
-                },
-                Some(b'\r') => {
-                    self.source.skip();
-                    self.column = 1;
-                    if let Some(b'\n') = self.source.peek() {
-                        self.source.skip();
-                        self.line += 1;
-                    }
-                }
-                Some(b' ') => {
+                Some(b' ') | Some(b'\r') => {
                     self.source.skip();
                     self.column += 1;
+                }
+                Some(b';') => {
+                    loop {
+                        match self.source.peek() {
+                            Some(b'\n') | None => break,
+                            Some(_) => {
+                                self.source.skip();
+                                self.column += 1;
+                            }
+                        }
+                    }
                 }
                 Some(_) | None => break,
             }
@@ -72,61 +72,43 @@ impl <'a> Scanner<'a> {
 
     fn match_token(&mut self, c: u8) -> Result<Option<Token<'a>>, Error> {
         match c {
-            b'`' => Ok(Some(self.make_token(TokenType::Backtick))),
+            b'\n' => {
+                let token = self.make_token(TokenType::Newline);
+                self.line += 1;
+                self.column = 1;
+                Ok(Some(token))
+            }
             b'^' => Ok(Some(self.make_token(TokenType::Caret))),
-            b'-' => Ok(Some(self.make_token(TokenType::Minus))),
-            b'%' => Ok(Some(self.make_token(TokenType::Percent))),
-            b'+' => Ok(Some(self.make_token(TokenType::Plus))),
-            b'/' => Ok(Some(self.make_token(TokenType::Slash))),
-            b'*' => Ok(Some(self.make_token(TokenType::Star))),
             b'~' => Ok(Some(self.make_token(TokenType::Tilde))),
+            b'+' => Ok(Some(self.make_token(TokenType::Plus))),
+            b'-' => Ok(Some(self.make_token(TokenType::Minus))),
+            b'*' => Ok(Some(self.make_token(TokenType::Star))),
+            b'/' => Ok(Some(self.make_token(TokenType::Slash))),
+            b'%' => Ok(Some(self.make_token(TokenType::Percent))),
             b'(' => Ok(Some(self.make_token(TokenType::LeftParen))),
             b')' => Ok(Some(self.make_token(TokenType::RightParen))),
-            b'[' => Ok(Some(self.make_token(TokenType::LeftBBracket))),
-            b']' => Ok(Some(self.make_token(TokenType::RightBracket))),
-            b';' => Ok(Some(self.make_token(TokenType::Semicolon))),
+            b',' => Ok(Some(self.make_token(TokenType::Comma))),
+            b':' => Ok(Some(self.make_token(TokenType::Colon))),
+            b'#' => Ok(Some(self.make_token(TokenType::Hash))),
+            b'=' => Ok(Some(self.make_token(TokenType::Equal))),
             b'&' => match self.source.peek() {
-                Some(b'&') =>  Ok(Some(self.advance_and_make_token(TokenType::AmperAmper))),
+                Some(b'&') => Ok(Some(self.advance_and_make_token(TokenType::AmperAmper))),
                 Some(_) | None => Ok(Some(self.make_token(TokenType::Amper))),
             }
-            b'!' => match self.source.peek() {
-                Some(b'=') => Ok(Some(self.advance_and_make_token(TokenType::BangEqual))),
-                Some(_) | None => Ok(Some(self.make_token(TokenType::Bang))),
-            }
+            b'!' => Ok(Some(self.make_token(TokenType::Bang))),
             b'|' => match self.source.peek() {
                 Some(b'|') => Ok(Some(self.advance_and_make_token(TokenType::BarBar))),
                 Some(_) | None => Ok(Some(self.make_token(TokenType::Bar))),
             }
-            b'=' => match self.source.peek() {
-                Some(b'=') => Ok(Some(self.advance_and_make_token(TokenType::EqualEqual))),
-                Some(_) | None => Ok(Some(self.make_token(TokenType::Equal))),
-            },
             b'>' => match self.source.peek() {
-                Some(b'=') => Ok(Some(self.advance_and_make_token(TokenType::GreaterEqual))),
                 Some(b'>') => Ok(Some(self.advance_and_make_token(TokenType::GreaterGreater))),
                 Some(_) | None => Ok(Some(self.make_token(TokenType::Greater))),
             },
             b'<' => match self.source.peek() {
-                Some(b'=') => Ok(Some(self.advance_and_make_token(TokenType::LesserEqual))),
                 Some(b'<') => Ok(Some(self.advance_and_make_token(TokenType::LesserLesser))),
                 Some(_) | None => Ok(Some(self.make_token(TokenType::Lesser))),
             }
-            b'B'| b'b' => match self.source.peek() {
-                Some(b'[') => Ok(Some(self.advance_and_make_token(TokenType::LeftBBracket))),
-                Some(_) | None => Ok(Some(self.make_symbol(c))),
-            }
-            b'W' | b'w' => match self.source.peek() {
-                Some(b'[') => Ok(Some(self.advance_and_make_token(TokenType::LeftWBracket))),
-                Some(_) | None => Ok(Some(self.make_symbol(c))),
-            }
-            b'D' | b'd' => match self.source.peek() {
-                Some(b'[') => Ok(Some(self.advance_and_make_token(TokenType::LeftDBracket))),
-                Some(_) | None => Ok(Some(self.make_symbol(c))),
-            }
-            b':' => match self.source.peek() {
-                Some(b'=') => Ok(Some(self.advance_and_make_token(TokenType::Walrus))),
-                Some(_) | None => Err(Error::from(self.line, self.column, "unrecognized character"))
-            }
+            b'.' => Self::optional(self.make_directive()),
             b'$' => Self::optional(self.make_hexadecimal_number()),
             b'"' => Self::optional(self.make_string_literal()),
             b'\'' => Self::optional(self.make_char_literal()),
@@ -163,6 +145,25 @@ impl <'a> Scanner<'a> {
             }
         }
         self.make_token(TokenType::Symbol(name))
+    }
+
+    fn make_directive(&mut self) -> Result<Token<'a>, Error> {
+        match self.source.peek() {
+            Some(b'_') | Some(b'A'..=b'Z') | Some(b'a'..=b'z') => {}
+            Some(_) | None => return Err(Error::from(self.line, self.column, "expected directive name")),
+        }
+        let mut name = String::new();
+        loop {
+            let c = self.source.peek();
+            match c {
+                Some(b'_') | Some(b'0'..=b'9') | Some(b'A'..=b'Z') | Some(b'a'..=b'z') => {
+                    self.source.advance();
+                    name.push(c.unwrap() as char)
+                }
+                Some(_) | None => break
+            }
+        }
+        Ok(self.make_token(TokenType::Directive(name)))
     }
 
     fn make_prefixed_number(&mut self) -> Result<Token<'a>, Error> {
@@ -374,37 +375,32 @@ mod tests {
     fn next_token_with_valid_operators() {
         assert_next_token_valid("&", &TokenType::Amper);
         assert_next_token_valid("&&", &TokenType::AmperAmper);
-        assert_next_token_valid("`", &TokenType::Backtick);
+        assert_next_token_valid("!", &TokenType::Bang);
         assert_next_token_valid("|", &TokenType::Bar);
         assert_next_token_valid("||", &TokenType::BarBar);
         assert_next_token_valid("^", &TokenType::Caret);
-        assert_next_token_valid("!", &TokenType::Bang);
-        assert_next_token_valid("!=", &TokenType::BangEqual);
+        assert_next_token_valid(":", &TokenType::Colon);
+        assert_next_token_valid(",", &TokenType::Comma);
         assert_next_token_valid("=", &TokenType::Equal);
-        assert_next_token_valid("==", &TokenType::EqualEqual);
         assert_next_token_valid(">", &TokenType::Greater);
-        assert_next_token_valid(">=", &TokenType::GreaterEqual);
         assert_next_token_valid(">>", &TokenType::GreaterGreater);
+        assert_next_token_valid("#", &TokenType::Hash);
         assert_next_token_valid("<", &TokenType::Lesser);
-        assert_next_token_valid("<=", &TokenType::LesserEqual);
         assert_next_token_valid("<<", &TokenType::LesserLesser);
         assert_next_token_valid("-", &TokenType::Minus);
         assert_next_token_valid("%", &TokenType::Percent);
         assert_next_token_valid("+", &TokenType::Plus);
-        assert_next_token_valid(";", &TokenType::Semicolon);
         assert_next_token_valid("/", &TokenType::Slash);
         assert_next_token_valid("*", &TokenType::Star);
         assert_next_token_valid("~", &TokenType::Tilde);
         assert_next_token_valid("(", &TokenType::LeftParen);
         assert_next_token_valid(")", &TokenType::RightParen);
-        assert_next_token_valid("]", &TokenType::RightBracket);
-        assert_next_token_valid("[", &TokenType::LeftBBracket);
-        assert_next_token_valid("B[", &TokenType::LeftBBracket);
-        assert_next_token_valid("W[", &TokenType::LeftWBracket);
-        assert_next_token_valid("D[", &TokenType::LeftDBracket);
-        assert_next_token_valid("b[", &TokenType::LeftBBracket);
-        assert_next_token_valid("w[", &TokenType::LeftWBracket);
-        assert_next_token_valid("d[", &TokenType::LeftDBracket);
+        assert_next_token_valid("\n", &TokenType::Newline);
+        assert_next_token_valid(".org", &TokenType::Directive(String::from("org")));
+        assert_next_token_valid(".byte", &TokenType::Directive(String::from("byte")));
+        assert_next_token_valid(".word", &TokenType::Directive(String::from("word")));
+        assert_next_token_valid(".res", &TokenType::Directive(String::from("res")));
+        assert_next_token_valid(".equ", &TokenType::Directive(String::from("equ")));
         assert_next_token_valid("\"foobar\"", &TokenType::String(String::from("foobar")));
         assert_next_token_valid("\"\\n\\r\\t\\\\\"", &TokenType::String(String::from("\n\r\t\\")));
         assert_next_token_valid("\"\\\"\"", &TokenType::String(String::from("\"")));
@@ -412,6 +408,30 @@ mod tests {
         assert_next_token_valid("'a'", &TokenType::Number(b'a'.into()));
         assert_next_token_valid("'\n'", &TokenType::Number('\n'.into()));
         assert_next_token_valid("'\\''", &TokenType::Number('\''.into()));
+    }
+
+    fn assert_first_token_type(source: &str, expected_type: &TokenType) {
+        let mut scanner = Scanner::new(source);
+        let token = scanner.next_token().unwrap().unwrap();
+        assert_eq!(token.token_type(), expected_type);
+    }
+
+    #[test]
+    fn next_token_lesser_vs_lesser_lesser_disambiguation() {
+        assert_next_token_valid("<", &TokenType::Lesser);
+        assert_next_token_valid("<<", &TokenType::LesserLesser);
+        assert_first_token_type("< ", &TokenType::Lesser);
+        assert_first_token_type("<label", &TokenType::Lesser);
+        assert_first_token_type("<< 4", &TokenType::LesserLesser);
+    }
+
+    #[test]
+    fn next_token_greater_vs_greater_greater_disambiguation() {
+        assert_next_token_valid(">", &TokenType::Greater);
+        assert_next_token_valid(">>", &TokenType::GreaterGreater);
+        assert_first_token_type("> ", &TokenType::Greater);
+        assert_first_token_type(">label", &TokenType::Greater);
+        assert_first_token_type(">> 4", &TokenType::GreaterGreater);
     }
 
     #[test]
@@ -519,15 +539,19 @@ mod tests {
         assert_next_token_valid("z", &TokenType::Symbol(String::from("z")));
         assert_next_token_valid("A0", &TokenType::Symbol(String::from("A0")));
         assert_next_token_valid("Az", &TokenType::Symbol(String::from("Az")));
-        // These cases cover the situation in which we see the starting letter of a
-        // memory operator (B[...], W[...], D[...], b[...], w[...], or d[...]), but it is not followed
-        // by the left bracket
-        assert_next_token_valid("B", &TokenType::Symbol(String::from("B")));
-        assert_next_token_valid("W", &TokenType::Symbol(String::from("W")));
-        assert_next_token_valid("D", &TokenType::Symbol(String::from("D")));
-        assert_next_token_valid("b", &TokenType::Symbol(String::from("b")));
-        assert_next_token_valid("w", &TokenType::Symbol(String::from("w")));
-        assert_next_token_valid("d", &TokenType::Symbol(String::from("d")));
+        assert_next_token_valid("my_routine", &TokenType::Symbol(String::from("my_routine")));
+        assert_next_token_valid("LDA", &TokenType::Symbol(String::from("LDA")));
+    }
+
+    #[test]
+    fn next_token_directive() {
+        assert_next_token_valid(".org", &TokenType::Directive(String::from("org")));
+        assert_next_token_valid(".ORG", &TokenType::Directive(String::from("ORG")));
+        assert_next_token_valid(".equ", &TokenType::Directive(String::from("equ")));
+        assert_next_token_invalid(".",
+            |e| e.to_string().contains("expected directive name"));
+        assert_next_token_invalid(".1",
+            |e| e.to_string().contains("expected directive name"));
     }
 
     #[test]
@@ -558,17 +582,8 @@ mod tests {
     }
 
     #[test]
-    fn next_token_walrus() {
-        assert_next_token_valid(":=", &TokenType::Walrus);
-        assert_next_token_invalid("::",
-            |e| e.to_string().contains("unrecognized"));
-        assert_next_token_invalid(":",
-            |e| e.to_string().contains("unrecognized"));
-    }
-
-    #[test]
     fn next_token_unrecognized() {
-        assert_next_token_invalid(".",
+        assert_next_token_invalid("@",
             |e| e.to_string().contains("unrecognized"));
     }
 
@@ -586,24 +601,38 @@ mod tests {
     fn next_token_whitespace() {
         assert_whitespace_consumed(" ", 1, 2);
         assert_whitespace_consumed("\t", 1, 1 + TAB_SIZE);
-        assert_whitespace_consumed("\r", 1, 1);
-        assert_whitespace_consumed("\n", 2, 1);
-        assert_whitespace_consumed("\r\n", 2, 1);
+        assert_whitespace_consumed("\r", 1, 2);
+    }
+
+    #[test]
+    fn scan_comment_is_stripped_and_newline_still_tokenized() {
+        let mut scanner = Scanner::new("; a comment\n");
+        let tokens = scanner.scan().unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type(), &TokenType::Newline);
+    }
+
+    #[test]
+    fn scan_comment_at_end_of_source_with_no_trailing_newline() {
+        let mut scanner = Scanner::new("LDA #1 ; load one");
+        let tokens = scanner.scan().unwrap();
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0].token_type(), &TokenType::Symbol(String::from("LDA")));
+        assert_eq!(tokens[1].token_type(), &TokenType::Hash);
+        assert_eq!(tokens[2].token_type(), &TokenType::Number(1));
     }
 
     #[test]
     fn scan_trims_whitespace() {
-        let token_text = "  PC  == 0x20c && A  != 3";
+        let token_text = "  LDA  #$20 , X";
         let mut scanner = Scanner::new(token_text);
         let tokens = scanner.scan().unwrap();
-        assert_eq!(tokens.len(), 7);
-        assert_eq!(tokens[0].text(), "PC");
-        assert_eq!(tokens[1].text(), "==");
-        assert_eq!(tokens[2].text(), "0x20c");
-        assert_eq!(tokens[3].text(), "&&");
-        assert_eq!(tokens[4].text(), "A");
-        assert_eq!(tokens[5].text(), "!=");
-        assert_eq!(tokens[6].text(), "3");
+        assert_eq!(tokens.len(), 5);
+        assert_eq!(tokens[0].text(), "LDA");
+        assert_eq!(tokens[1].text(), "#");
+        assert_eq!(tokens[2].text(), "$20");
+        assert_eq!(tokens[3].text(), ",");
+        assert_eq!(tokens[4].text(), "X");
     }
 
     fn assert_is_expected_token(actual: &Token, expected_type: &TokenType) {
@@ -612,25 +641,36 @@ mod tests {
 
     #[test]
     fn scan_with_valid_text_produces_expected_tokens() {
-        let token_text = "  PC == 0x20c && !`C && A = 3";
+        let token_text = "loop:  LDA #<label\n  BNE loop";
         let mut scanner = Scanner::new(token_text);
         let tokens = scanner.scan().unwrap();
-        assert_eq!(tokens.len(), 11);
-        assert_is_expected_token(&tokens[0], &TokenType::Symbol(String::from("PC")));
-        assert_is_expected_token(&tokens[1], &TokenType::EqualEqual);
-        assert_is_expected_token(&tokens[2], &TokenType::Number(0x20c));
-        assert_is_expected_token(&tokens[3], &TokenType::AmperAmper);
-        assert_is_expected_token(&tokens[4], &TokenType::Bang);
-        assert_is_expected_token(&tokens[5], &TokenType::Backtick);
-        assert_is_expected_token(&tokens[6], &TokenType::Symbol(String::from("C")));
-        assert_is_expected_token(&tokens[7], &TokenType::AmperAmper);
-        assert_is_expected_token(&tokens[8], &TokenType::Symbol(String::from("A")));
+        assert_is_expected_token(&tokens[0], &TokenType::Symbol(String::from("loop")));
+        assert_is_expected_token(&tokens[1], &TokenType::Colon);
+        assert_is_expected_token(&tokens[2], &TokenType::Symbol(String::from("LDA")));
+        assert_is_expected_token(&tokens[3], &TokenType::Hash);
+        assert_is_expected_token(&tokens[4], &TokenType::Lesser);
+        assert_is_expected_token(&tokens[5], &TokenType::Symbol(String::from("label")));
+        assert_is_expected_token(&tokens[6], &TokenType::Newline);
+        assert_is_expected_token(&tokens[7], &TokenType::Symbol(String::from("BNE")));
+        assert_is_expected_token(&tokens[8], &TokenType::Symbol(String::from("loop")));
+    }
 
+    #[test]
+    fn scan_multiple_lines_produces_newline_tokens_between_statements() {
+        let mut scanner = Scanner::new("FOO = 1\nBAR = 2\n");
+        let tokens = scanner.scan().unwrap();
+        assert_eq!(tokens.len(), 8);
+        assert_is_expected_token(&tokens[3], &TokenType::Newline);
+        assert_eq!(tokens[3].location.line, 1);
+        assert_is_expected_token(&tokens[7], &TokenType::Newline);
+        assert_eq!(tokens[7].location.line, 2);
+        assert_eq!(tokens[4].location.line, 2);
+        assert_eq!(tokens[4].location.column, 1);
     }
 
     #[test]
     fn scan_hexadecimal_with_invalid_digits() {
-        let token_text = "A == 0xinvalid";
+        let token_text = "LDA $invalid";
         let mut scanner = Scanner::new(token_text);
         let result = scanner.scan();
         assert!(result.is_err());
@@ -650,51 +690,27 @@ mod tests {
 
     #[test]
     fn scan_number_followed_by_token() {
-        assert_token_sequence_valid("0]", &["0", "]"],
-                                    &[&TokenType::Number(0), &TokenType::RightBracket]);
-        assert_token_sequence_valid("9]", &["9", "]"],
-                                    &[&TokenType::Number(9), &TokenType::RightBracket]);
-        assert_token_sequence_valid("0b0]", &["0b0", "]"],
-                                    &[&TokenType::Number(0), &TokenType::RightBracket]);
-        assert_token_sequence_valid("0o0]", &["0o0", "]"],
-                                    &[&TokenType::Number(0), &TokenType::RightBracket]);
-        assert_token_sequence_valid("01]", &["01", "]"],
-                                    &[&TokenType::Number(1), &TokenType::RightBracket]);
-        assert_token_sequence_valid("0x0]", &["0x0", "]"],
-                                    &[&TokenType::Number(0), &TokenType::RightBracket]);
+        assert_token_sequence_valid("0,", &["0", ","],
+                                    &[&TokenType::Number(0), &TokenType::Comma]);
+        assert_token_sequence_valid("9,", &["9", ","],
+                                    &[&TokenType::Number(9), &TokenType::Comma]);
+        assert_token_sequence_valid("0b0,", &["0b0", ","],
+                                    &[&TokenType::Number(0), &TokenType::Comma]);
+        assert_token_sequence_valid("0o0,", &["0o0", ","],
+                                    &[&TokenType::Number(0), &TokenType::Comma]);
+        assert_token_sequence_valid("01,", &["01", ","],
+                                    &[&TokenType::Number(1), &TokenType::Comma]);
+        assert_token_sequence_valid("0x0,", &["0x0", ","],
+                                    &[&TokenType::Number(0), &TokenType::Comma]);
     }
 
     #[test]
-    fn scan_with_memory_operator_produces_three_tokens() {
-        let token_text = "B[0]";
-        let mut scanner = Scanner::new(token_text);
+    fn scan_directive_followed_by_expression() {
+        let mut scanner = Scanner::new(".org $8000");
         let tokens = scanner.scan().unwrap();
-        assert_eq!(tokens.len(), 3);
-        assert_is_expected_token(&tokens[0], &TokenType::LeftBBracket);
-        assert_is_expected_token(&tokens[1], &TokenType::Number(0));
-        assert_is_expected_token(&tokens[2], &TokenType::RightBracket);
-    }
-
-    fn validate_symbol_that_looks_like_memory_operator(token_text: &str) {
-        let tokens = Scanner::new(token_text).scan().unwrap();
-        assert_eq!(tokens.len(), 1);
-        assert_is_expected_token(&tokens[0], &TokenType::Symbol(String::from(token_text)));
-    }
-
-    #[test]
-    fn scan_symbols_that_look_like_memory_operator() {
-        validate_symbol_that_looks_like_memory_operator("b");
-        validate_symbol_that_looks_like_memory_operator("w");
-        validate_symbol_that_looks_like_memory_operator("d");
-        validate_symbol_that_looks_like_memory_operator("B");
-        validate_symbol_that_looks_like_memory_operator("W");
-        validate_symbol_that_looks_like_memory_operator("D");
-        validate_symbol_that_looks_like_memory_operator("bar");
-        validate_symbol_that_looks_like_memory_operator("Bar");
-        validate_symbol_that_looks_like_memory_operator("widget");
-        validate_symbol_that_looks_like_memory_operator("Widget");
-        validate_symbol_that_looks_like_memory_operator("debug");
-        validate_symbol_that_looks_like_memory_operator("Debug");
+        assert_eq!(tokens.len(), 2);
+        assert_is_expected_token(&tokens[0], &TokenType::Directive(String::from("org")));
+        assert_is_expected_token(&tokens[1], &TokenType::Number(0x8000));
     }
 
 }

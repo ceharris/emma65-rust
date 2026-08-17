@@ -1,41 +1,35 @@
-use crate::location::Location;
 use std::mem;
+use crate::location::Location;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Amper,
     AmperAmper,
-    Backtick,
     Bang,
-    BangEqual,
     Bar,
     BarBar,
     Caret,
+    Colon,
+    Comma,
+    Directive(String),
     Equal,
-    EqualEqual,
     Greater,
-    GreaterEqual,
     GreaterGreater,
-    LeftBBracket,
-    LeftWBracket,
-    LeftDBracket,
-    Lesser,
-    LesserEqual,
-    LesserLesser,
+    Hash,
     LeftParen,
+    Lesser,
+    LesserLesser,
     Minus,
+    Newline,
     Number(u32),
     Percent,
     Plus,
-    RightBracket,
     RightParen,
-    Semicolon,
     Slash,
     Star,
     String(String),
     Symbol(String),
     Tilde,
-    Walrus,
 }
 
 impl PartialEq<TokenType> for &TokenType {
@@ -44,6 +38,7 @@ impl PartialEq<TokenType> for &TokenType {
             (TokenType::Number(n), TokenType::Number(other_n)) => n == other_n,
             (TokenType::Symbol(s), TokenType::Symbol(other_s)) => s == other_s,
             (TokenType::String(s), TokenType::String(other_s)) => s == other_s,
+            (TokenType::Directive(d), TokenType::Directive(other_d)) => d == other_d,
             _ => mem::discriminant(*self) == mem::discriminant(other)
         }
     }
@@ -73,7 +68,6 @@ impl<'a> Token<'a> {
         self.text
     }
 
-
 }
 
 #[cfg(test)]
@@ -90,6 +84,8 @@ mod tests {
         assert_ne!(TokenType::Symbol(String::from("foo")), TokenType::Symbol(String::from("bar")));
         assert_eq!(TokenType::String(String::from("hello")), TokenType::String(String::from("hello")));
         assert_ne!(TokenType::String(String::from("hello")), TokenType::String(String::from("world")));
+        assert_eq!(TokenType::Directive(String::from("org")), TokenType::Directive(String::from("org")));
+        assert_ne!(TokenType::Directive(String::from("org")), TokenType::Directive(String::from("byte")));
     }
 
 }
