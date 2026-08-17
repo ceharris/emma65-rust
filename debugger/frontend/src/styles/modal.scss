@@ -129,18 +129,21 @@
 
 // Color-swatch popover (issue #467) — a labeled swatch button that opens a
 // small popover of ANSI presets plus a native <input type="color"> for
-// arbitrary RGB. Used inline (foreground/background) and in a wrapping grid
-// (the 16-color palette).
+// arbitrary RGB. Used labeled, inline, for foreground/background, and
+// unlabeled ("compact") in the 16-color palette grid (the name is still
+// available via `title`/`aria-label`).
 .color-picker-row {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
 }
 
+// Fixed at 8 columns (16 palette entries -> 2 rows), each just wide enough
+// for a bare swatch — labels are dropped in this (compact) grid specifically
+// so 8 columns don't force the dialog wide.
 .color-picker-grid {
-  flex: 1;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(8, 18px);
   gap: 8px 10px;
 }
 
@@ -161,12 +164,6 @@
 
   &:hover {
     border-color: var(--color-accent);
-  }
-
-  &.color-picker-swatch-default {
-    background:
-      linear-gradient(45deg, transparent 45%, var(--color-border-strong) 45%, var(--color-border-strong) 55%, transparent 55%),
-      var(--color-bg-alt);
   }
 }
 

@@ -6,7 +6,21 @@ interface ColorPickerPopoverProps {
   label: string;
   /** `null` means "use the current light/dark theme's value" (the "Default" option below). */
   value: string | null;
+  /**
+   * The color actually in effect when `value` is `null` — shown as the
+   * swatch's own background instead of a placeholder, so an unset field
+   * previews what the terminal is really rendering rather than a generic
+   * "unset" marker.
+   */
+  defaultColor: string;
   onChange: (value: string | null) => void;
+  /**
+   * Omits the inline text label next to the swatch (the name is still
+   * available via `title`/`aria-label`) — used by the 16-entry palette grid
+   * so 8 columns fit without forcing the dialog wide; the foreground/
+   * background row keeps its label visible since it only has two entries.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -18,7 +32,7 @@ interface ColorPickerPopoverProps {
  * Preferences dialog's Text tab (foreground/background/16-palette), reused
  * as-is by Work Unit 3 for the Cursor tab's cursor/accent colors.
  */
-export default function ColorPickerPopover({ label, value, onChange }: ColorPickerPopoverProps) {
+export default function ColorPickerPopover({ label, value, defaultColor, onChange, compact = false }: ColorPickerPopoverProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -47,13 +61,13 @@ export default function ColorPickerPopover({ label, value, onChange }: ColorPick
     <div className="color-picker" ref={containerRef}>
       <button
         type="button"
-        className={`color-picker-swatch${value ? "" : " color-picker-swatch-default"}`}
-        style={value ? { backgroundColor: value } : undefined}
-        title={value ?? "Default"}
+        className="color-picker-swatch"
+        style={{ backgroundColor: value ?? defaultColor }}
+        title={value ? `${label}: ${value}` : `${label}: Default (${defaultColor})`}
         aria-label={`${label} color`}
         onClick={() => setOpen((o) => !o)}
       />
-      <span className="color-picker-label">{label}</span>
+      {!compact && <span className="color-picker-label">{label}</span>}
 
       {open && (
         <div className="color-picker-popover" onKeyDown={(e) => e.stopPropagation()}>

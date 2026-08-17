@@ -14,6 +14,14 @@ interface TerminalPreferencesDialogProps {
    * the Text-tab-relevant values to the already-open live terminal.
    */
   onSaved: (preferences: TerminalPreferences) => void;
+  /**
+   * The current light/dark base theme's foreground/background — previewed
+   * by the foreground/background color pickers when those fields are unset,
+   * so an unset swatch shows what the terminal is actually rendering rather
+   * than a generic placeholder.
+   */
+  defaultForeground: string;
+  defaultBackground: string;
 }
 
 /**
@@ -33,7 +41,13 @@ const TABS: { id: TabId; label: string }[] = [{ id: "text", label: "Text" }];
  * `App.tsx` like `AboutDialog`) since it needs `open`/`onSaved` wired to
  * whichever terminal instance — docked or detached — actually opened it.
  */
-export default function TerminalPreferencesDialog({ open, onClose, onSaved }: TerminalPreferencesDialogProps) {
+export default function TerminalPreferencesDialog({
+  open,
+  onClose,
+  onSaved,
+  defaultForeground,
+  defaultBackground,
+}: TerminalPreferencesDialogProps) {
   const [preferences, setPreferences] = useState<TerminalPreferences | null>(null);
   const [fontError, setFontError] = useState("");
   const [tab, setTab] = useState<TabId>("text");
@@ -156,19 +170,31 @@ export default function TerminalPreferencesDialog({ open, onClose, onSaved }: Te
             <div className="modal-field">
               <label className="modal-label">Colors</label>
               <div className="color-picker-row">
-                <ColorPickerPopover label="Foreground" value={text.foreground} onChange={(v) => updateText({ foreground: v })} />
-                <ColorPickerPopover label="Background" value={text.background} onChange={(v) => updateText({ background: v })} />
+                <ColorPickerPopover
+                  label="Foreground"
+                  value={text.foreground}
+                  defaultColor={defaultForeground}
+                  onChange={(v) => updateText({ foreground: v })}
+                />
+                <ColorPickerPopover
+                  label="Background"
+                  value={text.background}
+                  defaultColor={defaultBackground}
+                  onChange={(v) => updateText({ background: v })}
+                />
               </div>
             </div>
 
             <div className="modal-field modal-palette-field">
               <label className="modal-label">Palette</label>
               <div className="color-picker-grid">
-                {ANSI_PALETTE_FIELDS.map(({ field, label }) => (
+                {ANSI_PALETTE_FIELDS.map(({ field, label, defaultHex }) => (
                   <ColorPickerPopover
                     key={field}
                     label={label}
                     value={text[field] as string | null}
+                    defaultColor={defaultHex}
+                    compact
                     onChange={(v) => updateText({ [field]: v } as Partial<TerminalTextPreferences>)}
                   />
                 ))}

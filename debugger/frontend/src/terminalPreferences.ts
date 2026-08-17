@@ -61,27 +61,34 @@ export interface TerminalPreferences {
 }
 
 /**
- * Ordered [field, label, xterm ITheme key] triples for the 16 ANSI palette
- * fields on `TerminalTextPreferences` — drives both the Preferences dialog's
- * palette swatch grid and `themeWithTextOverrides`'s field-by-field merge.
+ * Ordered [field, label, xterm ITheme key, built-in default hex] entries for
+ * the 16 ANSI palette fields on `TerminalTextPreferences` — drives the
+ * Preferences dialog's palette swatch grid (`defaultHex` is what the
+ * color-swatch popover previews when a slot is unset),
+ * `themeWithTextOverrides`'s field-by-field merge, and the palette grid's
+ * default color preview.
+ *
+ * `defaultHex` values are `@xterm/xterm`'s own built-in `DEFAULT_ANSI_COLORS`
+ * (verified directly against the installed package's bundle) — what's
+ * actually rendered for a slot left unset, independent of light/dark theme.
  */
-export const ANSI_PALETTE_FIELDS: { field: keyof TerminalTextPreferences; label: string; themeKey: keyof ITheme }[] = [
-  { field: "black", label: "Black", themeKey: "black" },
-  { field: "red", label: "Red", themeKey: "red" },
-  { field: "green", label: "Green", themeKey: "green" },
-  { field: "yellow", label: "Yellow", themeKey: "yellow" },
-  { field: "blue", label: "Blue", themeKey: "blue" },
-  { field: "magenta", label: "Magenta", themeKey: "magenta" },
-  { field: "cyan", label: "Cyan", themeKey: "cyan" },
-  { field: "white", label: "White", themeKey: "white" },
-  { field: "bright_black", label: "Bright Black", themeKey: "brightBlack" },
-  { field: "bright_red", label: "Bright Red", themeKey: "brightRed" },
-  { field: "bright_green", label: "Bright Green", themeKey: "brightGreen" },
-  { field: "bright_yellow", label: "Bright Yellow", themeKey: "brightYellow" },
-  { field: "bright_blue", label: "Bright Blue", themeKey: "brightBlue" },
-  { field: "bright_magenta", label: "Bright Magenta", themeKey: "brightMagenta" },
-  { field: "bright_cyan", label: "Bright Cyan", themeKey: "brightCyan" },
-  { field: "bright_white", label: "Bright White", themeKey: "brightWhite" },
+export const ANSI_PALETTE_FIELDS: { field: keyof TerminalTextPreferences; label: string; themeKey: keyof ITheme; defaultHex: string }[] = [
+  { field: "black", label: "Black", themeKey: "black", defaultHex: "#2e3436" },
+  { field: "red", label: "Red", themeKey: "red", defaultHex: "#cc0000" },
+  { field: "green", label: "Green", themeKey: "green", defaultHex: "#4e9a06" },
+  { field: "yellow", label: "Yellow", themeKey: "yellow", defaultHex: "#c4a000" },
+  { field: "blue", label: "Blue", themeKey: "blue", defaultHex: "#3465a4" },
+  { field: "magenta", label: "Magenta", themeKey: "magenta", defaultHex: "#75507b" },
+  { field: "cyan", label: "Cyan", themeKey: "cyan", defaultHex: "#06989a" },
+  { field: "white", label: "White", themeKey: "white", defaultHex: "#d3d7cf" },
+  { field: "bright_black", label: "Bright Black", themeKey: "brightBlack", defaultHex: "#555753" },
+  { field: "bright_red", label: "Bright Red", themeKey: "brightRed", defaultHex: "#ef2929" },
+  { field: "bright_green", label: "Bright Green", themeKey: "brightGreen", defaultHex: "#8ae234" },
+  { field: "bright_yellow", label: "Bright Yellow", themeKey: "brightYellow", defaultHex: "#fce94f" },
+  { field: "bright_blue", label: "Bright Blue", themeKey: "brightBlue", defaultHex: "#729fcf" },
+  { field: "bright_magenta", label: "Bright Magenta", themeKey: "brightMagenta", defaultHex: "#ad7fa8" },
+  { field: "bright_cyan", label: "Bright Cyan", themeKey: "brightCyan", defaultHex: "#34e2e2" },
+  { field: "bright_white", label: "Bright White", themeKey: "brightWhite", defaultHex: "#eeeeec" },
 ];
 
 /**

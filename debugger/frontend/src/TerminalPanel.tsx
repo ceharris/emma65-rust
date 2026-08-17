@@ -394,6 +394,8 @@ export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {})
         open={preferencesOpen}
         onClose={() => setPreferencesOpen(false)}
         onSaved={(preferences) => applyTextPreferences(preferences.text)}
+        defaultForeground={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).foreground!}
+        defaultBackground={(resolvedTheme === "dark" ? XTERM_DARK_THEME : XTERM_LIGHT_THEME).background!}
       />
     </>
   );
