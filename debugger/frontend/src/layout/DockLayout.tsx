@@ -589,6 +589,9 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
       const sizeAction = headerActions.terminal;
       return (
         <>
+          <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
+            <i className="codicon codicon-multiple-windows" />
+          </button>
           {sizeAction && (
             <button
               className="dock-tab-action"
@@ -599,9 +602,6 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
               <i className="codicon codicon-menu" />
             </button>
           )}
-          <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
-            <i className="codicon codicon-multiple-windows" />
-          </button>
         </>
       );
     }
