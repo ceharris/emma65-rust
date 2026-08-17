@@ -534,6 +534,13 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
  * retargets the console bridge, persists the flag — see `terminal.rs`) and
  * only then closes the dock panel, deliberately after the new window/target
  * is fully in place (issue #385's `emit_to`-retarget race mitigation).
+ * Terminal also gets a size-preset hamburger icon (issue #462 Work Unit 4)
+ * alongside Detach — `TerminalPanel.tsx` registers it via
+ * `usePanelHeaderAction`/`headerActions` (the generic fallback mechanism
+ * below), same as Breakpoints/Watchpoints' single-action panels, but
+ * rendered inline here instead of through that fallback branch since
+ * Terminal already needs its own early-return for the hardcoded Detach
+ * button.
  *
  * Run Controls' Float button (issue #404) is a plain dockview-only
  * operation — `containerApi.addFloatingGroup` moves the panel into a new
@@ -579,10 +586,23 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
           .then(() => closeTerminalPanel(containerApi, positionRef))
           .catch((err) => console.error("detach_terminal failed:", err));
       };
+      const sizeAction = headerActions.terminal;
       return (
-        <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
-          <i className="codicon codicon-multiple-windows" />
-        </button>
+        <>
+          <button className="dock-tab-action" onClick={handleDetach} title="Detach Terminal to its own window">
+            <i className="codicon codicon-multiple-windows" />
+          </button>
+          {sizeAction && (
+            <button
+              className="dock-tab-action"
+              onClick={sizeAction.onClick}
+              disabled={sizeAction.disabled}
+              title={sizeAction.disabled ? (sizeAction.disabledTitle ?? sizeAction.title) : sizeAction.title}
+            >
+              <i className="codicon codicon-menu" />
+            </button>
+          )}
+        </>
       );
     }
     if (activePanel?.id === "run-controls" && activePanel.group.api.location.type !== "floating") {

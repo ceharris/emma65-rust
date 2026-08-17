@@ -5,6 +5,7 @@
   "windows": ["main", "terminal-detached"],
   "permissions": [
     "core:default",
+    "core:window:allow-set-size",
     "dialog:default",
     "log:default",
     "opener:default",

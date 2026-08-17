@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { Menu } from "@tauri-apps/api/menu";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { DockviewPanelApi } from "dockview-react";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -8,7 +11,8 @@ import "@xterm/xterm/css/xterm.css";
 import { APP_KEY_BINDINGS } from "./useAppKeyBindings";
 import { useEditMenuOverride } from "./EditMenuContext";
 import { useTheme } from "./ThemeContext";
-import { resolveTerminalFont } from "./terminalSizing";
+import { useOptionalPanelHeaderAction } from "./layout/panelHeaderActions";
+import { resolveTerminalFont, pixelSizeForGrid, logicalSizeForCssPixels, TERMINAL_SIZE_PRESETS } from "./terminalSizing";
 
 const XTERM_DARK_THEME: ITheme = {
   background: "#1e1e1e",
@@ -53,12 +57,97 @@ function getFallbackMonoFont(): string {
  * terminal's grid always match its *current* host's actual size, with no way
  * for a size measured against a previous host to leak into the next one.
  */
-export default function TerminalPanel() {
+interface TerminalPanelProps {
+  /**
+   * The dockview panel API for this component's own dock panel, threaded
+   * down by `panelRegistry.tsx`. `undefined` when this component is mounted
+   * in the detached-Terminal window (`terminal-detached.tsx`), which has no
+   * dockview instance at all — the size-preset menu (issue #462 Work Unit 4)
+   * uses its presence/absence to decide whether resizing a preset means
+   * `dockPanelApi.setSize()` (docked) or `getCurrentWindow().setSize()`
+   * (detached).
+   */
+  dockPanelApi?: DockviewPanelApi;
+}
+
+export default function TerminalPanel({ dockPanelApi }: TerminalPanelProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const { resolvedTheme } = useTheme();
   const editMenu = useEditMenuOverride();
+
+  // Resizes the terminal to `cols`x`rows` by resizing its *host* (the dock
+  // panel, or the detached OS window) rather than the `Terminal` instance
+  // directly — the existing `ResizeObserver` in the construction effect
+  // below then fits the terminal to whatever size the host actually lands
+  // on, the same as any other resize. Docked, `pixelSizeForGrid`'s CSS-px
+  // result is exactly what `setSize` wants (issue #462's Work Unit 2 doc
+  // comment on `logicalSizeForCssPixels`: the docked path stays entirely in
+  // CSS/logical px within this webview). Detached, it's converted to a
+  // Tauri `LogicalSize` first, honoring the `--scale-factor` CLI override
+  // when one was given.
+  const resizeToGrid = async (cols: number, rows: number) => {
+    const term = termRef.current;
+    if (!term) return;
+    const size = pixelSizeForGrid(term, cols, rows);
+    if (!size) return;
+    if (dockPanelApi) {
+      // `dockPanelApi.setSize()` forwards to the *group's* setSize
+      // (dockview-core's `DockviewPanel` constructor wires
+      // `panel.api.onDidSizeChange` straight to `this.group.api.setSize`),
+      // i.e. it resizes the whole tab group Terminal is tabbed into —
+      // header/tab-strip included — not just this panel's own content box.
+      // `dockPanelApi.height` (read) is the content-box height (what this
+      // panel's `layout()` actually receives, post-header), so the gap
+      // between it and the group's own total height is exactly the
+      // tab-strip's height, which has to be added back in or the requested
+      // grid comes up short by however many rows that strip is tall.
+      const headerOverhead = dockPanelApi.group.height - dockPanelApi.height;
+      dockPanelApi.setSize({ width: size.width, height: size.height + headerOverhead });
+      return;
+    }
+    let scaleFactorOverride: number | null = null;
+    try {
+      scaleFactorOverride = await invoke<number | null>("get_terminal_scale_factor_override");
+    } catch (err) {
+      console.error("get_terminal_scale_factor_override failed:", err);
+    }
+    const logical = await logicalSizeForCssPixels(size.width, size.height, scaleFactorOverride);
+    await getCurrentWindow().setSize(logical);
+  };
+
+  // Builds and pops up the size-preset context menu — shared by the
+  // terminal container's own `contextmenu` handler (registered in the
+  // construction effect below) and the docked panel header's hamburger
+  // icon (`usePanelHeaderAction` below, rendered by `DockLayout.tsx`'s
+  // `DockTabActions`), both in both docked and detached hosts. Built fresh
+  // on every popup so the checkmark reflects whichever preset (if any)
+  // matches the terminal's *current* grid.
+  const openSizeMenu = async () => {
+    const term = termRef.current;
+    if (!term) return;
+    const items = TERMINAL_SIZE_PRESETS.map((preset) => ({
+      id: `${preset.cols}x${preset.rows}`,
+      text: `${preset.cols} x ${preset.rows}`,
+      checked: term.cols === preset.cols && term.rows === preset.rows,
+      action: () => {
+        resizeToGrid(preset.cols, preset.rows).catch((err) => console.error("resizeToGrid failed:", err));
+      },
+    }));
+    const menu = await Menu.new({ items });
+    await menu.popup();
+  };
+
+  // No-op outside the docked host (see `useOptionalPanelHeaderAction`'s doc
+  // comment) — the detached window has no dock tab header to add an icon
+  // to; its size menu is reachable only via right-click.
+  useOptionalPanelHeaderAction("terminal", {
+    title: "Terminal Size…",
+    onClick: () => {
+      openSizeMenu().catch((err) => console.error("openSizeMenu failed:", err));
+    },
+  });
 
   useEffect(() => {
     if (termRef.current) {
@@ -180,6 +269,18 @@ export default function TerminalPanel() {
     // it wherever it happened to be.
     term.focus();
 
+    // The size-preset menu (issue #462 Work Unit 4) — identical in both
+    // docked and detached hosts, so a right-click anywhere in the terminal
+    // area reaches it the same way regardless of which host this mount
+    // landed in. The docked panel additionally gets a header hamburger icon
+    // reaching the same `openSizeMenu` (see `useOptionalPanelHeaderAction`
+    // above).
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      openSizeMenu().catch((err) => console.error("openSizeMenu failed:", err));
+    };
+    containerRef.current!.addEventListener("contextmenu", handleContextMenu);
+
     // A dockview split drag resizes this panel's container without resizing
     // the OS window, so window-resize alone (the old standalone Terminal
     // window's refit trigger) wouldn't cover it here — this observer handles
@@ -260,6 +361,7 @@ export default function TerminalPanel() {
       disposed = true;
       unlisten?.();
       resizeObserver.disconnect();
+      containerRef.current?.removeEventListener("contextmenu", handleContextMenu);
       unregisterOverride?.();
       selectionChangeDisposable?.dispose();
       termRef.current = null;

@@ -102,6 +102,20 @@ export interface PixelSize {
   height: number;
 }
 
+/** A fixed VT220-style terminal grid size. */
+export interface TerminalSizePreset {
+  cols: number;
+  rows: number;
+}
+
+/** The four standard VT220 grid sizes named in issue #462, in the order the size-preset menu lists them. */
+export const TERMINAL_SIZE_PRESETS: TerminalSizePreset[] = [
+  { cols: 80, rows: 24 },
+  { cols: 132, rows: 24 },
+  { cols: 80, rows: 43 },
+  { cols: 132, rows: 43 },
+];
+
 /**
  * Inverse of `FitAddon.proposeDimensions()`: given a target grid, returns the
  * CSS-px size of `term.element`'s parent (the same element
@@ -138,18 +152,42 @@ export function pixelSizeForGrid(term: Terminal, cols: number, rows: number): Pi
  * logical px within the same webview (dockview's own `panel.api.setSize()`)
  * and needs no scale conversion.
  *
+ * The multiplier is `window.devicePixelRatio / (await getCurrentWindow().scaleFactor())`,
+ * **not** `scaleFactor()` alone — confirmed by issue #462's Work Unit 4 UAT
+ * (a requested 80x24 rendered as ~63x19) under this project's dev
+ * environment: `main.rs` forces `GDK_BACKEND=x11`, and on X11 without
+ * `GDK_SCALE` set, GTK's own window scale factor (what
+ * `getCurrentWindow().scaleFactor()` reports) stays 1 regardless of
+ * `Xft.dpi`, while WebKitGTK independently renders this webview's content at
+ * a `devicePixelRatio` derived from `Xft.dpi` (1.25 here, from `Xft.dpi:
+ * 120`). `setSize(LogicalSize(L))` asks Tauri/GTK for an OS window of
+ * `L * scaleFactor()` physical px; WebKit then lays out `physical /
+ * devicePixelRatio` CSS px of content — so to land on the `cssWidth` this
+ * function was asked for, `L` must be `cssWidth * devicePixelRatio /
+ * scaleFactor()`, not `cssWidth * scaleFactor()`. On a host where both
+ * scales agree (the common case outside this GTK/WebKit split — e.g.
+ * macOS/Windows, where `devicePixelRatio` and `scaleFactor()` both reflect
+ * the same OS display scale), the ratio is 1 and this reduces to the
+ * identity conversion CSS px already imply.
+ *
  * `scaleFactorOverride`, when given (the `--scale-factor` CLI flag, read via
- * `get_terminal_scale_factor_override`), is used in place of
- * `getCurrentWindow().scaleFactor()` — an escape hatch for hosts where scale
- * auto-detection misreports the effective display scale, the same class of
- * bug `doc/terminal-sizing-plan.md` (June 2026) hit under GNOME text scaling
- * before `main.rs` started forcing `GDK_BACKEND=x11`.
+ * `get_terminal_scale_factor_override`), replaces this whole ratio — an
+ * escape hatch for hosts where scale auto-detection misreports the
+ * effective display scale, the same class of bug `doc/terminal-sizing-plan.md`
+ * (June 2026) hit under GNOME text scaling before `main.rs` started forcing
+ * `GDK_BACKEND=x11`.
  */
 export async function logicalSizeForCssPixels(
   cssWidth: number,
   cssHeight: number,
   scaleFactorOverride?: number | null,
 ): Promise<LogicalSize> {
-  const scaleFactor = scaleFactorOverride ?? (await getCurrentWindow().scaleFactor());
-  return new LogicalSize(cssWidth * scaleFactor, cssHeight * scaleFactor);
+  const scaleFactor = scaleFactorOverride ?? (window.devicePixelRatio / (await getCurrentWindow().scaleFactor()));
+  // Rounds up, same reasoning as `pixelSizeForGrid`'s own `Math.ceil`: this
+  // multiplication can reintroduce a fractional pixel that truncating away
+  // (silently, wherever the OS-level resize call rounds a non-integer size)
+  // would eat back into the margin that `Math.ceil` there was meant to
+  // guarantee, clipping the last column/row on hosts where the two scale
+  // factors this ratio is built from don't divide evenly.
+  return new LogicalSize(Math.ceil(cssWidth * scaleFactor), Math.ceil(cssHeight * scaleFactor));
 }

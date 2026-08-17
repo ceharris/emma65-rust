@@ -139,6 +139,23 @@
     }
   }
 
+  // dockview-react mounts our rightHeaderActionsComponent's whole output
+  // (which can be more than one button — Terminal's Detach + size-preset
+  // hamburger, issue #462 Work Unit 4) into a single `.dv-react-part` div
+  // that dockview-core itself never gives a layout mode: it's a plain,
+  // unstyled block element, so multiple `<button>` children fall back to
+  // normal inline-block wrapping instead of sitting in the row the
+  // `.dv-right-actions-container` around it is flexed for. Whether that
+  // wraps to a second line depends on how wide dockview happens to have
+  // sized the actions container that day, which is exactly the "stacks
+  // vertically despite plenty of room" bug this rule fixes — flexing this
+  // div directly makes the row layout unconditional instead of leaving it
+  // up to a container width dockview computes.
+  .dv-right-actions-container .dv-react-part {
+    display: flex;
+    align-items: center;
+  }
+
   // Per-panel tab header actions (Terminal's "Detach", issue #385; Run
   // Controls' "Float", issue #404), rendered via dockview's
   // rightHeaderActionsComponent — styled as a plain icon button matching
