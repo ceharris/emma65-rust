@@ -3,7 +3,30 @@ import { invoke } from "@tauri-apps/api/core";
 import "./styles/modal.scss";
 import { isMonospaceFont } from "./terminalSizing";
 import ColorPickerPopover from "./ColorPickerPopover";
-import { ANSI_PALETTE_FIELDS, TerminalPreferences, TerminalTextPreferences } from "./terminalPreferences";
+import NumberStepper from "./NumberStepper";
+import SelectPopover from "./SelectPopover";
+import {
+  ANSI_PALETTE_FIELDS,
+  CursorInactiveShape,
+  CursorShape,
+  TerminalCursorPreferences,
+  TerminalPreferences,
+  TerminalTextPreferences,
+} from "./terminalPreferences";
+
+const ACTIVE_SHAPE_OPTIONS: { value: CursorShape; label: string }[] = [
+  { value: "block", label: "Block" },
+  { value: "underline", label: "Underline" },
+  { value: "bar", label: "Bar" },
+];
+
+const INACTIVE_SHAPE_OPTIONS: { value: CursorInactiveShape; label: string }[] = [
+  { value: "outline", label: "Outline" },
+  { value: "block", label: "Block" },
+  { value: "underline", label: "Underline" },
+  { value: "bar", label: "Bar" },
+  { value: "none", label: "None" },
+];
 
 interface TerminalPreferencesDialogProps {
   open: boolean;
@@ -22,15 +45,27 @@ interface TerminalPreferencesDialogProps {
    */
   defaultForeground: string;
   defaultBackground: string;
+  /**
+   * Same idea as `defaultForeground`/`defaultBackground`, for the Cursor
+   * tab's color/accent-color swatches: the current light/dark base theme's
+   * `cursor` value, and `@xterm/xterm`'s own built-in `cursorAccent` default
+   * (`DEFAULT_CURSOR_ACCENT_COLOR` — independent of theme, see its doc
+   * comment in `terminalPreferences.ts`).
+   */
+  defaultCursorColor: string;
+  defaultCursorAccentColor: string;
 }
 
 /**
- * Only "text" exists so far — Work Units 3/4 add "cursor"/"compatibility"
- * entries here (and a corresponding tab-panel branch below) without needing
- * to touch the tab-strip rendering itself.
+ * Work Unit 4 adds a "compatibility" entry here (and a corresponding
+ * tab-panel branch below) without needing to touch the tab-strip rendering
+ * itself.
  */
-type TabId = "text";
-const TABS: { id: TabId; label: string }[] = [{ id: "text", label: "Text" }];
+type TabId = "text" | "cursor";
+const TABS: { id: TabId; label: string }[] = [
+  { id: "text", label: "Text" },
+  { id: "cursor", label: "Cursor" },
+];
 
 /**
  * The terminal's "Preferences…" modal (issue #467), opened from
@@ -47,6 +82,8 @@ export default function TerminalPreferencesDialog({
   onSaved,
   defaultForeground,
   defaultBackground,
+  defaultCursorColor,
+  defaultCursorAccentColor,
 }: TerminalPreferencesDialogProps) {
   const [preferences, setPreferences] = useState<TerminalPreferences | null>(null);
   const [fontError, setFontError] = useState("");
@@ -65,6 +102,10 @@ export default function TerminalPreferencesDialog({
   const updateText = (patch: Partial<TerminalTextPreferences>) => {
     setPreferences((p) => p && { ...p, text: { ...p.text, ...patch } });
     if ("font_family" in patch) setFontError("");
+  };
+
+  const updateCursor = (patch: Partial<TerminalCursorPreferences>) => {
+    setPreferences((p) => p && { ...p, cursor: { ...p.cursor, ...patch } });
   };
 
   /**
@@ -95,7 +136,7 @@ export default function TerminalPreferencesDialog({
 
   if (!open || !preferences) return null;
 
-  const { text } = preferences;
+  const { text, cursor } = preferences;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -144,26 +185,22 @@ export default function TerminalPreferencesDialog({
 
             <div className="modal-field">
               <label className="modal-label">Font size</label>
-              <input
-                type="number"
-                className="modal-input modal-input-narrow"
+              <NumberStepper
                 min={6}
                 max={72}
                 placeholder="default"
-                value={text.font_size ?? ""}
-                onChange={(e) => updateText({ font_size: e.target.value ? Number(e.target.value) : null })}
+                value={text.font_size}
+                onChange={(v) => updateText({ font_size: v })}
               />
             </div>
 
             <div className="modal-field">
               <label className="modal-label">Scrollback</label>
-              <input
-                type="number"
-                className="modal-input modal-input-narrow"
+              <NumberStepper
                 min={0}
                 max={100000}
                 value={text.scrollback}
-                onChange={(e) => updateText({ scrollback: Math.max(0, Number(e.target.value) || 0) })}
+                onChange={(v) => updateText({ scrollback: v ?? 0 })}
               />
             </div>
 
@@ -198,6 +235,57 @@ export default function TerminalPreferencesDialog({
                     onChange={(v) => updateText({ [field]: v } as Partial<TerminalTextPreferences>)}
                   />
                 ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "cursor" && (
+          <div className="modal-tab-panel">
+            <div className="modal-field">
+              <label className="modal-label">Active shape</label>
+              <SelectPopover
+                label="Active cursor shape"
+                value={cursor.active_shape}
+                options={ACTIVE_SHAPE_OPTIONS}
+                onChange={(v) => updateCursor({ active_shape: v })}
+              />
+            </div>
+
+            <div className="modal-field">
+              <label className="modal-label">Inactive shape</label>
+              <SelectPopover
+                label="Inactive cursor shape"
+                value={cursor.inactive_shape}
+                options={INACTIVE_SHAPE_OPTIONS}
+                onChange={(v) => updateCursor({ inactive_shape: v })}
+              />
+            </div>
+
+            <label className="modal-checkbox-row">
+              <input
+                type="checkbox"
+                checked={cursor.blink}
+                onChange={(e) => updateCursor({ blink: e.target.checked })}
+              />
+              Blinking cursor
+            </label>
+
+            <div className="modal-field">
+              <label className="modal-label">Colors</label>
+              <div className="color-picker-row">
+                <ColorPickerPopover
+                  label="Cursor"
+                  value={cursor.color}
+                  defaultColor={defaultCursorColor}
+                  onChange={(v) => updateCursor({ color: v })}
+                />
+                <ColorPickerPopover
+                  label="Accent"
+                  value={cursor.accent_color}
+                  defaultColor={defaultCursorAccentColor}
+                  onChange={(v) => updateCursor({ accent_color: v })}
+                />
               </div>
             </div>
           </div>
