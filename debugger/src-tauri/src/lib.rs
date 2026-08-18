@@ -50,6 +50,10 @@ mod breakpoints;
 /// Memory panel: paged reads, writes, fills, and file loads.
 mod memory;
 
+/// Assembler panel: assembles source text and patches the result into the
+/// CPU's bus.
+mod assembler;
+
 /// Stack panel: stack pointer and stack page snapshot.
 mod stack;
 
@@ -576,6 +580,7 @@ pub fn run() {
             memory::load_memory,
             memory::save_memory,
             memory::fill_memory,
+            assembler::assemble_and_load,
             stack::get_stack,
             breakpoints::toggle_breakpoint,
             breakpoints::set_breakpoint,

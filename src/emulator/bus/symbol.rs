@@ -62,7 +62,21 @@ impl SymbolTable {
         self.by_address.clear();
         self.symbols.clear();
     }
-    
+
+    /// Returns the number of live name -> address mappings in this table.
+    ///
+    /// Counts non-tombstoned entries directly rather than `by_name.len()`,
+    /// since `remove()` tombstones a slot in `symbols` without evicting its
+    /// `by_name` key.
+    pub fn len(&self) -> usize {
+        self.symbols.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Returns `true` if this table has no live mappings.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Gets the address mapped by `name`, if any.
     pub fn address_for(&self, name: &str) -> Option<u16> {
         self.by_name.get(name).and_then(|&i| self.symbols[i].as_ref()).map(|s| s.address)
@@ -162,6 +176,19 @@ mod tests {
         assert_eq!(table.address_for("foo"), Some(0xBEEF));
         let names: Vec<&str> = table.names_for(0xBEEF).collect();
         assert!(names.contains(&"foo"));
+    }
+
+    #[test]
+    fn len_counts_live_mappings_and_ignores_tombstoned_removals() {
+        let mut table = SymbolTable::default();
+        assert_eq!(table.len(), 0);
+        assert!(table.is_empty());
+        table.insert("foo".to_string(), 0xBEEF);
+        table.insert("bar".to_string(), 0xBEEF);
+        assert_eq!(table.len(), 2);
+        table.remove("foo");
+        assert_eq!(table.len(), 1);
+        assert!(!table.is_empty());
     }
 
     #[test]
