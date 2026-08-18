@@ -13,7 +13,7 @@ bespoke assembler**, in the spirit of Mesen's inline assembler:
   than one `.org` directive, each starting a new output segment
   (offset + length).
 - Directives: `.org`, `.byte` (incl. string-literal operands), `.word`,
-  `.res`.
+  `.res`, `.setcpu`.
 - Symbol definition via `FOO = expr`, `FOO .equ expr`, or a label on an
   instruction (`my_routine:  LDA #$55`).
 - Expressions over symbols and literals (binary/octal/decimal/hex/char),
@@ -149,11 +149,20 @@ mnemonic text, `opcodes.rs:90-138`) but no `FromStr`; the assembler adds
 its own string→`Mnemonic` table (a natural inverse of the existing
 `Display` match arms) rather than touching `opcodes.rs`.
 
-Target `CpuVariant` is a constructor parameter (mirroring
-`Disassembler::new(variant)`), and `DecodedOp::is_valid` is honored so the
-34 WDC-only mnemonics (`STP`, `WAI`, and the `BBR0..7`/`BBS0..7`/
+### Rejected during code review
+Target `CpuVariant` is a constructor parameter 
+(mirroring `Disassembler::new(variant)`), and `DecodedOp::is_valid` is honored 
+so the 34 WDC-only mnemonics (`STP`, `WAI`, and the `BBR0..7`/`BBS0..7`/
 `RMB0..7`/`SMB0..7` families — `opcodes.rs:147-165`) are rejected when
 assembling for plain `Cmos65C02`.
+
+### Adopted CPU variant support
+Assembler users are accustomed to specifying a `.setcpu` directive to choose
+the active instruction set. The assembler will assume a reasonable default
+(`CpuVariant::Cmos65C02`) when no `.setcpu` directive has been seen in the
+current assembly. The `.setcpu` directive sets the prevailing instruction set
+for subsequently assembled instructions, and may appear multiple times within
+a given assembly.
 
 ### Symbol table: reuse `emulator::bus::symbol::SymbolTable` for the result
 
@@ -288,7 +297,7 @@ the next.
   Vec<u8> }`, `pub struct AssembledProgram { pub segments: Vec<Segment>,
   pub symbols: SymbolTable }` (segments in `.org` order), `pub struct
   Error { .. }` with `line()`/`column()`/`message()`, `pub fn
-  assemble(source: &str, variant: CpuVariant) -> Result<AssembledProgram,
+  assemble(source: &str) -> Result<AssembledProgram,
   Vec<Error>>` (collect *all* errors across the source, don't stop at the
   first — mirrors `WatchCompiler::compile_all`'s best-effort recovery).
 - End-to-end tests assembling small multi-instruction programs (including
