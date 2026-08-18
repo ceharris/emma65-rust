@@ -14,7 +14,7 @@ use super::expr::{Expr, Operand};
 use super::instructions::InstructionTable;
 use super::parser::Parser;
 use super::token::TokenType;
-use crate::emulator::cpu::opcodes::{AddressingMode, Mnemonic};
+use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
 use crate::location::Location;
 
 /// The addressing-mode syntax written after a mnemonic, before it has been
@@ -242,19 +242,31 @@ pub fn encode(
     }
 }
 
+/// Opcode byte followed by zero-padding out to `op.byte_len` — covers `BRK`,
+/// whose second byte is a signature/padding byte the CPU skips over without
+/// reading (see `Cpu`'s `Mnemonic::Brk` handling) but which still must be
+/// reserved in the output so later statements land at the right address.
+/// Every other fixed-length (`Implied`/`Accumulator`) opcode is 1 byte, so
+/// this is a no-op padding for them.
+fn opcode_bytes(op: &DecodedOp) -> Vec<u8> {
+    let mut bytes = vec![op.opcode];
+    bytes.resize(op.byte_len as usize, 0);
+    bytes
+}
+
 fn encode_none(ctx: &Context) -> Result<EncodedInstruction, Error> {
     if let Some(op) = ctx.table.get(ctx.mnemonic, AddressingMode::Implied) {
-        return Ok(EncodedInstruction { mode: AddressingMode::Implied, byte_len: op.byte_len, bytes: Some(vec![op.opcode]) });
+        return Ok(EncodedInstruction { mode: AddressingMode::Implied, byte_len: op.byte_len, bytes: Some(opcode_bytes(op)) });
     }
     if let Some(op) = ctx.table.get(ctx.mnemonic, AddressingMode::Accumulator) {
-        return Ok(EncodedInstruction { mode: AddressingMode::Accumulator, byte_len: op.byte_len, bytes: Some(vec![op.opcode]) });
+        return Ok(EncodedInstruction { mode: AddressingMode::Accumulator, byte_len: op.byte_len, bytes: Some(opcode_bytes(op)) });
     }
     Err(unsupported(ctx.mnemonic, ctx.location))
 }
 
 fn encode_fixed(ctx: &Context, mode: AddressingMode) -> Result<EncodedInstruction, Error> {
     match ctx.table.get(ctx.mnemonic, mode) {
-        Some(op) => Ok(EncodedInstruction { mode, byte_len: op.byte_len, bytes: Some(vec![op.opcode]) }),
+        Some(op) => Ok(EncodedInstruction { mode, byte_len: op.byte_len, bytes: Some(opcode_bytes(op)) }),
         None => Err(unsupported(ctx.mnemonic, ctx.location)),
     }
 }
