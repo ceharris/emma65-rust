@@ -17,10 +17,12 @@ use super::statement::{ByteOperand, Directive, Statement, parse_program};
 use crate::emulator::cpu::variant::CpuVariant;
 use crate::location::Location;
 
-/// A generous but finite cap on the number of layout passes, guarding
-/// against a genuine non-convergence (see the plan doc) rather than looping
-/// forever. Ordinary programs converge in two or three passes.
-const DEFAULT_MAX_PASSES: usize = 25;
+/// A finite cap on the number of layout passes, guarding against a genuine
+/// non-convergence (see the plan doc) rather than looping forever. Ordinary
+/// programs converge in two or three passes; with no macro support or other
+/// source of pass-count variability, this leaves generous headroom without
+/// being effectively unbounded.
+const DEFAULT_MAX_PASSES: usize = 10;
 
 /// One contiguous output region, starting at `origin`.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,8 +32,34 @@ pub struct Segment {
 }
 
 impl Segment {
-    fn address(&self) -> u16 {
+    /// The address just past the last byte emitted so far — i.e. where the
+    /// next label or instruction in this segment lands.
+    fn next_address(&self) -> u16 {
         self.origin.wrapping_add(self.bytes.len() as u16)
+    }
+}
+
+/// The `InstructionTable` for each supported [`CpuVariant`], built once and
+/// selected per instruction according to whichever variant is active at
+/// that point in the source (see [`Directive::SetCpu`]).
+struct VariantTables {
+    cmos: InstructionTable,
+    wdc: InstructionTable,
+}
+
+impl VariantTables {
+    fn new() -> Self {
+        Self {
+            cmos: InstructionTable::new(CpuVariant::Cmos65C02),
+            wdc: InstructionTable::new(CpuVariant::Wdc65C02),
+        }
+    }
+
+    fn get(&self, variant: CpuVariant) -> &InstructionTable {
+        match variant {
+            CpuVariant::Cmos65C02 => &self.cmos,
+            CpuVariant::Wdc65C02 => &self.wdc,
+        }
     }
 }
 
@@ -44,27 +72,25 @@ pub struct AssembledOutput {
     pub symbols: HashMap<String, u32>,
 }
 
-/// Assembles `source` for `variant`, collecting all errors found rather than
-/// stopping at the first one.
-pub fn assemble(source: &str, variant: CpuVariant) -> Result<AssembledOutput, Vec<Error>> {
-    assemble_with_pass_limit(source, variant, DEFAULT_MAX_PASSES)
+/// Assembles `source`, collecting all errors found rather than stopping at
+/// the first one. The CPU variant defaults to [`CpuVariant::Cmos65C02`] and
+/// is selected (and may be changed any number of times) from within the
+/// source itself via the `.setcpu` directive — see [`Directive::SetCpu`].
+pub fn assemble(source: &str) -> Result<AssembledOutput, Vec<Error>> {
+    assemble_with_pass_limit(source, DEFAULT_MAX_PASSES)
 }
 
-fn assemble_with_pass_limit(
-    source: &str,
-    variant: CpuVariant,
-    max_passes: usize,
-) -> Result<AssembledOutput, Vec<Error>> {
-    let table = InstructionTable::new(variant);
-    let statements = parse_program(source, &table).map_err(|e| vec![e])?;
+fn assemble_with_pass_limit(source: &str, max_passes: usize) -> Result<AssembledOutput, Vec<Error>> {
+    let statements = parse_program(source).map_err(|e| vec![e])?;
     check_duplicate_symbols(&statements)?;
 
+    let tables = VariantTables::new();
     let mut symbols: HashMap<String, u32> = HashMap::new();
     let mut sizes: Vec<u8> = vec![0; statements.len()];
     let mut converged = false;
     for _ in 0..max_passes {
         let previous_sizes = sizes.clone();
-        run_pass(&statements, &mut symbols, &mut sizes, &table, false)?;
+        run_pass(&statements, &mut symbols, &mut sizes, &tables, false)?;
         if sizes == previous_sizes {
             converged = true;
             break;
@@ -78,7 +104,7 @@ fn assemble_with_pass_limit(
         )]);
     }
 
-    let segments = run_pass(&statements, &mut symbols, &mut sizes, &table, true)?;
+    let segments = run_pass(&statements, &mut symbols, &mut sizes, &tables, true)?;
     check_overlaps(&segments)?;
 
     Ok(AssembledOutput { segments, symbols })
@@ -146,23 +172,28 @@ fn run_pass<'a>(
     statements: &[(Statement<'a>, Location)],
     symbols: &mut HashMap<String, u32>,
     sizes: &mut [u8],
-    table: &InstructionTable,
+    tables: &VariantTables,
     final_pass: bool,
 ) -> Result<Vec<Segment>, Vec<Error>> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut current: Option<usize> = None;
     let mut errors: Vec<Error> = Vec::new();
+    // Resets to the default at the start of every pass, then gets updated in
+    // source order as `.setcpu` directives are (re-)encountered — matching
+    // how `current`/`segments` are also rebuilt fresh each pass.
+    let mut variant = CpuVariant::Cmos65C02;
 
     for (i, (statement, location)) in statements.iter().enumerate() {
         let location = *location;
         match statement {
             Statement::Label(name) => match current {
                 Some(seg) => {
-                    let addr = segments[seg].address();
+                    let addr = segments[seg].next_address();
                     symbols.insert(name.clone(), addr as u32);
                 }
                 None => errors.push(no_active_segment_error(location, "label")),
             },
+            Statement::Directive(Directive::SetCpu(new_variant)) => variant = *new_variant,
             Statement::SymbolAssign(name, expr) => match evaluate(expr, symbols) {
                 Ok(Some(value)) => {
                     symbols.insert(name.clone(), value);
@@ -250,7 +281,8 @@ fn run_pass<'a>(
             Statement::Instruction(mnemonic, operand) => match current {
                 None => errors.push(no_active_segment_error(location, "instruction")),
                 Some(seg) => {
-                    let addr = segments[seg].address();
+                    let addr = segments[seg].next_address();
+                    let table = tables.get(variant);
                     match encode(*mnemonic, operand, addr, symbols, table, location) {
                         Ok(encoded) => {
                             sizes[i] = encoded.byte_len;
@@ -288,13 +320,13 @@ mod tests {
     use super::*;
 
     fn assemble_ok(source: &str) -> AssembledOutput {
-        assemble(source, CpuVariant::Wdc65C02).unwrap_or_else(|errors| {
+        assemble(source).unwrap_or_else(|errors| {
             panic!("expected assembly to succeed, got errors: {errors:?}");
         })
     }
 
     fn assemble_err(source: &str) -> Vec<Error> {
-        assemble(source, CpuVariant::Wdc65C02).expect_err("expected assembly to fail")
+        assemble(source).expect_err("expected assembly to fail")
     }
 
     #[test]
@@ -404,12 +436,44 @@ mod tests {
         // This program needs two passes to shrink LDA's forward reference to
         // zero page; capping at one pass must surface as an error rather
         // than silently emitting the wrong (unconverged) bytes.
-        let errors = assemble_with_pass_limit(
-            ".org $0200\nLDA forward\nforward = $10\n",
-            CpuVariant::Wdc65C02,
-            1,
-        )
-        .expect_err("expected non-convergence error");
+        let errors = assemble_with_pass_limit(".org $0200\nLDA forward\nforward = $10\n", 1)
+            .expect_err("expected non-convergence error");
         assert!(errors.iter().any(|e| e.message().contains("did not converge")));
+    }
+
+    #[test]
+    fn assemble_defaults_to_cmos_variant_rejecting_wdc_only_mnemonics() {
+        let errors = assemble_err(".org $8000\nSTP\n");
+        assert!(errors.iter().any(|e| e.message().contains("not supported")));
+    }
+
+    #[test]
+    fn assemble_setcpu_enables_wdc_only_mnemonics() {
+        let output = assemble_ok(".setcpu \"wdc65c02\"\n.org $8000\nSTP\n");
+        assert_eq!(output.segments[0].bytes, vec![0xDB]);
+    }
+
+    #[test]
+    fn assemble_setcpu_takes_effect_only_from_that_point_onward() {
+        // STP before the .setcpu must still fail even though the source as a
+        // whole selects the Wdc65C02 variant partway through.
+        let errors = assemble_err(".org $8000\nSTP\n.setcpu \"wdc65c02\"\nSTP\n");
+        assert!(errors.iter().any(|e| e.message().contains("not supported")));
+    }
+
+    #[test]
+    fn assemble_setcpu_can_switch_back_to_cmos() {
+        // The first STP (under wdc65c02) must succeed; only the second, after
+        // switching back to 65c02, should fail.
+        let errors =
+            assemble_err(".org $8000\n.setcpu \"wdc65c02\"\nSTP\n.setcpu \"65c02\"\nSTP\n");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message().contains("not supported"));
+    }
+
+    #[test]
+    fn assemble_setcpu_unknown_variant_error() {
+        let errors = assemble_err(".setcpu \"6809\"\n");
+        assert!(errors.iter().any(|e| e.message().contains("unknown CPU variant")));
     }
 }

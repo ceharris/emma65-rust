@@ -10,8 +10,17 @@
 //!   the whole line
 //! - `IDENT ':'` — a label, optionally followed by a directive or
 //!   instruction on the same line (`my_routine:  LDA #$55`)
-//! - a directive (`.org`/`.byte`/`.word`/`.res`)
+//! - a directive (`.org`/`.byte`/`.word`/`.res`/`.setcpu`)
 //! - an instruction (mnemonic plus operand syntax)
+//!
+//! Operand syntax is parsed the same way regardless of the CPU variant
+//! selected by any `.setcpu` directive appearing earlier in the source
+//! (`parse_program` always uses a `Wdc65C02`-based [`InstructionTable`] to
+//! disambiguate syntax, since it's a strict superset of `Cmos65C02`). A
+//! mnemonic that isn't actually valid under the variant active at that
+//! point in the source (tracked by the driver, a later unit) is a semantic
+//! error caught at encode time, not a parse-time error — this keeps parsing
+//! independent of where `.setcpu` directives happen to fall.
 
 use super::error::Error;
 use super::expr::Expr;
@@ -20,6 +29,7 @@ use super::operand::{OperandSyntax, parse_operand};
 use super::parser::Parser;
 use super::token::{Token, TokenType};
 use crate::emulator::cpu::opcodes::{AddressingMode, Mnemonic};
+use crate::emulator::cpu::variant::CpuVariant;
 use crate::location::Location;
 
 /// A `.byte` operand: either a numeric expression (truncated to one byte) or
@@ -42,6 +52,11 @@ pub enum Directive<'a> {
     Word(Vec<Expr<'a>>),
     /// `.res expr` — reserves `expr` zero bytes.
     Res(Expr<'a>),
+    /// `.setcpu "variant"` — selects the CPU variant used to validate and
+    /// encode every instruction from this point in the source onward
+    /// (until the next `.setcpu`, if any). Defaults to `Cmos65C02` when no
+    /// `.setcpu` has appeared yet.
+    SetCpu(CpuVariant),
 }
 
 /// One parsed statement. A single source line can produce up to two of
@@ -55,17 +70,16 @@ pub enum Statement<'a> {
 }
 
 /// Parses the entire `source` into a flat, ordered list of statements, each
-/// paired with the source location of its first token. `table` resolves
-/// whether a mnemonic supports accumulator/zero-page-relative addressing,
-/// needed to disambiguate operand syntax (see [`super::operand::parse_operand`]).
-pub fn parse_program<'a>(
-    source: &'a str,
-    table: &InstructionTable,
-) -> Result<Vec<(Statement<'a>, Location)>, Error> {
+/// paired with the source location of its first token.
+pub fn parse_program<'a>(source: &'a str) -> Result<Vec<(Statement<'a>, Location)>, Error> {
+    // Always parsed against the Wdc65C02 superset table (see module docs) —
+    // this only disambiguates operand *syntax*, not whether a mnemonic is
+    // semantically valid under whatever variant `.setcpu` selects.
+    let syntax_table = InstructionTable::new(CpuVariant::Wdc65C02);
     let mut parser = Parser::new(source)?;
     let mut statements = Vec::new();
     while !parser.is_at_end() {
-        statements.extend(parse_line(&mut parser, table)?);
+        statements.extend(parse_line(&mut parser, &syntax_table)?);
     }
     Ok(statements)
 }
@@ -159,6 +173,7 @@ fn parse_directive_statement<'a>(parser: &mut Parser<'a>) -> Result<(Statement<'
         "byte" => Directive::Byte(parse_byte_operands(parser)?),
         "word" => Directive::Word(parse_expr_list(parser)?),
         "res" => Directive::Res(parser.parse_expr()?),
+        "setcpu" => Directive::SetCpu(parse_cpu_variant(parser, location)?),
         other => {
             return Err(Error::from(
                 location.line,
@@ -168,6 +183,45 @@ fn parse_directive_statement<'a>(parser: &mut Parser<'a>) -> Result<(Statement<'
         }
     };
     Ok((Statement::Directive(directive), location))
+}
+
+/// Parses `.setcpu`'s quoted string argument and maps it to a [`CpuVariant`],
+/// accepting the aliases `"65c02"`/`"c02"` for [`CpuVariant::Cmos65C02`] and
+/// `"wdc65c02"`/`"w65c02"` for [`CpuVariant::Wdc65C02`], case-insensitively.
+fn parse_cpu_variant(parser: &mut Parser, directive_location: Location) -> Result<CpuVariant, Error> {
+    match parser.peek().cloned() {
+        Some(token) => match token.token_type() {
+            TokenType::String(s) => {
+                let variant = cpu_variant_from_str(s).ok_or_else(|| {
+                    Error::from(
+                        token.location.line,
+                        token.location.column,
+                        &format!("unknown CPU variant '{s}'"),
+                    )
+                })?;
+                parser.advance();
+                Ok(variant)
+            }
+            _ => Err(Error::from(
+                token.location.line,
+                token.location.column,
+                "expected a quoted CPU variant string",
+            )),
+        },
+        None => Err(Error::from(
+            directive_location.line,
+            directive_location.column,
+            "expected a quoted CPU variant string",
+        )),
+    }
+}
+
+fn cpu_variant_from_str(s: &str) -> Option<CpuVariant> {
+    match s.to_ascii_lowercase().as_str() {
+        "65c02" | "c02" => Some(CpuVariant::Cmos65C02),
+        "wdc65c02" | "w65c02" => Some(CpuVariant::Wdc65C02),
+        _ => None,
+    }
 }
 
 fn parse_byte_operands<'a>(parser: &mut Parser<'a>) -> Result<Vec<ByteOperand<'a>>, Error> {
@@ -413,8 +467,7 @@ mod tests {
 
     #[test]
     fn parse_program_multiple_lines() {
-        let t = table();
-        let statements = parse_program("start:\n  LDA #1\n  STA $10\n", &t).unwrap();
+        let statements = parse_program("start:\n  LDA #1\n  STA $10\n").unwrap();
         assert_eq!(statements.len(), 3);
         assert_eq!(statements[0].0, Statement::Label(String::from("start")));
         assert!(matches!(&statements[1].0, Statement::Instruction(Mnemonic::Lda, _)));
@@ -423,9 +476,52 @@ mod tests {
 
     #[test]
     fn parse_program_skips_blank_lines_and_comments() {
-        let t = table();
-        let statements = parse_program("\n; a comment\nNOP\n\n", &t).unwrap();
+        let statements = parse_program("\n; a comment\nNOP\n\n").unwrap();
         assert_eq!(statements.len(), 1);
         assert_eq!(statements[0].0, Statement::Instruction(Mnemonic::Nop, OperandSyntax::None));
+    }
+
+    #[test]
+    fn parse_setcpu_directive_accepts_all_aliases() {
+        let t = table();
+        for (text, expected) in [
+            ("65c02", CpuVariant::Cmos65C02),
+            ("C02", CpuVariant::Cmos65C02),
+            ("wdc65c02", CpuVariant::Wdc65C02),
+            ("W65C02", CpuVariant::Wdc65C02),
+        ] {
+            let source = format!(".setcpu \"{text}\"\n");
+            let statements = parse_line_source(&source, &t).unwrap();
+            assert_eq!(statements[0].0, Statement::Directive(Directive::SetCpu(expected)));
+        }
+    }
+
+    #[test]
+    fn parse_setcpu_unknown_variant_errors() {
+        let t = table();
+        let result = parse_line_source(".setcpu \"6809\"\n", &t);
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("unknown CPU variant"));
+    }
+
+    #[test]
+    fn parse_setcpu_requires_quoted_string() {
+        let t = table();
+        let result = parse_line_source(".setcpu wdc65c02\n", &t);
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("expected a quoted CPU variant string"));
+    }
+
+    #[test]
+    fn parse_wdc_only_mnemonic_syntax_is_variant_independent() {
+        // Parsing always disambiguates operand syntax against the Wdc65C02
+        // superset table, regardless of any .setcpu in the source (or lack
+        // thereof) — whether BBR0 is actually *valid* is an encode-time
+        // concern for the driver, not a parse-time one.
+        let statements = parse_program("BBR0 $10, label\n").unwrap();
+        assert!(matches!(
+            &statements[0].0,
+            Statement::Instruction(Mnemonic::Bbr0, OperandSyntax::ZeroPageRelative(_, _))
+        ));
     }
 }
