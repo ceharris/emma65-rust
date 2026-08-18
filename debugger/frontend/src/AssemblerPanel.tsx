@@ -30,22 +30,41 @@ interface AssembleReport {
 }
 
 /**
+ * A red triangle-with-exclamation-mark SVG, wrapped as a `content: url(...)`
+ * value, used below to replace `@codemirror/lint`'s default error gutter
+ * marker (a plain filled red circle) — which, in this app, is visually
+ * indistinguishable from the filled red "●" `DisassemblyPanel.tsx` already
+ * uses for an enabled breakpoint (see `.disasm-gutter.breakpoint` in
+ * `disassembly.scss`). A different *shape* (not just a different color)
+ * is what actually disambiguates the two at a glance.
+ */
+const errorMarkerSvg = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">' +
+    '<path d="M20 4 L37 35 L3 35 Z" fill="#f44747"/>' +
+    '<rect x="18" y="14" width="4" height="12" fill="#fff"/>' +
+    '<rect x="18" y="29" width="4" height="4" fill="#fff"/>' +
+    "</svg>",
+)}")`;
+
+/**
  * Follows the app's light/dark theme via CSS custom properties (`--color-*`,
  * defined in `global.scss`) rather than `TerminalPanel.tsx`'s `useTheme()` +
  * recompute-on-change approach — CodeMirror renders through real DOM/CSS
  * (unlike xterm's canvas), so a `var(--color-*)` reference here just tracks
  * the app's theme automatically as the cascade updates, with no JS involved.
  *
- * `!important` on the four overridden properties is deliberate: CodeMirror's
- * built-in default theme only ever applies its `&light` variant of each of
- * these (gutter background/color, active line, caret color) because nothing
+ * `!important` on the overridden properties is deliberate: CodeMirror's
+ * built-in default theme only ever applies its `&light` variant of the
+ * gutter background/color, active line, and caret color, because nothing
  * in this editor ever sets CodeMirror's own `dark` theme flag — confirmed by
  * reading `@codemirror/view`'s base theme, whose `&light`/`&dark` selectors
  * resolve to equal-specificity, mount-order-dependent rules. `!important`
- * sidesteps needing to depend on that ordering. There's no `drawSelection()`
- * extension here (not needed at this unit's scope), so selection is the
- * browser's native `::selection`, not CodeMirror's `.cm-selectionBackground`
- * layer — hence targeting `.cm-content ::selection` instead.
+ * sidesteps needing to depend on that ordering; the same reasoning applies
+ * to the `.cm-lint-marker-error` override below, against `@codemirror/lint`'s
+ * own base theme. There's no `drawSelection()` extension here (not needed at
+ * this unit's scope), so selection is the browser's native `::selection`,
+ * not CodeMirror's `.cm-selectionBackground` layer — hence targeting
+ * `.cm-content ::selection` instead.
  */
 const assemblerEditorTheme = EditorView.theme({
   "&": {
@@ -67,34 +86,28 @@ const assemblerEditorTheme = EditorView.theme({
   ".cm-content::selection, .cm-content *::selection": {
     backgroundColor: "var(--color-bg-selected) !important",
   },
+  ".cm-lint-marker-error": {
+    content: `${errorMarkerSvg} !important`,
+  },
 });
 
 /**
- * Maps a 1-based `(line, column)` position from `emma65::assembler`'s
- * scanner (`src/assembler/scanner.rs`) to a 0-based CodeMirror document
- * offset. Columns are tab-expanded there: the scanner advances the column
- * by 8 for every `\t` and by 1 for every other character (`TAB_SIZE` in
- * `scanner.rs`), not by counting characters — so this must walk the line
- * character-by-character rather than computing `line.from + (column - 1)`,
- * which is wrong on any line containing a tab before the target column.
+ * Converts a backend `AssembleDiagnostic` to a CodeMirror `Diagnostic`
+ * covering the diagnostic's entire source line, not just its reported
+ * column. Two reasons: (1) `AssembleDiagnostic.column` is tab-expanded by
+ * `emma65::assembler`'s scanner (`src/assembler/scanner.rs`, `TAB_SIZE = 8`
+ * per `\t`), which doesn't match this editor's own 4-column tab stops
+ * (`indentUnit.of("\t")` below plus CodeMirror's default `tabSize`), so a
+ * precise column→offset mapping would misplace the marker on any line with
+ * a tab before the error column — not worth chasing given how little a
+ * single assembly statement has going on. (2) One statement per line is
+ * this grammar's norm, so underlining the whole line reads as "this
+ * statement has a problem," which is what the diagnostic actually means,
+ * without needing to pinpoint a sub-token.
  */
-function lineColToOffset(doc: Text, line: number, column: number): number {
-  const lineObj = doc.line(Math.min(Math.max(line, 1), doc.lines));
-  const text = lineObj.text;
-  let col = 1;
-  let i = 0;
-  while (i < text.length && col < column) {
-    col += text.charCodeAt(i) === 9 /* '\t' */ ? 8 : 1;
-    i++;
-  }
-  return Math.min(lineObj.from + i, lineObj.to);
-}
-
-/** Converts a backend `AssembleDiagnostic` to a CodeMirror `Diagnostic`, covering one character (a non-empty range renders better than a zero-width one). */
 function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): Diagnostic {
-  const from = lineColToOffset(doc, d.line, d.column);
-  const to = Math.min(from + 1, doc.lineAt(from).to);
-  return { from, to, severity: "error", message: d.message };
+  const lineObj = doc.line(Math.min(Math.max(d.line, 1), doc.lines));
+  return { from: lineObj.from, to: lineObj.to, severity: "error", message: d.message };
 }
 
 /**
@@ -135,6 +148,7 @@ export default function AssemblerPanel() {
     onClick: runAssemble,
     disabled: execState !== "stopped",
     disabledTitle: "Stop the CPU to assemble",
+    icon: "output",
   });
 
   useEffect(() => {
@@ -258,7 +272,7 @@ export default function AssemblerPanel() {
           <div className="assembler-diagnostics">
             {report.diagnostics.map((d, i) => (
               <div className="assembler-diagnostic" key={i}>
-                {d.line}:{d.column}: {d.message}
+                Line {d.line}: {d.message}
               </div>
             ))}
           </div>
