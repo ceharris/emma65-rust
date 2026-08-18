@@ -5,6 +5,7 @@
 //! consumer until then.
 #![allow(dead_code)]
 
+mod driver;
 mod error;
 mod eval;
 mod expr;
@@ -12,4 +13,5 @@ mod instructions;
 mod operand;
 mod parser;
 mod scanner;
+mod statement;
 mod token;
