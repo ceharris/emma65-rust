@@ -538,6 +538,21 @@ pub fn run() {
                 // header buttons.
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "memory");
                 let _ = app.emit_to(MAIN_WINDOW_LABEL, "memory-menu-action", event.id().as_ref().to_string());
+            } else if matches!(
+                event.id().as_ref(),
+                menu::NEW_ASSEMBLER_ID
+                    | menu::OPEN_ASSEMBLER_ID
+                    | menu::SAVE_ASSEMBLER_ID
+                    | menu::SAVE_AS_ASSEMBLER_ID
+                    | menu::ASSEMBLE_LOAD_ID
+            ) {
+                // Same pattern as the Memory menu above (issue #474, debugger
+                // integration Unit 4): bring the Assembler panel back if it's
+                // been dismissed, then dispatch the action itself to
+                // `AssemblerPanel.tsx`, which owns the actual file-dialog/
+                // dirty-tracking/assemble logic.
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "reveal-panel", "assembler");
+                let _ = app.emit_to(MAIN_WINDOW_LABEL, "assembler-menu-action", event.id().as_ref().to_string());
             } else if matches!(event.id().as_ref(), menu::CUT_ID | menu::COPY_ID | menu::PASTE_ID) {
                 // No panel to reveal here (issue #435) — `EditMenuContext.tsx`
                 // acts against whatever is currently focused/selected in the
@@ -581,6 +596,8 @@ pub fn run() {
             memory::save_memory,
             memory::fill_memory,
             assembler::assemble_and_load,
+            assembler::read_source_file,
+            assembler::write_source_file,
             stack::get_stack,
             breakpoints::toggle_breakpoint,
             breakpoints::set_breakpoint,
@@ -608,12 +625,20 @@ pub fn run() {
             recent::clear_recent_profiles,
             menu::set_run_controls_enabled,
             menu::set_memory_menu_enabled,
+            menu::set_assembler_menu_enabled,
             menu::set_edit_menu_enabled,
             about::get_about_info,
         ])
         .setup(move |app| {
-            let (app_menu, window_menu_state, recent_menu_state, run_menu_state, memory_menu_state, edit_menu_state) =
-                menu::build_menu(app)?;
+            let (
+                app_menu,
+                window_menu_state,
+                recent_menu_state,
+                run_menu_state,
+                memory_menu_state,
+                assembler_menu_state,
+                edit_menu_state,
+            ) = menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
             // GTK's default `gtk-menu-bar-accel` binds F10 to focus/open the menu
@@ -646,6 +671,7 @@ pub fn run() {
             app.manage(recent_menu_state);
             app.manage(run_menu_state);
             app.manage(memory_menu_state);
+            app.manage(assembler_menu_state);
             app.manage(edit_menu_state);
 
             // Detached-Terminal window: strip its menu and install the

@@ -62,6 +62,17 @@ pub(crate) const EDIT_MEMORY_ID: &str = "edit-memory";
 /// Menu item id / `memory-menu-action` event payload for the Memory > Fill… item.
 pub(crate) const FILL_MEMORY_ID: &str = "fill-memory";
 
+/// Menu item id / `assembler-menu-action` event payload for the Assembler > New item.
+pub(crate) const NEW_ASSEMBLER_ID: &str = "new-assembler";
+/// Menu item id / `assembler-menu-action` event payload for the Assembler > Open… item.
+pub(crate) const OPEN_ASSEMBLER_ID: &str = "open-assembler";
+/// Menu item id / `assembler-menu-action` event payload for the Assembler > Save item.
+pub(crate) const SAVE_ASSEMBLER_ID: &str = "save-assembler";
+/// Menu item id / `assembler-menu-action` event payload for the Assembler > Save As… item.
+pub(crate) const SAVE_AS_ASSEMBLER_ID: &str = "save-as-assembler";
+/// Menu item id / `assembler-menu-action` event payload for the Assembler > Assemble & Load item.
+pub(crate) const ASSEMBLE_LOAD_ID: &str = "assemble-load";
+
 /// Holds menu items `on_menu_event`/other modules need a handle to after
 /// construction. The View menu's per-panel items (issue #393) are plain,
 /// non-checkable items matched by id prefix alone in `on_menu_event`, so no
@@ -164,6 +175,16 @@ pub struct MemoryMenuState {
     pub fill_item: MenuItem<Wry>,
 }
 
+/// Holds the Assembler > Assemble & Load item handle so
+/// `set_assembler_menu_enabled` can toggle it in place, mirroring
+/// `MemoryMenuState`. New/Open…/Save/Save As… don't depend on CPU state
+/// (they only touch the in-panel editor buffer and the filesystem), so
+/// unlike `MemoryMenuState`'s four items, only this one needs tracking here.
+pub struct AssemblerMenuState {
+    /// The Assembler > Assemble & Load item.
+    pub assemble_load_item: MenuItem<Wry>,
+}
+
 /// Builds the native app menu (File/Edit/View/Run/Memory/Window/Help) and the `exit_item`
 /// handle `on_menu_event` needs to dispatch an Exit click. The File > Open
 /// Recent submenu starts empty — populated once the recent-profiles list is
@@ -171,7 +192,7 @@ pub struct MemoryMenuState {
 #[allow(clippy::type_complexity)]
 pub fn build_menu(
     app: &tauri::App,
-) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState, MemoryMenuState, EditMenuState)> {
+) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState, MemoryMenuState, AssemblerMenuState, EditMenuState)> {
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
     // predefined types on Linux), so the item never appeared at all. The
@@ -358,9 +379,42 @@ pub fn build_menu(
     let about_item = MenuItem::with_id(app, ABOUT_ID, "About", true, None::<&str>)?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&github_item, &about_item])?;
 
+    // Replaces the Assembler panel's own header button (issue #474, debugger
+    // integration Unit 4) with a top-level menu, same click-dispatches-an-event
+    // pattern as the Memory menu above: `on_menu_event` in `lib.rs` reveals the
+    // Assembler panel then emits `assembler-menu-action`, which
+    // `AssemblerPanel.tsx` handles — it owns all the actual file-dialog/dirty-
+    // tracking logic, there being no separate profile-scoped default source
+    // file the way Memory's binary images have. Accelerators deliberately use
+    // `Alt` rather than `CmdOrCtrl(+Shift)` to keep this namespace
+    // visually/mechanically distinct from Memory's — confirmed no `Alt+`-
+    // modified accelerator exists anywhere else in this file, so this is a
+    // fresh, collision-free namespace. Assemble & Load's `F9` is shared
+    // between this menu and the panel's own header button from Unit 3, both
+    // funneled through `AssemblerPanel.tsx`'s single `runAssemble` handler.
+    let new_assembler_item = MenuItem::with_id(app, NEW_ASSEMBLER_ID, "New", true, Some("Alt+N"))?;
+    let open_assembler_item = MenuItem::with_id(app, OPEN_ASSEMBLER_ID, "Open…", true, Some("Alt+O"))?;
+    let save_assembler_item = MenuItem::with_id(app, SAVE_ASSEMBLER_ID, "Save", true, Some("Alt+S"))?;
+    let save_as_assembler_item = MenuItem::with_id(app, SAVE_AS_ASSEMBLER_ID, "Save As…", true, None::<&str>)?;
+    let assembler_separator = PredefinedMenuItem::separator(app)?;
+    let assemble_load_item = MenuItem::with_id(app, ASSEMBLE_LOAD_ID, "Assemble & Load", true, Some("F9"))?;
+    let assembler_menu = Submenu::with_items(
+        app,
+        "Assembler",
+        true,
+        &[
+            &new_assembler_item,
+            &open_assembler_item,
+            &save_assembler_item,
+            &save_as_assembler_item,
+            &assembler_separator,
+            &assemble_load_item,
+        ],
+    )?;
+
     let menu = Menu::with_items(
         app,
-        &[&file_menu, &edit_menu, &view_menu, &run_menu, &memory_menu, &window_menu, &help_menu],
+        &[&file_menu, &edit_menu, &view_menu, &run_menu, &memory_menu, &assembler_menu, &window_menu, &help_menu],
     )?;
 
     Ok((
@@ -374,6 +428,7 @@ pub fn build_menu(
             edit_item: edit_memory_item,
             fill_item: fill_memory_item,
         },
+        AssemblerMenuState { assemble_load_item },
         EditMenuState { cut_item, copy_item, paste_item },
     ))
 }
@@ -401,6 +456,16 @@ pub fn set_memory_menu_enabled(enabled: bool, state: State<MemoryMenuState>) {
     let _ = state.save_item.set_enabled(enabled);
     let _ = state.edit_item.set_enabled(enabled);
     let _ = state.fill_item.set_enabled(enabled);
+}
+
+/// Enables or disables the Assembler menu's Assemble & Load item — the CPU
+/// must be stopped, mirroring the panel's own header button
+/// (`usePanelHeaderAction`'s `disabled={execState !== "stopped"}` in
+/// `AssemblerPanel.tsx`). New/Open…/Save/Save As… aren't gated by CPU state,
+/// so unlike `set_memory_menu_enabled` this only touches one item.
+#[tauri::command]
+pub fn set_assembler_menu_enabled(enabled: bool, state: State<AssemblerMenuState>) {
+    let _ = state.assemble_load_item.set_enabled(enabled);
 }
 
 /// Pushes `flags` onto the Run menu's six items' enabled state

@@ -5,11 +5,14 @@ import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@c
 import { indentUnit } from "@codemirror/language";
 import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
 import { useExecutionContext } from "./ExecutionContext";
 import { usePanelHeaderAction } from "./layout/panelHeaderActions";
 import "./styles/assembler.scss";
+import "./styles/modal.scss";
 
 interface AssembleDiagnostic {
   line: number;
@@ -124,6 +127,14 @@ export default function AssemblerPanel() {
   const editMenu = useEditMenuOverride();
   const { execState } = useExecutionContext();
   const [report, setReport] = useState<AssembleReport | null>(null);
+  /** Absolute path of the file currently backing the editor; null for an untitled buffer. */
+  const [currentPath, setCurrentPath] = useState<string | null>(null);
+  /** True once the buffer has been edited since it was last loaded/saved. */
+  const [isDirty, setIsDirty] = useState(false);
+  /** True while the "discard unsaved changes?" confirmation is open (New only, per explicit scope). */
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  /** Error message from a failed Open/Save/Save As…; null when no error dialog is open. */
+  const [fileErrorDialog, setFileErrorDialog] = useState<string | null>(null);
 
   // On-demand only, never live-as-you-type — assembling has a real side
   // effect (writing memory via `Bus::patch`), so it must never fire
@@ -150,6 +161,135 @@ export default function AssemblerPanel() {
     disabledTitle: "Stop the CPU to assemble",
     icon: "output",
   });
+
+  // Keeps the native Assembler menu's Assemble & Load item in lockstep with
+  // the header button's own `disabled={execState !== "stopped"}` condition —
+  // New/Open…/Save/Save As… aren't CPU-gated, so only this one item needs
+  // syncing (mirrors `set_memory_menu_enabled`'s call site in `MemoryPanel.tsx`).
+  const lastAssemblerMenuEnabledRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const enabled = execState === "stopped";
+    if (enabled === lastAssemblerMenuEnabledRef.current) return;
+    lastAssemblerMenuEnabledRef.current = enabled;
+    invoke("set_assembler_menu_enabled", { enabled }).catch((e) =>
+      console.error("set_assembler_menu_enabled failed:", e),
+    );
+  }, [execState]);
+
+  /**
+   * Replaces the whole buffer, resetting dirty/path/report state and
+   * clearing any lint gutter markers left over from assembling the previous
+   * buffer's contents (their positions no longer mean anything once the
+   * document they were computed against is gone).
+   */
+  const loadDocument = useCallback((text: string, path: string | null) => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: text },
+      selection: { anchor: 0 },
+    });
+    view.dispatch(setDiagnostics(view.state, []));
+    setCurrentPath(path);
+    setIsDirty(false);
+    setReport(null);
+  }, []);
+
+  /** Clears the buffer to a new untitled document, confirming first if there are unsaved changes. */
+  const handleNew = useCallback(() => {
+    if (isDirty) {
+      setConfirmDiscard(true);
+      return;
+    }
+    loadDocument("", null);
+  }, [isDirty, loadDocument]);
+
+  const confirmNew = useCallback(() => {
+    setConfirmDiscard(false);
+    loadDocument("", null);
+  }, [loadDocument]);
+
+  /** Opens the native file chooser, reads the selected file, and loads it into the buffer. */
+  const handleOpen = useCallback(async () => {
+    const defaultPath = await invoke<string | null>("get_last_file_dialog_dir");
+    const selected = await openFileDialog({
+      multiple: false,
+      filters: [{ name: "Assembly Source", extensions: ["s", "asm", "a65"] }],
+      defaultPath: defaultPath ?? undefined,
+    });
+    if (typeof selected !== "string") return;
+    try {
+      const contents = await invoke<string>("read_source_file", { path: selected });
+      loadDocument(contents, selected);
+      invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
+    } catch (e) {
+      setFileErrorDialog(String(e));
+    }
+  }, [loadDocument]);
+
+  /** Opens the native save-file chooser and writes the buffer to the chosen path. */
+  const handleSaveAs = useCallback(async () => {
+    const view = viewRef.current;
+    if (!view) return;
+    const defaultPath = currentPath ?? (await invoke<string | null>("get_last_file_dialog_dir")) ?? undefined;
+    const selected = await saveFileDialog({
+      filters: [{ name: "Assembly Source", extensions: ["s", "asm", "a65"] }],
+      defaultPath,
+    });
+    if (typeof selected !== "string") return;
+    try {
+      await invoke("write_source_file", { path: selected, contents: view.state.doc.toString() });
+      setCurrentPath(selected);
+      setIsDirty(false);
+      invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
+    } catch (e) {
+      setFileErrorDialog(String(e));
+    }
+  }, [currentPath]);
+
+  /** Writes the buffer to its current path; falls back to Save As… when the buffer has none yet. */
+  const handleSave = useCallback(async () => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (!currentPath) {
+      await handleSaveAs();
+      return;
+    }
+    try {
+      await invoke("write_source_file", { path: currentPath, contents: view.state.doc.toString() });
+      setIsDirty(false);
+    } catch (e) {
+      setFileErrorDialog(String(e));
+    }
+  }, [currentPath, handleSaveAs]);
+
+  // The Assembler panel's file operations are also reachable via the native
+  // Assembler menu (issue #474, debugger integration Unit 4) — a menu click
+  // or `Alt+N`/`Alt+O`/`Alt+S`/`F9` accelerator reaches this handler as an
+  // event targeted at the main window, the same way `memory-menu-action`
+  // reaches `MemoryPanel.tsx`.
+  useEffect(() => {
+    const unlistenPromise = listen<string>("assembler-menu-action", (event) => {
+      switch (event.payload) {
+        case "new-assembler":
+          handleNew();
+          break;
+        case "open-assembler":
+          handleOpen();
+          break;
+        case "save-assembler":
+          handleSave();
+          break;
+        case "save-as-assembler":
+          handleSaveAs();
+          break;
+        case "assemble-load":
+          runAssemble();
+          break;
+      }
+    });
+    return () => { unlistenPromise.then((f) => f()); };
+  }, [handleNew, handleOpen, handleSave, handleSaveAs, runAssemble]);
 
   useEffect(() => {
     const copySelection = () => {
@@ -230,6 +370,12 @@ export default function AssemblerPanel() {
       // lifecycle code needed.
       EditorView.updateListener.of((update) => {
         if (update.selectionSet && editMenu) editMenu.notifyChanged();
+        // `loadDocument` (New/Open) issues its own full-doc replacement
+        // transaction, which also flows through here as `docChanged` — it
+        // calls `setIsDirty(false)` itself right after dispatching, and
+        // since both calls land in the same React batch, that later call
+        // wins over this one.
+        if (update.docChanged) setIsDirty(true);
       }),
     ];
 
@@ -259,6 +405,26 @@ export default function AssemblerPanel() {
     // tear down and rebuild the whole editor.
   }, []);
 
+  /** Dismiss the discard-changes confirmation on Escape while it is open. */
+  useEffect(() => {
+    if (!confirmDiscard) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmDiscard(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [confirmDiscard]);
+
+  /** Dismiss the file-error dialog on Escape while it is open. */
+  useEffect(() => {
+    if (!fileErrorDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFileErrorDialog(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [fileErrorDialog]);
+
   return (
     <div className="assembler-panel">
       <div ref={containerRef} className="assembler-container" />
@@ -277,6 +443,39 @@ export default function AssemblerPanel() {
             ))}
           </div>
         )
+      )}
+
+      {confirmDiscard && (
+        <div className="modal-backdrop" onClick={() => setConfirmDiscard(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">Discard Changes</div>
+            <div className="modal-message">
+              This buffer has unsaved changes. Starting a new file will discard them. Continue?
+            </div>
+            <div className="modal-buttons">
+              <button className="modal-btn-action modal-btn-cancel" onClick={() => setConfirmDiscard(false)}>
+                Cancel
+              </button>
+              <button className="modal-btn-action modal-btn-ok" onClick={confirmNew}>
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {fileErrorDialog !== null && (
+        <div className="modal-backdrop" onClick={() => setFileErrorDialog(null)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">File Error</div>
+            <div className="modal-message">{fileErrorDialog}</div>
+            <div className="modal-buttons">
+              <button className="modal-btn-action modal-btn-ok" onClick={() => setFileErrorDialog(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
