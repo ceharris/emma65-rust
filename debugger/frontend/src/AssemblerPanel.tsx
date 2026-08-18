@@ -1,10 +1,33 @@
-import { useEffect, useRef } from "react";
-import { EditorState, Extension } from "@codemirror/state";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { EditorState, Extension, Text } from "@codemirror/state";
 import { EditorView, KeyBinding, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
+import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
+import { invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
+import { useExecutionContext } from "./ExecutionContext";
+import { usePanelHeaderAction } from "./layout/panelHeaderActions";
+import "./styles/assembler.scss";
+
+interface AssembleDiagnostic {
+  line: number;
+  column: number;
+  message: string;
+}
+
+interface SegmentSummary {
+  origin: number;
+  length: number;
+}
+
+interface AssembleReport {
+  success: boolean;
+  diagnostics: AssembleDiagnostic[];
+  segments: SegmentSummary[];
+  symbol_count: number;
+}
 
 /**
  * Follows the app's light/dark theme via CSS custom properties (`--color-*`,
@@ -47,17 +70,72 @@ const assemblerEditorTheme = EditorView.theme({
 });
 
 /**
+ * Maps a 1-based `(line, column)` position from `emma65::assembler`'s
+ * scanner (`src/assembler/scanner.rs`) to a 0-based CodeMirror document
+ * offset. Columns are tab-expanded there: the scanner advances the column
+ * by 8 for every `\t` and by 1 for every other character (`TAB_SIZE` in
+ * `scanner.rs`), not by counting characters — so this must walk the line
+ * character-by-character rather than computing `line.from + (column - 1)`,
+ * which is wrong on any line containing a tab before the target column.
+ */
+function lineColToOffset(doc: Text, line: number, column: number): number {
+  const lineObj = doc.line(Math.min(Math.max(line, 1), doc.lines));
+  const text = lineObj.text;
+  let col = 1;
+  let i = 0;
+  while (i < text.length && col < column) {
+    col += text.charCodeAt(i) === 9 /* '\t' */ ? 8 : 1;
+    i++;
+  }
+  return Math.min(lineObj.from + i, lineObj.to);
+}
+
+/** Converts a backend `AssembleDiagnostic` to a CodeMirror `Diagnostic`, covering one character (a non-empty range renders better than a zero-width one). */
+function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): Diagnostic {
+  const from = lineColToOffset(doc, d.line, d.column);
+  const to = Math.min(from + 1, doc.lineAt(from).to);
+  return { from, to, severity: "error", message: d.message };
+}
+
+/**
  * The dock panel hosting the assembler source editor (issue #474 debugger
- * integration, Unit 2). Mounts a bare CodeMirror 6 `EditorView` imperatively
- * — matching `TerminalPanel.tsx`'s `useRef`+`useEffect` xterm-mount pattern
- * rather than a third-party React wrapper, since none is used anywhere else
- * in this codebase. In-memory buffer only for this unit: no `invoke` calls,
- * no assemble/load wiring (Unit 3), no file Open/Save (Unit 4).
+ * integration, Units 2-3). Mounts a bare CodeMirror 6 `EditorView`
+ * imperatively — matching `TerminalPanel.tsx`'s `useRef`+`useEffect` xterm-
+ * mount pattern rather than a third-party React wrapper, since none is used
+ * anywhere else in this codebase. In-memory buffer only: no file Open/Save
+ * (Unit 4).
  */
 export default function AssemblerPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editMenu = useEditMenuOverride();
+  const { execState } = useExecutionContext();
+  const [report, setReport] = useState<AssembleReport | null>(null);
+
+  // On-demand only, never live-as-you-type — assembling has a real side
+  // effect (writing memory via `Bus::patch`), so it must never fire
+  // implicitly on a debounce timer the way pure-syntax linting normally
+  // does.
+  const runAssemble = useCallback(async () => {
+    const view = viewRef.current;
+    if (!view) return;
+    const source = view.state.doc.toString();
+    try {
+      const result = await invoke<AssembleReport>("assemble_and_load", { source });
+      setReport(result);
+      const diagnostics = result.diagnostics.map((d) => toCodeMirrorDiagnostic(view.state.doc, d));
+      view.dispatch(setDiagnostics(view.state, diagnostics));
+    } catch (e) {
+      console.error("assemble_and_load failed:", e);
+    }
+  }, []);
+
+  usePanelHeaderAction("assembler", {
+    title: "Assemble & Load",
+    onClick: runAssemble,
+    disabled: execState !== "stopped",
+    disabledTitle: "Stop the CPU to assemble",
+  });
 
   useEffect(() => {
     const copySelection = () => {
@@ -113,6 +191,10 @@ export default function AssemblerPanel() {
     const extensions: Extension[] = [
       lineNumbers(),
       history(),
+      // Renders diagnostic markers in the gutter; the diagnostics
+      // themselves are pushed in via `setDiagnostics()` from `runAssemble`
+      // above, not this extension's own (unused here) `linter()` source.
+      lintGutter(),
       // `indentLess` (bound to Shift-Tab above) measures/removes leading
       // whitespace in units of `indentUnit`'s column width, which defaults
       // to 2 spaces regardless of what character Tab actually inserts —
@@ -163,5 +245,25 @@ export default function AssemblerPanel() {
     // tear down and rebuild the whole editor.
   }, []);
 
-  return <div ref={containerRef} className="assembler-container" />;
+  return (
+    <div className="assembler-panel">
+      <div ref={containerRef} className="assembler-container" />
+      {report && (
+        report.success ? (
+          <div className="assembler-summary">
+            {report.segments.reduce((sum, s) => sum + s.length, 0)} bytes across {report.segments.length} segment
+            {report.segments.length === 1 ? "" : "s"}, {report.symbol_count} symbol{report.symbol_count === 1 ? "" : "s"}
+          </div>
+        ) : (
+          <div className="assembler-diagnostics">
+            {report.diagnostics.map((d, i) => (
+              <div className="assembler-diagnostic" key={i}>
+                {d.line}:{d.column}: {d.message}
+              </div>
+            ))}
+          </div>
+        )
+      )}
+    </div>
+  );
 }
