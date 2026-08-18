@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { EditorState, Extension } from "@codemirror/state";
 import { EditorView, KeyBinding, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@codemirror/commands";
+import { indentUnit } from "@codemirror/language";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
 
@@ -112,6 +113,19 @@ export default function AssemblerPanel() {
     const extensions: Extension[] = [
       lineNumbers(),
       history(),
+      // `indentLess` (bound to Shift-Tab above) measures/removes leading
+      // whitespace in units of `indentUnit`'s column width, which defaults
+      // to 2 spaces regardless of what character Tab actually inserts —
+      // so, unconfigured, Shift-Tab only undid *half* of what Tab just
+      // inserted (a 2-column-wide dedent against a tab char that renders 4
+      // columns wide at the default `tabSize`), while Backspace deleted
+      // the tab character outright and so felt like it retreated twice as
+      // far. Setting the indent unit to a literal tab keeps `indentLess`
+      // (and `indentMore`/block-selection Tab, via `insertTab`'s fallback)
+      // consistent with `insertTab`'s own tab-character insertion, at
+      // whatever `tabSize` is in effect — `getIndentUnit` computes a
+      // tab-based indent unit's column width as `tabSize * 1`.
+      indentUnit.of("\t"),
       keymap.of([tabBinding, ...defaultKeymap, ...historyKeymap]),
       assemblerEditorTheme,
       // Future extension point (out of scope for this unit): a
