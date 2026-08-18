@@ -571,8 +571,9 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
  *
  * Any other panel gets a generic fallback: whatever single action it
  * registered via `usePanelHeaderAction` (see `panelHeaderActions.tsx`) is
- * rendered as a plain "+" icon button, so panels like Breakpoints and
- * Watchpoints get a tab-header action without hardcoding their ids here.
+ * rendered as a button with that action's own `icon` (a "+" via
+ * `codicon-add` by default), so panels like Breakpoints, Watchpoints, and
+ * Assembler get a tab-header action without hardcoding their ids here.
  * `usePanelHeaderActions()` must run on every render of this component (not
  * just the fallback branch) to satisfy the rules of hooks, since the
  * terminal/run-controls branches above return early.
@@ -647,7 +648,7 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
           disabled={action.disabled}
           title={action.disabled ? (action.disabledTitle ?? action.title) : action.title}
         >
-          <i className="codicon codicon-add" />
+          <i className={`codicon codicon-${action.icon ?? "add"}`} />
         </button>
       );
     }

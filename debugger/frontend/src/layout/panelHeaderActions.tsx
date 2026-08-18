@@ -7,6 +7,8 @@ export interface PanelHeaderAction {
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
   disabledTitle?: string;
+  /** Codicon name (without the `codicon-` prefix) to render in the button. Defaults to `"add"`. */
+  icon?: string;
 }
 
 interface PanelHeaderActionContextValue {
@@ -56,7 +58,7 @@ export function usePanelHeaderAction(id: MainPanelId, action: PanelHeaderAction)
   useEffect(() => {
     register(id, { ...action, onClick: (e) => onClickRef.current(e) });
     return () => register(id, null);
-  }, [register, id, action.title, action.disabled, action.disabledTitle]);
+  }, [register, id, action.title, action.disabled, action.disabledTitle, action.icon]);
 }
 
 /**
@@ -75,7 +77,7 @@ export function useOptionalPanelHeaderAction(id: MainPanelId, action: PanelHeade
     if (!register) return;
     register(id, { ...action, onClick: (e) => onClickRef.current(e) });
     return () => register(id, null);
-  }, [register, id, action.title, action.disabled, action.disabledTitle]);
+  }, [register, id, action.title, action.disabled, action.disabledTitle, action.icon]);
 }
 
 /** Reads the current id -> action map, for `DockTabActions` to render from. */

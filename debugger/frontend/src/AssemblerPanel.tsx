@@ -1,10 +1,33 @@
-import { useEffect, useRef } from "react";
-import { EditorState, Extension } from "@codemirror/state";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { EditorState, Extension, Text } from "@codemirror/state";
 import { EditorView, KeyBinding, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
+import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
+import { invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
+import { useExecutionContext } from "./ExecutionContext";
+import { usePanelHeaderAction } from "./layout/panelHeaderActions";
+import "./styles/assembler.scss";
+
+interface AssembleDiagnostic {
+  line: number;
+  column: number;
+  message: string;
+}
+
+interface SegmentSummary {
+  origin: number;
+  length: number;
+}
+
+interface AssembleReport {
+  success: boolean;
+  diagnostics: AssembleDiagnostic[];
+  segments: SegmentSummary[];
+  symbol_count: number;
+}
 
 /**
  * Follows the app's light/dark theme via CSS custom properties (`--color-*`,
@@ -13,16 +36,18 @@ import { useEditMenuOverride } from "./EditMenuContext";
  * (unlike xterm's canvas), so a `var(--color-*)` reference here just tracks
  * the app's theme automatically as the cascade updates, with no JS involved.
  *
- * `!important` on the four overridden properties is deliberate: CodeMirror's
- * built-in default theme only ever applies its `&light` variant of each of
- * these (gutter background/color, active line, caret color) because nothing
+ * `!important` on the overridden properties is deliberate: CodeMirror's
+ * built-in default theme only ever applies its `&light` variant of the
+ * gutter background/color, active line, and caret color, because nothing
  * in this editor ever sets CodeMirror's own `dark` theme flag — confirmed by
  * reading `@codemirror/view`'s base theme, whose `&light`/`&dark` selectors
  * resolve to equal-specificity, mount-order-dependent rules. `!important`
- * sidesteps needing to depend on that ordering. There's no `drawSelection()`
- * extension here (not needed at this unit's scope), so selection is the
- * browser's native `::selection`, not CodeMirror's `.cm-selectionBackground`
- * layer — hence targeting `.cm-content ::selection` instead.
+ * sidesteps needing to depend on that ordering; the same reasoning applies
+ * to the `.cm-lint-marker-error` override below, against `@codemirror/lint`'s
+ * own base theme. There's no `drawSelection()` extension here (not needed at
+ * this unit's scope), so selection is the browser's native `::selection`,
+ * not CodeMirror's `.cm-selectionBackground` layer — hence targeting
+ * `.cm-content ::selection` instead.
  */
 const assemblerEditorTheme = EditorView.theme({
   "&": {
@@ -44,20 +69,87 @@ const assemblerEditorTheme = EditorView.theme({
   ".cm-content::selection, .cm-content *::selection": {
     backgroundColor: "var(--color-bg-selected) !important",
   },
+  // `@codemirror/lint`'s default error marker is a plain filled red circle
+  // (`.cm-lint-marker-error { content: url(<svg circle>) }` in its own base
+  // theme) — visually identical to `DisassemblyPanel.tsx`'s breakpoint
+  // indicator (the "●" character, `.disasm-gutter.breakpoint`). Swap it for
+  // the same warning-triangle codicon glyph VS Code itself uses for its
+  // Markers/Problems view (`markers-view-icon`, which VS Code registers
+  // against `Codicon.warning` — `@vscode/codicons` ships that glyph under
+  // its base name, `codicon-warning`), rather than a bespoke SVG: first
+  // reset `content` back to its normal (non-replaced-element) value so the
+  // marker div can render a `::before` pseudo-element instead of the
+  // built-in SVG, then render the codicon's own font glyph there.
+  ".cm-lint-marker-error": {
+    content: "normal !important",
+  },
+  ".cm-lint-marker-error::before": {
+    content: '"" !important', // codicon-warning
+    font: "normal normal normal 1em/1 codicon !important",
+    color: "var(--color-error) !important",
+    display: "inline-block",
+  },
 });
 
 /**
+ * Converts a backend `AssembleDiagnostic` to a CodeMirror `Diagnostic`
+ * covering the diagnostic's entire source line, not just its reported
+ * column. Two reasons: (1) `AssembleDiagnostic.column` is tab-expanded by
+ * `emma65::assembler`'s scanner (`src/assembler/scanner.rs`, `TAB_SIZE = 8`
+ * per `\t`), which doesn't match this editor's own 4-column tab stops
+ * (`indentUnit.of("\t")` below plus CodeMirror's default `tabSize`), so a
+ * precise column→offset mapping would misplace the marker on any line with
+ * a tab before the error column — not worth chasing given how little a
+ * single assembly statement has going on. (2) One statement per line is
+ * this grammar's norm, so underlining the whole line reads as "this
+ * statement has a problem," which is what the diagnostic actually means,
+ * without needing to pinpoint a sub-token.
+ */
+function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): Diagnostic {
+  const lineObj = doc.line(Math.min(Math.max(d.line, 1), doc.lines));
+  return { from: lineObj.from, to: lineObj.to, severity: "error", message: d.message };
+}
+
+/**
  * The dock panel hosting the assembler source editor (issue #474 debugger
- * integration, Unit 2). Mounts a bare CodeMirror 6 `EditorView` imperatively
- * — matching `TerminalPanel.tsx`'s `useRef`+`useEffect` xterm-mount pattern
- * rather than a third-party React wrapper, since none is used anywhere else
- * in this codebase. In-memory buffer only for this unit: no `invoke` calls,
- * no assemble/load wiring (Unit 3), no file Open/Save (Unit 4).
+ * integration, Units 2-3). Mounts a bare CodeMirror 6 `EditorView`
+ * imperatively — matching `TerminalPanel.tsx`'s `useRef`+`useEffect` xterm-
+ * mount pattern rather than a third-party React wrapper, since none is used
+ * anywhere else in this codebase. In-memory buffer only: no file Open/Save
+ * (Unit 4).
  */
 export default function AssemblerPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const editMenu = useEditMenuOverride();
+  const { execState } = useExecutionContext();
+  const [report, setReport] = useState<AssembleReport | null>(null);
+
+  // On-demand only, never live-as-you-type — assembling has a real side
+  // effect (writing memory via `Bus::patch`), so it must never fire
+  // implicitly on a debounce timer the way pure-syntax linting normally
+  // does.
+  const runAssemble = useCallback(async () => {
+    const view = viewRef.current;
+    if (!view) return;
+    const source = view.state.doc.toString();
+    try {
+      const result = await invoke<AssembleReport>("assemble_and_load", { source });
+      setReport(result);
+      const diagnostics = result.diagnostics.map((d) => toCodeMirrorDiagnostic(view.state.doc, d));
+      view.dispatch(setDiagnostics(view.state, diagnostics));
+    } catch (e) {
+      console.error("assemble_and_load failed:", e);
+    }
+  }, []);
+
+  usePanelHeaderAction("assembler", {
+    title: "Assemble & Load",
+    onClick: runAssemble,
+    disabled: execState !== "stopped",
+    disabledTitle: "Stop the CPU to assemble",
+    icon: "output",
+  });
 
   useEffect(() => {
     const copySelection = () => {
@@ -113,6 +205,10 @@ export default function AssemblerPanel() {
     const extensions: Extension[] = [
       lineNumbers(),
       history(),
+      // Renders diagnostic markers in the gutter; the diagnostics
+      // themselves are pushed in via `setDiagnostics()` from `runAssemble`
+      // above, not this extension's own (unused here) `linter()` source.
+      lintGutter(),
       // `indentLess` (bound to Shift-Tab above) measures/removes leading
       // whitespace in units of `indentUnit`'s column width, which defaults
       // to 2 spaces regardless of what character Tab actually inserts —
@@ -163,5 +259,25 @@ export default function AssemblerPanel() {
     // tear down and rebuild the whole editor.
   }, []);
 
-  return <div ref={containerRef} className="assembler-container" />;
+  return (
+    <div className="assembler-panel">
+      <div ref={containerRef} className="assembler-container" />
+      {report && (
+        report.success ? (
+          <div className="assembler-summary">
+            {report.segments.reduce((sum, s) => sum + s.length, 0)} bytes across {report.segments.length} segment
+            {report.segments.length === 1 ? "" : "s"}, {report.symbol_count} symbol{report.symbol_count === 1 ? "" : "s"}
+          </div>
+        ) : (
+          <div className="assembler-diagnostics">
+            {report.diagnostics.map((d, i) => (
+              <div className="assembler-diagnostic" key={i}>
+                Line {d.line}: {d.message}
+              </div>
+            ))}
+          </div>
+        )
+      )}
+    </div>
+  );
 }
