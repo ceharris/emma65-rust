@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { EditorState, Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
 
@@ -90,7 +90,16 @@ export default function AssemblerPanel() {
     const extensions: Extension[] = [
       lineNumbers(),
       history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
+      // `indentWithTab` isn't part of `defaultKeymap` — CodeMirror leaves it
+      // out by default so Tab keeps its usual browser role of moving focus
+      // to the next control, unless a consumer opts in. This is a source
+      // editor, where users expect Tab to indent instead, so opt in
+      // explicitly (accepting that Tab no longer tabs out of this panel;
+      // `defaultKeymap` already carries CodeMirror's own escape hatch for
+      // this, Ctrl-m / Shift-Alt-m on macOS, bound to `toggleTabFocusMode`,
+      // which temporarily restores Tab's native focus-moving behavior for
+      // a keyboard-only user who needs to leave the editor).
+      keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
       assemblerEditorTheme,
       // Future extension point (out of scope for this unit): a
       // `StreamLanguage`-based 6502/65C02 syntax highlighter slots in here
