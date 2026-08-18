@@ -30,23 +30,6 @@ interface AssembleReport {
 }
 
 /**
- * A red triangle-with-exclamation-mark SVG, wrapped as a `content: url(...)`
- * value, used below to replace `@codemirror/lint`'s default error gutter
- * marker (a plain filled red circle) — which, in this app, is visually
- * indistinguishable from the filled red "●" `DisassemblyPanel.tsx` already
- * uses for an enabled breakpoint (see `.disasm-gutter.breakpoint` in
- * `disassembly.scss`). A different *shape* (not just a different color)
- * is what actually disambiguates the two at a glance.
- */
-const errorMarkerSvg = `url("data:image/svg+xml,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">' +
-    '<path d="M20 4 L37 35 L3 35 Z" fill="#f44747"/>' +
-    '<rect x="18" y="14" width="4" height="12" fill="#fff"/>' +
-    '<rect x="18" y="29" width="4" height="4" fill="#fff"/>' +
-    "</svg>",
-)}")`;
-
-/**
  * Follows the app's light/dark theme via CSS custom properties (`--color-*`,
  * defined in `global.scss`) rather than `TerminalPanel.tsx`'s `useTheme()` +
  * recompute-on-change approach — CodeMirror renders through real DOM/CSS
@@ -86,8 +69,25 @@ const assemblerEditorTheme = EditorView.theme({
   ".cm-content::selection, .cm-content *::selection": {
     backgroundColor: "var(--color-bg-selected) !important",
   },
+  // `@codemirror/lint`'s default error marker is a plain filled red circle
+  // (`.cm-lint-marker-error { content: url(<svg circle>) }` in its own base
+  // theme) — visually identical to `DisassemblyPanel.tsx`'s breakpoint
+  // indicator (the "●" character, `.disasm-gutter.breakpoint`). Swap it for
+  // the same warning-triangle codicon glyph VS Code itself uses for its
+  // Markers/Problems view (`markers-view-icon`, which VS Code registers
+  // against `Codicon.warning` — `@vscode/codicons` ships that glyph under
+  // its base name, `codicon-warning`), rather than a bespoke SVG: first
+  // reset `content` back to its normal (non-replaced-element) value so the
+  // marker div can render a `::before` pseudo-element instead of the
+  // built-in SVG, then render the codicon's own font glyph there.
   ".cm-lint-marker-error": {
-    content: `${errorMarkerSvg} !important`,
+    content: "normal !important",
+  },
+  ".cm-lint-marker-error::before": {
+    content: '"" !important', // codicon-warning
+    font: "normal normal normal 1em/1 codicon !important",
+    color: "var(--color-error) !important",
+    display: "inline-block",
   },
 });
 
