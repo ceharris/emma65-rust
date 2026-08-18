@@ -1,4 +1,5 @@
 import { IDockviewPanelProps } from "dockview-react";
+import AssemblerPanel from "../AssemblerPanel";
 import BreakpointPanel from "../BreakpointPanel";
 import DisassemblyPanel from "../DisassemblyPanel";
 import LogPanel from "../LogPanel";
@@ -21,7 +22,8 @@ export type MainPanelId =
   | "run-controls"
   | "trace"
   | "log"
-  | "terminal";
+  | "terminal"
+  | "assembler";
 
 /** Tab/group title dockview displays for each main-window panel. */
 export const PANEL_TITLES: Record<MainPanelId, string> = {
@@ -35,6 +37,7 @@ export const PANEL_TITLES: Record<MainPanelId, string> = {
   trace: "Trace",
   log: "Log",
   terminal: "Terminal",
+  assembler: "Assembler",
 };
 
 /** dockview component-id -> renderer map for the main window's dockview panels. */
@@ -53,4 +56,5 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   // detached-window host (`terminal-detached.tsx`) renders `TerminalPanel`
   // with no such prop, which is how it tells docked and detached apart.
   terminal: ({ api }) => <TerminalPanel dockPanelApi={api} />,
+  assembler: () => <AssemblerPanel />,
 };

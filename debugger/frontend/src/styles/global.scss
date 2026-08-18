@@ -184,6 +184,18 @@ body {
   overflow: hidden;
 }
 
+// --- assembler editor ---
+
+.assembler-container {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+
+  .cm-editor {
+    height: 100%;
+  }
+}
+
 // --- shared context-menu chrome (DisassemblyPanel row menu, Terminal size menu) ---
 
 .context-menu {

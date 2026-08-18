@@ -233,7 +233,8 @@ pub fn build_menu(
     // former Ctrl+Shift+Y/L bindings were dropped rather than reassigned here
     // (issue #393), and Terminal's Ctrl+Shift+T remains the Window menu's
     // detach/attach accelerator below, so reusing it here would collide.
-    let view_panels: [(&str, &str); 10] = [
+    let view_panels: [(&str, &str); 11] = [
+        ("assembler", "Assembler"),
         ("breakpoints", "Breakpoints"),
         ("disassembly", "Disassembly"),
         ("log", "Log"),
