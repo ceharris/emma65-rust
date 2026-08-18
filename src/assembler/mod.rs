@@ -44,9 +44,11 @@ pub fn assemble(source: &str) -> Result<AssembledProgram, Vec<Error>> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::disassembler::Disassembler;
-    use crate::emulator::cpu::opcodes::Mnemonic;
+    use crate::emulator::cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic, decode_table};
     use crate::emulator::cpu::variant::CpuVariant;
     use crate::emulator::{AddressRange, Bus, RomWritePolicy};
 
@@ -218,5 +220,113 @@ LDA (zp)
         );
         assert!(lines.iter().all(|l| l.mnemonic == Mnemonic::Lda && l.is_valid));
         assert_eq!(lines.len(), 9);
+    }
+
+    /// Minimal valid operand syntax for one addressing mode, `None` for
+    /// `Implied` (no operand text at all).
+    fn addressing_mode_operand(mode: AddressingMode) -> Option<&'static str> {
+        use AddressingMode::*;
+        match mode {
+            Implied => None,
+            Accumulator => Some("A"),
+            Immediate => Some("#$42"),
+            ZeroPage => Some("$10"),
+            ZeroPageX => Some("$10,X"),
+            ZeroPageY => Some("$10,Y"),
+            Absolute => Some("$1234"),
+            AbsoluteX => Some("$1234,X"),
+            AbsoluteY => Some("$1234,Y"),
+            Indirect => Some("($1234)"),
+            IndirectX => Some("($10,X)"),
+            IndirectY => Some("($10),Y"),
+            ZeroPageIndirect => Some("($10)"),
+            AbsoluteIndirectX => Some("($1234,X)"),
+            // A trailing `target:` label placed immediately after the
+            // instruction always yields a zero displacement, which is
+            // in range regardless of where `.org` places the instruction.
+            Relative => Some("target"),
+            ZeroPageRelative => Some("$10,target"),
+        }
+    }
+
+    /// Assembles a single `mnemonic`/`mode` instruction and checks the
+    /// resulting bytes against `entry` (opcode and length), then round-trips
+    /// them through `Disassembler` (mnemonic, byte length, validity).
+    fn assert_addressing_mode_round_trips(
+        mnemonic: Mnemonic,
+        mode: AddressingMode,
+        entry: &DecodedOp,
+        variant: CpuVariant,
+    ) {
+        let setcpu = match variant {
+            CpuVariant::Cmos65C02 => "\"65c02\"",
+            CpuVariant::Wdc65C02 => "\"wdc65c02\"",
+        };
+        let mut source = format!(".setcpu {setcpu}\n.org $0200\n{mnemonic}");
+        if let Some(operand) = addressing_mode_operand(mode) {
+            source.push(' ');
+            source.push_str(operand);
+        }
+        source.push('\n');
+        if matches!(mode, AddressingMode::Relative | AddressingMode::ZeroPageRelative) {
+            source.push_str("target:\n");
+        }
+
+        let program = assemble(&source).unwrap_or_else(|errors| {
+            panic!("failed to assemble {mnemonic} under {mode:?} ({variant:?}): {errors:?}\nsource:\n{source}");
+        });
+        let segment = &program.segments[0];
+        assert_eq!(
+            segment.bytes.len(), entry.byte_len as usize,
+            "{mnemonic} under {mode:?} ({variant:?}): expected {} bytes, got {}",
+            entry.byte_len, segment.bytes.len(),
+        );
+        // Several illegal opcodes alias `(Nop, Implied)` and a few other
+        // modes (see `InstructionTable::new`'s doc comment) — which one the
+        // assembler picks for those is arbitrary, so only check the opcode
+        // byte for non-NOPs.
+        if mnemonic != Mnemonic::Nop {
+            assert_eq!(
+                segment.bytes[0], entry.opcode,
+                "{mnemonic} under {mode:?} ({variant:?}): opcode byte mismatch",
+            );
+        }
+
+        let disassembler = Disassembler::new(variant);
+        let bus = bus_for_segment(segment, &program.symbols);
+        let end = segment.origin.wrapping_add(segment.bytes.len() as u16);
+        let lines = disassembler.disassemble_range(&bus, segment.origin, end, 1);
+        assert_eq!(lines.len(), 1, "{mnemonic} under {mode:?} ({variant:?}): expected exactly one decoded line");
+        assert_eq!(lines[0].mnemonic, mnemonic, "{mnemonic} under {mode:?} ({variant:?}): mnemonic did not round-trip");
+        assert!(lines[0].is_valid, "{mnemonic} under {mode:?} ({variant:?}): disassembled line marked invalid");
+    }
+
+    /// Exhaustively assembles one instruction for every `(Mnemonic,
+    /// AddressingMode)` combination present in `decode_table` for each CPU
+    /// variant, rather than the handful of hand-picked examples the other
+    /// tests in this module cover — so an encoding regression anywhere in
+    /// the instruction set fails a test, not just in the cases someone
+    /// thought to spot-check.
+    #[test]
+    fn assemble_sweeps_every_addressing_mode_for_every_mnemonic() {
+        for variant in [CpuVariant::Cmos65C02, CpuVariant::Wdc65C02] {
+            // Dedupe the raw 256-entry table down to one representative
+            // `DecodedOp` per (mnemonic, mode) — same approach as
+            // `InstructionTable::new` (several illegal opcodes alias
+            // `(Nop, Implied)`, but which one "wins" doesn't matter here
+            // since the opcode-byte check above is skipped for NOP).
+            let mut combos: HashMap<(Mnemonic, AddressingMode), DecodedOp> = HashMap::new();
+            for entry in decode_table(variant).into_iter().filter(|e| e.is_valid && e.mnemonic != Mnemonic::Ill) {
+                combos.entry((entry.mnemonic, entry.mode)).or_insert(entry);
+            }
+            assert!(
+                combos.len() > 100,
+                "expected a substantial instruction set for {variant:?}, got {}", combos.len(),
+            );
+
+            for ((mnemonic, mode), entry) in &combos {
+                assert_addressing_mode_round_trips(*mnemonic, *mode, entry, variant);
+            }
+        }
     }
 }
