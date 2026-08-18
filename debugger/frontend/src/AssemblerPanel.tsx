@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { EditorState, Extension } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { EditorView, KeyBinding, keymap, lineNumbers } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@codemirror/commands";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
 
@@ -87,19 +87,32 @@ export default function AssemblerPanel() {
         .catch((err) => console.error("paste from clipboard failed:", err));
     };
 
+    // Tab isn't part of `defaultKeymap` — CodeMirror leaves it out by
+    // default so it keeps its usual browser role of moving focus to the
+    // next control, unless a consumer opts in. This is a source editor,
+    // where users expect Tab to indent instead, so opt in explicitly
+    // (accepting that Tab no longer tabs out of this panel; `defaultKeymap`
+    // already carries CodeMirror's own escape hatch for this, Ctrl-m /
+    // Shift-Alt-m on macOS, bound to `toggleTabFocusMode`, which
+    // temporarily restores Tab's native focus-moving behavior for a
+    // keyboard-only user who needs to leave the editor).
+    //
+    // Deliberately `insertTab`, not the built-in `indentWithTab` binding
+    // (which runs `indentMore`) — `indentMore` always reindents the
+    // *entire current line* from its start, which is right for a selected
+    // block of lines but wrong for the common case of a cursor mid-line
+    // with nothing selected: a user typing a mnemonic then hitting Tab to
+    // align a comment expects a tab character inserted at the cursor, not
+    // the whole line's leading whitespace rewritten. `insertTab` handles
+    // both: it inserts `"\t"` at the cursor when the selection is empty,
+    // and falls back to `indentMore` only when a selection spans text —
+    // exactly the multi-line-block-indent case `indentMore` is for.
+    const tabBinding: KeyBinding = { key: "Tab", run: insertTab, shift: indentLess };
+
     const extensions: Extension[] = [
       lineNumbers(),
       history(),
-      // `indentWithTab` isn't part of `defaultKeymap` — CodeMirror leaves it
-      // out by default so Tab keeps its usual browser role of moving focus
-      // to the next control, unless a consumer opts in. This is a source
-      // editor, where users expect Tab to indent instead, so opt in
-      // explicitly (accepting that Tab no longer tabs out of this panel;
-      // `defaultKeymap` already carries CodeMirror's own escape hatch for
-      // this, Ctrl-m / Shift-Alt-m on macOS, bound to `toggleTabFocusMode`,
-      // which temporarily restores Tab's native focus-moving behavior for
-      // a keyboard-only user who needs to leave the editor).
-      keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+      keymap.of([tabBinding, ...defaultKeymap, ...historyKeymap]),
       assemblerEditorTheme,
       // Future extension point (out of scope for this unit): a
       // `StreamLanguage`-based 6502/65C02 syntax highlighter slots in here
