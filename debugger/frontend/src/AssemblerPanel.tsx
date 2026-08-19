@@ -3,7 +3,7 @@ import { EditorState, Extension, Text } from "@codemirror/state";
 import { EditorView, KeyBinding, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
-import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
+import { Diagnostic, forEachDiagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { invoke } from "@tauri-apps/api/core";
 import { DockviewPanelApi } from "dockview-react";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
@@ -99,6 +99,21 @@ const assemblerEditorTheme = EditorView.theme({
     font: "normal normal normal 1em/1 codicon !important",
     color: "var(--color-error) !important",
     display: "inline-block",
+  },
+  // The lint-hover popover (`.cm-tooltip`, from `@codemirror/view`'s own
+  // base theme) is stuck on its `&light` variant for the same reason as the
+  // gutter marker above — `&light .cm-tooltip` hardcodes a light-gray
+  // background (`#f5f5f5`) with no explicit text color, so in dark mode the
+  // popover renders this app's light `--color-fg` text against that
+  // near-white background: unreadable. The popover's container div is
+  // appended to `document.body` (outside `.cm-editor`) but still carries
+  // this theme's generated class (`view.themeClasses`), so a plain
+  // `EditorView.theme()` selector still reaches it the same way it reaches
+  // in-editor elements like the gutter.
+  ".cm-tooltip": {
+    backgroundColor: "var(--color-bg-alt) !important",
+    color: "var(--color-fg) !important",
+    border: "1px solid var(--color-border) !important",
   },
 });
 
@@ -429,7 +444,29 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
         // calls `setIsDirty(false)` itself right after dispatching, and
         // since both calls land in the same React batch, that later call
         // wins over this one.
-        if (update.docChanged) setIsDirty(true);
+        if (update.docChanged) {
+          setIsDirty(true);
+          // `@codemirror/lint`'s diagnostics state field just maps marker
+          // positions through each change (`lintState.update`, in the
+          // package's own source) — it never drops a marker on its own,
+          // since we push diagnostics manually via `setDiagnostics()`
+          // rather than using the `linter()` extension's automatic
+          // re-lint-on-change. We don't re-assemble as the user types
+          // (assembling has a real bus-write side effect), but a marker
+          // anchored to a line whose text has since changed is actively
+          // misleading, so drop just the diagnostics whose range the edit
+          // touched, leaving markers on untouched lines alone.
+          const survivors: Diagnostic[] = [];
+          let anyCleared = false;
+          forEachDiagnostic(update.startState, (diagnostic, from, to) => {
+            if (update.changes.touchesRange(from, to)) {
+              anyCleared = true;
+              return;
+            }
+            survivors.push({ ...diagnostic, from: update.changes.mapPos(from), to: update.changes.mapPos(to) });
+          });
+          if (anyCleared) update.view.dispatch(setDiagnostics(update.state, survivors));
+        }
       }),
     ];
 
