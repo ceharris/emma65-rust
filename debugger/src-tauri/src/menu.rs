@@ -397,7 +397,7 @@ pub fn build_menu(
     let save_assembler_item = MenuItem::with_id(app, SAVE_ASSEMBLER_ID, "Save", true, Some("Alt+S"))?;
     let save_as_assembler_item = MenuItem::with_id(app, SAVE_AS_ASSEMBLER_ID, "Save As…", true, None::<&str>)?;
     let assembler_separator = PredefinedMenuItem::separator(app)?;
-    let assemble_load_item = MenuItem::with_id(app, ASSEMBLE_LOAD_ID, "Assemble & Load", true, Some("F9"))?;
+    let assemble_load_item = MenuItem::with_id(app, ASSEMBLE_LOAD_ID, "Assemble…", true, Some("F9"))?;
     let assembler_menu = Submenu::with_items(
         app,
         "Assembler",
