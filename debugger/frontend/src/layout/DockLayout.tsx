@@ -19,6 +19,7 @@ import {useTheme} from "../ThemeContext";
 import {MainPanelId, PANEL_TITLES, panelComponents} from "./panelRegistry";
 import {RUN_CONTROLS_DOCKED_HEIGHT, RUN_CONTROLS_MIN_WIDTH} from "../RunControlsPanel";
 import {PanelHeaderActionProvider, usePanelHeaderActions} from "./panelHeaderActions";
+import {dispatchAssemblerMenuAction} from "./assemblerMenuActions";
 
 // Debounces persisting the layout while the user is actively dragging/resizing
 // panels — onDidLayoutChange fires on every intermediate frame of a drag.
@@ -711,6 +712,24 @@ export default function DockLayout() {
           : undefined;
         api.addPanel({ id, component: id, title: PANEL_TITLES[id], position, initialHeight, ...constraints });
       }
+    });
+    return () => { unlistenPromise.then((f) => f()); };
+  }, []);
+
+  // Bridges `assembler-menu-action` to `AssemblerPanel.tsx` via
+  // `assemblerMenuActions.ts` rather than letting the panel `listen()` for
+  // it directly — see that module's doc comment for the full race it closes.
+  // In short: Assembler is the only panel with its own action-dispatching
+  // menu that isn't part of `addDefaultLayout` below, so its dock tab (and
+  // thus its own `listen()` call) doesn't exist yet the *first* time a user
+  // clicks one of its menu items — racing against the `assembler-menu-action`
+  // event that exact same click already triggered. This effect, like the
+  // `reveal-panel` one above, is mounted once here, well before any menu
+  // click is possible, so it can never lose that race; it just forwards
+  // (or queues) the action for whenever the panel is actually ready.
+  useEffect(() => {
+    const unlistenPromise = listen<string>("assembler-menu-action", (event) => {
+      dispatchAssemblerMenuAction(event.payload);
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);

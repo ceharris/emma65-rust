@@ -5,11 +5,11 @@ import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@c
 import { indentUnit } from "@codemirror/language";
 import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
 import { useExecutionContext } from "./ExecutionContext";
+import { registerAssemblerPanel } from "./layout/assemblerMenuActions";
 import "./styles/assembler.scss";
 import "./styles/modal.scss";
 
@@ -126,15 +126,13 @@ export default function AssemblerPanel() {
   /**
    * Guards `handleOpen`/`handleSaveAs` against showing the native file
    * chooser twice for a single Assembler > Open…/Save/Save As… menu click.
-   * Empirically (issue #474 debugger integration, post-Unit-4 fix): only the
-   * two actions that call into `@tauri-apps/plugin-dialog`'s `open()`/
-   * `save()` double-fire when the Assembler panel is already docked — New
-   * and Assemble…, which never call that plugin, never do. This points at a
-   * GTK/menu-event reentrancy triggered by opening a native modal dialog
-   * synchronously in response to a menu-click-sourced event, not a bug in
-   * this component's own listener registration — but regardless of which
-   * layer redelivers the triggering event, a synchronous ref set before the
-   * first `await` reliably blocks a second dialog from ever appearing.
+   * The actual root cause of the double-dialog/lost-event bug (issue #474
+   * debugger integration, Unit 4 follow-up) turned out to be a mount-timing
+   * race, fixed by routing `assembler-menu-action` through
+   * `assemblerMenuActions.ts` instead — see that module's doc comment. This
+   * guard is kept as a cheap, harmless defense against any other path that
+   * might invoke these two handlers concurrently (e.g. a leftover dockview
+   * panel instance from before that fix), not as the primary fix.
    */
   const nativeDialogInFlightRef = useRef(false);
   const editMenu = useEditMenuOverride();
@@ -286,12 +284,19 @@ export default function AssemblerPanel() {
 
   // The Assembler panel's file operations are also reachable via the native
   // Assembler menu (issue #474, debugger integration Unit 4) — a menu click
-  // or `Alt+N`/`Alt+O`/`Alt+S`/`F9` accelerator reaches this handler as an
-  // event targeted at the main window, the same way `memory-menu-action`
-  // reaches `MemoryPanel.tsx`.
+  // or `Alt+N`/`Alt+O`/`Alt+S`/`F9` accelerator reaches this handler through
+  // `assemblerMenuActions.ts`'s `registerAssemblerPanel`, not a direct
+  // `listen("assembler-menu-action", ...)` call here: this panel's dock tab
+  // is created lazily on first reveal, so a `listen()` registered from this
+  // component's own mount effect can lose the race against the very click
+  // that's revealing it (see that module's doc comment for the full
+  // explanation, including how this was confirmed with diagnostic logging).
+  // `registerAssemblerPanel` is backed by an always-active listener mounted
+  // once in `DockLayout.tsx`, and replays any action that arrived before
+  // this panel was ready.
   useEffect(() => {
-    const unlistenPromise = listen<string>("assembler-menu-action", (event) => {
-      switch (event.payload) {
+    return registerAssemblerPanel((action) => {
+      switch (action) {
         case "new-assembler":
           handleNew();
           break;
@@ -309,7 +314,6 @@ export default function AssemblerPanel() {
           break;
       }
     });
-    return () => { unlistenPromise.then((f) => f()); };
   }, [handleNew, handleOpen, handleSave, handleSaveAs, runAssemble]);
 
   useEffect(() => {
