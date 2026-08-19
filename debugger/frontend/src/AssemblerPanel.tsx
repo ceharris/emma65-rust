@@ -5,6 +5,7 @@ import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@c
 import { indentUnit } from "@codemirror/language";
 import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { invoke } from "@tauri-apps/api/core";
+import { DockviewPanelApi } from "dockview-react";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
@@ -12,6 +13,14 @@ import { useExecutionContext } from "./ExecutionContext";
 import { registerAssemblerPanel } from "./layout/assemblerMenuActions";
 import "./styles/assembler.scss";
 import "./styles/modal.scss";
+
+/** Tab title shown when no file is open — kept in sync with `PANEL_TITLES.assembler` in `panelRegistry.tsx`. */
+const BASE_TITLE = "Assembler";
+
+/** Basename of a file path, for the tab title — same pattern as `TracePanel.tsx`'s `basename`. */
+function basename(path: string): string {
+  return path.split(/[/\\]/).pop() ?? path;
+}
 
 interface AssembleDiagnostic {
   line: number;
@@ -112,6 +121,15 @@ function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): Diagnostic {
   return { from: lineObj.from, to: lineObj.to, severity: "error", message: d.message };
 }
 
+interface AssemblerPanelProps {
+  /**
+   * The dockview panel API, threaded down from `panelRegistry.tsx` (same
+   * pattern as `TerminalPanel.tsx`'s `dockPanelApi`) so the dock tab's title
+   * can be kept in sync with the currently open file.
+   */
+  dockPanelApi?: DockviewPanelApi;
+}
+
 /**
  * The dock panel hosting the assembler source editor (issue #474 debugger
  * integration, Units 2-3). Mounts a bare CodeMirror 6 `EditorView`
@@ -120,7 +138,7 @@ function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): Diagnostic {
  * anywhere else in this codebase. In-memory buffer only: no file Open/Save
  * (Unit 4).
  */
-export default function AssemblerPanel() {
+export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   /**
@@ -146,6 +164,17 @@ export default function AssemblerPanel() {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   /** Error message from a failed Open/Save/Save As…; null when no error dialog is open. */
   const [fileErrorDialog, setFileErrorDialog] = useState<string | null>(null);
+
+  // Keeps the dock tab's title in sync with the currently open file, so the
+  // path is visible at a glance without needing to hover/inspect anything —
+  // just the filename (not the full directory), with a trailing "*" while
+  // there are unsaved changes, matching common editor-tab conventions.
+  useEffect(() => {
+    if (!dockPanelApi) return;
+    const name = currentPath ? basename(currentPath) : null;
+    const dirtyMark = isDirty ? "*" : "";
+    dockPanelApi.setTitle(name ? `${BASE_TITLE} — ${name}${dirtyMark}` : `${BASE_TITLE}${dirtyMark}`);
+  }, [dockPanelApi, currentPath, isDirty]);
 
   // On-demand only, never live-as-you-type — assembling has a real side
   // effect (writing memory via `Bus::patch`), so it must never fire
