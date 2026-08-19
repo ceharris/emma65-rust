@@ -85,6 +85,20 @@ pub fn assemble_and_load(source: String, cpu_state: State<CpuState>, app: AppHan
     Ok(report)
 }
 
+/// Reads a source file's full contents as UTF-8 text, for the Assembler
+/// panel's Open… command.
+#[tauri::command]
+pub async fn read_source_file(path: String) -> Result<String, String> {
+    tokio::fs::read_to_string(&path).await.map_err(|e| e.to_string())
+}
+
+/// Writes `contents` verbatim to the file at `path`, creating or overwriting
+/// it, for the Assembler panel's Save/Save As… commands.
+#[tauri::command]
+pub async fn write_source_file(path: String, contents: String) -> Result<(), String> {
+    tokio::fs::write(&path, contents).await.map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +184,24 @@ mod tests {
         let mut second = [0u8; 3];
         cpu.bus().peek_range(0x9000, &mut second).unwrap();
         assert_eq!(second, [0x4C, 0x00, 0x80]);
+    }
+
+    #[tokio::test]
+    async fn write_source_file_then_read_source_file_round_trips_contents() {
+        let dir = std::env::temp_dir().join(format!("emma65-assembler-test-{}", std::process::id()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("program.s").to_string_lossy().into_owned();
+
+        write_source_file(path.clone(), ".org $8000\nSTART:\nNOP\n".to_string()).await.unwrap();
+        let contents = read_source_file(path).await.unwrap();
+
+        assert_eq!(contents, ".org $8000\nSTART:\nNOP\n");
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn read_source_file_missing_path_reports_error() {
+        let result = read_source_file("/nonexistent/emma65-assembler-test/program.s".to_string()).await;
+        assert!(result.is_err());
     }
 }

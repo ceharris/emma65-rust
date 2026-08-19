@@ -56,5 +56,8 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   // detached-window host (`terminal-detached.tsx`) renders `TerminalPanel`
   // with no such prop, which is how it tells docked and detached apart.
   terminal: ({ api }) => <TerminalPanel dockPanelApi={api} />,
-  assembler: () => <AssemblerPanel />,
+  // Threads the dockview panel API down so the tab title can reflect the
+  // currently open source file (issue #474 debugger integration, Unit 4
+  // follow-up) — same pattern as Terminal's dockPanelApi above.
+  assembler: ({ api }) => <AssemblerPanel dockPanelApi={api} />,
 };
