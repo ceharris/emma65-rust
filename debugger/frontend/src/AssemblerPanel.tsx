@@ -3,7 +3,7 @@ import { EditorState, Extension, Text } from "@codemirror/state";
 import { EditorView, KeyBinding, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
-import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
+import { Diagnostic, forEachDiagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { invoke } from "@tauri-apps/api/core";
 import { DockviewPanelApi } from "dockview-react";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
@@ -100,7 +100,36 @@ const assemblerEditorTheme = EditorView.theme({
     color: "var(--color-error) !important",
     display: "inline-block",
   },
+  // The lint-hover popover (`.cm-tooltip`, from `@codemirror/view`'s own
+  // base theme) is stuck on its `&light` variant for the same reason as the
+  // gutter marker above — `&light .cm-tooltip` hardcodes a light-gray
+  // background (`#f5f5f5`) with no explicit text color, so in dark mode the
+  // popover renders this app's light `--color-fg` text against that
+  // near-white background: unreadable. The popover's container div is
+  // appended to `document.body` (outside `.cm-editor`) but still carries
+  // this theme's generated class (`view.themeClasses`), so a plain
+  // `EditorView.theme()` selector still reaches it the same way it reaches
+  // in-editor elements like the gutter.
+  ".cm-tooltip": {
+    backgroundColor: "var(--color-bg-alt) !important",
+    color: "var(--color-fg) !important",
+    border: "1px solid var(--color-border) !important",
+  },
 });
+
+/**
+ * A CodeMirror `Diagnostic` carrying the source line number of the
+ * `AssembleDiagnostic` it was built from, so a diagnostic cleared from the
+ * editor (see the update listener below) can also be matched back to and
+ * removed from the plain-text diagnostic list rendered below the editor.
+ * `@codemirror/lint` stores whatever object it's given verbatim in its
+ * decoration spec (`LintState.init`, in the package's own source) — it
+ * doesn't clone or strip extra properties — so this survives untouched
+ * through `setDiagnostics()`/`forEachDiagnostic()`.
+ */
+interface EditorDiagnostic extends Diagnostic {
+  reportLine: number;
+}
 
 /**
  * Converts a backend `AssembleDiagnostic` to a CodeMirror `Diagnostic`
@@ -116,9 +145,9 @@ const assemblerEditorTheme = EditorView.theme({
  * statement has a problem," which is what the diagnostic actually means,
  * without needing to pinpoint a sub-token.
  */
-function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): Diagnostic {
+function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): EditorDiagnostic {
   const lineObj = doc.line(Math.min(Math.max(d.line, 1), doc.lines));
-  return { from: lineObj.from, to: lineObj.to, severity: "error", message: d.message };
+  return { from: lineObj.from, to: lineObj.to, severity: "error", message: d.message, reportLine: d.line };
 }
 
 interface AssemblerPanelProps {
@@ -429,7 +458,43 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
         // calls `setIsDirty(false)` itself right after dispatching, and
         // since both calls land in the same React batch, that later call
         // wins over this one.
-        if (update.docChanged) setIsDirty(true);
+        if (update.docChanged) {
+          setIsDirty(true);
+          // `@codemirror/lint`'s diagnostics state field just maps marker
+          // positions through each change (`lintState.update`, in the
+          // package's own source) — it never drops a marker on its own,
+          // since we push diagnostics manually via `setDiagnostics()`
+          // rather than using the `linter()` extension's automatic
+          // re-lint-on-change. We don't re-assemble as the user types
+          // (assembling has a real bus-write side effect), but a marker
+          // anchored to a line whose text has since changed is actively
+          // misleading, so drop just the diagnostics whose range the edit
+          // touched, leaving markers on untouched lines alone.
+          const survivors: EditorDiagnostic[] = [];
+          const clearedLines = new Set<number>();
+          forEachDiagnostic(update.startState, (diagnostic, from, to) => {
+            const { reportLine } = diagnostic as EditorDiagnostic;
+            if (update.changes.touchesRange(from, to)) {
+              clearedLines.add(reportLine);
+              return;
+            }
+            survivors.push({ ...(diagnostic as EditorDiagnostic), from: update.changes.mapPos(from), to: update.changes.mapPos(to) });
+          });
+          if (clearedLines.size > 0) {
+            update.view.dispatch(setDiagnostics(update.state, survivors));
+            // Keep the plain-text diagnostic list below the editor (driven
+            // by `report`, not CodeMirror's own diagnostics state) in sync
+            // with the markers just cleared above — otherwise a message
+            // stays listed there for a line whose in-editor marker already
+            // disappeared, which reads as the fix not having taken effect.
+            setReport((prev) => {
+              if (!prev) return prev;
+              const diagnostics = prev.diagnostics.filter((d) => !clearedLines.has(d.line));
+              if (diagnostics.length === prev.diagnostics.length) return prev;
+              return diagnostics.length === 0 ? null : { ...prev, diagnostics };
+            });
+          }
+        }
       }),
     ];
 
