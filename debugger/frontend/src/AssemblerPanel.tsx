@@ -10,7 +10,6 @@ import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plug
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditMenuOverride } from "./EditMenuContext";
 import { useExecutionContext } from "./ExecutionContext";
-import { usePanelHeaderAction } from "./layout/panelHeaderActions";
 import "./styles/assembler.scss";
 import "./styles/modal.scss";
 
@@ -154,18 +153,14 @@ export default function AssemblerPanel() {
     }
   }, []);
 
-  usePanelHeaderAction("assembler", {
-    title: "Assemble & Load",
-    onClick: runAssemble,
-    disabled: execState !== "stopped",
-    disabledTitle: "Stop the CPU to assemble",
-    icon: "output",
-  });
-
-  // Keeps the native Assembler menu's Assemble & Load item in lockstep with
-  // the header button's own `disabled={execState !== "stopped"}` condition —
-  // New/Open…/Save/Save As… aren't CPU-gated, so only this one item needs
-  // syncing (mirrors `set_memory_menu_enabled`'s call site in `MemoryPanel.tsx`).
+  // Keeps the native Assembler menu's Assemble… item in lockstep with the
+  // CPU-must-be-stopped condition Assemble & Load always required — the
+  // panel's own header button that used to carry this `disabled` state was
+  // removed in favor of the native menu (mirroring the Memory panel's
+  // issue #411 precedent), so this is now the only place that condition is
+  // enforced client-side. New/Open…/Save/Save As… aren't CPU-gated, so only
+  // this one item needs syncing (mirrors `set_memory_menu_enabled`'s call
+  // site in `MemoryPanel.tsx`).
   const lastAssemblerMenuEnabledRef = useRef<boolean | null>(null);
   useEffect(() => {
     const enabled = execState === "stopped";
