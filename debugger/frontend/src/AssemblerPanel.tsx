@@ -118,6 +118,20 @@ const assemblerEditorTheme = EditorView.theme({
 });
 
 /**
+ * A CodeMirror `Diagnostic` carrying the source line number of the
+ * `AssembleDiagnostic` it was built from, so a diagnostic cleared from the
+ * editor (see the update listener below) can also be matched back to and
+ * removed from the plain-text diagnostic list rendered below the editor.
+ * `@codemirror/lint` stores whatever object it's given verbatim in its
+ * decoration spec (`LintState.init`, in the package's own source) — it
+ * doesn't clone or strip extra properties — so this survives untouched
+ * through `setDiagnostics()`/`forEachDiagnostic()`.
+ */
+interface EditorDiagnostic extends Diagnostic {
+  reportLine: number;
+}
+
+/**
  * Converts a backend `AssembleDiagnostic` to a CodeMirror `Diagnostic`
  * covering the diagnostic's entire source line, not just its reported
  * column. Two reasons: (1) `AssembleDiagnostic.column` is tab-expanded by
@@ -131,9 +145,9 @@ const assemblerEditorTheme = EditorView.theme({
  * statement has a problem," which is what the diagnostic actually means,
  * without needing to pinpoint a sub-token.
  */
-function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): Diagnostic {
+function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): EditorDiagnostic {
   const lineObj = doc.line(Math.min(Math.max(d.line, 1), doc.lines));
-  return { from: lineObj.from, to: lineObj.to, severity: "error", message: d.message };
+  return { from: lineObj.from, to: lineObj.to, severity: "error", message: d.message, reportLine: d.line };
 }
 
 interface AssemblerPanelProps {
@@ -456,16 +470,30 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
           // anchored to a line whose text has since changed is actively
           // misleading, so drop just the diagnostics whose range the edit
           // touched, leaving markers on untouched lines alone.
-          const survivors: Diagnostic[] = [];
-          let anyCleared = false;
+          const survivors: EditorDiagnostic[] = [];
+          const clearedLines = new Set<number>();
           forEachDiagnostic(update.startState, (diagnostic, from, to) => {
+            const { reportLine } = diagnostic as EditorDiagnostic;
             if (update.changes.touchesRange(from, to)) {
-              anyCleared = true;
+              clearedLines.add(reportLine);
               return;
             }
-            survivors.push({ ...diagnostic, from: update.changes.mapPos(from), to: update.changes.mapPos(to) });
+            survivors.push({ ...(diagnostic as EditorDiagnostic), from: update.changes.mapPos(from), to: update.changes.mapPos(to) });
           });
-          if (anyCleared) update.view.dispatch(setDiagnostics(update.state, survivors));
+          if (clearedLines.size > 0) {
+            update.view.dispatch(setDiagnostics(update.state, survivors));
+            // Keep the plain-text diagnostic list below the editor (driven
+            // by `report`, not CodeMirror's own diagnostics state) in sync
+            // with the markers just cleared above — otherwise a message
+            // stays listed there for a line whose in-editor marker already
+            // disappeared, which reads as the fix not having taken effect.
+            setReport((prev) => {
+              if (!prev) return prev;
+              const diagnostics = prev.diagnostics.filter((d) => !clearedLines.has(d.line));
+              if (diagnostics.length === prev.diagnostics.length) return prev;
+              return diagnostics.length === 0 ? null : { ...prev, diagnostics };
+            });
+          }
         }
       }),
     ];
