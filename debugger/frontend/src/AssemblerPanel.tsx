@@ -123,6 +123,20 @@ function toCodeMirrorDiagnostic(doc: Text, d: AssembleDiagnostic): Diagnostic {
 export default function AssemblerPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  /**
+   * Guards `handleOpen`/`handleSaveAs` against showing the native file
+   * chooser twice for a single Assembler > Open…/Save/Save As… menu click.
+   * Empirically (issue #474 debugger integration, post-Unit-4 fix): only the
+   * two actions that call into `@tauri-apps/plugin-dialog`'s `open()`/
+   * `save()` double-fire when the Assembler panel is already docked — New
+   * and Assemble…, which never call that plugin, never do. This points at a
+   * GTK/menu-event reentrancy triggered by opening a native modal dialog
+   * synchronously in response to a menu-click-sourced event, not a bug in
+   * this component's own listener registration — but regardless of which
+   * layer redelivers the triggering event, a synchronous ref set before the
+   * first `await` reliably blocks a second dialog from ever appearing.
+   */
+  const nativeDialogInFlightRef = useRef(false);
   const editMenu = useEditMenuOverride();
   const { execState } = useExecutionContext();
   const [report, setReport] = useState<AssembleReport | null>(null);
@@ -206,19 +220,25 @@ export default function AssemblerPanel() {
 
   /** Opens the native file chooser, reads the selected file, and loads it into the buffer. */
   const handleOpen = useCallback(async () => {
-    const defaultPath = await invoke<string | null>("get_last_file_dialog_dir");
-    const selected = await openFileDialog({
-      multiple: false,
-      filters: [{ name: "Assembly Source", extensions: ["s", "asm", "a65"] }],
-      defaultPath: defaultPath ?? undefined,
-    });
-    if (typeof selected !== "string") return;
+    if (nativeDialogInFlightRef.current) return;
+    nativeDialogInFlightRef.current = true;
     try {
-      const contents = await invoke<string>("read_source_file", { path: selected });
-      loadDocument(contents, selected);
-      invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
-    } catch (e) {
-      setFileErrorDialog(String(e));
+      const defaultPath = await invoke<string | null>("get_last_file_dialog_dir");
+      const selected = await openFileDialog({
+        multiple: false,
+        filters: [{ name: "Assembly Source", extensions: ["s", "asm", "a65"] }],
+        defaultPath: defaultPath ?? undefined,
+      });
+      if (typeof selected !== "string") return;
+      try {
+        const contents = await invoke<string>("read_source_file", { path: selected });
+        loadDocument(contents, selected);
+        invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
+      } catch (e) {
+        setFileErrorDialog(String(e));
+      }
+    } finally {
+      nativeDialogInFlightRef.current = false;
     }
   }, [loadDocument]);
 
@@ -226,19 +246,25 @@ export default function AssemblerPanel() {
   const handleSaveAs = useCallback(async () => {
     const view = viewRef.current;
     if (!view) return;
-    const defaultPath = currentPath ?? (await invoke<string | null>("get_last_file_dialog_dir")) ?? undefined;
-    const selected = await saveFileDialog({
-      filters: [{ name: "Assembly Source", extensions: ["s", "asm", "a65"] }],
-      defaultPath,
-    });
-    if (typeof selected !== "string") return;
+    if (nativeDialogInFlightRef.current) return;
+    nativeDialogInFlightRef.current = true;
     try {
-      await invoke("write_source_file", { path: selected, contents: view.state.doc.toString() });
-      setCurrentPath(selected);
-      setIsDirty(false);
-      invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
-    } catch (e) {
-      setFileErrorDialog(String(e));
+      const defaultPath = currentPath ?? (await invoke<string | null>("get_last_file_dialog_dir")) ?? undefined;
+      const selected = await saveFileDialog({
+        filters: [{ name: "Assembly Source", extensions: ["s", "asm", "a65"] }],
+        defaultPath,
+      });
+      if (typeof selected !== "string") return;
+      try {
+        await invoke("write_source_file", { path: selected, contents: view.state.doc.toString() });
+        setCurrentPath(selected);
+        setIsDirty(false);
+        invoke("set_last_file_dialog_dir", { path: selected }).catch(() => {});
+      } catch (e) {
+        setFileErrorDialog(String(e));
+      }
+    } finally {
+      nativeDialogInFlightRef.current = false;
     }
   }, [currentPath]);
 
