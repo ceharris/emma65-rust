@@ -22,6 +22,11 @@ function basename(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
 }
 
+/** 4-digit uppercase hex, no `$`/`0x` prefix — matches `MemoryPanel.tsx`'s `fmtAddr`/`DisassemblyPanel.tsx`'s `formatAddr`. */
+function fmtAddr(addr: number): string {
+  return addr.toString(16).toUpperCase().padStart(4, "0");
+}
+
 interface AssembleDiagnostic {
   line: number;
   column: number;
@@ -193,6 +198,17 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   /** Error message from a failed Open/Save/Save As…; null when no error dialog is open. */
   const [fileErrorDialog, setFileErrorDialog] = useState<string | null>(null);
+  /**
+   * A successful `assemble_preview` result awaiting the user's explicit
+   * confirmation before anything is written to memory; null when the
+   * confirmation dialog is closed. `source` is the exact buffer text the
+   * preview was computed from — `confirmAssemble` re-sends this same string
+   * to `assemble_and_load` rather than re-reading the (possibly since-edited)
+   * live buffer, so what the dialog describes is exactly what gets written.
+   */
+  const [pendingAssemble, setPendingAssemble] = useState<{ source: string; segments: SegmentSummary[]; symbolCount: number } | null>(
+    null,
+  );
 
   // Keeps the dock tab's title in sync with the currently open file, so the
   // path is visible at a glance without needing to hover/inspect anything —
@@ -205,23 +221,49 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
     dockPanelApi.setTitle(name ? `${BASE_TITLE} — ${name}${dirtyMark}` : `${BASE_TITLE}${dirtyMark}`);
   }, [dockPanelApi, currentPath, isDirty]);
 
-  // On-demand only, never live-as-you-type — assembling has a real side
-  // effect (writing memory via `Bus::patch`), so it must never fire
-  // implicitly on a debounce timer the way pure-syntax linting normally
-  // does.
+  // On-demand only, never live-as-you-type — assembling has a real eventual
+  // side effect (writing memory via `Bus::patch`), so it must never fire
+  // implicitly on a debounce timer the way pure-syntax linting normally does.
+  // This step itself only *previews* the result (`assemble_preview` touches
+  // no memory) — a successful assembly opens the confirmation dialog below
+  // rather than writing immediately; a failed one applies diagnostics exactly
+  // as before and skips the dialog entirely, since there is nothing to
+  // confirm.
   const runAssemble = useCallback(async () => {
     const view = viewRef.current;
     if (!view) return;
     const source = view.state.doc.toString();
     try {
-      const result = await invoke<AssembleReport>("assemble_and_load", { source });
+      const result = await invoke<AssembleReport>("assemble_preview", { source });
+      if (!result.success) {
+        setReport(result);
+        const diagnostics = result.diagnostics.map((d) => toCodeMirrorDiagnostic(view.state.doc, d));
+        view.dispatch(setDiagnostics(view.state, diagnostics));
+        return;
+      }
+      setPendingAssemble({ source, segments: result.segments, symbolCount: result.symbol_count });
+    } catch (e) {
+      console.error("assemble_preview failed:", e);
+    }
+  }, []);
+
+  const cancelAssemble = useCallback(() => setPendingAssemble(null), []);
+
+  /** Writes the previewed assembly to memory — the only path that actually calls `assemble_and_load`. */
+  const confirmAssemble = useCallback(async () => {
+    const pending = pendingAssemble;
+    setPendingAssemble(null);
+    const view = viewRef.current;
+    if (!pending || !view) return;
+    try {
+      const result = await invoke<AssembleReport>("assemble_and_load", { source: pending.source });
       setReport(result);
       const diagnostics = result.diagnostics.map((d) => toCodeMirrorDiagnostic(view.state.doc, d));
       view.dispatch(setDiagnostics(view.state, diagnostics));
     } catch (e) {
       console.error("assemble_and_load failed:", e);
     }
-  }, []);
+  }, [pendingAssemble]);
 
   // Keeps the native Assembler menu's Assemble… item in lockstep with the
   // CPU-must-be-stopped condition Assemble & Load always required — the
@@ -534,6 +576,16 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
     return () => document.removeEventListener("keydown", handler);
   }, [confirmDiscard]);
 
+  /** Dismiss the Assemble confirmation (without writing to memory) on Escape while it is open. */
+  useEffect(() => {
+    if (!pendingAssemble) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPendingAssemble(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [pendingAssemble]);
+
   /** Dismiss the file-error dialog on Escape while it is open. */
   useEffect(() => {
     if (!fileErrorDialog) return;
@@ -562,6 +614,33 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
             ))}
           </div>
         )
+      )}
+
+      {pendingAssemble && (
+        <div className="modal-backdrop" onClick={cancelAssemble}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">Confirm Assemble</div>
+            <div className="modal-message">
+              This will write the following segment{pendingAssemble.segments.length === 1 ? "" : "s"} to memory,
+              overwriting any existing contents:
+            </div>
+            <ul className="assembler-confirm-segments">
+              {pendingAssemble.segments.map((s, i) => (
+                <li key={i}>
+                  {fmtAddr(s.origin)}: {s.length} byte{s.length === 1 ? "" : "s"}
+                </li>
+              ))}
+            </ul>
+            <div className="modal-buttons">
+              <button className="modal-btn-action modal-btn-cancel" onClick={cancelAssemble}>
+                Cancel
+              </button>
+              <button className="modal-btn-action modal-btn-ok" onClick={confirmAssemble}>
+                Write to Memory
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {confirmDiscard && (

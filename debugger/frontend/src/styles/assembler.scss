@@ -27,3 +27,19 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+// Per-segment address/length list in the Assemble confirmation dialog
+// (`modal.scss`'s shared `.modal-*` classes provide the dialog chrome).
+.assembler-confirm-segments {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  color: var(--color-fg);
+  max-height: 200px;
+  overflow-y: auto;
+}

@@ -1,5 +1,11 @@
-//! Assembler panel: `assemble_and_load` assembles source text and writes the
-//! result directly into emulator memory via `Bus::patch`.
+//! Assembler panel: `assemble_preview` assembles source text and reports the
+//! resulting segments without touching memory, for the Assemble confirmation
+//! dialog; `assemble_and_load` (invoked only once the user confirms) assembles
+//! the same source again and writes the result into emulator memory via
+//! `Bus::patch`. Re-assembling on confirm rather than carrying the first
+//! assemble's result across the Tauri IPC boundary is deliberate — `assemble`
+//! is a pure, deterministic function of the source text, so a second call is
+//! cheap and avoids needing `AssembledProgram` to be `Serialize`.
 
 use tauri::{AppHandle, Emitter, State};
 
@@ -29,6 +35,26 @@ pub struct AssembleReport {
     pub symbol_count: usize,
 }
 
+fn diagnostics_from_errors(errors: &[assembler::Error]) -> Vec<AssembleDiagnostic> {
+    errors.iter().map(|e| AssembleDiagnostic { line: e.line(), column: e.column(), message: e.message().to_string() }).collect()
+}
+
+/// Assembles `source` and reports the resulting segments/diagnostics without
+/// writing anything to memory — used to populate the Assemble confirmation
+/// dialog before the user decides whether to commit the write.
+fn assemble_preview_report(source: &str) -> AssembleReport {
+    match assembler::assemble(source) {
+        Ok(program) => {
+            let segments =
+                program.segments.iter().map(|s| SegmentSummary { origin: s.origin, length: s.bytes.len() }).collect();
+            AssembleReport { success: true, diagnostics: Vec::new(), segments, symbol_count: program.symbols.len() }
+        }
+        Err(errors) => {
+            AssembleReport { success: false, diagnostics: diagnostics_from_errors(&errors), segments: Vec::new(), symbol_count: 0 }
+        }
+    }
+}
+
 /// Assembles `source` and, on success, patches the resulting segments into
 /// `cpu`'s bus and merges the resulting symbols into its symbol table.
 ///
@@ -38,11 +64,7 @@ fn assemble_and_patch(source: &str, cpu: &mut Cpu) -> AssembleReport {
     let program = match assembler::assemble(source) {
         Ok(program) => program,
         Err(errors) => {
-            let diagnostics = errors
-                .iter()
-                .map(|e| AssembleDiagnostic { line: e.line(), column: e.column(), message: e.message().to_string() })
-                .collect();
-            return AssembleReport { success: false, diagnostics, segments: Vec::new(), symbol_count: 0 };
+            return AssembleReport { success: false, diagnostics: diagnostics_from_errors(&errors), segments: Vec::new(), symbol_count: 0 };
         }
     };
 
@@ -62,6 +84,16 @@ fn assemble_and_patch(source: &str, cpu: &mut Cpu) -> AssembleReport {
     AssembleReport { success: true, diagnostics: Vec::new(), segments, symbol_count: program.symbols.len() }
 }
 
+/// Assembles `source` and reports the resulting segments/diagnostics without
+/// writing anything to memory — the Assembler panel calls this first, to
+/// populate its confirmation dialog, before ever calling `assemble_and_load`.
+/// Doesn't touch the CPU at all (assembling is pure), so unlike
+/// `assemble_and_load` it isn't gated on the CPU being halted.
+#[tauri::command]
+pub fn assemble_preview(source: String) -> AssembleReport {
+    assemble_preview_report(&source)
+}
+
 /// Assembles `source` and patches the result into the CPU's bus, merging the
 /// resulting symbols into the bus symbol table without clearing existing
 /// ones (so ROM-loaded labels survive an assemble).
@@ -72,6 +104,12 @@ fn assemble_and_patch(source: &str, cpu: &mut Cpu) -> AssembleReport {
 /// infrastructure failure (CPU not ready). Emits `"debugger-halted"` and
 /// `"memory-modified"` on return regardless of `success`, to refresh
 /// dependent panels (a no-op refresh on failure is harmless).
+///
+/// The Assembler panel only calls this after the user has confirmed the
+/// segment preview from `assemble_preview` — it re-assembles `source` rather
+/// than reusing that preview's result, since `assemble` is pure/deterministic
+/// and a second call is cheaper than carrying an `AssembledProgram` across
+/// the IPC boundary.
 #[tauri::command]
 pub fn assemble_and_load(source: String, cpu_state: State<CpuState>, app: AppHandle) -> Result<AssembleReport, String> {
     let (report, pc) = {
@@ -116,6 +154,28 @@ mod tests {
             .unwrap();
         cpu.reset().unwrap();
         cpu
+    }
+
+    #[test]
+    fn assemble_preview_report_good_source_reports_segments_without_a_cpu() {
+        let report = assemble_preview_report(".org $8000\nstart:\nLDA #$01\nSTA $10\n");
+
+        assert!(report.success);
+        assert!(report.diagnostics.is_empty());
+        assert_eq!(report.segments, vec![SegmentSummary { origin: 0x8000, length: 4 }]);
+        assert_eq!(report.symbol_count, 1);
+    }
+
+    #[test]
+    fn assemble_preview_report_bad_source_reports_diagnostics() {
+        let report = assemble_preview_report(".org $8000\nLDA missing\n");
+
+        assert!(!report.success);
+        assert!(report.segments.is_empty());
+        assert_eq!(report.symbol_count, 0);
+        assert_eq!(report.diagnostics.len(), 1);
+        assert_eq!(report.diagnostics[0].line, 2);
+        assert!(report.diagnostics[0].message.contains("undefined symbol"));
     }
 
     #[test]
