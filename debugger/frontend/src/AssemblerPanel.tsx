@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { EditorState, Extension, Text } from "@codemirror/state";
-import { EditorView, KeyBinding, keymap, lineNumbers } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentLess, insertTab } from "@codemirror/commands";
-import { indentUnit } from "@codemirror/language";
-import { Diagnostic, forEachDiagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
-import { invoke } from "@tauri-apps/api/core";
-import { DockviewPanelApi } from "dockview-react";
-import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { useEditMenuOverride } from "./EditMenuContext";
-import { useExecutionContext } from "./ExecutionContext";
-import { registerAssemblerPanel } from "./layout/assemblerMenuActions";
+import {useCallback, useEffect, useRef, useState} from "react";
+import {EditorState, Extension, Text} from "@codemirror/state";
+import {EditorView, KeyBinding, keymap, lineNumbers} from "@codemirror/view";
+import {defaultKeymap, history, historyKeymap, indentLess, insertTab} from "@codemirror/commands";
+import {indentUnit} from "@codemirror/language";
+import {Diagnostic, forEachDiagnostic, lintGutter, setDiagnostics} from "@codemirror/lint";
+import {invoke} from "@tauri-apps/api/core";
+import {DockviewPanelApi} from "dockview-react";
+import {open as openFileDialog, save as saveFileDialog} from "@tauri-apps/plugin-dialog";
+import {readText, writeText} from "@tauri-apps/plugin-clipboard-manager";
+import {useEditMenuOverride} from "./EditMenuContext";
+import {useExecutionContext} from "./ExecutionContext";
+import {registerAssemblerPanel} from "./layout/assemblerMenuActions";
 import "./styles/assembler.scss";
 import "./styles/modal.scss";
 
@@ -619,7 +619,7 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
       {pendingAssemble && (
         <div className="modal-backdrop" onClick={cancelAssemble}>
           <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-title">Confirm Assemble</div>
+            <div className="modal-title">Assemble to Memory</div>
             <div className="modal-message">
               This will write the following segment{pendingAssemble.segments.length === 1 ? "" : "s"} to memory,
               overwriting any existing contents:
@@ -636,7 +636,7 @@ export default function AssemblerPanel({ dockPanelApi }: AssemblerPanelProps = {
                 Cancel
               </button>
               <button className="modal-btn-action modal-btn-ok" onClick={confirmAssemble}>
-                Write to Memory
+                Write
               </button>
             </div>
           </div>
