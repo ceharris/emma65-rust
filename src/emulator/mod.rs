@@ -14,7 +14,7 @@ pub use cpu::trace::{BinaryTraceReader, BinaryTraceWriter, ChannelTraceCallback,
 pub use logging::{LogCategory, LogLevel, LogRecord, LogSender, spawn_log_collector, spawn_log_writer};
 pub(crate) use logging::log_msg;
 pub use cpu::vector::{IdentityVectorResolver, VectorResolver};
-pub use bus::{AddressRange, Bus, BusConfig, BusOp, InterruptController, IrqSource, RomWritePolicy, SymbolTable, UnmappedPolicy};
+pub use bus::{AddressRange, Bus, BusConfig, BusOp, InterruptController, IrqSource, RomWritePolicy, SymbolSource, SymbolTable, UnmappedPolicy};
 pub use config::{BuildError, Config, CpuVariantSpec, DeviceModule, DeviceModuleError, DeviceRegistry, DeviceSpec, ExpandedPathBuf, InstantiationContext, RamModule, RomModule, TransportSlot, TransportSpec, TransportSpecFormat};
 pub use cpu::opcodes::{AddressingMode, DecodedOp, Mnemonic};
 pub use cpu::status::StatusRegister;
