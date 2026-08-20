@@ -10,7 +10,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use emma65::assembler;
-use emma65::emulator::Cpu;
+use emma65::emulator::{Cpu, SymbolSource};
 
 use crate::CpuState;
 
@@ -56,7 +56,10 @@ fn assemble_preview_report(source: &str) -> AssembleReport {
 }
 
 /// Assembles `source` and, on success, patches the resulting segments into
-/// `cpu`'s bus and merges the resulting symbols into its symbol table.
+/// `cpu`'s bus and replaces the `Assembler`-sourced entries in its symbol
+/// table with the newly assembled symbols, leaving `File`/`User`-sourced
+/// entries untouched. This is what prevents a re-assemble after moving a
+/// label from leaving a stale, ghost entry for that name at its old address.
 ///
 /// On failure, makes zero bus writes, even when a later segment in a
 /// multi-`.org` source would have succeeded.
@@ -79,7 +82,9 @@ fn assemble_and_patch(source: &str, cpu: &mut Cpu) -> AssembleReport {
             SegmentSummary { origin: segment.origin, length: segment.bytes.len() }
         })
         .collect();
-    bus.symbol_table_mut().insert_from(&program.symbols);
+    let symbol_table = bus.symbol_table_mut();
+    symbol_table.clear_source(&SymbolSource::Assembler);
+    symbol_table.insert_from(&program.symbols);
 
     AssembleReport { success: true, diagnostics: Vec::new(), segments, symbol_count: program.symbols.len() }
 }
@@ -94,9 +99,11 @@ pub fn assemble_preview(source: String) -> AssembleReport {
     assemble_preview_report(&source)
 }
 
-/// Assembles `source` and patches the result into the CPU's bus, merging the
-/// resulting symbols into the bus symbol table without clearing existing
-/// ones (so ROM-loaded labels survive an assemble).
+/// Assembles `source` and patches the result into the CPU's bus, replacing
+/// the bus symbol table's `Assembler`-sourced entries with the newly
+/// assembled symbols (so ROM-loaded labels and any user-defined ones survive
+/// an assemble, and a re-assemble after moving a label doesn't leave a ghost
+/// entry behind).
 ///
 /// Only callable while the CPU is halted; returns an error if the CPU is
 /// running. A bad assembly source is *not* an `Err` here — it's reported as
@@ -224,6 +231,27 @@ mod tests {
         assert!(report.success);
         assert_eq!(cpu.bus().symbol_table().address_for("existing"), Some(0x1234));
         assert_eq!(cpu.bus().symbol_table().address_for("start"), Some(0x8000));
+    }
+
+    #[test]
+    fn assemble_and_patch_reassemble_after_label_move_leaves_no_ghost() {
+        let mut cpu = make_cpu();
+        let file_source = SymbolSource::File(std::path::PathBuf::from("/rom/labels.lbl"));
+        cpu.bus_mut().symbol_table_mut().insert_tagged("ROM_ENTRY".to_string(), 0xF000, file_source.clone());
+
+        let first = assemble_and_patch(".org $8000\nSTART:\nNOP\n", &mut cpu);
+        assert!(first.success);
+        assert_eq!(cpu.bus().symbol_table().address_for("START"), Some(0x8000));
+
+        let second = assemble_and_patch(".org $9000\nSTART:\nNOP\n", &mut cpu);
+        assert!(second.success);
+
+        // The label moved; its old address must no longer report it.
+        assert!(!cpu.bus().symbol_table().names_for(0x8000).any(|n| n == "START"));
+        assert_eq!(cpu.bus().symbol_table().address_for("START"), Some(0x9000));
+
+        // A pre-existing File-sourced symbol survives both assembles untouched.
+        assert_eq!(cpu.bus().symbol_table().address_for("ROM_ENTRY"), Some(0xF000));
     }
 
     #[test]

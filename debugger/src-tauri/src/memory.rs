@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 use tauri::{AppHandle, Emitter, State};
 
+use emma65::emulator::Cpu;
+
 use crate::disassembly::LiveSnapshotRx;
 use crate::CpuState;
 
@@ -104,12 +106,46 @@ pub fn write_memory(
     Ok(())
 }
 
+/// Sync core of [`load_memory`], factored out so it can be exercised directly in tests
+/// without going through the `AppHandle`/Tauri command plumbing (and without holding
+/// `cpu_state`'s `std::sync::MutexGuard` across the command's `.await` points): writes
+/// already-loaded `data` into `cpu`'s bus via `Bus::patch` at `bias`, in `load_format`. If
+/// `symbols` is given, merges it into the bus symbol table, first replacing any symbols each
+/// of its `file_sources()` previously contributed (so reloading the same labels file after
+/// an edit leaves no stale entries) while leaving symbols from other sources — other labels
+/// files, the assembler, or user-defined symbols — untouched. Returns the CPU's program
+/// counter on success.
+fn apply_loaded_memory(
+    cpu: &mut Cpu,
+    data: &[u8],
+    load_format: emma65::emulator::config::loader::LoadFormat,
+    bias: u16,
+    symbols: Option<&emma65::emulator::SymbolTable>,
+) -> Result<u16, String> {
+    use emma65::emulator::bus::BusLoadTarget;
+    use emma65::emulator::config::loader::load_target;
+    use emma65::emulator::SymbolSource;
+
+    let pc = cpu.registers().pc;
+    let bus = cpu.bus_mut();
+    let mut target = BusLoadTarget::new(bus, bias as usize);
+    load_target(data, load_format, &mut target).map_err(|e| e.to_string())?;
+    if let Some(table) = symbols {
+        let bus_table = bus.symbol_table_mut();
+        for source_path in table.file_sources() {
+            bus_table.clear_source(&SymbolSource::File(source_path.to_path_buf()));
+        }
+        bus_table.insert_from(table);
+    }
+    Ok(pc)
+}
+
 /// Loads a file into emulator memory, bypassing ROM write protection.
 ///
 /// Reads the file at `path`, parses it according to `format` (`"image"`, `"intel_hex"`,
-/// or `"motorola_srec"`), and writes the result to the bus via `Bus::patch`.
-/// `bias` is the load address (meaningful only for the binary image format).
-/// If `symbol_path` is given, loads VICE labels from that file into the bus symbol table.
+/// or `"motorola_srec"`), and applies the result via [`apply_loaded_memory`]. `bias` is the
+/// load address (meaningful only for the binary image format). If `symbol_path` is given,
+/// loads VICE labels from that file first.
 #[tauri::command]
 pub async fn load_memory(
     path: String,
@@ -119,9 +155,8 @@ pub async fn load_memory(
     cpu_state: State<'_, CpuState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    use emma65::emulator::bus::BusLoadTarget;
     use emma65::emulator::bus::symbol::load_vice_labels;
-    use emma65::emulator::config::loader::{LoadFormat, load_target};
+    use emma65::emulator::config::loader::LoadFormat;
 
     let load_format = match format.as_str() {
         "image"         => LoadFormat::Image,
@@ -140,16 +175,7 @@ pub async fn load_memory(
     let pc = {
         let mut guard = cpu_state.0.lock().unwrap();
         let cpu = guard.as_mut().ok_or("CPU not ready")?;
-        let pc = cpu.registers().pc;
-        let bus = cpu.bus_mut();
-        let mut target = BusLoadTarget::new(bus, bias as usize);
-        load_target(&data, load_format, &mut target).map_err(|e| e.to_string())?;
-        if let Some(table) = &symbols {
-            let bus_table = bus.symbol_table_mut();
-            bus_table.clear();
-            bus_table.insert_from(table);
-        }
-        pc
+        apply_loaded_memory(cpu, &data, load_format, bias, symbols.as_ref())?
     };
 
     app.emit("debugger-halted", pc).ok();
@@ -359,5 +385,71 @@ mod tests {
 
         // MemoryViewAddr must still reflect the newer request, not the stale one.
         assert_eq!(app.state::<MemoryViewAddr>().0.load(Ordering::Relaxed), 0xC000);
+    }
+
+    async fn write_temp_file(name: &str, contents: &[u8]) -> String {
+        let dir = std::env::temp_dir().join(format!("emma65-memory-test-{}", std::process::id()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join(name);
+        tokio::fs::write(&path, contents).await.unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn apply_loaded_memory_reloading_same_labels_file_leaves_no_ghost() {
+        use emma65::emulator::bus::symbol::load_vice_labels;
+        use emma65::emulator::config::loader::LoadFormat;
+
+        let mut cpu = make_cpu();
+        let labels_path = write_temp_file("reload.lbl", b"al 008000 .START\n").await;
+
+        let first = load_vice_labels(&labels_path).await.unwrap();
+        apply_loaded_memory(&mut cpu, &[0xEA], LoadFormat::Image, 0x8000, Some(&first)).unwrap();
+        assert_eq!(cpu.bus().symbol_table().address_for("START"), Some(0x8000));
+
+        // Reload the same labels file after it moved the label to a new address.
+        tokio::fs::write(&labels_path, b"al 009000 .START\n").await.unwrap();
+        let second = load_vice_labels(&labels_path).await.unwrap();
+        apply_loaded_memory(&mut cpu, &[0xEA], LoadFormat::Image, 0x8000, Some(&second)).unwrap();
+
+        assert_eq!(cpu.bus().symbol_table().address_for("START"), Some(0x9000));
+        assert!(!cpu.bus().symbol_table().names_for(0x8000).any(|n| n == "START"));
+    }
+
+    #[tokio::test]
+    async fn apply_loaded_memory_two_different_labels_files_both_survive() {
+        use emma65::emulator::bus::symbol::load_vice_labels;
+        use emma65::emulator::config::loader::LoadFormat;
+
+        let mut cpu = make_cpu();
+        let labels_a_path = write_temp_file("a.lbl", b"al 001000 .FOO\n").await;
+        let labels_b_path = write_temp_file("b.lbl", b"al 002000 .BAR\n").await;
+        let labels_a = load_vice_labels(&labels_a_path).await.unwrap();
+        let labels_b = load_vice_labels(&labels_b_path).await.unwrap();
+
+        apply_loaded_memory(&mut cpu, &[0xEA], LoadFormat::Image, 0x8000, Some(&labels_a)).unwrap();
+        apply_loaded_memory(&mut cpu, &[0xEA], LoadFormat::Image, 0x8000, Some(&labels_b)).unwrap();
+
+        assert_eq!(cpu.bus().symbol_table().address_for("FOO"), Some(0x1000));
+        assert_eq!(cpu.bus().symbol_table().address_for("BAR"), Some(0x2000));
+    }
+
+    #[tokio::test]
+    async fn apply_loaded_memory_preserves_non_file_sourced_symbols() {
+        use emma65::emulator::bus::symbol::load_vice_labels;
+        use emma65::emulator::config::loader::LoadFormat;
+        use emma65::emulator::SymbolSource;
+
+        let mut cpu = make_cpu();
+        cpu.bus_mut().symbol_table_mut().insert_tagged("ASM_SYM".to_string(), 0x4000, SymbolSource::Assembler);
+        cpu.bus_mut().symbol_table_mut().insert("USER_SYM".to_string(), 0x5000);
+
+        let labels_path = write_temp_file("c.lbl", b"al 003000 .FROM_FILE\n").await;
+        let labels = load_vice_labels(&labels_path).await.unwrap();
+        apply_loaded_memory(&mut cpu, &[0xEA], LoadFormat::Image, 0x8000, Some(&labels)).unwrap();
+
+        assert_eq!(cpu.bus().symbol_table().address_for("ASM_SYM"), Some(0x4000));
+        assert_eq!(cpu.bus().symbol_table().address_for("USER_SYM"), Some(0x5000));
+        assert_eq!(cpu.bus().symbol_table().address_for("FROM_FILE"), Some(0x3000));
     }
 }
