@@ -595,6 +595,7 @@ pub fn run() {
             memory::load_memory,
             memory::save_memory,
             memory::fill_memory,
+            assembler::assemble_preview,
             assembler::assemble_and_load,
             assembler::read_source_file,
             assembler::write_source_file,
