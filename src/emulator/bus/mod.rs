@@ -9,7 +9,7 @@ use rand::RngExt;
 pub use interrupt::{DeviceInterruptState, InterruptController, IrqSource, MAX_IRQ_SOURCES};
 pub use loader::BusLoadTarget;
 pub use region::{AddressRange, BusOp};
-pub use symbol::SymbolTable;
+pub use symbol::{SymbolSource, SymbolTable};
 
 use crate::emulator::cpu::vector::VectorResolver;
 use crate::emulator::device::{DeviceId, IoDevice};

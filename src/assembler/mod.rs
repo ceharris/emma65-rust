@@ -17,7 +17,7 @@ mod scanner;
 mod statement;
 mod token;
 
-use crate::emulator::bus::SymbolTable;
+use crate::emulator::bus::{SymbolSource, SymbolTable};
 
 pub use driver::Segment;
 pub use error::Error;
@@ -37,7 +37,7 @@ pub fn assemble(source: &str) -> Result<AssembledProgram, Vec<Error>> {
     let output = driver::assemble(source)?;
     let mut symbols = SymbolTable::new();
     for (name, address) in output.symbols {
-        symbols.insert(name, address as u16);
+        symbols.insert_tagged(name, address as u16, SymbolSource::Assembler);
     }
     Ok(AssembledProgram { segments: output.segments, symbols })
 }
