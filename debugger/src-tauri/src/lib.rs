@@ -57,6 +57,10 @@ mod assembler;
 /// Stack panel: stack pointer and stack page snapshot.
 mod stack;
 
+/// Symbols panel: read-only snapshot of the live symbol table (name,
+/// address, source, aliases) for the sortable/filterable Symbols panel.
+mod symbols;
+
 /// Terminal panel: console byte-stream bridge.
 mod terminal;
 
@@ -278,6 +282,10 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
             breakpoints::install_breakpoints(&mut cpu, &loaded_breakpoints);
             breakpoints::emit_loaded_breakpoints(app, &loaded_breakpoints, &symbol_table);
             *app.state::<breakpoints::BreakpointState>().0.lock().unwrap() = loaded_breakpoints;
+
+            // The Symbols panel has no per-panel state of its own to reset —
+            // it just re-fetches `get_symbols` on this broadcast.
+            let _ = app.emit("symbols-changed", ());
 
             // Reset the rest of the per-panel state that assumes one
             // long-lived session, so nothing from the previous profile lingers.
@@ -600,6 +608,7 @@ pub fn run() {
             assembler::read_source_file,
             assembler::write_source_file,
             stack::get_stack,
+            symbols::get_symbols,
             breakpoints::toggle_breakpoint,
             breakpoints::set_breakpoint,
             breakpoints::remove_breakpoint,
