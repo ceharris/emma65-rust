@@ -145,7 +145,10 @@ fn apply_loaded_memory(
 /// Reads the file at `path`, parses it according to `format` (`"image"`, `"intel_hex"`,
 /// or `"motorola_srec"`), and applies the result via [`apply_loaded_memory`]. `bias` is the
 /// load address (meaningful only for the binary image format). If `symbol_path` is given,
-/// loads VICE labels from that file first.
+/// loads VICE labels from that file first. Emits `"symbols-changed"` unconditionally on
+/// success, alongside `"debugger-halted"` and `"memory-modified"` — harmless even when
+/// `symbol_path` wasn't given, matching how those two are emitted regardless of whether
+/// their respective state actually changed.
 #[tauri::command]
 pub async fn load_memory(
     path: String,
@@ -180,6 +183,7 @@ pub async fn load_memory(
 
     app.emit("debugger-halted", pc).ok();
     app.emit("memory-modified", ()).ok();
+    app.emit("symbols-changed", ()).ok();
     Ok(())
 }
 

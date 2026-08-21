@@ -108,9 +108,10 @@ pub fn assemble_preview(source: String) -> AssembleReport {
 /// Only callable while the CPU is halted; returns an error if the CPU is
 /// running. A bad assembly source is *not* an `Err` here — it's reported as
 /// `AssembleReport { success: false, .. }`; `Err` is reserved for
-/// infrastructure failure (CPU not ready). Emits `"debugger-halted"` and
-/// `"memory-modified"` on return regardless of `success`, to refresh
-/// dependent panels (a no-op refresh on failure is harmless).
+/// infrastructure failure (CPU not ready). Emits `"debugger-halted"`,
+/// `"memory-modified"`, and `"symbols-changed"` on return regardless of
+/// `success`, to refresh dependent panels (a no-op refresh on failure is
+/// harmless).
 ///
 /// The Assembler panel only calls this after the user has confirmed the
 /// segment preview from `assemble_preview` — it re-assembles `source` rather
@@ -127,6 +128,7 @@ pub fn assemble_and_load(source: String, cpu_state: State<CpuState>, app: AppHan
     };
     app.emit("debugger-halted", pc).ok();
     app.emit("memory-modified", ()).ok();
+    app.emit("symbols-changed", ()).ok();
     Ok(report)
 }
 
