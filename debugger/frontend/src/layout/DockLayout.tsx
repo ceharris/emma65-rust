@@ -147,6 +147,7 @@ const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: Main
   disassembly: { referencePanel: "memory", direction: "right" },
   registers: { referencePanel: "disassembly", direction: "right" },
   watchpoints: { referencePanel: "memory", direction: "below" },
+  symbols: { referencePanel: "watchpoints" },
   stack: { referencePanel: "registers", direction: "below" },
   breakpoints: { referencePanel: "stack", direction: "below" },
   log: { referencePanel: "trace" },
@@ -285,10 +286,10 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
  * Hardcoded default arrangement (issue #421) mirroring a manually tailored
  * 3-column layout, captured via the existing `layout.json` persistence at
  * the default 1600x900 window size: Memory tabbed with Terminal (Watchpoints
- * below), Disassembly (Run Controls below), and Registers/Stack/Breakpoints
- * stacked, with Trace/Log tabbed together spanning the bottom. Used on first
- * run and as the fallback whenever a persisted layout (issue #382) is
- * missing or fails to restore.
+ * below, tabbed with Symbols — issue #489), Disassembly (Run Controls below),
+ * and Registers/Stack/Breakpoints stacked, with Trace/Log tabbed together
+ * spanning the bottom. Used on first run and as the fallback whenever a
+ * persisted layout (issue #382) is missing or fails to restore.
  *
  * `position: {referencePanel, direction}` splits relative to the *group*
  * containing that panel, not the whole row/column it happens to sit in —
@@ -325,6 +326,7 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   add("disassembly", { position: { referencePanel: "memory", direction: "right" } });
   add("registers", { position: { referencePanel: "disassembly", direction: "right" }, initialWidth: 202 });
   add("watchpoints", { position: { referencePanel: "memory", direction: "below" } });
+  add("symbols", { position: { referencePanel: "watchpoints" } });
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
   add("breakpoints", { position: { referencePanel: "stack", direction: "below" } });
 
