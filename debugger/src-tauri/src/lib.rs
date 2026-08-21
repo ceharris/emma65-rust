@@ -624,6 +624,8 @@ pub fn run() {
             preferences::get_terminal_preferences,
             preferences::set_terminal_preferences,
             preferences::set_last_file_dialog_dir,
+            preferences::get_symbols_column_widths,
+            preferences::set_symbols_column_widths,
             layout::get_dock_layout,
             layout::set_dock_layout,
             layout::restore_dock_layout,

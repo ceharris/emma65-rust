@@ -30,6 +30,38 @@ fn default_terminal_scrollback() -> u32 {
     1000
 }
 
+// Defaults mirror the pixel widths `symbols.scss` used before columns became
+// user-resizable (issue #489) — an absent/fresh `ui.toml` should reproduce
+// the same initial layout the panel always had.
+fn default_symbols_name_width() -> u32 {
+    140
+}
+fn default_symbols_address_width() -> u32 {
+    68
+}
+fn default_symbols_source_width() -> u32 {
+    160
+}
+
+/// User-resizable column widths for the Symbols panel's Name/Address/Source
+/// columns, in CSS pixels — see issue #489. The trailing Aliases column
+/// always fills whatever space remains, so it has no persisted width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SymbolsColumnWidths {
+    #[serde(default = "default_symbols_name_width")]
+    pub name: u32,
+    #[serde(default = "default_symbols_address_width")]
+    pub address: u32,
+    #[serde(default = "default_symbols_source_width")]
+    pub source: u32,
+}
+
+impl Default for SymbolsColumnWidths {
+    fn default() -> Self {
+        Self { name: default_symbols_name_width(), address: default_symbols_address_width(), source: default_symbols_source_width() }
+    }
+}
+
 /// A window's last-known size, screen position, and maximized/fullscreen
 /// state, captured by `capture_window_geometry` and re-applied by
 /// `apply_window_geometry`.
@@ -62,8 +94,8 @@ pub struct WindowGeometry {
 /// issue #68 for the original theme-only version, issue #349 for the
 /// exit-confirmation addition, issue #357 for the file dialog directory,
 /// issue #385 for the terminal scrollback line count, issue #419 for the
-/// window geometry fields, and issue #467 for the structured terminal
-/// preferences block.
+/// window geometry fields, issue #467 for the structured terminal
+/// preferences block, and issue #489 for the Symbols panel column widths.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct UiConfig {
     /// The user's selected theme mode.
@@ -97,6 +129,10 @@ pub struct UiConfig {
     /// the first time it's loaded, since this is single-user local state.
     #[serde(default)]
     pub terminal_preferences: TerminalPreferences,
+    /// User-resizable Name/Address/Source column widths for the Symbols
+    /// panel — see issue #489.
+    #[serde(default)]
+    pub symbols_column_widths: SymbolsColumnWidths,
 }
 
 /// Active-cursor shape, mapping directly onto xterm.js's `cursorStyle`
@@ -408,6 +444,25 @@ pub fn set_terminal_preferences(preferences: TerminalPreferences, state: State<U
     save_ui_config_to(&profile::config_dir()?, &config)
 }
 
+/// Returns the Symbols panel's configured Name/Address/Source column widths.
+#[tauri::command]
+pub fn get_symbols_column_widths(state: State<UiConfigState>) -> SymbolsColumnWidths {
+    state.0.lock().unwrap().symbols_column_widths
+}
+
+/// Replaces the Symbols panel's column widths wholesale and persists them to
+/// `~/.emma/debugger/config/ui.toml`. Called once a column-resize drag ends
+/// (`SymbolsPanel.tsx`), not on every drag-move tick.
+#[tauri::command]
+pub fn set_symbols_column_widths(widths: SymbolsColumnWidths, state: State<UiConfigState>) -> Result<(), String> {
+    let config = {
+        let mut guard = state.0.lock().unwrap();
+        guard.symbols_column_widths = widths;
+        guard.clone()
+    };
+    save_ui_config_to(&profile::config_dir()?, &config)
+}
+
 /// Persists `skip` as the "Don't ask again" exit-confirmation preference.
 ///
 /// Called from `lib::confirm_exit` once the user commits the exit
@@ -569,6 +624,24 @@ mod tests {
         let serialized = toml::to_string(&config).unwrap();
         let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.last_file_dialog_dir, Some("/home/user/roms".to_string()));
+    }
+
+    #[test]
+    fn defaults_symbols_column_widths_when_missing() {
+        let config: UiConfig = toml::from_str("").unwrap();
+        assert_eq!(config.symbols_column_widths, SymbolsColumnWidths::default());
+        assert_eq!(config.symbols_column_widths.name, 140);
+        assert_eq!(config.symbols_column_widths.address, 68);
+        assert_eq!(config.symbols_column_widths.source, 160);
+    }
+
+    #[test]
+    fn round_trips_symbols_column_widths() {
+        let widths = SymbolsColumnWidths { name: 220, address: 80, source: 190 };
+        let config = UiConfig { symbols_column_widths: widths, ..Default::default() };
+        let serialized = toml::to_string(&config).unwrap();
+        let deserialized: UiConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.symbols_column_widths, widths);
     }
 
     #[test]

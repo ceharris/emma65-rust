@@ -7,6 +7,7 @@ import MemoryPanel from "../MemoryPanel";
 import RegisterPanel from "../RegisterPanel";
 import RunControlsPanel from "../RunControlsPanel";
 import StackPanel from "../StackPanel";
+import SymbolsPanel from "../SymbolsPanel";
 import TerminalPanel from "../TerminalPanel";
 import TracePanel from "../TracePanel";
 import WatchpointPanel from "../WatchpointPanel";
@@ -17,6 +18,7 @@ export type MainPanelId =
   | "disassembly"
   | "memory"
   | "stack"
+  | "symbols"
   | "watchpoints"
   | "breakpoints"
   | "run-controls"
@@ -31,6 +33,7 @@ export const PANEL_TITLES: Record<MainPanelId, string> = {
   disassembly: "Disassembly",
   memory: "Memory",
   stack: "Stack",
+  symbols: "Symbols",
   watchpoints: "Watchpoints",
   breakpoints: "Breakpoints",
   "run-controls": "Run Controls",
@@ -46,6 +49,7 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   disassembly: () => <DisassemblyPanel />,
   memory: () => <MemoryPanel />,
   stack: () => <StackPanel />,
+  symbols: () => <SymbolsPanel />,
   watchpoints: () => <WatchpointPanel />,
   breakpoints: () => <BreakpointPanel />,
   "run-controls": () => <RunControlsPanel />,

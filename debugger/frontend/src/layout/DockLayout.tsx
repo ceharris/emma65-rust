@@ -147,6 +147,7 @@ const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: Main
   disassembly: { referencePanel: "memory", direction: "right" },
   registers: { referencePanel: "disassembly", direction: "right" },
   watchpoints: { referencePanel: "memory", direction: "below" },
+  symbols: { referencePanel: "trace" },
   stack: { referencePanel: "registers", direction: "below" },
   breakpoints: { referencePanel: "stack", direction: "below" },
   log: { referencePanel: "trace" },
@@ -286,9 +287,9 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
  * 3-column layout, captured via the existing `layout.json` persistence at
  * the default 1600x900 window size: Memory tabbed with Terminal (Watchpoints
  * below), Disassembly (Run Controls below), and Registers/Stack/Breakpoints
- * stacked, with Trace/Log tabbed together spanning the bottom. Used on first
- * run and as the fallback whenever a persisted layout (issue #382) is
- * missing or fails to restore.
+ * stacked, with Trace/Log/Symbols (issue #489) tabbed together spanning the
+ * bottom. Used on first run and as the fallback whenever a persisted layout
+ * (issue #382) is missing or fails to restore.
  *
  * `position: {referencePanel, direction}` splits relative to the *group*
  * containing that panel, not the whole row/column it happens to sit in —
@@ -349,6 +350,7 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   // column's own cell precisely because they *do* reference a panel there.
   add("trace", { position: { direction: "below" }, initialHeight: BOTTOM_GROUP_DEFAULT_HEIGHT });
   add("log", { position: { referencePanel: "trace" } });
+  add("symbols", { position: { referencePanel: "trace" } });
 
   // Reserve Memory's full page height directly rather than sizing
   // Watchpoints (dockview gives the sibling whichever space is left over).
