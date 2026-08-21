@@ -54,6 +54,7 @@
 
 .symbols-header-row {
   flex-shrink: 0;
+  white-space: nowrap;
   background-color: var(--color-bg-alt);
   border-bottom: 1px solid var(--color-border);
   font-family: var(--font-ui);
@@ -92,7 +93,11 @@
 }
 
 .symbols-col-address {
-  flex: 0 0 5ch;
+  // Fixed px, not ch: the header ("Address" plus a sort chevron) renders in
+  // --font-ui at --font-size-btn while the body's 4 hex digits render in
+  // --font-mono at --font-size-mono, so a shared `ch` width would size the
+  // two rows' columns differently and break alignment between them.
+  flex: 0 0 68px;
   color: var(--color-muted);
 }
 
