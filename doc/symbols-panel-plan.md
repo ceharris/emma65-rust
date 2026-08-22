@@ -35,11 +35,9 @@ There's currently no live "symbol table changed" event; the table changes when t
 - Registration: add `"symbols"` to `MainPanelId`, `PANEL_TITLES`, `panelComponents` in `panelRegistry.tsx`; add a View-menu entry in `menu.rs`'s `view_panels` array (lexically ordered, per that array's existing convention); give it a sensible default dock position in `DockLayout.tsx`'s default layout.
 - Alias column in this unit: simple truncation via CSS `text-overflow: ellipsis` (no click-to-expand yet) — ships a working, if not fully spec-compliant, panel.
 
-### Unit 3 — Alias overflow: ellipsis click-to-expand
+### Unit 3 — Alias overflow: ellipsis click-to-expand (dropped)
 
-- Replace the CSS-only truncation with an explicit affordance: detect overflow (or just always show a trailing `…` when there's more than one alias that doesn't fit / matches some threshold) and make it clickable.
-- Clicking opens a small popover (styled per the existing hand-rolled popover pattern, not a native `<select>`/tooltip) anchored to the cell, showing the full alias list wrapped normally.
-- Dismiss on outside click / Escape, consistent with `BreakpointPanel`'s add-dialog dismiss handling.
+Originally planned to replace the CSS-only ellipsis truncation with a click-to-expand popover. Dropped after unit 2 shipped drag-to-resize columns (added during PR #494 review, beyond that unit's original scope) plus the existing `title` tooltip on the Aliases cell — between widening the column by hand and hovering for the full list, the popover's job is already covered, so it's no longer needed.
 
 ## Open questions to confirm before/during implementation
 
