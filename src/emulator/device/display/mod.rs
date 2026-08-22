@@ -14,10 +14,12 @@
 //!
 //! This device is not IRQ-capable; nothing in its register map asserts an interrupt.
 //!
-//! Compositing (turning character/color RAM plus a palette and glyph font into pixels) and
-//! configuration wiring live elsewhere (`compositing.rs`/`font.rs` and
-//! `emulator::config::display`, added in later work units); this module is bus-facing register
-//! and buffer-swap behavior only.
+//! Compositing (turning character/color RAM plus a palette and glyph font into pixels) lives in
+//! [`compositing`] and [`font`]. Configuration wiring lives in `emulator::config::display`, added
+//! in a later work unit; this module is bus-facing register and buffer-swap behavior only.
+
+pub mod compositing;
+pub mod font;
 
 use crate::emulator::{AddressRange, IoDevice};
 
