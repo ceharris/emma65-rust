@@ -20,7 +20,10 @@
 
 pub mod compositing;
 pub mod font;
+pub mod palette;
 
+use self::compositing::Rgb24;
+use self::font::Font;
 use crate::emulator::{AddressRange, IoDevice};
 
 /// Default grid width in cells, matching the spec's default.
@@ -72,6 +75,13 @@ pub struct CharDisplay {
     /// `frame_rate_hz`.
     cycles_per_frame: u64,
     cycle_accumulator: u64,
+
+    /// Glyph font and color palette fixed at configuration time (spec §3, §7). Not yet consumed
+    /// here -- compositing a frame and pushing it to a debugger-owned sink is added in a later
+    /// work unit -- but held now so the config module's loaded values actually take effect on
+    /// the instantiated device rather than being parsed and discarded.
+    font: Font,
+    palette: Vec<Rgb24>,
 }
 
 impl CharDisplay {
@@ -80,6 +90,11 @@ impl CharDisplay {
     ///
     /// `clock_hz` is the CPU's configured clock speed in Hz, or `None` if the CPU runs
     /// unthrottled (`ClockSpeed::unlimited()`); see [`NOMINAL_CLOCK_HZ`].
+    ///
+    /// `font` and `palette` are the glyph bitmap and color list fixed at configuration time
+    /// (spec §3, §7); `palette` must be non-empty, per spec §3 -- the config module validates
+    /// this before constructing the device.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &'static str,
         address_range: AddressRange,
@@ -88,7 +103,10 @@ impl CharDisplay {
         double_buffered: bool,
         clock_hz: Option<u64>,
         frame_rate_hz: u32,
+        font: Font,
+        palette: Vec<Rgb24>,
     ) -> Self {
+        debug_assert!(!palette.is_empty(), "palette must be non-empty (validated by the config module)");
         let cells = (columns as usize) * (rows as usize);
         let effective_clock_hz = clock_hz.unwrap_or(NOMINAL_CLOCK_HZ);
         let cycles_per_frame = (effective_clock_hz / frame_rate_hz.max(1) as u64).max(1);
@@ -107,6 +125,8 @@ impl CharDisplay {
             status: 0,
             cycles_per_frame,
             cycle_accumulator: 0,
+            font,
+            palette,
         }
     }
 
@@ -123,6 +143,16 @@ impl CharDisplay {
     /// Total number of cells (`columns * rows`).
     pub fn cells(&self) -> usize {
         self.char_ram.len()
+    }
+
+    /// The glyph font fixed at configuration time (spec §7).
+    pub fn font(&self) -> &Font {
+        &self.font
+    }
+
+    /// The color palette fixed at configuration time (spec §3).
+    pub fn palette(&self) -> &[Rgb24] {
+        &self.palette
     }
 
     /// Returns the (character, color) buffer pair currently intended for scanout (spec §6):
@@ -283,6 +313,8 @@ mod tests {
             double_buffered,
             Some(1_000_000),
             100,
+            Font::default(),
+            palette::default_palette(),
         )
     }
 
@@ -426,6 +458,8 @@ mod tests {
             true,
             None,
             DEFAULT_FRAME_RATE_HZ,
+            Font::default(),
+            palette::default_palette(),
         );
         let cycles_per_frame = NOMINAL_CLOCK_HZ / DEFAULT_FRAME_RATE_HZ as u64;
         device.tick(cycles_per_frame as u32 - 1);
@@ -445,5 +479,24 @@ mod tests {
         assert_eq!(device.peek(control_addr()), 0);
         assert_eq!(device.peek(status_addr()), 0);
         assert_eq!(device.peek(char_ram_addr(0)), 0x41);
+    }
+
+    #[test]
+    fn font_and_palette_accessors_reflect_constructor_arguments() {
+        let font = Font::default();
+        let palette = vec![Rgb24::new(1, 2, 3), Rgb24::new(4, 5, 6)];
+        let device = CharDisplay::new(
+            DEVICE_NAME,
+            address_range(),
+            COLUMNS,
+            ROWS,
+            true,
+            Some(1_000_000),
+            100,
+            font.clone(),
+            palette.clone(),
+        );
+        assert_eq!(device.font(), &font);
+        assert_eq!(device.palette(), palette.as_slice());
     }
 }
