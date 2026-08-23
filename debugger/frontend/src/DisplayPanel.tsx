@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { APP_KEY_BINDINGS } from "./useAppKeyBindings";
 
 /** `display::DisplayGeometryPayload`'s shape — fixed for the device's lifetime, so this is fetched once on mount rather than tracked as changing state. */
 interface DisplayGeometry {
@@ -41,12 +42,49 @@ function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
 }
 
 /**
+ * Encodes a keydown event into the single byte forwarded to `write_keyboard`, or `null` if
+ * this key isn't forwarded at all (bare modifier keydowns, Alt/Meta combos, and anything else
+ * outside the small table below all pass through untouched — see the memory-mapped keyboard
+ * device plan §6). Deliberately small and principled rather than an ad hoc list: printable
+ * single-character keys send their char code directly; a handful of named keys map to their
+ * standard ASCII control codes; and Ctrl+<letter> uses the standard ASCII control-code
+ * derivation (`charCode(letter) - 64`) rather than hardcoding any particular combination's
+ * meaning — this one rule produces `0x03` for Ctrl+C for free, plus every other control code,
+ * with no break-key-specific logic here at all (the backend's `break=` attribute is what gives
+ * any particular byte break-key significance).
+ */
+function keyboardByteForEvent(e: KeyboardEvent): number | null {
+  if (e.altKey || e.metaKey) return null;
+  if (e.ctrlKey) {
+    return /^[a-zA-Z]$/.test(e.key) ? e.key.toUpperCase().charCodeAt(0) - 64 : null;
+  }
+  switch (e.key) {
+    case "Enter":
+      return 0x0d;
+    case "Backspace":
+      return 0x08;
+    case "Tab":
+      return 0x09;
+    case "Escape":
+      return 0x1b;
+  }
+  return e.key.length === 1 ? e.key.charCodeAt(0) : null;
+}
+
+/**
  * The dock panel hosting the memory-mapped display device's composited output (Work Unit 5 of
  * the memory-mapped display device plan — see `doc/memory-mapped-display-device-plan.md`
  * design §11). A dumb blit target only: compositing (char/color RAM + palette + font -> RGBA)
  * happens entirely in the Rust backend (`emulator::device::display::compositing`, `display.rs`'s
  * bridge task), so this component does nothing but size a `<canvas>` from `get_display_geometry`
  * and `putImageData` whatever arrives on `"display-frame"`.
+ *
+ * Also the input side of the memory-mapped keyboard device plan's Work Unit 4 (see
+ * `doc/memory-mapped-keyboard-device-plan.md` §6): the canvas is focusable (`tabIndex={0}`) and
+ * forwards `keydown` bytes to `write_keyboard`, silently absorbed if no `keyboard` device is
+ * configured. No auto-focus on mount, unlike `TerminalPanel` — Console and `display/char` can
+ * both be configured at once, and unconditional auto-focus here would nondeterministically steal
+ * focus from Terminal depending on mount order; this panel is focusable only by explicit click.
  *
  * No `dockPanelApi` prop, unlike `TerminalPanel` — the canvas has a fixed intrinsic pixel size
  * driven entirely by device configuration (columns/rows are fixed for the device's lifetime),
@@ -128,6 +166,16 @@ export default function DisplayPanel() {
           height={geometry.pixel_height}
           style={{ width: geometry.pixel_width * scale, height: geometry.pixel_height * scale }}
           className="display-canvas"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            // Let app-wide shortcuts (Ctrl+Shift+T/D) bypass keyboard-device capture — mirrors
+            // TerminalPanel.tsx's attachCustomKeyEventHandler guard.
+            if (APP_KEY_BINDINGS.some((b) => b.matches(e.nativeEvent))) return;
+            const byte = keyboardByteForEvent(e.nativeEvent);
+            if (byte === null) return;
+            e.preventDefault();
+            invoke("write_keyboard", { bytes: [byte] }).catch(() => {});
+          }}
         />
       )}
     </div>
