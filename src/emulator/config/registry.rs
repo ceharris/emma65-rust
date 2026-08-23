@@ -2,12 +2,14 @@ use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrMod
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::config::display::CharDisplayModule;
 use crate::emulator::config::led_matrix::LedMatrixModule;
+use crate::emulator::device::display::DisplayFrame;
 use crate::emulator::transport::{ChannelRelay, Transport, TransportError, TransportReporter};
 use crate::emulator::{BusConfig, DeviceEvent, ErrorSender, LogSender};
 use figment::value::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 
 /// A shareable slot holding an optional pre-built transport, suitable for
 /// one-time consumption by a device module that runs after the slot is
@@ -17,6 +19,36 @@ use std::sync::{Arc, Mutex};
 /// exists, so the reporter starts unbound and the device module that
 /// consumes the slot binds it once the device's id is allocated.
 pub type TransportSlot = Arc<Mutex<Option<(Box<dyn Transport>, ChannelRelay<u8>, TransportReporter)>>>;
+
+/// A shareable slot a display device module fills with the sending half of its composited-frame
+/// push channel during instantiation, mirroring [`TransportSlot`]'s shape: the caller (the
+/// debugger's session setup code) creates the channel and stashes the sender here before bus
+/// construction runs, then keeps the receiver for its own bridge task -- see design doc §9.
+pub type DisplayFrameSlot = Arc<Mutex<Option<mpsc::Sender<DisplayFrame>>>>;
+
+/// A shareable slot a display device module fills with its fixed pixel/cell geometry during
+/// instantiation. Unlike [`DisplayFrameSlot`], nothing is "taken" from this slot -- it's simply
+/// set once, since (unlike a frame push channel) a plain value can be read any number of times
+/// without being consumed.
+pub type DisplayGeometrySlot = Arc<Mutex<Option<DisplayGeometry>>>;
+
+/// A display device's fixed pixel/cell geometry, known entirely from its configuration
+/// attributes (columns, rows, frame rate) and unaffected by anything the CPU does afterward
+/// (design doc §9). Handed to the debugger via [`InstantiationContext::display_geometry_sink`]
+/// so its display panel can size its canvas on mount, before any frame has been composited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayGeometry {
+    /// Grid width in cells.
+    pub columns: u32,
+    /// Grid height in cells.
+    pub rows: u32,
+    /// Composited frame width in pixels (`columns * 8`, the fixed glyph width -- design doc §7).
+    pub pixel_width: u32,
+    /// Composited frame height in pixels (`rows * 8`, the fixed glyph height -- design doc §7).
+    pub pixel_height: u32,
+    /// Configured vsync cadence in Hz (design doc §6).
+    pub frame_rate_hz: u32,
+}
 
 /// A context of application attributes that may be used by device modules during instantiation.
 #[derive(Clone)]
@@ -36,6 +68,14 @@ pub struct InstantiationContext {
     /// module that calls `set_log_sender`. `None` means no file sink is configured; devices keep
     /// their own default `log`-crate-backed sender in that case.
     pub log_sender: Option<LogSender>,
+    /// A pre-created slot for a display device to hand back the sending half of its
+    /// composited-frame push channel (design doc §9). `None` when no host wants to receive
+    /// frames (e.g. the plain `emma65` CLI) -- a display device configured in that case simply
+    /// composites nothing.
+    pub display_frame_sink: Option<DisplayFrameSlot>,
+    /// A pre-created slot for a display device to report its fixed pixel/cell geometry (design
+    /// doc §9), read by the debugger's `get_display_geometry` command.
+    pub display_geometry_sink: Option<DisplayGeometrySlot>,
 }
 
 impl InstantiationContext {
@@ -193,7 +233,7 @@ mod tests {
     #[test]
     fn transport_reporter_is_bound_and_reports_through_error_sender() {
         let (sender, mut receiver) = crate::emulator::device_event_channel();
-        let context = InstantiationContext { clock_hz: None, error_sender: Some(sender), console_transport: None, log_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: Some(sender), console_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None };
 
         let reporter = context.transport_reporter("test-device");
         reporter.report_connected(None);
@@ -206,7 +246,7 @@ mod tests {
 
     #[test]
     fn transport_reporter_is_a_silent_no_op_when_no_error_sender_is_configured() {
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None };
 
         let reporter = context.transport_reporter("test-device");
         // Must not panic with no error sender configured.
@@ -217,7 +257,7 @@ mod tests {
     async fn instantiate_unknown_device_type() {
         let registry = DeviceRegistry::default();
         let bus_config = BusConfig::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let attributes: HashMap<String, Value> = HashMap::new();
         let err = registry.instantiate("foobar", bus_config, 0x55aa, &attributes, &context, id_allocator)
@@ -229,7 +269,7 @@ mod tests {
     async fn instantiate_routes_to_correct_module() {
         let mut registry = DeviceRegistry::default();
         let attributes: HashMap<String, Value> = HashMap::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         registry.register(MockModule::from_name("alpha"));
         registry.register(MockModule::from_name("beta"));
@@ -247,7 +287,7 @@ mod tests {
         let attributes: HashMap<String, Value> = HashMap::new();
         registry.register(MockModule::from_name_and_tag("alpha", "alpha1"));
         registry.register(MockModule::from_name_and_tag("alpha", "alpha2"));
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context, id_allocator)
             .await.err().unwrap();
@@ -257,7 +297,7 @@ mod tests {
     #[tokio::test]
     async fn with_builtins_has_ram_module() {
         let registry = DeviceRegistry::with_builtins();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let mut attributes: HashMap<String, Value> = HashMap::new();
         attributes.insert("size".to_string(), Value::from(65536));

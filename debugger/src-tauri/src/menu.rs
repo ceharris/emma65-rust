@@ -7,6 +7,8 @@ use tauri::{AppHandle, State, Wry};
 
 /// Menu item id for the Window > Terminal item.
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
+/// Menu item id for the Window > Display item.
+pub(crate) const TOGGLE_DISPLAY_ID: &str = "toggle-display";
 /// Menu item id for the Window > Restore Layout… item.
 pub(crate) const RESTORE_LAYOUT_ID: &str = "restore-layout";
 /// Id prefix for entries in the View menu; each item's full id is this
@@ -85,6 +87,9 @@ pub struct WindowMenuState {
     pub exit_item: MenuItem<Wry>,
     /// The Window > Terminal item.
     pub terminal_item: MenuItem<Wry>,
+    /// The Window > Display item. Toggles between "Detach Display…" and "Attach Display" the
+    /// same way `terminal_item` does — see `set_display_menu_label`.
+    pub display_item: MenuItem<Wry>,
 }
 
 /// Holds the File > Open Recent submenu so its items can be replaced in
@@ -252,8 +257,15 @@ pub fn build_menu(
     // sync with that map by hand, since Rust has no access to the frontend's
     // TypeScript constants. None of these carry an accelerator: Trace/Log's
     // former Ctrl+Shift+Y/L bindings were dropped rather than reassigned here
-    // (issue #393), and Terminal's Ctrl+Shift+T remains the Window menu's
-    // detach/attach accelerator below, so reusing it here would collide.
+    // (issue #393), and Terminal's Ctrl+Shift+T and Display's Ctrl+Shift+D
+    // remain the Window menu's detach/attach accelerators below, so reusing
+    // either here would collide.
+    // "display" is deliberately not in this list yet: it isn't a real dockview panel id until
+    // the memory-mapped display device plan's Work Unit 5 registers one in `panelRegistry.tsx`
+    // (`MainPanelId`) — adding a View menu entry for it here first would dispatch a
+    // `reveal-panel` id the frontend can't resolve. The Window > "Detach Display…" item below is
+    // still added now (its target is the statically-declared `display-detached` window, not a
+    // dock panel), matching Unit 4's scope in the plan.
     let view_panels: [(&str, &str); 12] = [
         ("assembler", "Assembler"),
         ("breakpoints", "Breakpoints"),
@@ -359,6 +371,12 @@ pub fn build_menu(
     // job, alongside the other eight panels — see `on_menu_event` in `lib.rs`.
     let terminal_item = MenuItem::with_id(app, TOGGLE_TERMINAL_ID, "Detach Terminal…", true, Some("Ctrl+Shift+T"))?;
 
+    // Same toggle-label pattern as `terminal_item` above (memory-mapped display device plan,
+    // Work Unit 4), with its own accelerator letter (`D`) to avoid colliding with Terminal's —
+    // same GTK consumed-modifier reasoning documented on `terminal_item` rules out a
+    // punctuation-based combo here too.
+    let display_item = MenuItem::with_id(app, TOGGLE_DISPLAY_ID, "Detach Display…", true, Some("Ctrl+Shift+D"))?;
+
     // Bottom of the Window menu, set off by its own separator (issue #398):
     // discards every panel's current position/size, restoring the same
     // default arrangement a brand-new profile starts with. Dialog-confirmed
@@ -367,8 +385,12 @@ pub fn build_menu(
     // command once the user confirms (see `layout.rs`).
     let window_separator = PredefinedMenuItem::separator(app)?;
     let restore_layout_item = MenuItem::with_id(app, RESTORE_LAYOUT_ID, "Restore Layout…", true, None::<&str>)?;
-    let window_menu =
-        Submenu::with_items(app, "Window", true, &[&terminal_item, &window_separator, &restore_layout_item])?;
+    let window_menu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[&terminal_item, &display_item, &window_separator, &restore_layout_item],
+    )?;
 
     let github_item = MenuItem::with_id(app, GITHUB_ID, "View on GitHub", true, None::<&str>)?;
     // A plain `MenuItem` rather than `PredefinedMenuItem::about`: the
@@ -420,7 +442,7 @@ pub fn build_menu(
 
     Ok((
         menu,
-        WindowMenuState { exit_item, terminal_item },
+        WindowMenuState { exit_item, terminal_item, display_item },
         RecentMenuState(open_recent_submenu),
         RunMenuState { run_item, stop_item, step_into_item, step_over_item, step_return_item, toggle_auto_step_item },
         MemoryMenuState {
@@ -492,6 +514,13 @@ pub fn set_run_controls_enabled(flags: RunControlsEnabled, state: State<RunMenuS
 pub(crate) fn set_terminal_menu_label(state: &WindowMenuState, detached: bool) {
     let label = if detached { "Attach Terminal" } else { "Detach Terminal…" };
     let _ = state.terminal_item.set_text(label);
+}
+
+/// Updates the Window > Display item's label the same way `set_terminal_menu_label` does for
+/// Terminal.
+pub(crate) fn set_display_menu_label(state: &WindowMenuState, detached: bool) {
+    let label = if detached { "Attach Display" } else { "Detach Display…" };
+    let _ = state.display_item.set_text(label);
 }
 
 /// Replaces the File > Open Recent submenu's items with `entries` (each a

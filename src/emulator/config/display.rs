@@ -1,5 +1,5 @@
 use super::palette;
-use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext};
+use super::{DeviceModule, DeviceModuleError, DisplayGeometry, ExpandedPathBuf, InstantiationContext};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::display::compositing::default_palette;
 use crate::emulator::device::display::font::Font;
@@ -77,7 +77,7 @@ impl DeviceModule for CharDisplayModule {
         // Not IRQ-capable (design doc §1): plain allocation, no interrupt line reserved.
         let device_id = id_allocator.lock().unwrap().next_available();
 
-        let device = CharDisplay::new(
+        let mut device = CharDisplay::new(
             self.name(),
             address_range,
             columns,
@@ -88,6 +88,24 @@ impl DeviceModule for CharDisplayModule {
             font,
             palette,
         );
+
+        // Both slots (design doc §9) are consumed the same way `console_transport` is: present
+        // only when a host (the debugger) wants to receive this device's output, absent (a
+        // no-op here) for the plain `emma65` CLI.
+        if let Some(slot) = &context.display_geometry_sink {
+            *slot.lock().unwrap() = Some(DisplayGeometry {
+                columns,
+                rows,
+                pixel_width: columns * 8,
+                pixel_height: rows * 8,
+                frame_rate_hz,
+            });
+        }
+        if let Some(slot) = &context.display_frame_sink
+            && let Some(sender) = slot.lock().unwrap().take()
+        {
+            device.attach_frame_sink(sender);
+        }
 
         bus_config.device(address_range, device_id, Box::new(device))
             .map_err(DeviceModuleError::BusConfig)

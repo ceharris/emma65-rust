@@ -7,11 +7,11 @@ use figment::{Figment, providers::{Env, Format, Toml}};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use emma65::disassembler::Disassembler;
 use emma65::emulator::bus::MAX_IRQ_SOURCES;
-use emma65::emulator::{Config, Cpu, DeviceRegistry, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, LogSender, Transport, TransportReporter, TransportSlot};
+use emma65::emulator::{Config, Cpu, DeviceRegistry, DisplayFrame, DisplayFrameSlot, DisplayGeometrySlot, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, LogSender, Transport, TransportReporter, TransportSlot};
 
 /// Label of the main debugger window, as assigned by the (unlabeled) first
 /// entry in `tauri.conf.json`'s `app.windows` list.
@@ -64,6 +64,10 @@ mod symbols;
 /// Terminal panel: console byte-stream bridge.
 mod terminal;
 
+/// Display panel: composited-frame push channel bridge and dockable/detachable window
+/// lifecycle, mirroring `terminal`'s dock/detach architecture.
+mod display;
+
 /// Trace panel: live-recorded execution trace and windowed reads.
 mod trace;
 
@@ -111,7 +115,14 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// Takes `log_sender` rather than constructing its own: the caller (`load_or_reload_session`)
 /// needs to build it before this runs, since doing so requires an `AppHandle` (via
 /// `spawn_log_collector`'s callback) that this function doesn't have.
-async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, IrqSource), String> {
+///
+/// Also creates a fresh composited-frame channel and geometry slot (design doc §9) for a
+/// possible `display/char` device to consume via `InstantiationContext::display_frame_sink`/
+/// `display_geometry_sink` — present regardless of whether the active profile actually
+/// configures one, the same way `console_transport` is always injected whether or not a
+/// console device consumes it. Returns the receiver and whatever geometry ended up in the
+/// slot (`None` if no display device is configured) alongside the session.
+async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, IrqSource, mpsc::Receiver<DisplayFrame>, Option<display::DisplayGeometryPayload>), String> {
     let config_path = profile_dir.join("emulator.toml");
 
     let config: Config = Figment::new()
@@ -129,6 +140,15 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
 
     let transport_slot: TransportSlot = Arc::new(Mutex::new(Some((Box::new(local) as Box<dyn Transport>, relay, reporter))));
 
+    // Bounded to 2 (design doc §6): the device's own vsync composites at most `frame_rate_hz`
+    // times per second, and the bridge task's wall-clock rate limiting (`display::run_display_bridge`)
+    // is what actually protects the UI -- this capacity just needs to be small enough that
+    // `try_send` starts dropping stale frames promptly if the bridge task is ever briefly
+    // behind, rather than allowing a backlog to build up.
+    let (display_frame_tx, display_frame_rx) = mpsc::channel::<DisplayFrame>(2);
+    let display_frame_slot: DisplayFrameSlot = Arc::new(Mutex::new(Some(display_frame_tx)));
+    let display_geometry_slot: DisplayGeometrySlot = Arc::new(Mutex::new(None));
+
     // `log_sender` (built by the caller, see this function's doc comment) is shared by every
     // device, the CPU, and the event-logging loop spawned in `load_or_reload_session` below, so
     // every clone shares the same underlying cycle-count `Arc` (see `LogSender::set_cycles`)
@@ -139,6 +159,8 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
         error_sender: None,
         console_transport: Some(transport_slot),
         log_sender: Some(log_sender.clone()),
+        display_frame_sink: Some(display_frame_slot),
+        display_geometry_sink: Some(display_geometry_slot.clone()),
     };
 
     let registry = DeviceRegistry::with_builtins();
@@ -150,7 +172,8 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
         .map_err(|e| format!("Failed to build emulator session: {e}"))?;
 
     let ui_irq_source = IrqSource::from(device_id);
-    Ok((session, remote, ui_irq_source))
+    let display_geometry = display_geometry_slot.lock().unwrap().take().map(display::DisplayGeometryPayload::from);
+    Ok((session, remote, ui_irq_source, display_frame_rx, display_geometry))
 }
 
 /// Stops any free-running CPU (Run, Step Over, or Step Return) and waits for
@@ -202,6 +225,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     *app.state::<CpuState>().0.lock().unwrap() = None;
     *app.state::<terminal::TerminalTx>().0.lock().unwrap() = None;
     app.state::<terminal::TerminalHistory>().0.lock().unwrap().clear();
+    *app.state::<display::DisplayGeometryState>().0.lock().unwrap() = None;
 
     *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
 
@@ -221,9 +245,16 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
         });
 
     match load_session(profile_dir, log_sender.clone()).await {
-        Ok((session, remote, ui_irq_source)) => {
+        Ok((session, remote, ui_irq_source, display_frame_rx, display_geometry)) => {
             let (remote_rx, remote_tx) = remote.into_split();
             *app.state::<terminal::TerminalTx>().0.lock().unwrap() = Some(remote_tx);
+
+            let frame_rate_hz = display_geometry.map(|g| g.frame_rate_hz);
+            *app.state::<display::DisplayGeometryState>().0.lock().unwrap() = display_geometry;
+            let display_bridge_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                display::run_display_bridge(display_frame_rx, display_bridge_handle, frame_rate_hz).await;
+            });
 
             // Structured device/transport events now flow into the Log window via the
             // `log_sender`/collector built above, in addition to the `tauri-plugin-log` sink any
@@ -341,10 +372,10 @@ fn request_exit(app: &AppHandle) {
 }
 
 /// Captures and persists the main window's geometry, plus the
-/// detached-Terminal window's geometry if it's currently detached (visible)
-/// — see issue #419. Called once per exit request rather than on every
-/// resize/move event, so `ui.toml` isn't rewritten continuously while the
-/// user drags a window around.
+/// detached-Terminal and detached-Display windows' geometry if either is
+/// currently detached (visible) — see issue #419. Called once per exit
+/// request rather than on every resize/move event, so `ui.toml` isn't
+/// rewritten continuously while the user drags a window around.
 fn persist_window_geometries(app: &AppHandle) {
     let state = app.state::<preferences::UiConfigState>();
     if let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL)
@@ -358,6 +389,13 @@ fn persist_window_geometries(app: &AppHandle) {
             preferences::save_window_geometry(&terminal_window, &state, |c, g| c.terminal_window_geometry = Some(g))
     {
         eprintln!("Failed to save terminal window geometry: {e}");
+    }
+    if let Some(display_window) = app.get_webview_window(display::DISPLAY_DETACHED_WINDOW_LABEL)
+        && display_window.is_visible().unwrap_or(false)
+        && let Err(e) =
+            preferences::save_window_geometry(&display_window, &state, |c, g| c.display_window_geometry = Some(g))
+    {
+        eprintln!("Failed to save display window geometry: {e}");
     }
 }
 
@@ -416,6 +454,7 @@ pub fn run() {
     let dock_layout =
         if cli.restore_layout { layout::DockLayoutData::default() } else { layout::load_dock_layout_from(&config_dir) };
     let terminal_was_detached = dock_layout.terminal_detached;
+    let display_was_detached = dock_layout.display_detached;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -435,6 +474,8 @@ pub fn run() {
         .manage(terminal::TerminalTx(Mutex::new(None)))
         .manage(terminal::TerminalTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
         .manage(terminal::TerminalScaleFactorOverride(cli.scale_factor))
+        .manage(display::DisplayTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
+        .manage(display::DisplayGeometryState::default())
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
         .manage(disassembly::DisassemblerState(Mutex::new(None)))
@@ -498,21 +539,35 @@ pub fn run() {
                 } else {
                     let _ = app.emit_to(MAIN_WINDOW_LABEL, "terminal-detach-requested", ());
                 }
+            } else if event.id() == menu::TOGGLE_DISPLAY_ID {
+                let detached = app.state::<layout::LayoutState>().0.lock().unwrap().display_detached;
+                if detached {
+                    display::reattach_display(app);
+                } else if let Err(e) = display::begin_display_detach(app) {
+                    eprintln!("Failed to detach display: {e}");
+                } else {
+                    let _ = app.emit_to(MAIN_WINDOW_LABEL, "display-detach-requested", ());
+                }
             } else if let Some(panel_id) = event.id().as_ref().strip_prefix(menu::VIEW_PANEL_ID_PREFIX) {
-                // Terminal is special-cased: while it's detached to its own
-                // window, that window (not a "terminal" dock panel) is the
-                // thing to reveal — asking the dock to add a panel that
-                // duplicates it would fight the single-source-of-truth
-                // detach/reattach design in `terminal.rs`. Every other panel
-                // id, and Terminal while it's docked, goes through the
-                // generic dockview-driven `reveal-panel` handler in
-                // `DockLayout.tsx`, which adds the panel back (using its last
-                // dock position, or its default position) if it isn't
-                // present, or just activates its tab if it is.
-                let terminal_detached = panel_id == "terminal"
-                    && app.state::<layout::LayoutState>().0.lock().unwrap().terminal_detached;
-                if terminal_detached {
-                    if let Some(window) = app.get_webview_window(terminal::TERMINAL_DETACHED_WINDOW_LABEL) {
+                // Terminal and Display are both special-cased: while either is detached to its
+                // own window, that window (not a dock panel) is the thing to reveal — asking the
+                // dock to add a panel that duplicates it would fight the single-source-of-truth
+                // detach/reattach design in `terminal.rs`/`display.rs`. Every other panel id, and
+                // Terminal/Display while docked, goes through the generic dockview-driven
+                // `reveal-panel` handler in `DockLayout.tsx`, which adds the panel back (using
+                // its last dock position, or its default position) if it isn't present, or just
+                // activates its tab if it is.
+                let detached_window_label = {
+                    let layout_state = app.state::<layout::LayoutState>();
+                    let detached = layout_state.0.lock().unwrap();
+                    match panel_id {
+                        "terminal" if detached.terminal_detached => Some(terminal::TERMINAL_DETACHED_WINDOW_LABEL),
+                        "display" if detached.display_detached => Some(display::DISPLAY_DETACHED_WINDOW_LABEL),
+                        _ => None,
+                    }
+                };
+                if let Some(label) = detached_window_label {
+                    if let Some(window) = app.get_webview_window(label) {
                         let _ = window.set_focus();
                     }
                 } else {
@@ -581,6 +636,9 @@ pub fn run() {
             terminal::detach_terminal,
             terminal::attach_terminal,
             terminal::get_terminal_scale_factor_override,
+            display::detach_display,
+            display::attach_display,
+            display::get_display_geometry,
             trace::record_trace,
             trace::stop_trace,
             trace::get_trace_window,
@@ -697,6 +755,8 @@ pub fn run() {
             // dock panel, so this only needs to handle the window side.
             terminal::install_detached_window(app.handle());
             terminal::restore_detached_window_if_needed(app.handle(), terminal_was_detached);
+            display::install_detached_window(app.handle());
+            display::restore_detached_window_if_needed(app.handle(), display_was_detached);
 
             // Exit explicitly rather than relying on Tauri's default "exit when all
             // windows are closed" behavior, so the close control honors the exit
