@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { DockviewPanelApi } from "dockview-react";
 import { APP_KEY_BINDINGS } from "./useAppKeyBindings";
 
 /** `display::DisplayGeometryPayload`'s shape — fixed for the device's lifetime, so this is fetched once on mount rather than tracked as changing state. */
@@ -82,16 +83,23 @@ function keyboardByteForEvent(e: KeyboardEvent): number | null {
  * Also the input side of the memory-mapped keyboard device plan's Work Unit 4 (see
  * `doc/memory-mapped-keyboard-device-plan.md` §6): the canvas is focusable (`tabIndex={0}`) and
  * forwards `keydown` bytes to `write_keyboard`, silently absorbed if no `keyboard` device is
- * configured. No auto-focus on mount, unlike `TerminalPanel` — Console and `display/char` can
- * both be configured at once, and unconditional auto-focus here would nondeterministically steal
- * focus from Terminal depending on mount order; this panel is focusable only by explicit click.
+ * configured. Rather than requiring an explicit click into the canvas every time, it auto-focuses
+ * itself whenever this panel/window has focus (see the dedicated `useEffect` below) — docked,
+ * that means whenever this tab becomes dockview's active tab, or whenever the main window regains
+ * OS focus while this tab is already active; detached, any window focus, since the detached
+ * window hosts nothing else. This intentionally *does* risk stealing focus from Terminal if both
+ * `console` and `display/char` are configured and the user switches to the Display tab — accepted
+ * as the point of the feature (no extra click needed) rather than the earlier no-auto-focus
+ * stance, since the panel/window-focus gating (as opposed to unconditional focus-on-mount) means
+ * it only takes focus when the user has actually navigated to this panel.
  *
- * No `dockPanelApi` prop, unlike `TerminalPanel` — the canvas has a fixed intrinsic pixel size
- * driven entirely by device configuration (columns/rows are fixed for the device's lifetime),
- * not a user-resizable content area the way Terminal's size-preset menu resizes its host. A
- * resized dock cell just scales the canvas via CSS (`.display-container`'s `object-fit: contain`
- * equivalent, done here as `max-width`/`max-height` with preserved aspect ratio), never
- * resampling the actual pixel buffer.
+ * `dockPanelApi` prop, like `TerminalPanel`, but purely to observe `onDidActiveChange`/`isActive`
+ * for the auto-focus behavior above — unlike Terminal's use of it for `setSize()`, the canvas
+ * itself has a fixed intrinsic pixel size driven entirely by device configuration (columns/rows
+ * are fixed for the device's lifetime), not a user-resizable content area. A resized dock cell
+ * just scales the canvas via CSS (`.display-container`'s `object-fit: contain` equivalent, done
+ * here as `max-width`/`max-height` with preserved aspect ratio), never resampling the actual pixel
+ * buffer.
  *
  * Mounted in both the docked panel and the detached-Display window
  * (`display-detached.tsx`), same reuse shape as `TerminalPanel`/`terminal-detached.tsx`: no
@@ -107,7 +115,12 @@ function keyboardByteForEvent(e: KeyboardEvent): number | null {
  * canvas's CSS `width`/`height` (not its pixel buffer) so `image-rendering: pixelated` upscales
  * with crisp, uniform pixel edges rather than resampling the actual RGBA data.
  */
-export default function DisplayPanel() {
+interface DisplayPanelProps {
+  /** Present when docked (see `panelRegistry.tsx`); absent in the detached-Display window. */
+  dockPanelApi?: DockviewPanelApi;
+}
+
+export default function DisplayPanel({ dockPanelApi }: DisplayPanelProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [geometry, setGeometry] = useState<DisplayGeometry | null>(null);
@@ -156,6 +169,31 @@ export default function DisplayPanel() {
       unlistenPromise.then((f) => f());
     };
   }, []);
+
+  // Auto-focuses the canvas whenever this panel/window has focus, so keydown reaches the keyboard
+  // device without an extra click into the canvas first. Docked: refocuses on every
+  // `onDidActiveChange` (switching to this tab) and on every window `focus` event while this tab
+  // is already the active one (e.g. alt-tabbing back into an already-selected Display tab).
+  // Detached: `display-detached.tsx` hosts nothing but this panel, so any window `focus` refocuses
+  // unconditionally. Runs once immediately too, covering the case where the panel/window already
+  // has focus by the time `geometry` arrives and the canvas first exists.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const isPanelActive = () => !dockPanelApi || dockPanelApi.isActive;
+    const focusIfActive = () => {
+      if (isPanelActive()) canvas.focus({ preventScroll: true });
+    };
+    focusIfActive();
+    window.addEventListener("focus", focusIfActive);
+    const activeDisposable = dockPanelApi?.onDidActiveChange((e) => {
+      if (e.isActive) canvas.focus({ preventScroll: true });
+    });
+    return () => {
+      window.removeEventListener("focus", focusIfActive);
+      activeDisposable?.dispose();
+    };
+  }, [dockPanelApi, geometry]);
 
   return (
     <div ref={containerRef} className="display-container">

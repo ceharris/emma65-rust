@@ -208,6 +208,10 @@ body {
   // Crisp upscaling for a low-res pixel grid rather than a blurry resample — matches how a
   // character-cell display's glyph edges should look scaled up.
   image-rendering: pixelated;
+  // The canvas is focusable (`tabIndex={0}`) so it can receive keydown for the keyboard device
+  // (memory-mapped keyboard device plan §6), but a focus ring around emulated display output
+  // reads as a rendering glitch rather than a UI affordance.
+  outline: none;
 }
 
 // --- assembler editor ---
