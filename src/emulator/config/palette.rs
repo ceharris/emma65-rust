@@ -5,6 +5,12 @@
 //! Palette files are plain text, one color per line: six hex digits (`RRGGBB`,
 //! case-insensitive), with an optional leading `#`. Blank lines are skipped.
 //!
+//! The entry count must be exactly [`SMALL_PALETTE_ENTRIES`] (16) or [`LARGE_PALETTE_ENTRIES`]
+//! (256) -- not merely non-empty and no more than 256 as the device itself would tolerate (spec
+//! §3, §4.1: `CharDisplay`'s modulo index resolution works for any 1-256 length). Any other
+//! count is rejected here as almost certainly a user mistake rather than an intentional
+//! custom-size palette; there's no real use case for, say, a hand-authored 200-entry list.
+//!
 //! Other formats were considered and rejected:
 //! - **Inline TOML/JSON array** (`palette = ["#000000", ...]`) directly in the device's
 //!   attribute table, avoiding a separate file -- rejected because up to 256 entries would bloat
@@ -25,19 +31,19 @@
 use crate::emulator::device::display::compositing::Rgb24;
 use std::fmt;
 
-/// Minimum number of palette entries (spec §3: "must be non-empty").
-pub const MIN_ENTRIES: usize = 1;
-/// Maximum number of palette entries (spec §3: "no more than 256 entries", since color RAM
-/// indices are a full byte).
-pub const MAX_ENTRIES: usize = 256;
+/// A "low-color" palette entry count -- one of the two counts [`parse`] accepts.
+pub const SMALL_PALETTE_ENTRIES: usize = 16;
+/// A "full-range" palette entry count, using every value an 8-bit color-RAM index can hold --
+/// the other count [`parse`] accepts.
+pub const LARGE_PALETTE_ENTRIES: usize = 256;
+/// Entry counts [`parse`] accepts.
+pub const ALLOWED_ENTRY_COUNTS: [usize; 2] = [SMALL_PALETTE_ENTRIES, LARGE_PALETTE_ENTRIES];
 
 /// An error parsing or validating palette text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteError {
-    /// No non-blank lines were present.
-    Empty,
-    /// More than [`MAX_ENTRIES`] entries were present.
-    TooManyEntries { actual: usize },
+    /// Entry count was not one of [`ALLOWED_ENTRY_COUNTS`].
+    InvalidCount { actual: usize },
     /// A non-blank line was not a valid `RRGGBB` (optionally `#`-prefixed) color.
     InvalidEntry { line: usize, text: String },
 }
@@ -45,10 +51,8 @@ pub enum PaletteError {
 impl fmt::Display for PaletteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PaletteError::Empty =>
-                write!(f, "palette must contain at least {MIN_ENTRIES} color"),
-            PaletteError::TooManyEntries { actual } =>
-                write!(f, "palette must contain at most {MAX_ENTRIES} colors, got {actual}"),
+            PaletteError::InvalidCount { actual } =>
+                write!(f, "palette must contain exactly {SMALL_PALETTE_ENTRIES} or {LARGE_PALETTE_ENTRIES} colors, got {actual}"),
             PaletteError::InvalidEntry { line, text } =>
                 write!(f, "invalid color on line {line}: {text:?} (expected 6 hex digits, optionally prefixed with '#')"),
         }
@@ -68,8 +72,8 @@ fn parse_color(text: &str) -> Option<Rgb24> {
     Some(Rgb24::new(r, g, b))
 }
 
-/// Parses palette text into a list of colors, validating the count against spec §3's 1-256
-/// entry range.
+/// Parses palette text into a list of colors, requiring the entry count to be one of
+/// [`ALLOWED_ENTRY_COUNTS`].
 pub fn parse(text: &str) -> Result<Vec<Rgb24>, PaletteError> {
     let mut colors = Vec::new();
     for (i, raw_line) in text.lines().enumerate() {
@@ -81,11 +85,8 @@ pub fn parse(text: &str) -> Result<Vec<Rgb24>, PaletteError> {
             .ok_or_else(|| PaletteError::InvalidEntry { line: i + 1, text: line.to_string() })?;
         colors.push(color);
     }
-    if colors.is_empty() {
-        return Err(PaletteError::Empty);
-    }
-    if colors.len() > MAX_ENTRIES {
-        return Err(PaletteError::TooManyEntries { actual: colors.len() });
+    if !ALLOWED_ENTRY_COUNTS.contains(&colors.len()) {
+        return Err(PaletteError::InvalidCount { actual: colors.len() });
     }
     Ok(colors)
 }
@@ -94,28 +95,49 @@ pub fn parse(text: &str) -> Result<Vec<Rgb24>, PaletteError> {
 mod tests {
     use super::*;
 
+    fn sixteen_entry_text() -> String {
+        // First two entries exercise both prefixed and unprefixed, mixed-case hex; the rest are
+        // filler so the count lands on the accepted 16.
+        let mut text = String::from("#FF0000\n00ff00\n");
+        text.push_str(&"0000FF\n".repeat(14));
+        text
+    }
+
     #[test]
     fn parses_hex_colors_with_and_without_hash_prefix() {
-        let colors = parse("#FF0000\n00ff00\n0000FF\n").unwrap();
-        assert_eq!(colors, vec![Rgb24::new(0xFF, 0, 0), Rgb24::new(0, 0xFF, 0), Rgb24::new(0, 0, 0xFF)]);
+        let colors = parse(&sixteen_entry_text()).unwrap();
+        assert_eq!(colors.len(), 16);
+        assert_eq!(colors[0], Rgb24::new(0xFF, 0, 0));
+        assert_eq!(colors[1], Rgb24::new(0, 0xFF, 0));
+        assert_eq!(colors[2], Rgb24::new(0, 0, 0xFF));
     }
 
     #[test]
     fn skips_blank_lines() {
-        let colors = parse("#FF0000\n\n  \n00FF00\n").unwrap();
-        assert_eq!(colors.len(), 2);
+        let mut text = sixteen_entry_text();
+        text.push_str("\n  \n");
+        let colors = parse(&text).unwrap();
+        assert_eq!(colors.len(), 16);
     }
 
     #[test]
     fn rejects_empty_input() {
-        assert_eq!(parse("").unwrap_err(), PaletteError::Empty);
-        assert_eq!(parse("\n\n  \n").unwrap_err(), PaletteError::Empty);
+        assert_eq!(parse("").unwrap_err(), PaletteError::InvalidCount { actual: 0 });
+        assert_eq!(parse("\n\n  \n").unwrap_err(), PaletteError::InvalidCount { actual: 0 });
     }
 
     #[test]
-    fn rejects_more_than_256_entries() {
-        let text = "000000\n".repeat(257);
-        assert!(matches!(parse(&text).unwrap_err(), PaletteError::TooManyEntries { actual: 257 }));
+    fn rejects_counts_other_than_16_or_256() {
+        for count in [1, 3, 15, 17, 200, 255, 257] {
+            let text = "000000\n".repeat(count);
+            assert_eq!(parse(&text).unwrap_err(), PaletteError::InvalidCount { actual: count });
+        }
+    }
+
+    #[test]
+    fn accepts_exactly_16_entries() {
+        let text = "000000\n".repeat(16);
+        assert_eq!(parse(&text).unwrap().len(), 16);
     }
 
     #[test]
@@ -126,7 +148,9 @@ mod tests {
 
     #[test]
     fn rejects_malformed_entry() {
-        let err = parse("FF0000\nnotacolor\n").unwrap_err();
+        let mut text = String::from("FF0000\nnotacolor\n");
+        text.push_str(&"000000\n".repeat(14));
+        let err = parse(&text).unwrap_err();
         assert!(matches!(err, PaletteError::InvalidEntry { line: 2, .. }));
     }
 }
