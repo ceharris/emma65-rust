@@ -64,6 +64,10 @@ mod symbols;
 /// Terminal panel: console byte-stream bridge.
 mod terminal;
 
+/// Keyboard input bridge: forwards bytes typed in the Display panel to a configured `keyboard`
+/// device's injected transport slot.
+mod keyboard;
+
 /// Display panel: composited-frame push channel bridge and dockable/detachable window
 /// lifecycle, mirroring `terminal`'s dock/detach architecture.
 mod display;
@@ -122,7 +126,12 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// configures one, the same way `console_transport` is always injected whether or not a
 /// console device consumes it. Returns the receiver and whatever geometry ended up in the
 /// slot (`None` if no display device is configured) alongside the session.
-async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, IrqSource, mpsc::Receiver<DisplayFrame>, Option<display::DisplayGeometryPayload>), String> {
+///
+/// Also injects a second, independent pipe transport for `InstantiationContext::keyboard_transport`
+/// (memory-mapped keyboard device plan, work unit 3), built and consumed the same way as the
+/// console one — present regardless of whether the active profile actually configures a
+/// `keyboard` device. Returns its remote end alongside the console one.
+async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, InternalPipeTransport, IrqSource, mpsc::Receiver<DisplayFrame>, Option<display::DisplayGeometryPayload>), String> {
     let config_path = profile_dir.join("emulator.toml");
 
     let config: Config = Figment::new()
@@ -139,6 +148,14 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
         .map_err(|e| format!("Failed to create console transport: {e}"))?;
 
     let transport_slot: TransportSlot = Arc::new(Mutex::new(Some((Box::new(local) as Box<dyn Transport>, relay, reporter))));
+
+    // No `DeviceId` exists yet at this point either — `KeyboardModule::instantiate` binds its
+    // own reporter once its id is known, same as the console reporter above.
+    let kbd_reporter = TransportReporter::pending(None);
+    let ((kbd_local, kbd_relay), kbd_remote) = InternalPipeTransport::pair(kbd_reporter.clone())
+        .map_err(|e| format!("Failed to create keyboard transport: {e}"))?;
+    let keyboard_transport_slot: TransportSlot =
+        Arc::new(Mutex::new(Some((Box::new(kbd_local) as Box<dyn Transport>, kbd_relay, kbd_reporter))));
 
     // Bounded to 2 (design doc §6): the device's own vsync composites at most `frame_rate_hz`
     // times per second, and the bridge task's wall-clock rate limiting (`display::run_display_bridge`)
@@ -158,7 +175,7 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
         clock_hz: config.clock_speed_hz,
         error_sender: None,
         console_transport: Some(transport_slot),
-        keyboard_transport: None,
+        keyboard_transport: Some(keyboard_transport_slot),
         log_sender: Some(log_sender.clone()),
         display_frame_sink: Some(display_frame_slot),
         display_geometry_sink: Some(display_geometry_slot.clone()),
@@ -174,7 +191,7 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
 
     let ui_irq_source = IrqSource::from(device_id);
     let display_geometry = display_geometry_slot.lock().unwrap().take().map(display::DisplayGeometryPayload::from);
-    Ok((session, remote, ui_irq_source, display_frame_rx, display_geometry))
+    Ok((session, remote, kbd_remote, ui_irq_source, display_frame_rx, display_geometry))
 }
 
 /// Stops any free-running CPU (Run, Step Over, or Step Return) and waits for
@@ -227,6 +244,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     *app.state::<terminal::TerminalTx>().0.lock().unwrap() = None;
     app.state::<terminal::TerminalHistory>().0.lock().unwrap().clear();
     *app.state::<display::DisplayGeometryState>().0.lock().unwrap() = None;
+    *app.state::<keyboard::KeyboardTx>().0.lock().unwrap() = None;
 
     *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
 
@@ -246,9 +264,16 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
         });
 
     match load_session(profile_dir, log_sender.clone()).await {
-        Ok((session, remote, ui_irq_source, display_frame_rx, display_geometry)) => {
+        Ok((session, remote, kbd_remote, ui_irq_source, display_frame_rx, display_geometry)) => {
             let (remote_rx, remote_tx) = remote.into_split();
             *app.state::<terminal::TerminalTx>().0.lock().unwrap() = Some(remote_tx);
+
+            // The rx half is intentionally dropped: `into_split()` returns two independently-
+            // `try_clone()`d `File`s with no coupling requiring both to stay alive, and nothing
+            // ever writes to this pipe from the emulator side — `Keyboard::write(0, _)` never
+            // calls `transport.send()`, by design (this device is input-only).
+            let (_kbd_remote_rx, kbd_remote_tx) = kbd_remote.into_split();
+            *app.state::<keyboard::KeyboardTx>().0.lock().unwrap() = Some(kbd_remote_tx);
 
             let frame_rate_hz = display_geometry.map(|g| g.frame_rate_hz);
             *app.state::<display::DisplayGeometryState>().0.lock().unwrap() = display_geometry;
@@ -475,6 +500,7 @@ pub fn run() {
         .manage(terminal::TerminalTx(Mutex::new(None)))
         .manage(terminal::TerminalTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
         .manage(terminal::TerminalScaleFactorOverride(cli.scale_factor))
+        .manage(keyboard::KeyboardTx(Mutex::new(None)))
         .manage(display::DisplayTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
         .manage(display::DisplayGeometryState::default())
         .manage(CpuState(Mutex::new(None)))
@@ -637,6 +663,7 @@ pub fn run() {
             terminal::detach_terminal,
             terminal::attach_terminal,
             terminal::get_terminal_scale_factor_override,
+            keyboard::write_keyboard,
             display::detach_display,
             display::attach_display,
             display::get_display_geometry,
