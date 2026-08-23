@@ -12,17 +12,32 @@ interface DisplayGeometry {
 }
 
 /**
- * `display::DisplayFramePayload`'s shape — `pixels` arrives as a plain JSON number array (no
- * `serde_bytes` on the Rust side), same as Terminal's byte-stream events. `columns`/`rows` here
- * are the *cell* grid dimensions the frame was composited from (`CharDisplay::columns()`), not
- * the RGBA buffer's pixel dimensions — those come only from `DisplayGeometry` (glyphs are a
- * fixed 8x8, so pixel size = cells * 8, but this component reads `pixel_width`/`pixel_height`
- * from the geometry fetched on mount rather than hardcoding that factor).
+ * `display::DisplayFramePayload`'s shape — `pixels` arrives base64-encoded rather than as a
+ * plain JSON number array: decoding ~256,000 individual JSON tokens per frame at up to
+ * `frame_rate_hz` per second was slow enough (until the JS engine's JIT warmed up on that code
+ * path) that the panel visibly lagged behind the emulated program for the first several seconds.
+ * `columns`/`rows` here are the *cell* grid dimensions the frame was composited from
+ * (`CharDisplay::columns()`), not the RGBA buffer's pixel dimensions — those come only from
+ * `DisplayGeometry` (glyphs are a fixed 8x8, so pixel size = cells * 8, but this component reads
+ * `pixel_width`/`pixel_height` from the geometry fetched on mount rather than hardcoding that
+ * factor).
  */
 interface DisplayFramePayload {
-  pixels: number[];
+  pixels: string;
   columns: number;
   rows: number;
+}
+
+/** Decodes a base64 string into raw bytes — `atob` plus a `charCodeAt` loop is a native fast
+ * path on both calls, far cheaper per frame than `JSON.parse`-ing a quarter-million-element
+ * number array. */
+function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
+  const binary = atob(base64);
+  const bytes = new Uint8ClampedArray(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /**
@@ -96,7 +111,7 @@ export default function DisplayPanel() {
       const { pixel_width, pixel_height } = geometry;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      const imageData = new ImageData(new Uint8ClampedArray(event.payload.pixels), pixel_width, pixel_height);
+      const imageData = new ImageData(decodeBase64(event.payload.pixels), pixel_width, pixel_height);
       ctx.putImageData(imageData, 0, 0);
     });
     return () => {

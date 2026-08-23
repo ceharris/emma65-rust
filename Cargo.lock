@@ -1108,6 +1108,7 @@ dependencies = [
 name = "emma65-debugger"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "clap",
  "emma65",
