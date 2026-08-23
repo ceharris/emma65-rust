@@ -335,13 +335,15 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
   ) => api.addPanel({ id, component: id, title: PANEL_TITLES[id], ...rest });
 
   if (!terminalDetached) {
-    add("terminal", { initialWidth: 592 });
+    // 660, not 592: when Display shares this group it needs >=640px (2x its native 320px
+    // width) to render at a legible integer scale by default — see DisplayPanel.tsx.
+    add("terminal", { initialWidth: displayDetached ? 592 : 660 });
     if (!displayDetached) {
       add("display", { position: { referencePanel: "terminal" } });
     }
     add("memory", { position: { referencePanel: "terminal" } });
   } else if (!displayDetached) {
-    add("display", { initialWidth: 592 });
+    add("display", { initialWidth: 660 });
     add("memory", { position: { referencePanel: "display" } });
   } else {
     add("memory", { initialWidth: 592 });
