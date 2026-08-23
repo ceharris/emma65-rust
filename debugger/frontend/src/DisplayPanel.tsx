@@ -45,8 +45,17 @@ interface DisplayFramePayload {
  * device-specific state lives outside this component, so a detach/reattach cycle's unmount+
  * remount just re-fetches geometry and starts blitting fresh frames, with no state to carry
  * across the boundary.
+ *
+ * The canvas's intrinsic pixel buffer (`width`/`height` attributes) always matches the device's
+ * native resolution — an 8x8 font at 40x25 cells is only 320x200 device pixels, a couple of
+ * millimeters per glyph at a typical monitor's dot pitch, so displaying it 1:1 in CSS pixels on
+ * a high-DPI host is illegible. A `ResizeObserver` on the container recomputes the largest whole-
+ * number multiple of that native size that fits, and that integer scale is applied via the
+ * canvas's CSS `width`/`height` (not its pixel buffer) so `image-rendering: pixelated` upscales
+ * with crisp, uniform pixel edges rather than resampling the actual RGBA data.
  */
 export default function DisplayPanel() {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [geometry, setGeometry] = useState<DisplayGeometry | null>(null);
   // Read by the frame listener below without retriggering its effect on every geometry fetch —
@@ -54,6 +63,7 @@ export default function DisplayPanel() {
   // from null to a value, and the listener must already be registered to not miss a frame that
   // arrives in the gap between mount and that fetch resolving.
   const geometryRef = useRef<DisplayGeometry | null>(null);
+  const [scale, setScale] = useState(1);
 
   useEffect(() => {
     invoke<DisplayGeometry | null>("get_display_geometry")
@@ -63,6 +73,20 @@ export default function DisplayPanel() {
       })
       .catch((err) => console.error("get_display_geometry failed:", err));
   }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !geometry) return;
+    const { pixel_width, pixel_height } = geometry;
+    const recomputeScale = () => {
+      const fit = Math.min(container.clientWidth / pixel_width, container.clientHeight / pixel_height);
+      setScale(Math.max(1, Math.floor(fit)));
+    };
+    recomputeScale();
+    const observer = new ResizeObserver(recomputeScale);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [geometry]);
 
   useEffect(() => {
     const unlistenPromise = listen<DisplayFramePayload>("display-frame", (event) => {
@@ -81,8 +105,16 @@ export default function DisplayPanel() {
   }, []);
 
   return (
-    <div className="display-container">
-      {geometry && <canvas ref={canvasRef} width={geometry.pixel_width} height={geometry.pixel_height} className="display-canvas" />}
+    <div ref={containerRef} className="display-container">
+      {geometry && (
+        <canvas
+          ref={canvasRef}
+          width={geometry.pixel_width}
+          height={geometry.pixel_height}
+          style={{ width: geometry.pixel_width * scale, height: geometry.pixel_height * scale }}
+          className="display-canvas"
+        />
+      )}
     </div>
   );
 }
