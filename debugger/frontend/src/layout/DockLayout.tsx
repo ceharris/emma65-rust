@@ -155,7 +155,7 @@ function positionForReattach(
 const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: MainPanelId; direction?: "right" | "below" }>> = {
   disassembly: { referencePanel: "memory", direction: "right" },
   registers: { referencePanel: "disassembly", direction: "right" },
-  display: { referencePanel: "registers", direction: "right" },
+  display: { referencePanel: "memory" },
   watchpoints: { referencePanel: "memory", direction: "below" },
   symbols: { referencePanel: "trace" },
   stack: { referencePanel: "registers", direction: "below" },
@@ -295,11 +295,12 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
 /**
  * Hardcoded default arrangement (issue #421) mirroring a manually tailored
  * 3-column layout, captured via the existing `layout.json` persistence at
- * the default 1600x900 window size: Memory tabbed with Terminal (Watchpoints
- * below), Disassembly (Run Controls below), and Registers/Stack/Breakpoints
- * stacked, with Trace/Log/Symbols (issue #489) tabbed together spanning the
- * bottom. Used on first run and as the fallback whenever a persisted layout
- * (issue #382) is missing or fails to restore.
+ * the default 1600x900 window size: Memory tabbed with Terminal and Display
+ * (memory-mapped display device plan, Work Unit 5) (Watchpoints below),
+ * Disassembly (Run Controls below), and Registers/Stack/Breakpoints stacked,
+ * with Trace/Log/Symbols (issue #489) tabbed together spanning the bottom.
+ * Used on first run and as the fallback whenever a persisted layout (issue
+ * #382) is missing or fails to restore.
  *
  * `position: {referencePanel, direction}` splits relative to the *group*
  * containing that panel, not the whole row/column it happens to sit in —
@@ -310,10 +311,11 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
  * Adding a "below" split before the row exists instead nests the next
  * "right" split inside that same cell, collapsing all three columns' heights
  * down to just the top row. Tabbing has no such ordering constraint, so
- * Memory/Terminal's group is established with Terminal added first (anchor)
- * and Memory tabbed onto it second — `addPanel` makes a newly added panel
- * active by default, so this order leaves Memory as the foreground tab,
- * ahead of Terminal in the tab bar.
+ * Memory/Terminal/Display's group is established with Terminal added first
+ * (anchor), Display tabbed onto it next, and Memory tabbed onto it last —
+ * `addPanel` makes a newly added panel active by default, so this order
+ * leaves Memory as the foreground tab, ahead of both Terminal and Display in
+ * the tab bar.
  *
  * `terminalDetached`/`displayDetached` skip adding the "terminal"/"display"
  * panel respectively — reachable even on a brand-new profile with no saved
@@ -321,9 +323,10 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
  * `layout.json`, per #342) aren't profile-scoped: either panel can already be
  * detached from a previous profile when this profile builds its very first
  * default layout. Display (memory-mapped display device plan, Work Unit 5)
- * defaults to a fourth column right of Registers — its own dock group rather
- * than tabbed with anything, since a character-cell display benefits from
- * dedicated space rather than competing for a tab strip.
+ * tabs into the same group as Memory/Terminal, added before Memory in every
+ * branch below so Memory — added last — stays the foreground tab, same
+ * "addPanel makes a newly added panel active" reasoning as Memory/Terminal's
+ * own ordering.
  */
 function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: boolean, displayDetached: boolean) {
   const add = (
@@ -333,15 +336,18 @@ function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: bool
 
   if (!terminalDetached) {
     add("terminal", { initialWidth: 592 });
+    if (!displayDetached) {
+      add("display", { position: { referencePanel: "terminal" } });
+    }
     add("memory", { position: { referencePanel: "terminal" } });
+  } else if (!displayDetached) {
+    add("display", { initialWidth: 592 });
+    add("memory", { position: { referencePanel: "display" } });
   } else {
     add("memory", { initialWidth: 592 });
   }
   add("disassembly", { position: { referencePanel: "memory", direction: "right" } });
   add("registers", { position: { referencePanel: "disassembly", direction: "right" }, initialWidth: 202 });
-  if (!displayDetached) {
-    add("display", { position: { referencePanel: "registers", direction: "right" }, initialWidth: 320 });
-  }
   add("watchpoints", { position: { referencePanel: "memory", direction: "below" } });
   add("stack", { position: { referencePanel: "registers", direction: "below" } });
   add("breakpoints", { position: { referencePanel: "stack", direction: "below" } });
@@ -455,7 +461,7 @@ function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached
       position: { referencePanel: "memory" },
     });
   }
-  if (!hasDisplay && !displayDetached && api.getPanel("registers")) {
+  if (!hasDisplay && !displayDetached) {
     api.addPanel({
       id: "display",
       component: "display",
@@ -852,8 +858,9 @@ export default function DockLayout() {
   }, []);
 
   // Same as the Terminal reattach effect above, for Display — falls back to
-  // its default fourth-column position (`DEFAULT_PANEL_POSITION.display`)
-  // when there's no resolvable remembered position.
+  // its default position tabbed with Memory/Terminal
+  // (`DEFAULT_PANEL_POSITION.display`) when there's no resolvable remembered
+  // position.
   useEffect(() => {
     const unlistenPromise = listen("display-reattached", () => {
       const api = apiRef.current;
