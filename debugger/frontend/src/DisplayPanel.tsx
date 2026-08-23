@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { DockviewPanelApi } from "dockview-react";
+import { APP_KEY_BINDINGS } from "./useAppKeyBindings";
 
 /** `display::DisplayGeometryPayload`'s shape — fixed for the device's lifetime, so this is fetched once on mount rather than tracked as changing state. */
 interface DisplayGeometry {
@@ -41,6 +43,36 @@ function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
 }
 
 /**
+ * Encodes a keydown event into the single byte forwarded to `write_keyboard`, or `null` if
+ * this key isn't forwarded at all (bare modifier keydowns, Alt/Meta combos, and anything else
+ * outside the small table below all pass through untouched — see the memory-mapped keyboard
+ * device plan §6). Deliberately small and principled rather than an ad hoc list: printable
+ * single-character keys send their char code directly; a handful of named keys map to their
+ * standard ASCII control codes; and Ctrl+<letter> uses the standard ASCII control-code
+ * derivation (`charCode(letter) - 64`) rather than hardcoding any particular combination's
+ * meaning — this one rule produces `0x03` for Ctrl+C for free, plus every other control code,
+ * with no break-key-specific logic here at all (the backend's `break=` attribute is what gives
+ * any particular byte break-key significance).
+ */
+function keyboardByteForEvent(e: KeyboardEvent): number | null {
+  if (e.altKey || e.metaKey) return null;
+  if (e.ctrlKey) {
+    return /^[a-zA-Z]$/.test(e.key) ? e.key.toUpperCase().charCodeAt(0) - 64 : null;
+  }
+  switch (e.key) {
+    case "Enter":
+      return 0x0d;
+    case "Backspace":
+      return 0x08;
+    case "Tab":
+      return 0x09;
+    case "Escape":
+      return 0x1b;
+  }
+  return e.key.length === 1 ? e.key.charCodeAt(0) : null;
+}
+
+/**
  * The dock panel hosting the memory-mapped display device's composited output (Work Unit 5 of
  * the memory-mapped display device plan — see `doc/memory-mapped-display-device-plan.md`
  * design §11). A dumb blit target only: compositing (char/color RAM + palette + font -> RGBA)
@@ -48,12 +80,26 @@ function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
  * bridge task), so this component does nothing but size a `<canvas>` from `get_display_geometry`
  * and `putImageData` whatever arrives on `"display-frame"`.
  *
- * No `dockPanelApi` prop, unlike `TerminalPanel` — the canvas has a fixed intrinsic pixel size
- * driven entirely by device configuration (columns/rows are fixed for the device's lifetime),
- * not a user-resizable content area the way Terminal's size-preset menu resizes its host. A
- * resized dock cell just scales the canvas via CSS (`.display-container`'s `object-fit: contain`
- * equivalent, done here as `max-width`/`max-height` with preserved aspect ratio), never
- * resampling the actual pixel buffer.
+ * Also the input side of the memory-mapped keyboard device plan's Work Unit 4 (see
+ * `doc/memory-mapped-keyboard-device-plan.md` §6): the canvas is focusable (`tabIndex={0}`) and
+ * forwards `keydown` bytes to `write_keyboard`, silently absorbed if no `keyboard` device is
+ * configured. Rather than requiring an explicit click into the canvas every time, it auto-focuses
+ * itself whenever this panel/window has focus (see the dedicated `useEffect` below) — docked,
+ * that means whenever this tab becomes dockview's active tab, or whenever the main window regains
+ * OS focus while this tab is already active; detached, any window focus, since the detached
+ * window hosts nothing else. This intentionally *does* risk stealing focus from Terminal if both
+ * `console` and `display/char` are configured and the user switches to the Display tab — accepted
+ * as the point of the feature (no extra click needed) rather than the earlier no-auto-focus
+ * stance, since the panel/window-focus gating (as opposed to unconditional focus-on-mount) means
+ * it only takes focus when the user has actually navigated to this panel.
+ *
+ * `dockPanelApi` prop, like `TerminalPanel`, but purely to observe `onDidActiveChange`/`isActive`
+ * for the auto-focus behavior above — unlike Terminal's use of it for `setSize()`, the canvas
+ * itself has a fixed intrinsic pixel size driven entirely by device configuration (columns/rows
+ * are fixed for the device's lifetime), not a user-resizable content area. A resized dock cell
+ * just scales the canvas via CSS (`.display-container`'s `object-fit: contain` equivalent, done
+ * here as `max-width`/`max-height` with preserved aspect ratio), never resampling the actual pixel
+ * buffer.
  *
  * Mounted in both the docked panel and the detached-Display window
  * (`display-detached.tsx`), same reuse shape as `TerminalPanel`/`terminal-detached.tsx`: no
@@ -69,7 +115,12 @@ function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
  * canvas's CSS `width`/`height` (not its pixel buffer) so `image-rendering: pixelated` upscales
  * with crisp, uniform pixel edges rather than resampling the actual RGBA data.
  */
-export default function DisplayPanel() {
+interface DisplayPanelProps {
+  /** Present when docked (see `panelRegistry.tsx`); absent in the detached-Display window. */
+  dockPanelApi?: DockviewPanelApi;
+}
+
+export default function DisplayPanel({ dockPanelApi }: DisplayPanelProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [geometry, setGeometry] = useState<DisplayGeometry | null>(null);
@@ -119,6 +170,31 @@ export default function DisplayPanel() {
     };
   }, []);
 
+  // Auto-focuses the canvas whenever this panel/window has focus, so keydown reaches the keyboard
+  // device without an extra click into the canvas first. Docked: refocuses on every
+  // `onDidActiveChange` (switching to this tab) and on every window `focus` event while this tab
+  // is already the active one (e.g. alt-tabbing back into an already-selected Display tab).
+  // Detached: `display-detached.tsx` hosts nothing but this panel, so any window `focus` refocuses
+  // unconditionally. Runs once immediately too, covering the case where the panel/window already
+  // has focus by the time `geometry` arrives and the canvas first exists.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const isPanelActive = () => !dockPanelApi || dockPanelApi.isActive;
+    const focusIfActive = () => {
+      if (isPanelActive()) canvas.focus({ preventScroll: true });
+    };
+    focusIfActive();
+    window.addEventListener("focus", focusIfActive);
+    const activeDisposable = dockPanelApi?.onDidActiveChange((e) => {
+      if (e.isActive) canvas.focus({ preventScroll: true });
+    });
+    return () => {
+      window.removeEventListener("focus", focusIfActive);
+      activeDisposable?.dispose();
+    };
+  }, [dockPanelApi, geometry]);
+
   return (
     <div ref={containerRef} className="display-container">
       {geometry && (
@@ -128,6 +204,16 @@ export default function DisplayPanel() {
           height={geometry.pixel_height}
           style={{ width: geometry.pixel_width * scale, height: geometry.pixel_height * scale }}
           className="display-canvas"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            // Let app-wide shortcuts (Ctrl+Shift+T/D) bypass keyboard-device capture — mirrors
+            // TerminalPanel.tsx's attachCustomKeyEventHandler guard.
+            if (APP_KEY_BINDINGS.some((b) => b.matches(e.nativeEvent))) return;
+            const byte = keyboardByteForEvent(e.nativeEvent);
+            if (byte === null) return;
+            e.preventDefault();
+            invoke("write_keyboard", { bytes: [byte] }).catch(() => {});
+          }}
         />
       )}
     </div>

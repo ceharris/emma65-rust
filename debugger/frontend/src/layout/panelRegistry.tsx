@@ -51,7 +51,9 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   registers: () => <RegisterPanel />,
   disassembly: () => <DisassemblyPanel />,
   memory: () => <MemoryPanel />,
-  display: () => <DisplayPanel />,
+  // Threads the dockview panel API down so the canvas can auto-focus itself whenever this tab
+  // becomes the active one (see DisplayPanel.tsx) — same pattern as Terminal's dockPanelApi below.
+  display: ({ api }) => <DisplayPanel dockPanelApi={api} />,
   stack: () => <StackPanel />,
   symbols: () => <SymbolsPanel />,
   watchpoints: () => <WatchpointPanel />,
