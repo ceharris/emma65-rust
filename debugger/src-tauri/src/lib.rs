@@ -158,6 +158,7 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
         clock_hz: config.clock_speed_hz,
         error_sender: None,
         console_transport: Some(transport_slot),
+        keyboard_transport: None,
         log_sender: Some(log_sender.clone()),
         display_frame_sink: Some(display_frame_slot),
         display_geometry_sink: Some(display_geometry_slot.clone()),
