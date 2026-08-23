@@ -184,6 +184,32 @@ body {
   overflow: hidden;
 }
 
+// --- display panel ---
+
+// Centers the canvas, whose CSS size `DisplayPanel` sets to an integer multiple of its native
+// pixel size (large enough to be legible on a high-DPI host) computed from this container's
+// size — the canvas' own width/height attributes stay at the device's fixed intrinsic pixel size
+// (design §11's "dumb blit target"); only its CSS box scales.
+.display-container {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+}
+
+.display-canvas {
+  // Safety clamp only: shrinks the JS-computed integer-scaled size back down if the container
+  // is smaller than even a 1x render (e.g. a tiny dock cell), preserving aspect ratio.
+  max-width: 100%;
+  max-height: 100%;
+  // Crisp upscaling for a low-res pixel grid rather than a blurry resample — matches how a
+  // character-cell display's glyph edges should look scaled up.
+  image-rendering: pixelated;
+}
+
 // --- assembler editor ---
 
 .assembler-container {

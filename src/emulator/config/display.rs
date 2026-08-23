@@ -89,6 +89,10 @@ impl DeviceModule for CharDisplayModule {
             palette,
         );
 
+        if let Some(sender) = &context.log_sender {
+            device.set_log_sender(sender.clone());
+        }
+
         // Both slots (design doc §9) are consumed the same way `console_transport` is: present
         // only when a host (the debugger) wants to receive this device's output, absent (a
         // no-op here) for the plain `emma65` CLI.

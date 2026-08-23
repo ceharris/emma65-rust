@@ -36,6 +36,7 @@ const LAYOUT_PERSIST_DEBOUNCE_MS = 500;
 interface DockLayoutData {
   dockview: SerializedDockview | null;
   terminal_detached: boolean;
+  display_detached: boolean;
   panel_positions: Partial<Record<MainPanelId, PanelPosition>> | null;
 }
 
@@ -104,30 +105,38 @@ const RUN_CONTROLS_DEFAULT_POSITION: AddPanelPositionOptions = { referencePanel:
 const RUN_CONTROLS_FLOAT_BOUNDS: FloatingGroupOptions = { x: 460, y: 40, width: RUN_CONTROLS_MIN_WIDTH, height: 100 };
 
 /**
- * Records the "terminal" panel's current group/index into `positionRef`
- * before closing it, so a later reattach (`positionForReattach` below) can
- * restore it there. Shared by the dock tab's own Detach button and the
- * Window-menu/native-close-driven detach path (`terminal-detach-requested`),
- * since both ultimately just close the same panel.
+ * Records `id`'s current group/index into `positionRef` before closing it, so
+ * a later reattach (`positionForReattach` below) can restore it there. Shared
+ * by a dock tab's own Detach button and the Window-menu/native-close-driven
+ * detach path (`terminal-detach-requested`/`display-detach-requested`), since
+ * both ultimately just close the same panel. Generic over `id` — Terminal
+ * (issue #385) and Display (memory-mapped display device plan, Work Unit 5)
+ * are the only two detachable panels, so this one function backs both.
  */
-function closeTerminalPanel(api: DockviewReadyEvent["api"] | null, positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
-  const panel = api?.getPanel("terminal");
+function closeDockedPanel(
+  api: DockviewReadyEvent["api"] | null,
+  id: MainPanelId,
+  positionRef: React.MutableRefObject<DockedPanelPosition | null>,
+) {
+  const panel = api?.getPanel(id);
   if (!panel) return;
   positionRef.current = { group_id: panel.group.id, index: panel.group.panels.indexOf(panel) };
   panel.api.close();
 }
 
 /**
- * Resolves where to re-add the "terminal" panel on reattach: the remembered
- * pre-detach group/index if that group still exists (it won't if Terminal
- * was the last panel in it — dockview removes emptied groups), otherwise
- * Terminal's usual default position, tabbed with Memory (issue #421).
+ * Resolves where to re-add a just-reattached panel: the remembered pre-detach
+ * group/index if that group still exists (it won't if the panel was the last
+ * one in it — dockview removes emptied groups), otherwise `fallback` (each
+ * caller's own default docked position).
  */
-function positionForReattach(api: DockviewReadyEvent["api"], remembered: DockedPanelPosition | null): AddPanelPositionOptions {
+function positionForReattach(
+  api: DockviewReadyEvent["api"],
+  remembered: DockedPanelPosition | null,
+  fallback: AddPanelPositionOptions,
+): AddPanelPositionOptions {
   const groupStillExists = remembered !== null && api.getGroup(remembered.group_id) !== undefined;
-  return groupStillExists
-    ? { referenceGroup: remembered.group_id, index: remembered.index }
-    : { referencePanel: "memory" };
+  return groupStillExists ? { referenceGroup: remembered.group_id, index: remembered.index } : fallback;
 }
 
 /**
@@ -146,6 +155,7 @@ function positionForReattach(api: DockviewReadyEvent["api"], remembered: DockedP
 const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: MainPanelId; direction?: "right" | "below" }>> = {
   disassembly: { referencePanel: "memory", direction: "right" },
   registers: { referencePanel: "disassembly", direction: "right" },
+  display: { referencePanel: "memory" },
   watchpoints: { referencePanel: "memory", direction: "below" },
   symbols: { referencePanel: "trace" },
   stack: { referencePanel: "registers", direction: "below" },
@@ -285,11 +295,12 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
 /**
  * Hardcoded default arrangement (issue #421) mirroring a manually tailored
  * 3-column layout, captured via the existing `layout.json` persistence at
- * the default 1600x900 window size: Memory tabbed with Terminal (Watchpoints
- * below), Disassembly (Run Controls below), and Registers/Stack/Breakpoints
- * stacked, with Trace/Log/Symbols (issue #489) tabbed together spanning the
- * bottom. Used on first run and as the fallback whenever a persisted layout
- * (issue #382) is missing or fails to restore.
+ * the default 1600x900 window size: Memory tabbed with Terminal and Display
+ * (memory-mapped display device plan, Work Unit 5) (Watchpoints below),
+ * Disassembly (Run Controls below), and Registers/Stack/Breakpoints stacked,
+ * with Trace/Log/Symbols (issue #489) tabbed together spanning the bottom.
+ * Used on first run and as the fallback whenever a persisted layout (issue
+ * #382) is missing or fails to restore.
  *
  * `position: {referencePanel, direction}` splits relative to the *group*
  * containing that panel, not the whole row/column it happens to sit in —
@@ -300,26 +311,40 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
  * Adding a "below" split before the row exists instead nests the next
  * "right" split inside that same cell, collapsing all three columns' heights
  * down to just the top row. Tabbing has no such ordering constraint, so
- * Memory/Terminal's group is established with Terminal added first (anchor)
- * and Memory tabbed onto it second — `addPanel` makes a newly added panel
- * active by default, so this order leaves Memory as the foreground tab,
- * ahead of Terminal in the tab bar.
+ * Memory/Terminal/Display's group is established with Terminal added first
+ * (anchor), Display tabbed onto it next, and Memory tabbed onto it last —
+ * `addPanel` makes a newly added panel active by default, so this order
+ * leaves Memory as the foreground tab, ahead of both Terminal and Display in
+ * the tab bar.
  *
- * `terminalDetached` skips adding the "terminal" panel — reachable even on a
- * brand-new profile with no saved dockview arrangement yet, since the
- * terminal-detached flag (like the rest of `layout.json`, per #342) isn't
- * profile-scoped: Terminal can already be detached from a previous profile
- * when this profile builds its very first default layout.
+ * `terminalDetached`/`displayDetached` skip adding the "terminal"/"display"
+ * panel respectively — reachable even on a brand-new profile with no saved
+ * dockview arrangement yet, since both detached flags (like the rest of
+ * `layout.json`, per #342) aren't profile-scoped: either panel can already be
+ * detached from a previous profile when this profile builds its very first
+ * default layout. Display (memory-mapped display device plan, Work Unit 5)
+ * tabs into the same group as Memory/Terminal, added before Memory in every
+ * branch below so Memory — added last — stays the foreground tab, same
+ * "addPanel makes a newly added panel active" reasoning as Memory/Terminal's
+ * own ordering.
  */
-function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: boolean) {
+function addDefaultLayout(api: DockviewReadyEvent["api"], terminalDetached: boolean, displayDetached: boolean) {
   const add = (
     id: MainPanelId,
     rest: { position?: AddPanelPositionOptions; initialWidth?: number; initialHeight?: number },
   ) => api.addPanel({ id, component: id, title: PANEL_TITLES[id], ...rest });
 
   if (!terminalDetached) {
-    add("terminal", { initialWidth: 592 });
+    // 660, not 592: when Display shares this group it needs >=640px (2x its native 320px
+    // width) to render at a legible integer scale by default — see DisplayPanel.tsx.
+    add("terminal", { initialWidth: displayDetached ? 592 : 660 });
+    if (!displayDetached) {
+      add("display", { position: { referencePanel: "terminal" } });
+    }
     add("memory", { position: { referencePanel: "terminal" } });
+  } else if (!displayDetached) {
+    add("display", { initialWidth: 660 });
+    add("memory", { position: { referencePanel: "display" } });
   } else {
     add("memory", { initialWidth: 592 });
   }
@@ -387,10 +412,12 @@ function persistLayout(api: DockviewReadyEvent["api"], lastPositions: Partial<Re
 }
 
 /**
- * Adds Trace, Log, and Terminal if a just-restored layout is missing any of
- * them — i.e. it was persisted before #383/#384 introduced Trace/Log, or
- * before #421 moved Terminal's default home to Memory's tab group. Returns
- * whether anything was added, so the caller knows whether to re-persist.
+ * Adds Trace, Log, Terminal, and Display if a just-restored layout is missing
+ * any of them — i.e. it was persisted before #383/#384 introduced Trace/Log,
+ * before #421 moved Terminal's default home to Memory's tab group, or before
+ * the memory-mapped display device plan's Work Unit 5 introduced Display.
+ * Returns whether anything was added, so the caller knows whether to
+ * re-persist.
  *
  * `api.fromJSON` doesn't error just because the saved JSON has fewer panels
  * than `panelComponents` now registers — it happily restores a valid subset
@@ -399,15 +426,16 @@ function persistLayout(api: DockviewReadyEvent["api"], lastPositions: Partial<Re
  * is the only other place that adds them. Any future addition needs the
  * same kind of reconciliation here.
  *
- * `terminalDetached` skips adding "terminal" even when it's absent — a
- * missing "terminal" panel is only a stale-layout bug when Terminal isn't
+ * `terminalDetached`/`displayDetached` skip adding "terminal"/"display" even
+ * when absent — a missing panel is only a stale-layout bug when it isn't
  * currently detached; when it is, `restoreLayout` is the one place that
  * knows to leave it out.
  */
-function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached: boolean): boolean {
+function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached: boolean, displayDetached: boolean): boolean {
   const hasTrace = api.getPanel("trace") !== undefined;
   const hasLog = api.getPanel("log") !== undefined;
   const hasTerminal = api.getPanel("terminal") !== undefined;
+  const hasDisplay = api.getPanel("display") !== undefined;
   if (!hasTrace) {
     api.addPanel({
       id: "trace",
@@ -435,7 +463,15 @@ function addMissingBottomPanels(api: DockviewReadyEvent["api"], terminalDetached
       position: { referencePanel: "memory" },
     });
   }
-  return !hasTrace || !hasLog || (!hasTerminal && !terminalDetached);
+  if (!hasDisplay && !displayDetached) {
+    api.addPanel({
+      id: "display",
+      component: "display",
+      title: PANEL_TITLES.display,
+      position: DEFAULT_PANEL_POSITION.display,
+    });
+  }
+  return !hasTrace || !hasLog || (!hasTerminal && !terminalDetached) || (!hasDisplay && !displayDetached);
 }
 
 /**
@@ -474,14 +510,16 @@ function addMissingRunControlsPanel(api: DockviewReadyEvent["api"], lastPosition
  * but predates a since-added panel gets that panel patched in and
  * re-persisted too (see `addMissingBottomPanels`).
  *
- * The terminal-detached flag returned alongside the dockview arrangement is
- * authoritative over whatever the arrangement itself happens to contain —
- * `detach_terminal`/`reattach_terminal` (`terminal.rs`) persist the flag and
- * the arrangement as two separate writes, so a crash between them can leave
- * a restored arrangement with a stale "terminal" panel despite the flag
- * saying detached (or vice versa isn't possible: `addMissingBottomPanels`
- * already treats "flag false, panel missing" as a reconciliation case). Any
- * such mismatch is corrected here before the panel actions render.
+ * The terminal-detached/display-detached flags returned alongside the
+ * dockview arrangement are authoritative over whatever the arrangement
+ * itself happens to contain — `detach_terminal`/`reattach_terminal`
+ * (`terminal.rs`) and `detach_display`/`reattach_display` (`display.rs`)
+ * persist their flag and the arrangement as two separate writes, so a crash
+ * between them can leave a restored arrangement with a stale panel despite
+ * the flag saying detached (or vice versa isn't possible:
+ * `addMissingBottomPanels` already treats "flag false, panel missing" as a
+ * reconciliation case). Any such mismatch is corrected here before the panel
+ * actions render.
  *
  * Also seeds `lastPositionsRef` from the persisted `panel_positions` map
  * (issue #393) before `fromJSON` runs, so a panel closed in a prior session
@@ -496,9 +534,11 @@ function addMissingRunControlsPanel(api: DockviewReadyEvent["api"], lastPosition
 async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: React.MutableRefObject<Partial<Record<MainPanelId, PanelPosition>>>) {
   let restored = false;
   let terminalDetached = false;
+  let displayDetached = false;
   try {
     const saved = await invoke<DockLayoutData>("get_dock_layout");
     terminalDetached = saved.terminal_detached;
+    displayDetached = saved.display_detached;
     if (saved.panel_positions) {
       lastPositionsRef.current = saved.panel_positions;
     }
@@ -510,14 +550,17 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
     console.error("Failed to restore persisted dock layout, falling back to default:", err);
   }
   if (!restored) {
-    addDefaultLayout(api, terminalDetached);
+    addDefaultLayout(api, terminalDetached, displayDetached);
     persistLayout(api, lastPositionsRef.current);
     return;
   }
   if (terminalDetached) {
     api.getPanel("terminal")?.api.close();
   }
-  const addedBottomPanels = addMissingBottomPanels(api, terminalDetached);
+  if (displayDetached) {
+    api.getPanel("display")?.api.close();
+  }
+  const addedBottomPanels = addMissingBottomPanels(api, terminalDetached, displayDetached);
   const addedRunControls = addMissingRunControlsPanel(api, lastPositionsRef.current);
   if (addedBottomPanels || addedRunControls) {
     persistLayout(api, lastPositionsRef.current);
@@ -531,19 +574,25 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
  * `activePanel.id`; groups whose active panel needs no action render
  * nothing.
  *
- * Terminal's Detach button closes over `positionRef` so it can remember
- * where Terminal was before closing it (see `closeTerminalPanel`). Clicking
- * it calls the `detach_terminal` command (shows the detached window,
- * retargets the console bridge, persists the flag — see `terminal.rs`) and
- * only then closes the dock panel, deliberately after the new window/target
- * is fully in place (issue #385's `emit_to`-retarget race mitigation).
- * Terminal also gets a size-preset hamburger icon (issue #462 Work Unit 4)
- * alongside Detach — `TerminalPanel.tsx` registers it via
+ * Terminal's Detach button closes over `terminalPositionRef` so it can
+ * remember where Terminal was before closing it (see `closeDockedPanel`).
+ * Clicking it calls the `detach_terminal` command (shows the detached
+ * window, retargets the console bridge, persists the flag — see
+ * `terminal.rs`) and only then closes the dock panel, deliberately after the
+ * new window/target is fully in place (issue #385's `emit_to`-retarget race
+ * mitigation). Terminal also gets a size-preset hamburger icon (issue #462
+ * Work Unit 4) alongside Detach — `TerminalPanel.tsx` registers it via
  * `usePanelHeaderAction`/`headerActions` (the generic fallback mechanism
  * below), same as Breakpoints/Watchpoints' single-action panels, but
  * rendered inline here instead of through that fallback branch since
  * Terminal already needs its own early-return for the hardcoded Detach
  * button.
+ *
+ * Display's Detach button (memory-mapped display device plan, Work Unit 5)
+ * mirrors Terminal's exactly, closing over `displayPositionRef` and calling
+ * `detach_display` — no size-preset icon, since Display has no equivalent
+ * menu yet (design §11 defers dock-cell resize behavior to CSS scaling
+ * rather than a user-chosen grid size).
  *
  * Run Controls' Float button (issue #404) is a plain dockview-only
  * operation — `containerApi.addFloatingGroup` moves the panel into a new
@@ -581,13 +630,16 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
  * just the fallback branch) to satisfy the rules of hooks, since the
  * terminal/run-controls branches above return early.
  */
-function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosition | null>) {
+function makeDockTabActions(
+  terminalPositionRef: React.MutableRefObject<DockedPanelPosition | null>,
+  displayPositionRef: React.MutableRefObject<DockedPanelPosition | null>,
+) {
   return function DockTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
     const headerActions = usePanelHeaderActions();
     if (activePanel?.id === "terminal") {
       const handleDetach = () => {
         invoke("detach_terminal")
-          .then(() => closeTerminalPanel(containerApi, positionRef))
+          .then(() => closeDockedPanel(containerApi, "terminal", terminalPositionRef))
           .catch((err) => console.error("detach_terminal failed:", err));
       };
       const sizeAction = headerActions.terminal;
@@ -607,6 +659,18 @@ function makeDockTabActions(positionRef: React.MutableRefObject<DockedPanelPosit
             </button>
           )}
         </>
+      );
+    }
+    if (activePanel?.id === "display") {
+      const handleDetach = () => {
+        invoke("detach_display")
+          .then(() => closeDockedPanel(containerApi, "display", displayPositionRef))
+          .catch((err) => console.error("detach_display failed:", err));
+      };
+      return (
+        <button className="dock-tab-action" onClick={handleDetach} title="Detach Display to its own window">
+          <i className="codicon codicon-multiple-windows" />
+        </button>
       );
     }
     if (activePanel?.id === "run-controls" && activePanel.group.api.location.type !== "floating") {
@@ -666,8 +730,9 @@ export default function DockLayout() {
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
   const terminalPositionRef = useRef<DockedPanelPosition | null>(null);
+  const displayPositionRef = useRef<DockedPanelPosition | null>(null);
   const lastPanelPositionRef = useRef<Partial<Record<MainPanelId, PanelPosition>>>({});
-  const DockTabActions = useMemo(() => makeDockTabActions(terminalPositionRef), []);
+  const DockTabActions = useMemo(() => makeDockTabActions(terminalPositionRef, displayPositionRef), []);
 
   useEffect(
     () => () => {
@@ -741,9 +806,10 @@ export default function DockLayout() {
   // every panel's current position/size and rebuilds the same default
   // arrangement `restoreLayout` falls back to on first run, then re-persists
   // it — the actual `layout.json` overwrite that makes the reset stick.
-  // `terminalDetached` is always false here — `restore_dock_layout` reattaches
-  // Terminal first (emitting its own `terminal-reattached`) if it was
-  // detached, since the default layout always docks it.
+  // `terminalDetached`/`displayDetached` are always false here —
+  // `restore_dock_layout` reattaches Terminal and/or Display first (emitting
+  // their own `terminal-reattached`/`display-reattached`) if either was
+  // detached, since the default layout always docks both.
   useEffect(() => {
     const unlistenPromise = listen("dock-layout-reset", () => {
       const api = apiRef.current;
@@ -751,21 +817,29 @@ export default function DockLayout() {
       api.clear();
       lastPanelPositionRef.current = {};
       terminalPositionRef.current = null;
-      addDefaultLayout(api, false);
+      displayPositionRef.current = null;
+      addDefaultLayout(api, false, false);
       persistLayout(api, lastPanelPositionRef.current);
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
-  // Rust-driven detach/reattach (the Window > Terminal menu item, and the
-  // detached window's native close button) has no JS handler of its own
-  // already in place to add/remove the "terminal" dock panel — the dock
-  // tab's own Detach button (`DockTabActions` below) does that inline
-  // since it's already running in this component, but the menu/close paths
-  // instead emit these two events for the same effect.
+  // Rust-driven detach/reattach (the Window > Terminal/Display menu items,
+  // and each detached window's native close button) has no JS handler of its
+  // own already in place to add/remove the dock panel — the dock tab's own
+  // Detach button (`DockTabActions` above) does that inline since it's
+  // already running in this component, but the menu/close paths instead emit
+  // these events for the same effect.
   useEffect(() => {
     const unlistenPromise = listen("terminal-detach-requested", () => {
-      closeTerminalPanel(apiRef.current, terminalPositionRef);
+      closeDockedPanel(apiRef.current, "terminal", terminalPositionRef);
+    });
+    return () => { unlistenPromise.then((f) => f()); };
+  }, []);
+
+  useEffect(() => {
+    const unlistenPromise = listen("display-detach-requested", () => {
+      closeDockedPanel(apiRef.current, "display", displayPositionRef);
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
@@ -779,8 +853,22 @@ export default function DockLayout() {
     const unlistenPromise = listen("terminal-reattached", () => {
       const api = apiRef.current;
       if (!api || api.getPanel("terminal")) return;
-      const position = positionForReattach(api, terminalPositionRef.current);
+      const position = positionForReattach(api, terminalPositionRef.current, { referencePanel: "memory" });
       api.addPanel({ id: "terminal", component: "terminal", title: PANEL_TITLES.terminal, position });
+    });
+    return () => { unlistenPromise.then((f) => f()); };
+  }, []);
+
+  // Same as the Terminal reattach effect above, for Display — falls back to
+  // its default position tabbed with Memory/Terminal
+  // (`DEFAULT_PANEL_POSITION.display`) when there's no resolvable remembered
+  // position.
+  useEffect(() => {
+    const unlistenPromise = listen("display-reattached", () => {
+      const api = apiRef.current;
+      if (!api || api.getPanel("display")) return;
+      const position = positionForReattach(api, displayPositionRef.current, DEFAULT_PANEL_POSITION.display!);
+      api.addPanel({ id: "display", component: "display", title: PANEL_TITLES.display, position });
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);

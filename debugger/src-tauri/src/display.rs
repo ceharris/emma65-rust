@@ -75,17 +75,29 @@ pub fn get_display_geometry(state: State<DisplayGeometryState>) -> Option<Displa
 }
 
 /// A composited frame, in the shape the frontend blits directly via `putImageData` — mirrors
-/// `emma65::emulator::DisplayFrame` field-for-field, same reasoning as `DisplayGeometryPayload`.
+/// `emma65::emulator::DisplayFrame` field-for-field, same reasoning as `DisplayGeometryPayload`,
+/// except `pixels` is base64-encoded rather than carried as a raw `Vec<u8>`: Tauri's event
+/// system serializes a `Vec<u8>` as a JSON array of individual numbers (e.g. ~256,000 of them for
+/// a 320x200 frame), and parsing that on the frontend at up to `frame_rate_hz` per second is slow
+/// enough that the panel visibly lags for the first several seconds until the JS engine's JIT
+/// warms up on that code path. Base64 encode/decode are each a single native call on both ends
+/// (Rust's `base64` crate, JS's `atob`) instead of ~256,000 parsed JSON tokens, so there's no
+/// warm-up-dependent bottleneck — worth the ~33% larger wire payload.
 #[derive(Clone, serde::Serialize)]
 pub struct DisplayFramePayload {
-    pub pixels: Vec<u8>,
+    pub pixels: String,
     pub columns: u32,
     pub rows: u32,
 }
 
 impl From<DisplayFrame> for DisplayFramePayload {
     fn from(frame: DisplayFrame) -> Self {
-        Self { pixels: frame.pixels, columns: frame.columns, rows: frame.rows }
+        use base64::Engine;
+        Self {
+            pixels: base64::engine::general_purpose::STANDARD.encode(&frame.pixels),
+            columns: frame.columns,
+            rows: frame.rows,
+        }
     }
 }
 

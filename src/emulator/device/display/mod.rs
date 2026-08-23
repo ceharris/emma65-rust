@@ -24,7 +24,7 @@ pub mod font;
 
 use self::compositing::Rgb24;
 use self::font::Font;
-use crate::emulator::{AddressRange, IoDevice};
+use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
 use tokio::sync::mpsc;
 
 /// A composited frame ready for display: an RGBA byte buffer (`columns * 8` by `rows * 8`
@@ -105,6 +105,9 @@ pub struct CharDisplay {
     /// [`Self::attach_frame_sink`] -- `None` when run outside the debugger (plain `emma65`
     /// CLI), in which case vsync never composites anything.
     frame_sink: Option<mpsc::Sender<DisplayFrame>>,
+
+    /// Sender for structured diagnostic messages (e.g. `reset()`).
+    log_sender: LogSender,
 }
 
 impl CharDisplay {
@@ -151,6 +154,7 @@ impl CharDisplay {
             font,
             palette,
             frame_sink: None,
+            log_sender: LogSender::default(),
         }
     }
 
@@ -186,6 +190,11 @@ impl CharDisplay {
     /// contract `LogSender` upholds for its own bounded channel.
     pub fn attach_frame_sink(&mut self, sink: mpsc::Sender<DisplayFrame>) {
         self.frame_sink = Some(sink);
+    }
+
+    /// Installs a log sender for diagnostic messages (e.g. `reset()`).
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = sender;
     }
 
     /// Returns the (character, color) buffer pair currently intended for scanout (spec §6):
@@ -318,6 +327,7 @@ impl IoDevice for CharDisplay {
         self.swap_pending = false;
         self.status = 0;
         self.cycle_accumulator = 0;
+        log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
     }
 
     fn name(&self) -> &str {
@@ -525,6 +535,17 @@ mod tests {
         assert_eq!(device.peek(control_addr()), 0);
         assert_eq!(device.peek(status_addr()), 0);
         assert_eq!(device.peek(char_ram_addr(0)), 0x41);
+    }
+
+    #[test]
+    fn reset_logs_device_message() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device(true);
+        device.set_log_sender(sender);
+        device.reset();
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert_eq!(received.message, format!("{DEVICE_NAME}@0x{BASE_ADDRESS:04x} reset"));
     }
 
     #[test]
