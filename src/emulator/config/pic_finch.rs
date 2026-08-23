@@ -53,7 +53,7 @@ mod tests {
     use crate::emulator::{Cpu, CpuVariant, IrqSource};
 
     fn context() -> InstantiationContext {
-        InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None }
+        InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None }
     }
 
     #[tokio::test]

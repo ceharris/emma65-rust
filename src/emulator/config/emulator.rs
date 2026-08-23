@@ -119,6 +119,8 @@ impl Config {
             error_sender: Some(error_sender),
             console_transport: None,
             log_sender: None,
+            display_frame_sink: None,
+            display_geometry_sink: None,
         };
         self.build_devices(registry, context, error_receiver).await
     }

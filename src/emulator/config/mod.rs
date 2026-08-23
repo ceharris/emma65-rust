@@ -24,7 +24,7 @@ mod display;
 mod palette;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
-pub use registry::{DeviceRegistry, InstantiationContext, TransportSlot};
+pub use registry::{DeviceRegistry, DisplayFrameSlot, DisplayGeometry, DisplayGeometrySlot, InstantiationContext, TransportSlot};
 pub use transport::{TransportSpec, TransportSpecFormat};
 pub use device::{DeviceSpec, DeviceModule, DeviceModuleError};
 pub use memory::{RamModule, RomModule};

@@ -25,6 +25,24 @@ pub mod font;
 use self::compositing::Rgb24;
 use self::font::Font;
 use crate::emulator::{AddressRange, IoDevice};
+use tokio::sync::mpsc;
+
+/// A composited frame ready for display: an RGBA byte buffer (`columns * 8` by `rows * 8`
+/// pixels, as produced by [`compositing::composite`]) plus the cell dimensions it was
+/// composited from -- self-describing since a delivery client has no other way to learn the
+/// device's configured grid size until a frame actually arrives.
+///
+/// Pushed to a device's frame sink once per vsync (design doc §6, §9) -- the device-driven push
+/// channel the debugger's display panel bridge task consumes, via [`CharDisplay::attach_frame_sink`].
+#[derive(Clone)]
+pub struct DisplayFrame {
+    /// RGBA bytes, row-major, top row first, 4 bytes per pixel (see [`compositing::composite`]).
+    pub pixels: Vec<u8>,
+    /// Grid width in cells this frame was composited from.
+    pub columns: u32,
+    /// Grid height in cells this frame was composited from.
+    pub rows: u32,
+}
 
 /// Default grid width in cells, matching the spec's default.
 pub const DEFAULT_COLUMNS: u32 = 40;
@@ -82,6 +100,11 @@ pub struct CharDisplay {
     /// the instantiated device rather than being parsed and discarded.
     font: Font,
     palette: Vec<Rgb24>,
+
+    /// Push channel for composited frames (design doc §9), set post-construction via
+    /// [`Self::attach_frame_sink`] -- `None` when run outside the debugger (plain `emma65`
+    /// CLI), in which case vsync never composites anything.
+    frame_sink: Option<mpsc::Sender<DisplayFrame>>,
 }
 
 impl CharDisplay {
@@ -127,6 +150,7 @@ impl CharDisplay {
             cycle_accumulator: 0,
             font,
             palette,
+            frame_sink: None,
         }
     }
 
@@ -153,6 +177,15 @@ impl CharDisplay {
     /// The color palette fixed at configuration time (spec §3).
     pub fn palette(&self) -> &[Rgb24] {
         &self.palette
+    }
+
+    /// Attaches a push channel for composited frames (design doc §9). Once set, every vsync
+    /// (design §6) composites the current scanout buffers and sends the result with
+    /// [`mpsc::Sender::try_send`] -- never blocking `tick()`; if the consumer isn't keeping up,
+    /// the frame is silently dropped rather than stalling CPU execution, the same never-blocks
+    /// contract `LogSender` upholds for its own bounded channel.
+    pub fn attach_frame_sink(&mut self, sink: mpsc::Sender<DisplayFrame>) {
+        self.frame_sink = Some(sink);
     }
 
     /// Returns the (character, color) buffer pair currently intended for scanout (spec §6):
@@ -203,13 +236,19 @@ impl CharDisplay {
         self.scanout_color_ram.copy_from_slice(&self.color_ram);
     }
 
-    /// The vsync-equivalent tick (spec §5.3): sets the vsync status flag and performs a pending
-    /// swap, if any.
+    /// The vsync-equivalent tick (spec §5.3): sets the vsync status flag, performs a pending
+    /// swap if any, and -- if a frame sink is attached (design §9) -- composites the resulting
+    /// scanout buffers and pushes the frame.
     fn on_vsync(&mut self) {
         self.status |= STATUS_VSYNC;
         if self.swap_pending {
             self.perform_swap();
             self.swap_pending = false;
+        }
+        if let Some(sink) = &self.frame_sink {
+            let (char_ram, color_ram) = self.frame_source();
+            let pixels = compositing::composite(char_ram, color_ram, self.columns, self.rows, &self.palette, &self.font);
+            let _ = sink.try_send(DisplayFrame { pixels, columns: self.columns, rows: self.rows });
         }
     }
 }
@@ -287,6 +326,13 @@ impl IoDevice for CharDisplay {
 
     fn identity_address(&self) -> u16 {
         self.address_range.start
+    }
+
+    /// Drops the frame sink, closing the channel from this end -- the channel equivalent of
+    /// the terminal bridge seeing EOF on its pipe (design doc §10), ending the debugger's
+    /// display bridge task's `recv()` loop.
+    fn shutdown(&mut self) {
+        self.frame_sink = None;
     }
 }
 
@@ -498,5 +544,37 @@ mod tests {
         );
         assert_eq!(device.font(), &font);
         assert_eq!(device.palette(), palette.as_slice());
+    }
+
+    #[test]
+    fn vsync_pushes_a_composited_frame_to_an_attached_sink() {
+        let mut device = device(true);
+        let (tx, mut rx) = mpsc::channel(1);
+        device.attach_frame_sink(tx);
+        device.write(char_ram_addr(0), 0x41);
+        device.write(color_ram_addr(0), 1);
+        device.tick(10_000); // one vsync at this device's cycles_per_frame (1_000_000 / 100)
+
+        let frame = rx.try_recv().expect("expected a composited frame after vsync");
+        assert_eq!(frame.columns, COLUMNS);
+        assert_eq!(frame.rows, ROWS);
+        assert_eq!(frame.pixels.len(), (COLUMNS * 8 * ROWS * 8 * 4) as usize);
+    }
+
+    #[test]
+    fn vsync_with_no_attached_sink_still_sets_the_status_flag() {
+        let mut device = device(true);
+        device.tick(10_000);
+        assert_ne!(device.peek(status_addr()) & STATUS_VSYNC, 0);
+    }
+
+    #[test]
+    fn shutdown_drops_the_frame_sink_closing_the_channel() {
+        let mut device = device(true);
+        let (tx, mut rx) = mpsc::channel(1);
+        device.attach_frame_sink(tx);
+        device.shutdown();
+        device.tick(10_000);
+        assert!(rx.try_recv().is_err(), "channel should be closed once the sink is dropped");
     }
 }

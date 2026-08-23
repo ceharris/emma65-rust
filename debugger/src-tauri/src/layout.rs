@@ -27,6 +27,10 @@ pub struct DockLayoutData {
     /// rather than docked in the main layout.
     #[serde(default)]
     pub terminal_detached: bool,
+    /// Same as `terminal_detached`, but for the Display panel — see the memory-mapped display
+    /// device plan, Work Unit 4.
+    #[serde(default)]
+    pub display_detached: bool,
     /// Opaque per-panel "last known dock position" map (issue #393):
     /// dockview panel id -> `{group_id, index}`, kept up to date by
     /// `DockLayout.tsx`'s `recordPanelPositions` and consulted when the View
@@ -93,11 +97,23 @@ pub(crate) fn set_terminal_detached(app: &AppHandle, detached: bool) -> Result<(
     save_dock_layout_to(&profile::config_dir()?, &data)
 }
 
+/// Updates the display-detached flag and persists it, leaving everything else untouched.
+/// Mirrors `set_terminal_detached` exactly; not exposed as a Tauri command for the same reason.
+pub(crate) fn set_display_detached(app: &AppHandle, detached: bool) -> Result<(), String> {
+    let data = {
+        let state = app.state::<LayoutState>();
+        let mut guard = state.0.lock().unwrap();
+        guard.display_detached = detached;
+        guard.clone()
+    };
+    save_dock_layout_to(&profile::config_dir()?, &data)
+}
+
 /// Discards the persisted dock arrangement and per-panel position map
-/// (issue #398's Window > Restore Layout…), reattaching Terminal first if
-/// it's currently detached to its own window — the default layout always
-/// docks Terminal, so a restore that left it floating separately wouldn't
-/// actually be "default." Invoked from the frontend confirmation dialog
+/// (issue #398's Window > Restore Layout…), reattaching Terminal and/or Display first if either
+/// is currently detached to its own window — the default layout always docks both, so a restore
+/// that left one floating separately wouldn't actually be "default." Invoked from the frontend
+/// confirmation dialog
 /// opened by `emit_open_restore_layout_dialog`, once the user clicks
 /// "Restore". This only clears the Rust-side record and re-saves the empty
 /// result to `layout.json`; the `dock-layout-reset` event it emits is what
@@ -107,9 +123,16 @@ pub(crate) fn set_terminal_detached(app: &AppHandle, detached: bool) -> Result<(
 /// whatever was on screen before this ran).
 #[tauri::command]
 pub fn restore_dock_layout(app: AppHandle) -> Result<(), String> {
-    let was_detached = app.state::<LayoutState>().0.lock().unwrap().terminal_detached;
-    if was_detached {
+    let (terminal_was_detached, display_was_detached) = {
+        let state = app.state::<LayoutState>();
+        let guard = state.0.lock().unwrap();
+        (guard.terminal_detached, guard.display_detached)
+    };
+    if terminal_was_detached {
         crate::terminal::reattach_terminal(&app);
+    }
+    if display_was_detached {
+        crate::display::reattach_display(&app);
     }
     let data = {
         let state = app.state::<LayoutState>();
@@ -156,6 +179,7 @@ mod tests {
         let data = DockLayoutData {
             dockview: Some(serde_json::json!({"grid": {"root": {"type": "leaf"}}})),
             terminal_detached: true,
+            display_detached: false,
             panel_positions: Some(serde_json::json!({"trace": {"group_id": "group_1", "index": 0}})),
         };
         save_dock_layout_to(&dir, &data).unwrap();

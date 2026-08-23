@@ -70,6 +70,8 @@ async fn main() -> ExitCode {
         error_sender: None,
         console_transport: Some(Arc::clone(&console_transport_slot)),
         log_sender: Some(log_sender.clone()),
+        display_frame_sink: None,
+        display_geometry_sink: None,
     };
     let session = match config.emulator.build_with_context(&registry, context).await {
         Ok(s) => s,

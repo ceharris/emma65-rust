@@ -117,6 +117,8 @@ mod tests {
             clock_hz: None,
             error_sender: None,
             log_sender: None,
+            display_frame_sink: None,
+            display_geometry_sink: None,
             console_transport: Some(slot),
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
@@ -136,6 +138,8 @@ mod tests {
             clock_hz: None,
             error_sender: None,
             log_sender: None,
+            display_frame_sink: None,
+            display_geometry_sink: None,
             console_transport: Some(Arc::clone(&slot)),
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
@@ -160,6 +164,8 @@ mod tests {
             clock_hz: None,
             error_sender: None,
             log_sender: None,
+            display_frame_sink: None,
+            display_geometry_sink: None,
             console_transport: Some(Arc::clone(&slot)),
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
@@ -178,6 +184,8 @@ mod tests {
             clock_hz: None,
             error_sender: None,
             log_sender: None,
+            display_frame_sink: None,
+            display_geometry_sink: None,
             console_transport: Some(Arc::new(Mutex::new(Some((
                 Box::new(local) as Box<dyn Transport>, relay, reporter.clone(),
             ))))),
@@ -203,6 +211,8 @@ mod tests {
             clock_hz: None,
             error_sender: None,
             log_sender: None,
+            display_frame_sink: None,
+            display_geometry_sink: None,
             console_transport: None,
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));

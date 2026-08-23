@@ -27,6 +27,16 @@
         "resizable": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "label": "display-detached",
+        "title": "Emma65 Display",
+        "url": "display-detached.html",
+        "width": 640,
+        "height": 400,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {

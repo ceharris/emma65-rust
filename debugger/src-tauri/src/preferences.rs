@@ -122,6 +122,11 @@ pub struct UiConfig {
     /// window is actually detached (visible) — see issue #419.
     #[serde(default)]
     pub terminal_window_geometry: Option<WindowGeometry>,
+    /// Same as `terminal_window_geometry`, but for the detached-Display window
+    /// (`display::DISPLAY_DETACHED_WINDOW_LABEL`) — see the memory-mapped
+    /// display device plan, Work Unit 4.
+    #[serde(default)]
+    pub display_window_geometry: Option<WindowGeometry>,
     /// Structured terminal preferences (text/cursor/compatibility) — see
     /// issue #467. Replaces the formerly flat `terminal_font_family`/
     /// `terminal_font_size`/`terminal_scrollback` fields; a `ui.toml`
