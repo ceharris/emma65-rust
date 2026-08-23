@@ -18,6 +18,32 @@ impl Rgb24 {
     }
 }
 
+/// The bundled default palette (spec §3): the classic 16-color IBM CGA/VGA text-mode palette --
+/// plain RGB triples, not derived from any copyrighted asset. Used whenever a device is
+/// configured without a `palette=` attribute; kept here as the device's own compiled-in
+/// fallback (mirrors `Font::default()`) rather than in `emulator::config`, which only handles
+/// *user-supplied* palette files.
+pub fn default_palette() -> Vec<Rgb24> {
+    vec![
+        Rgb24::new(0x00, 0x00, 0x00),
+        Rgb24::new(0x00, 0x00, 0xAA),
+        Rgb24::new(0x00, 0xAA, 0x00),
+        Rgb24::new(0x00, 0xAA, 0xAA),
+        Rgb24::new(0xAA, 0x00, 0x00),
+        Rgb24::new(0xAA, 0x00, 0xAA),
+        Rgb24::new(0xAA, 0x55, 0x00),
+        Rgb24::new(0xAA, 0xAA, 0xAA),
+        Rgb24::new(0x55, 0x55, 0x55),
+        Rgb24::new(0x55, 0x55, 0xFF),
+        Rgb24::new(0x55, 0xFF, 0x55),
+        Rgb24::new(0x55, 0xFF, 0xFF),
+        Rgb24::new(0xFF, 0x55, 0x55),
+        Rgb24::new(0xFF, 0x55, 0xFF),
+        Rgb24::new(0xFF, 0xFF, 0x55),
+        Rgb24::new(0xFF, 0xFF, 0xFF),
+    ]
+}
+
 /// Resolves a color-RAM byte to a palette entry using the modulo rule (design doc §2):
 /// `index % palette.len()`, unconditionally -- bit-identical to power-of-two masking for
 /// every power-of-two palette length, and well-defined for every other length too.
@@ -140,5 +166,13 @@ mod tests {
         // Cell 1's top-left pixel (pixel_x = 8, pixel_y = 0): light gray.
         let cell1_offset = 8 * 4;
         assert_eq!(&pixels[cell1_offset..cell1_offset + 4], &[200, 200, 200, 255]);
+    }
+
+    #[test]
+    fn default_palette_has_16_entries_starting_with_black() {
+        let palette = default_palette();
+        assert_eq!(palette.len(), 16);
+        assert_eq!(palette[0], Rgb24::new(0, 0, 0));
+        assert_eq!(palette[15], Rgb24::new(0xFF, 0xFF, 0xFF));
     }
 }
