@@ -4,9 +4,9 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::{DeviceModule, DeviceModuleError, InstantiationContext, TransportSpec, TransportSpecFormat};
+use super::{DeviceModule, DeviceModuleError, InstantiationContext};
 use crate::emulator::bus::DeviceIdAllocator;
-use crate::emulator::device::Console;
+use crate::emulator::device::Keyboard;
 use crate::emulator::transport::TransportRelay;
 use crate::emulator::{AddressRange, BusConfig, IoDevice};
 
@@ -14,24 +14,23 @@ use crate::emulator::{AddressRange, BusConfig, IoDevice};
 const BUS_SIZE: u16 = 2;
 
 // Default device/IRQ identifier
-const DEFAULT_IRQ: u32 = 3;
+const DEFAULT_IRQ: u32 = 7;
 
-/// Buffered console device module.
+/// Memory-mapped keyboard input device module.
 #[derive(Clone)]
-pub struct ConsoleModule;
+pub struct KeyboardModule;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub struct ConsoleAttributes {
+pub struct KeyboardAttributes {
     #[serde(rename = "break", skip_serializing_if = "Option::is_none")]
-    break_key: Option <u8>,
-    transport: Option<TransportSpecFormat>,
+    break_key: Option<u8>,
     irq: Option<u32>,
 }
 
-impl DeviceModule for ConsoleModule {
+impl DeviceModule for KeyboardModule {
 
-    fn name(&self) -> &'static str { "console" }
+    fn name(&self) -> &'static str { "keyboard" }
 
     async fn instantiate(&self,
                          bus_config: BusConfig, address: u16,
@@ -41,29 +40,19 @@ impl DeviceModule for ConsoleModule {
             -> Result<BusConfig, DeviceModuleError> {
 
         let attrs = Dict::from_iter(attributes.clone());
-        let config: ConsoleAttributes = figment::Figment::new()
+        let config: KeyboardAttributes = figment::Figment::new()
             .merge(Serialized::defaults(attrs))
             .extract()
             .map_err(|e| DeviceModuleError::Config(format!("configuration error: {e}")))?;
-
-        let transport_spec = config.transport
-            .map(TransportSpec::try_from)
-            .transpose()
-            .map_err(DeviceModuleError::Config)?;
 
         let irq = config.irq.unwrap_or(DEFAULT_IRQ);
         let device_id = id_allocator.lock().unwrap()
             .for_irq(irq)
             .map_err(DeviceModuleError::BusConfig)?;
 
-        let console = {
-            let mut dev = Console::new(self.name()).with_address(address);
-            if let Some(transport_spec) = transport_spec {
-                let (transport, relay) = transport_spec
-                    .to_transport_with_reporter(context.transport_reporter(dev.identity()), context.pipe_exit_reporter(dev.identity())).await
-                    .map_err(DeviceModuleError::Transport)?;
-                dev.attach_transport(transport, relay);
-            } else if let Some((transport, relay, reporter)) = context.console_transport.as_ref()
+        let keyboard = {
+            let mut dev = Keyboard::new(self.name()).with_address(address);
+            if let Some((transport, relay, reporter)) = context.keyboard_transport.as_ref()
                     .and_then(|slot| slot.lock().ok()?.take()) {
                 // The reporter was constructed via `TransportReporter::pending`
                 // before this device existed (the `TransportSlot`
@@ -85,7 +74,7 @@ impl DeviceModule for ConsoleModule {
 
         bus_config.device(
             AddressRange::new(address, address + (BUS_SIZE - 1)),
-            device_id, Box::new(console))
+            device_id, Box::new(keyboard))
             .map_err(DeviceModuleError::BusConfig)
     }
 
@@ -110,72 +99,42 @@ mod tests {
         (slot, reporter, remote)
     }
 
-    #[tokio::test]
-    async fn instantiate_with_injected_transport() {
-        let (slot, _reporter, mut remote) = injected_slot();
-        let context = InstantiationContext {
+    fn context_with_keyboard_slot(slot: TransportSlot) -> InstantiationContext {
+        InstantiationContext {
             clock_hz: None,
             error_sender: None,
             log_sender: None,
             display_frame_sink: None,
             display_geometry_sink: None,
-            console_transport: Some(slot),
-            keyboard_transport: None,
-        };
+            console_transport: None,
+            keyboard_transport: Some(slot),
+        }
+    }
+
+    #[tokio::test]
+    async fn instantiate_with_injected_transport() {
+        let (slot, _reporter, mut remote) = injected_slot();
+        let context = context_with_keyboard_slot(slot);
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
-        let bus_config = ConsoleModule.instantiate(
+        let bus_config = KeyboardModule.instantiate(
             BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
 
         let mut bus = bus_config.build();
-        bus.write(0xFFF8, 0x41).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        assert_eq!(remote.try_recv(), Some(0x41));
+        remote.send(0x42);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        bus.tick_devices(1);
+        assert_eq!(bus.read(0xFFF9).unwrap(), 0x42);
     }
 
     #[tokio::test]
     async fn injected_transport_is_consumed() {
         let (slot, _reporter, _remote) = injected_slot();
-        let context = InstantiationContext {
-            clock_hz: None,
-            error_sender: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            console_transport: Some(Arc::clone(&slot)),
-            keyboard_transport: None,
-        };
+        let context = context_with_keyboard_slot(Arc::clone(&slot));
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
-        let _bus_config = ConsoleModule.instantiate(
+        let _bus_config = KeyboardModule.instantiate(
             BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
 
         assert!(slot.lock().unwrap().is_none(), "transport should be taken after instantiation");
-    }
-
-    #[tokio::test]
-    async fn injected_transport_ignored_when_transport_spec_is_set() {
-        // When a transport= attribute is configured, the context transport must not be consumed,
-        // so that the caller can detect whether stdio will be used (e.g. to enter raw mode).
-        let (slot, _reporter, _remote) = injected_slot();
-        let mut attributes = HashMap::new();
-        // pipe transport is the only variant we can create without an OS resource in a unit test
-        attributes.insert(
-            "transport".to_string(),
-            Value::from("pipe:/usr/bin/cat"),
-        );
-        let context = InstantiationContext {
-            clock_hz: None,
-            error_sender: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            console_transport: Some(Arc::clone(&slot)),
-            keyboard_transport: None,
-        };
-        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
-        let _result = ConsoleModule.instantiate(
-            BusConfig::new(), 0xFFF8, &attributes, &context, id_allocator).await;
-
-        assert!(slot.lock().unwrap().is_some(), "context transport should not be consumed when transport_spec is set");
     }
 
     #[tokio::test]
@@ -183,19 +142,12 @@ mod tests {
         let (error_sender, mut error_receiver) = crate::emulator::device_event_channel();
         let reporter = TransportReporter::pending(Some(error_sender));
         let ((local, relay), _remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
-        let context = InstantiationContext {
-            clock_hz: None,
-            error_sender: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            console_transport: Some(Arc::new(Mutex::new(Some((
-                Box::new(local) as Box<dyn Transport>, relay, reporter.clone(),
-            ))))),
-            keyboard_transport: None,
-        };
+        let slot = Arc::new(Mutex::new(Some((
+            Box::new(local) as Box<dyn Transport>, relay, reporter.clone(),
+        ))));
+        let context = context_with_keyboard_slot(slot);
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
-        let _bus_config = ConsoleModule.instantiate(
+        let _bus_config = KeyboardModule.instantiate(
             BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
 
         // Before `instantiate` runs, this reporter is unbound (the device doesn't exist yet at
@@ -210,7 +162,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn instantiate_without_injected_transport_and_no_spec() {
+    async fn instantiate_without_injected_transport() {
         let context = InstantiationContext {
             clock_hz: None,
             error_sender: None,
@@ -221,13 +173,53 @@ mod tests {
             keyboard_transport: None,
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
-        let bus_config = ConsoleModule.instantiate(
+        let bus_config = KeyboardModule.instantiate(
             BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
 
         let mut bus = bus_config.build();
-        // Console with no transport: write is silent, read returns 0
-        bus.write(0xFFF8, 0x42).unwrap();
+        // Keyboard with no transport attached: reads simply return 0
         assert_eq!(bus.read(0xFFF9).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn instantiate_applies_break_key() {
+        let (slot, _reporter, mut remote) = injected_slot();
+        let mut attributes = HashMap::new();
+        attributes.insert("break".to_string(), Value::from(3u8));
+        let context = context_with_keyboard_slot(slot);
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+        let bus_config = KeyboardModule.instantiate(
+            BusConfig::new(), 0xFFF8, &attributes, &context, id_allocator).await.unwrap();
+
+        let mut bus = bus_config.build();
+        remote.send(0x03);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        bus.tick_devices(1);
+        assert!(
+            bus.device_interrupt_states().any(|s| s.irq_active),
+            "expected break key to assert IRQ"
+        );
+    }
+
+    #[tokio::test]
+    async fn instantiate_uses_configured_irq() {
+        let mut attributes = HashMap::new();
+        attributes.insert("irq".to_string(), Value::from(9u32));
+        let context = InstantiationContext {
+            clock_hz: None,
+            error_sender: None,
+            log_sender: None,
+            display_frame_sink: None,
+            display_geometry_sink: None,
+            console_transport: None,
+            keyboard_transport: None,
+        };
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+        let _bus_config = KeyboardModule.instantiate(
+            BusConfig::new(), 0xFFF8, &attributes, &context, id_allocator.clone()).await.unwrap();
+
+        // IRQ 9 is now taken -- allocating it again should fail.
+        assert!(id_allocator.lock().unwrap().for_irq(9).is_err());
     }
 
 }

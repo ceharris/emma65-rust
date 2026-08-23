@@ -69,6 +69,7 @@ async fn main() -> ExitCode {
         clock_hz: config.emulator.clock_speed_hz,
         error_sender: None,
         console_transport: Some(Arc::clone(&console_transport_slot)),
+        keyboard_transport: None,
         log_sender: Some(log_sender.clone()),
         display_frame_sink: None,
         display_geometry_sink: None,
