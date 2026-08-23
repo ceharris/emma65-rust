@@ -15,12 +15,12 @@
 //! This device is not IRQ-capable; nothing in its register map asserts an interrupt.
 //!
 //! Compositing (turning character/color RAM plus a palette and glyph font into pixels) lives in
-//! [`compositing`] and [`font`]. Configuration wiring lives in `emulator::config::display`, added
-//! in a later work unit; this module is bus-facing register and buffer-swap behavior only.
+//! [`compositing`] and [`font`]. Configuration wiring (parsing `palette=`/`font=` file
+//! attributes) lives in `emulator::config::display`; this module is bus-facing register and
+//! buffer-swap behavior only, plus the compiled-in default font/palette fallbacks.
 
 pub mod compositing;
 pub mod font;
-pub mod palette;
 
 use self::compositing::Rgb24;
 use self::font::Font;
@@ -314,7 +314,7 @@ mod tests {
             Some(1_000_000),
             100,
             Font::default(),
-            palette::default_palette(),
+            compositing::default_palette(),
         )
     }
 
@@ -459,7 +459,7 @@ mod tests {
             None,
             DEFAULT_FRAME_RATE_HZ,
             Font::default(),
-            palette::default_palette(),
+            compositing::default_palette(),
         );
         let cycles_per_frame = NOMINAL_CLOCK_HZ / DEFAULT_FRAME_RATE_HZ as u64;
         device.tick(cycles_per_frame as u32 - 1);

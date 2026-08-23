@@ -1,14 +1,28 @@
-//! Parses the display device's palette configuration data (spec §3): a list of RGB24 color
+//! Parses a display device's `palette=` configuration file (spec §3): a list of RGB24 color
 //! triples supplied at configuration time, independent of the device's bus-addressable memory
-//! -- color RAM stores indices into this list, resolved during compositing (see
-//! `compositing::composite`).
+//! -- color RAM stores indices into this list, resolved during compositing.
 //!
 //! Palette files are plain text, one color per line: six hex digits (`RRGGBB`,
-//! case-insensitive), with an optional leading `#`. Blank lines are skipped. Text, rather than
-//! `font`'s raw bitmap bytes, is the natural format here: a flat list of colors reads and edits
-//! by hand the way a glyph bitmap does not.
+//! case-insensitive), with an optional leading `#`. Blank lines are skipped.
+//!
+//! Other formats were considered and rejected:
+//! - **Inline TOML/JSON array** (`palette = ["#000000", ...]`) directly in the device's
+//!   attribute table, avoiding a separate file -- rejected because up to 256 entries would bloat
+//!   a single device line/table, and every other file-shaped attribute this device (and `rom`)
+//!   accepts (`image=`, `labels=`, `font=`) is already a path to a separate file, not inline
+//!   structured data; a palette should follow that same convention rather than being a special
+//!   case.
+//! - **CSV** (`R,G,B` per line) -- rejected as more verbose than hex triples for no real benefit;
+//!   `#RRGGBB` is already the idiomatic way colors are written by hand (CSS/web convention).
+//! - **Binary** (raw RGB triples, mirroring `font`'s raw bitmap bytes) -- rejected because a
+//!   palette is far more likely to be hand-authored or tweaked than a font bitmap is; plain text
+//!   is directly editable without a hex editor, and parsing overhead is irrelevant at up to 256
+//!   entries.
+//! - **An existing palette-tool format** (e.g. GIMP `.gpl`) -- rejected to avoid pulling in a
+//!   parser for a foreign spec just to support hand-authoring, which a flat text file already
+//!   serves well enough.
 
-use super::compositing::Rgb24;
+use crate::emulator::device::display::compositing::Rgb24;
 use std::fmt;
 
 /// Minimum number of palette entries (spec §3: "must be non-empty").
@@ -16,10 +30,6 @@ pub const MIN_ENTRIES: usize = 1;
 /// Maximum number of palette entries (spec §3: "no more than 256 entries", since color RAM
 /// indices are a full byte).
 pub const MAX_ENTRIES: usize = 256;
-
-/// Text of the bundled default palette: the classic 16-color IBM CGA/VGA text-mode palette --
-/// plain RGB triples, not derived from any copyrighted asset.
-const DEFAULT_PALETTE_TEXT: &str = include_str!("default_palette.txt");
 
 /// An error parsing or validating palette text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,11 +90,6 @@ pub fn parse(text: &str) -> Result<Vec<Rgb24>, PaletteError> {
     Ok(colors)
 }
 
-/// Returns the bundled default palette (the classic 16-color IBM CGA/VGA text-mode palette).
-pub fn default_palette() -> Vec<Rgb24> {
-    parse(DEFAULT_PALETTE_TEXT).expect("bundled default palette must be well-formed")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,15 +128,5 @@ mod tests {
     fn rejects_malformed_entry() {
         let err = parse("FF0000\nnotacolor\n").unwrap_err();
         assert!(matches!(err, PaletteError::InvalidEntry { line: 2, .. }));
-    }
-
-    #[test]
-    fn default_palette_has_16_entries() {
-        assert_eq!(default_palette().len(), 16);
-    }
-
-    #[test]
-    fn default_palette_first_entry_is_black() {
-        assert_eq!(default_palette()[0], Rgb24::new(0, 0, 0));
     }
 }

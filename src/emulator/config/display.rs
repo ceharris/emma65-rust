@@ -1,7 +1,9 @@
+use super::palette;
 use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext};
 use crate::emulator::bus::DeviceIdAllocator;
+use crate::emulator::device::display::compositing::default_palette;
 use crate::emulator::device::display::font::Font;
-use crate::emulator::device::display::{palette, CharDisplay, DEFAULT_COLUMNS, DEFAULT_FRAME_RATE_HZ, DEFAULT_ROWS};
+use crate::emulator::device::display::{CharDisplay, DEFAULT_COLUMNS, DEFAULT_FRAME_RATE_HZ, DEFAULT_ROWS};
 use crate::emulator::{AddressRange, BusConfig};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
@@ -55,7 +57,7 @@ impl DeviceModule for CharDisplayModule {
                 let text = tokio::fs::read_to_string(path).await.map_err(DeviceModuleError::Io)?;
                 palette::parse(&text).map_err(|e| DeviceModuleError::Config(e.to_string()))?
             }
-            None => palette::default_palette(),
+            None => default_palette(),
         };
 
         let font = match &config.font {

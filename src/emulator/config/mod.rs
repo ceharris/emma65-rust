@@ -21,6 +21,7 @@ mod write_policy;
 mod vireo;
 mod led_matrix;
 mod display;
+mod palette;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
 pub use registry::{DeviceRegistry, InstantiationContext, TransportSlot};
