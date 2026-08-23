@@ -2,6 +2,7 @@ import { IDockviewPanelProps } from "dockview-react";
 import AssemblerPanel from "../AssemblerPanel";
 import BreakpointPanel from "../BreakpointPanel";
 import DisassemblyPanel from "../DisassemblyPanel";
+import DisplayPanel from "../DisplayPanel";
 import LogPanel from "../LogPanel";
 import MemoryPanel from "../MemoryPanel";
 import RegisterPanel from "../RegisterPanel";
@@ -17,6 +18,7 @@ export type MainPanelId =
   | "registers"
   | "disassembly"
   | "memory"
+  | "display"
   | "stack"
   | "symbols"
   | "watchpoints"
@@ -32,6 +34,7 @@ export const PANEL_TITLES: Record<MainPanelId, string> = {
   registers: "Registers",
   disassembly: "Disassembly",
   memory: "Memory",
+  display: "Display",
   stack: "Stack",
   symbols: "Symbols",
   watchpoints: "Watchpoints",
@@ -48,6 +51,7 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   registers: () => <RegisterPanel />,
   disassembly: () => <DisassemblyPanel />,
   memory: () => <MemoryPanel />,
+  display: () => <DisplayPanel />,
   stack: () => <StackPanel />,
   symbols: () => <SymbolsPanel />,
   watchpoints: () => <WatchpointPanel />,

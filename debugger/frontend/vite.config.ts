@@ -38,6 +38,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         "terminal-detached": resolve(__dirname, "terminal-detached.html"),
+        "display-detached": resolve(__dirname, "display-detached.html"),
       },
     },
   },

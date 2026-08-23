@@ -184,6 +184,30 @@ body {
   overflow: hidden;
 }
 
+// --- display panel ---
+
+// Centers the canvas and lets it shrink to fit a smaller dock cell or detached-window size
+// while preserving aspect ratio (letterboxing rather than stretching) — the canvas' own
+// width/height attributes stay at the device's fixed intrinsic pixel size (design §11's
+// "dumb blit target"); only its CSS box scales.
+.display-container {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+}
+
+.display-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  // Crisp upscaling for a low-res pixel grid rather than a blurry resample — matches how a
+  // character-cell display's glyph edges should look scaled up.
+  image-rendering: pixelated;
+}
+
 // --- assembler editor ---
 
 .assembler-container {

@@ -9,6 +9,9 @@ const MAIN_WINDOW_LABEL = "main";
 /** Label of the detached-Terminal window, per `TERMINAL_DETACHED_WINDOW_LABEL` in `debugger/src-tauri/src/terminal.rs`. */
 const TERMINAL_DETACHED_WINDOW_LABEL = "terminal-detached";
 
+/** Label of the detached-Display window, per `DISPLAY_DETACHED_WINDOW_LABEL` in `debugger/src-tauri/src/display.rs`. */
+const DISPLAY_DETACHED_WINDOW_LABEL = "display-detached";
+
 export interface AppKeyBinding {
   matches: (e: KeyboardEvent) => boolean;
   /** Runs the binding's action. Called with `preventDefault()` already applied to the event. */
@@ -37,7 +40,7 @@ export interface AppKeyBinding {
  * cross-window emit, since it has no direct access to the main window's
  * dockview instance (separate webview, separate JS runtime).
  */
-function revealPanel(panelId: "terminal") {
+function revealPanel(panelId: "terminal" | "display") {
   emitTo(MAIN_WINDOW_LABEL, "reveal-panel", panelId).catch((err) =>
     console.error(`emitTo reveal-panel(${panelId}) failed:`, err),
   );
@@ -73,6 +76,24 @@ export const APP_KEY_BINDINGS: AppKeyBinding[] = [
         invoke("attach_terminal").catch((err) => console.error("attach_terminal failed:", err));
       } else {
         revealPanel("terminal");
+      }
+    },
+    hasMainWindowAccelerator: true,
+  },
+  {
+    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyD",
+    // Same shape as Ctrl+Shift+T above, for the detached-Display window
+    // (memory-mapped display device plan, Work Unit 5) — it has no app menu
+    // either (`display.rs`'s `install_detached_window` calls `remove_menu()`
+    // the same way `terminal.rs`'s does), so it needs this binding as its
+    // only path back to docked. `attach_display` is the same reattach path
+    // the window's native close button and the Window > "Attach Display"
+    // menu item use.
+    run: () => {
+      if (getCurrentWindow().label === DISPLAY_DETACHED_WINDOW_LABEL) {
+        invoke("attach_display").catch((err) => console.error("attach_display failed:", err));
+      } else {
+        revealPanel("display");
       }
     },
     hasMainWindowAccelerator: true,

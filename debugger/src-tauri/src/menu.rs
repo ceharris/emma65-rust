@@ -260,16 +260,11 @@ pub fn build_menu(
     // (issue #393), and Terminal's Ctrl+Shift+T and Display's Ctrl+Shift+D
     // remain the Window menu's detach/attach accelerators below, so reusing
     // either here would collide.
-    // "display" is deliberately not in this list yet: it isn't a real dockview panel id until
-    // the memory-mapped display device plan's Work Unit 5 registers one in `panelRegistry.tsx`
-    // (`MainPanelId`) — adding a View menu entry for it here first would dispatch a
-    // `reveal-panel` id the frontend can't resolve. The Window > "Detach Display…" item below is
-    // still added now (its target is the statically-declared `display-detached` window, not a
-    // dock panel), matching Unit 4's scope in the plan.
-    let view_panels: [(&str, &str); 12] = [
+    let view_panels: [(&str, &str); 13] = [
         ("assembler", "Assembler"),
         ("breakpoints", "Breakpoints"),
         ("disassembly", "Disassembly"),
+        ("display", "Display"),
         ("log", "Log"),
         ("memory", "Memory"),
         ("registers", "Registers"),
