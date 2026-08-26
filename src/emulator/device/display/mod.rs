@@ -10,9 +10,18 @@
 //! | Character RAM    | `0`           | `cells`     | R/W    | Glyph index per cell            |
 //! | Color RAM        | `cells`       | `cells`     | R/W    | Palette index per cell          |
 //! | Control register | `2*cells`     | 1           | R/W    | See [`CONTROL_SWAP_REQUEST`] etc |
-//! | Status register  | `2*cells + 1` | 1           | R      | Bit 0: vsync flag, read-to-clear |
+//! | Status/data reg. | `2*cells + 1` | 1           | R/W    | Read: status (bit 0 vsync, bit 1 palette-update-accepted, both read-to-clear). Write: a data byte for an in-progress runtime palette update, ignored unless armed via control bit 3 (see [`CONTROL_PALETTE_ARM`]) |
 //!
 //! This device is not IRQ-capable; nothing in its register map asserts an interrupt.
+//!
+//! **Runtime palette updates**: writing [`CONTROL_PALETTE_ARM`] (bit 3) to the control register
+//! arms a 4-byte write sequence to the status/data register: `index`, `red`, `green`, `blue`.
+//! After the 4th byte, the addressed palette slot (`index` wrapped modulo the palette length, the
+//! same rule [`compositing::resolve_palette_index`] applies on the read side) is updated and
+//! status bit 1 is set. Writing control bit 3 again mid-sequence restarts it from `index`;
+//! writing a control byte with bit 3 clear -- including an otherwise-unrelated swap request or
+//! swap-on-vsync toggle -- discards any in-progress sequence and returns to idle, since bit 3 is
+//! level-sensitive on every control write rather than a one-shot pulse.
 //!
 //! Compositing (turning character/color RAM plus a palette and glyph font into pixels) lives in
 //! [`compositing`] and [`font`]. Configuration wiring (parsing `palette=`/`font=` file
@@ -62,8 +71,26 @@ const CONTROL_SWAP_REQUEST: u8 = 0b0000_0001;
 const CONTROL_SWAP_ON_VSYNC: u8 = 0b0000_0010;
 /// Control register bit 7: swap pending (read-only).
 const CONTROL_SWAP_PENDING: u8 = 0b1000_0000;
+/// Control register bit 3: write 1 to arm/restart the 4-byte runtime palette-update sequence on
+/// the status/data register; write 0 to disarm. Level-sensitive on every control-register write
+/// (see the module doc comment); always reads back 0.
+const CONTROL_PALETTE_ARM: u8 = 0b0000_1000;
 /// Status register bit 0: vsync flag. Read-to-clear.
 const STATUS_VSYNC: u8 = 0b0000_0001;
+/// Status register bit 1: a runtime palette-update sequence was just applied. Read-to-clear.
+const STATUS_PALETTE_ACCEPTED: u8 = 0b0000_0010;
+
+/// State machine for the in-progress runtime palette-update sequence (module doc comment):
+/// accumulates the `index`, `red`, `green` bytes before applying the color on the 4th (`blue`)
+/// byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaletteUpdateState {
+    Idle,
+    ExpectIndex,
+    ExpectRed(u8),
+    ExpectGreen(u8, u8),
+    ExpectBlue(u8, u8, u8),
+}
 
 /// A memory-mapped character/color-cell display device.
 pub struct CharDisplay {
@@ -87,6 +114,9 @@ pub struct CharDisplay {
     swap_on_vsync: bool,
     swap_pending: bool,
     status: u8,
+
+    /// In-progress runtime palette-update sequence state (module doc comment).
+    palette_update: PaletteUpdateState,
 
     /// Cycle-accounted vsync cadence (design §6): the fixed number of CPU cycles per frame,
     /// derived once at construction from `clock_hz` (or [`NOMINAL_CLOCK_HZ`] as a fallback) and
@@ -149,6 +179,7 @@ impl CharDisplay {
             swap_on_vsync: false,
             swap_pending: false,
             status: 0,
+            palette_update: PaletteUpdateState::Idle,
             cycles_per_frame,
             cycle_accumulator: 0,
             font,
@@ -224,6 +255,31 @@ impl CharDisplay {
         if value & CONTROL_SWAP_REQUEST != 0 {
             self.request_swap();
         }
+        // Bit 3 is level-sensitive on every control write, not a one-shot pulse: any write that
+        // doesn't hold it set -- including one aimed at bits 0/1 above -- disarms an in-progress
+        // palette-update sequence as a side effect (module doc comment).
+        if value & CONTROL_PALETTE_ARM != 0 {
+            self.palette_update = PaletteUpdateState::ExpectIndex;
+        } else {
+            self.palette_update = PaletteUpdateState::Idle;
+        }
+    }
+
+    /// Advances the runtime palette-update state machine by one data byte (module doc comment).
+    /// A no-op while idle, preserving the register's default "writes ignored" behavior.
+    fn write_palette_data(&mut self, value: u8) {
+        self.palette_update = match self.palette_update {
+            PaletteUpdateState::Idle => return,
+            PaletteUpdateState::ExpectIndex => PaletteUpdateState::ExpectRed(value),
+            PaletteUpdateState::ExpectRed(index) => PaletteUpdateState::ExpectGreen(index, value),
+            PaletteUpdateState::ExpectGreen(index, red) => PaletteUpdateState::ExpectBlue(index, red, value),
+            PaletteUpdateState::ExpectBlue(index, red, green) => {
+                let slot = compositing::resolve_palette_index(index, self.palette.len());
+                self.palette[slot] = Rgb24::new(red, green, value);
+                self.status |= STATUS_PALETTE_ACCEPTED;
+                PaletteUpdateState::Idle
+            }
+        };
     }
 
     /// Handles a swap request (spec §5.2): a no-op in single-buffered mode, an immediate copy
@@ -274,7 +330,7 @@ impl IoDevice for CharDisplay {
             self.control_register()
         } else if offset == 2 * cells + 1 {
             let value = self.status;
-            self.status &= !STATUS_VSYNC;
+            self.status &= !(STATUS_VSYNC | STATUS_PALETTE_ACCEPTED);
             value
         } else {
             0
@@ -290,8 +346,9 @@ impl IoDevice for CharDisplay {
             self.color_ram[(offset - cells) as usize] = value;
         } else if offset == 2 * cells {
             self.write_control(value);
+        } else if offset == 2 * cells + 1 {
+            self.write_palette_data(value);
         }
-        // Status register writes are ignored.
     }
 
     fn peek(&self, address: u16) -> u8 {
@@ -326,6 +383,7 @@ impl IoDevice for CharDisplay {
         self.swap_on_vsync = false;
         self.swap_pending = false;
         self.status = 0;
+        self.palette_update = PaletteUpdateState::Idle;
         self.cycle_accumulator = 0;
         log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
     }
@@ -492,6 +550,117 @@ mod tests {
         let mut device = device(true);
         device.write(status_addr(), 0xFF);
         assert_eq!(device.peek(status_addr()), 0);
+    }
+
+    #[test]
+    fn full_palette_sequence_applies_color_and_sets_accepted_status() {
+        let mut device = device(true);
+        device.write(control_addr(), CONTROL_PALETTE_ARM);
+        device.write(status_addr(), 2); // index
+        device.write(status_addr(), 10); // red
+        device.write(status_addr(), 20); // green
+        device.write(status_addr(), 30); // blue
+
+        assert_eq!(device.palette()[2], Rgb24::new(10, 20, 30));
+        assert_ne!(device.peek(status_addr()) & STATUS_PALETTE_ACCEPTED, 0);
+        assert_eq!(device.read(status_addr()) & STATUS_PALETTE_ACCEPTED, STATUS_PALETTE_ACCEPTED);
+        assert_eq!(device.peek(status_addr()) & STATUS_PALETTE_ACCEPTED, 0, "read-to-clear");
+    }
+
+    #[test]
+    fn palette_update_out_of_range_index_wraps_via_modulo() {
+        let mut device = device(true);
+        assert_eq!(device.palette().len(), 16);
+        device.write(control_addr(), CONTROL_PALETTE_ARM);
+        device.write(status_addr(), 200); // 200 % 16 == 8
+        device.write(status_addr(), 1);
+        device.write(status_addr(), 2);
+        device.write(status_addr(), 3);
+
+        assert_eq!(device.palette()[8], Rgb24::new(1, 2, 3));
+    }
+
+    #[test]
+    fn palette_data_writes_are_ignored_when_not_armed() {
+        let mut device = device(true);
+        let original = device.palette().to_vec();
+        device.write(status_addr(), 0);
+        device.write(status_addr(), 10);
+        device.write(status_addr(), 20);
+        device.write(status_addr(), 30);
+
+        assert_eq!(device.palette(), original.as_slice());
+        assert_eq!(device.peek(status_addr()) & STATUS_PALETTE_ACCEPTED, 0);
+    }
+
+    #[test]
+    fn rearming_mid_sequence_discards_partial_sequence_and_starts_fresh() {
+        let mut device = device(true);
+        device.write(control_addr(), CONTROL_PALETTE_ARM);
+        device.write(status_addr(), 0); // index (would-be first sequence)
+        device.write(status_addr(), 0xFF); // red (would-be first sequence, discarded)
+
+        device.write(control_addr(), CONTROL_PALETTE_ARM); // re-arm resets to ExpectIndex
+        device.write(status_addr(), 3); // index
+        device.write(status_addr(), 11);
+        device.write(status_addr(), 22);
+        device.write(status_addr(), 33);
+
+        assert_eq!(device.palette()[3], Rgb24::new(11, 22, 33));
+        assert_eq!(device.palette()[0], Rgb24::new(0, 0, 0), "first slot untouched by discarded sequence");
+    }
+
+    #[test]
+    fn explicit_disarm_mid_sequence_discards_sequence_and_ignores_further_writes() {
+        let mut device = device(true);
+        let original = device.palette().to_vec();
+        device.write(control_addr(), CONTROL_PALETTE_ARM);
+        device.write(status_addr(), 0); // index
+        device.write(status_addr(), 0xFF); // red
+
+        device.write(control_addr(), 0); // disarm, bit 3 clear
+        // Further writes (as if resuming the discarded sequence) are ignored until re-armed.
+        device.write(status_addr(), 1);
+        device.write(status_addr(), 2);
+        device.write(status_addr(), 3);
+
+        assert_eq!(device.palette(), original.as_slice());
+        assert_eq!(device.peek(status_addr()) & STATUS_PALETTE_ACCEPTED, 0);
+    }
+
+    #[test]
+    fn unrelated_control_write_without_arm_bit_aborts_in_progress_sequence() {
+        let mut device = device(true);
+        let original = device.palette().to_vec();
+        device.write(control_addr(), CONTROL_PALETTE_ARM);
+        device.write(status_addr(), 0); // index
+        device.write(status_addr(), 0xFF); // red
+
+        // A plain swap request, with bit 3 clear, aborts the in-progress sequence as a
+        // side effect.
+        device.write(control_addr(), CONTROL_SWAP_REQUEST);
+        device.write(status_addr(), 1);
+        device.write(status_addr(), 2);
+        device.write(status_addr(), 3);
+
+        assert_eq!(device.palette(), original.as_slice());
+    }
+
+    #[test]
+    fn reset_clears_in_progress_palette_update_state() {
+        let mut device = device(true);
+        let original = device.palette().to_vec();
+        device.write(control_addr(), CONTROL_PALETTE_ARM);
+        device.write(status_addr(), 0); // index
+        device.write(status_addr(), 0xFF); // red
+
+        device.reset();
+        // Resuming with the remaining bytes of the pre-reset sequence must not spuriously
+        // apply a color built from a mix of pre- and post-reset bytes.
+        device.write(status_addr(), 1);
+        device.write(status_addr(), 2);
+
+        assert_eq!(device.palette(), original.as_slice());
     }
 
     #[test]

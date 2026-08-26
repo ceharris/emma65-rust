@@ -70,7 +70,7 @@ char RAM region and one color RAM region at fixed offsets, always.
 | Character RAM | `0x0000` | `cells` bytes | R/W | Glyph index per cell |
 | Color RAM | `0x03E8`* | `cells` bytes | R/W | 8-bit palette index per cell (0..=255, wrapped/clamped into actual palette length — see §4.1) |
 | Control register | `0x07D0`* | 1 byte | R/W | See §4.2 |
-| Status register | `0x07D1`* | 1 byte | R (writes ignored) | See §4.3 |
+| Status/data register | `0x07D1`* | 1 byte | R/W | Read: status (§4.3). Write: a data byte for an in-progress runtime palette update (§4.4); ignored unless armed |
 
 *Offsets shown are for the 40×25 default (`cells = 1000`); they scale with
 `cells` for other configured dimensions.
@@ -101,6 +101,7 @@ color RAM must return exactly what was last written, unmodified.
 |---|---|---|
 | 0 | Swap request (write 1 to request a swap; self-clearing, always reads 0) | W |
 | 1 | Swap-on-vsync enable (0 = swap immediately on request, 1 = defer swap to next vsync) | R/W |
+| 3 | Palette-update arm/disarm (write 1 to (re)start the runtime palette-update sequence on the status/data register, §4.4; write 0 to disarm) | W |
 | 7 | Swap pending (1 = a vsync-deferred swap has been requested and not yet performed) | R |
 
 Writing bit 0 = 0 has no effect. Writing bit 0 = 1 triggers `request_swap`
@@ -111,13 +112,55 @@ buffer to update.
 Bit 1 is stored and readable independent of bit 0 — it configures how future
 swap requests are handled, not just the current write.
 
-### 4.3 Status register (offset `0x07D1`)
+Bit 3 is level-sensitive on **every** control-register write, not a one-shot
+pulse: it always reads back 0, since the palette-update state itself is not
+reflected in the control register. A consequence of this is that any control
+write that doesn't hold bit 3 set — including one aimed only at bits 0 or 1,
+such as a plain swap request or a swap-on-vsync toggle — also disarms an
+in-progress palette-update sequence as a side effect (§4.4). A program that
+needs to touch other control bits mid-sequence must hold bit 3 set on every
+such write.
+
+### 4.3 Status register (offset `0x07D1`, read side)
 
 | Bit | Meaning |
 |---|---|
-| 0 | Vsync flag — set by `on_vsync_tick`, semantics of clearing (e.g. read-to-clear vs. cleared at start of next frame) to be decided during implementation against Emma65's existing timing conventions |
+| 0 | Vsync flag — set by `on_vsync_tick`; read-to-clear |
+| 1 | Palette-update accepted — set once a full 4-byte runtime palette-update sequence (§4.4) has been applied; read-to-clear |
 
-Writes to this register are ignored.
+### 4.4 Runtime palette updates
+
+The status/data register's write side (offset `0x07D1`) lets a running program
+change a palette slot's RGB24 color without restarting the emulator. By
+default — before bit 3 of the control register (§4.2) has ever been set, or
+whenever it reads back disarmed — writes to this register are ignored
+entirely, preserving this revision's original "status register writes are
+ignored" behavior as the idle-state default.
+
+Writing control bit 3 = 1 arms a 4-byte write sequence on the status/data
+register. The four bytes, written in order, are consumed as:
+
+1. `index` — the palette slot to update, resolved with the same modulo rule
+   §4.1 uses for color-RAM lookups (`index % palette.len()`), so an
+   out-of-range index wraps rather than being rejected.
+2. `red`
+3. `green`
+4. `blue`
+
+After the 4th byte is written, the device applies `palette[index] =
+Rgb24(red, green, blue)` and sets status bit 1 (§4.3). The color takes effect
+in the next composited frame — compositing already re-reads the palette every
+vsync, so no additional signaling is needed.
+
+Re-arming (writing control bit 3 = 1 again) at any point — including
+mid-sequence — resets the state machine back to "expect index," discarding
+whatever partial sequence was in progress. Writing control bit 3 = 0
+explicitly disarms, also discarding any in-progress sequence, and returns to
+the idle default described above. As noted in §4.2, because bit 3 is
+level-sensitive on every control write, an unrelated control write that
+leaves bit 3 clear has this same disarming effect as a side effect. None of
+this signals an error — it mirrors the existing idempotent-ignore treatment
+of duplicate swap requests (§5.2).
 
 ## 5. Double buffering semantics
 
