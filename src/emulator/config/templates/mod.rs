@@ -21,9 +21,8 @@ const DEFAULT_TEMPLATE: &str = "taliforth";
 /// One bundled starter-profile template.
 pub struct Template {
     /// Stable identifier used by the `emma65` binary's `--profile` flag and
-    /// the debugger's New Profile template picker. `"default"` names the
-    /// TaliForth2 bundle and must never change: the CLI's zero-config
-    /// fallback and the debugger's `default` profile both depend on it.
+    /// the debugger's New Profile template picker. `"default"` is an alias
+    /// for the template named by `DEFAULT_TEMPLATE`.
     pub id: &'static str,
     /// Human-readable name shown in the New Profile template picker.
     pub name: &'static str,
