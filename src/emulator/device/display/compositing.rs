@@ -44,12 +44,19 @@ pub fn default_palette() -> Vec<Rgb24> {
     ]
 }
 
-/// Resolves a color-RAM byte to a palette entry using the modulo rule (design doc §2):
-/// `index % palette.len()`, unconditionally -- bit-identical to power-of-two masking for
-/// every power-of-two palette length, and well-defined for every other length too.
+/// Resolves a palette-index byte to a slot in a palette of the given length, using the modulo
+/// rule (design doc §2): `index % palette_len`, unconditionally -- bit-identical to power-of-two
+/// masking for every power-of-two palette length, and well-defined for every other length too.
+/// Shared by the color-RAM read path ([`resolve_color`]) and runtime palette-update writes
+/// (`CharDisplay::write_palette_data`).
+pub(super) fn resolve_palette_index(index: u8, palette_len: usize) -> usize {
+    index as usize % palette_len
+}
+
+/// Resolves a color-RAM byte to a palette entry using [`resolve_palette_index`].
 fn resolve_color(index: u8, palette: &[Rgb24]) -> Rgb24 {
     debug_assert!(!palette.is_empty(), "palette must be non-empty (spec §3 validates this at configuration time)");
-    palette[index as usize % palette.len()]
+    palette[resolve_palette_index(index, palette.len())]
 }
 
 /// Composites one frame of `columns * 8` by `rows * 8` RGBA pixels (4 bytes per pixel,
