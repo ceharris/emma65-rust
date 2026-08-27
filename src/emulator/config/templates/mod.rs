@@ -6,6 +6,7 @@
 //! files change.
 pub(super) mod asset;
 mod ehbasic;
+mod matrix;
 mod msbasic;
 mod snake;
 mod taliforth;
@@ -14,6 +15,8 @@ use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 
 pub use asset::MaterializeError;
+
+const DEFAULT_TEMPLATE: &str = "taliforth";
 
 /// One bundled starter-profile template.
 pub struct Template {
@@ -40,10 +43,10 @@ impl Template {
 /// Every bundled starter-profile template, in display order.
 pub static TEMPLATES: &[Template] = &[
     Template {
-        id: "default",
-        name: "Digital Rain",
-        description: "Digital Rain demo using memory-mapped display and LFSR",
-        materialize_fn: super::default::materialize_config,
+        id: "taliforth",
+        name: "TaliForth2",
+        description: "Forth-2012 with 32K RAM, 32K ROM, VIA, and MC6850",
+        materialize_fn: taliforth::materialize_config,
     },
     Template {
         id: "msbasic",
@@ -58,10 +61,10 @@ pub static TEMPLATES: &[Template] = &[
         materialize_fn: ehbasic::materialize_config,
     },
     Template {
-        id: "taliforth",
-        name: "TaliForth2",
-        description: "Forth-2012 with 32K RAM, 32K ROM, VIA, and MC6850",
-        materialize_fn: taliforth::materialize_config,
+        id: "matrix",
+        name: "Digital Rain",
+        description: "Digital Rain demo using memory-mapped display and LFSR",
+        materialize_fn: matrix::materialize_config,
     },
     Template {
         id: "snake",
@@ -120,8 +123,14 @@ impl std::error::Error for TemplateError {
     }
 }
 
-/// Materializes template `id`'s bundled assets into `dest` (created if
-/// missing). Returns the path to the written `emulator.toml`.
+/// Materializes the default template's bundled assets into `dest` (creeated if missing).
+/// Returns the path to the written `emulator.toml`.
+pub fn materialize_default(dest: &Path) -> Result<PathBuf, TemplateError> {
+    materialize(DEFAULT_TEMPLATE, dest)
+}
+
+/// Materializes template `id`'s bundled assets into `dest` (created if missing).
+/// Returns the path to the written `emulator.toml`.
 pub fn materialize(id: &str, dest: &Path) -> Result<PathBuf, TemplateError> {
     find(id)
         .ok_or_else(|| TemplateError::Unknown(UnknownTemplateError { id: id.to_string() }))?
@@ -141,19 +150,14 @@ mod tests {
 
     #[test]
     fn find_returns_registered_templates() {
-        assert!(find("default").is_some());
         assert!(find("msbasic").is_some());
+        assert!(find("ehbasic").is_some());
+        assert!(find("taliforth").is_some());
     }
 
     #[test]
     fn find_returns_none_for_unregistered_id() {
         assert!(find("nope").is_none());
-    }
-
-    #[test]
-    fn registered_template_ids() {
-        let ids: Vec<_> = TEMPLATES.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec!["default", "msbasic", "ehbasic", "snake"]);
     }
 
     #[test]

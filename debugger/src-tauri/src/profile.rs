@@ -105,7 +105,7 @@ pub fn ensure_profile_dir(name: &str) -> Result<PathBuf, String> {
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create profile directory {}: {e}", dir.display()))?;
         if name == "default" {
-            emma65::emulator::config::default::materialize_config(&dir)
+            emma65::emulator::config::templates::materialize_default(&dir)
                 .map_err(|e| format!("Failed to seed default profile: {e}"))?;
         } else {
             copy_missing_files_from_default(&dir)?;
@@ -461,21 +461,21 @@ mod tests {
     }
 
     #[test]
-    fn list_templates_returns_with_some_templtes() {
+    fn list_templates_returns_with_some_templates() {
         let templates = list_templates();
         let ids: Vec<_> = templates.iter().map(|t| t.id.as_str()).collect();
-        assert!(ids.contains(&"default"));
+        assert!(ids.contains(&"taliforth"));
         assert!(templates.iter().all(|t| !t.name.is_empty() && !t.description.is_empty()));
     }
 
     #[test]
-    fn create_profile_dir_from_template_seeds_from_msbasic() {
+    fn create_profile_dir_from_template_seeds_from_taliforth() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
-        let home = temp_home("create-from-msbasic-template");
+        let home = temp_home("create-from-taliforth-template");
         // SAFETY: HOME_ENV_LOCK excludes every other test using it, across modules.
         unsafe { std::env::set_var("HOME", &home) };
 
-        let dir = create_profile_dir_from_template("custom", "msbasic").unwrap();
+        let dir = create_profile_dir_from_template("custom", "taliforth").unwrap();
 
         assert!(dir.join("emulator.toml").exists());
         assert!(dir.join("program.bin").exists());

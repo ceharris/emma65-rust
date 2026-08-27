@@ -2,7 +2,6 @@
 mod transport;
 mod device;
 mod path;
-pub mod default;
 pub mod templates;
 mod console;
 mod keyboard;
