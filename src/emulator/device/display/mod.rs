@@ -18,10 +18,10 @@
 //! arms a 4-byte write sequence to the status/data register: `index`, `red`, `green`, `blue`.
 //! After the 4th byte, the addressed palette slot (`index` wrapped modulo the palette length, the
 //! same rule [`compositing::resolve_palette_index`] applies on the read side) is updated and
-//! status bit 1 is set. Writing control bit 3 again mid-sequence restarts it from `index`;
-//! writing a control byte with bit 3 clear -- including an otherwise-unrelated swap request or
-//! swap-on-vsync toggle -- discards any in-progress sequence and returns to idle, since bit 3 is
-//! level-sensitive on every control write rather than a one-shot pulse.
+//! status bit 1 is set. Writing control bit 3 again -- whether idle or mid-sequence -- (re)starts
+//! the sequence from `index`; there is no way to disarm it once armed short of completing or
+//! re-starting a sequence. A control write with bit 3 clear leaves the sequence state untouched,
+//! so it's safe to write the other control bits (e.g. a swap request) mid-sequence.
 //!
 //! Compositing (turning character/color RAM plus a palette and glyph font into pixels) lives in
 //! [`compositing`] and [`font`]. Configuration wiring (parsing `palette=`/`font=` file
@@ -71,9 +71,9 @@ const CONTROL_SWAP_REQUEST: u8 = 0b0000_0001;
 const CONTROL_SWAP_ON_VSYNC: u8 = 0b0000_0010;
 /// Control register bit 7: swap pending (read-only).
 const CONTROL_SWAP_PENDING: u8 = 0b1000_0000;
-/// Control register bit 3: write 1 to arm/restart the 4-byte runtime palette-update sequence on
-/// the status/data register; write 0 to disarm. Level-sensitive on every control-register write
-/// (see the module doc comment); always reads back 0.
+/// Control register bit 3: write 1 to (re)start the 4-byte runtime palette-update sequence on
+/// the status/data register. Always reads back 0; a write with this bit clear leaves the
+/// sequence state untouched (see the module doc comment).
 const CONTROL_PALETTE_ARM: u8 = 0b0000_1000;
 /// Status register bit 0: vsync flag. Read-to-clear.
 const STATUS_VSYNC: u8 = 0b0000_0001;
@@ -255,13 +255,8 @@ impl CharDisplay {
         if value & CONTROL_SWAP_REQUEST != 0 {
             self.request_swap();
         }
-        // Bit 3 is level-sensitive on every control write, not a one-shot pulse: any write that
-        // doesn't hold it set -- including one aimed at bits 0/1 above -- disarms an in-progress
-        // palette-update sequence as a side effect (module doc comment).
         if value & CONTROL_PALETTE_ARM != 0 {
             self.palette_update = PaletteUpdateState::ExpectIndex;
-        } else {
-            self.palette_update = PaletteUpdateState::Idle;
         }
     }
 
@@ -611,39 +606,19 @@ mod tests {
     }
 
     #[test]
-    fn explicit_disarm_mid_sequence_discards_sequence_and_ignores_further_writes() {
+    fn unrelated_control_write_without_arm_bit_does_not_disturb_in_progress_sequence() {
         let mut device = device(true);
-        let original = device.palette().to_vec();
         device.write(control_addr(), CONTROL_PALETTE_ARM);
-        device.write(status_addr(), 0); // index
-        device.write(status_addr(), 0xFF); // red
+        device.write(status_addr(), 5); // index
+        device.write(status_addr(), 11); // red
 
-        device.write(control_addr(), 0); // disarm, bit 3 clear
-        // Further writes (as if resuming the discarded sequence) are ignored until re-armed.
-        device.write(status_addr(), 1);
-        device.write(status_addr(), 2);
-        device.write(status_addr(), 3);
-
-        assert_eq!(device.palette(), original.as_slice());
-        assert_eq!(device.peek(status_addr()) & STATUS_PALETTE_ACCEPTED, 0);
-    }
-
-    #[test]
-    fn unrelated_control_write_without_arm_bit_aborts_in_progress_sequence() {
-        let mut device = device(true);
-        let original = device.palette().to_vec();
-        device.write(control_addr(), CONTROL_PALETTE_ARM);
-        device.write(status_addr(), 0); // index
-        device.write(status_addr(), 0xFF); // red
-
-        // A plain swap request, with bit 3 clear, aborts the in-progress sequence as a
-        // side effect.
+        // A plain swap request, with bit 3 clear, does not disarm the in-progress sequence --
+        // there is no way to disarm it short of re-arming or completing it.
         device.write(control_addr(), CONTROL_SWAP_REQUEST);
-        device.write(status_addr(), 1);
-        device.write(status_addr(), 2);
-        device.write(status_addr(), 3);
+        device.write(status_addr(), 22); // green
+        device.write(status_addr(), 33); // blue
 
-        assert_eq!(device.palette(), original.as_slice());
+        assert_eq!(device.palette()[5], Rgb24::new(11, 22, 33));
     }
 
     #[test]

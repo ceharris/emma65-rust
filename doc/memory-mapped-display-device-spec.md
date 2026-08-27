@@ -101,7 +101,7 @@ color RAM must return exactly what was last written, unmodified.
 |---|---|---|
 | 0 | Swap request (write 1 to request a swap; self-clearing, always reads 0) | W |
 | 1 | Swap-on-vsync enable (0 = swap immediately on request, 1 = defer swap to next vsync) | R/W |
-| 3 | Palette-update arm/disarm (write 1 to (re)start the runtime palette-update sequence on the status/data register, §4.4; write 0 to disarm) | W |
+| 3 | Palette-update arm (write 1 to (re)start the runtime palette-update sequence on the status/data register, §4.4) | W |
 | 7 | Swap pending (1 = a vsync-deferred swap has been requested and not yet performed) | R |
 
 Writing bit 0 = 0 has no effect. Writing bit 0 = 1 triggers `request_swap`
@@ -112,14 +112,11 @@ buffer to update.
 Bit 1 is stored and readable independent of bit 0 — it configures how future
 swap requests are handled, not just the current write.
 
-Bit 3 is level-sensitive on **every** control-register write, not a one-shot
-pulse: it always reads back 0, since the palette-update state itself is not
-reflected in the control register. A consequence of this is that any control
-write that doesn't hold bit 3 set — including one aimed only at bits 0 or 1,
-such as a plain swap request or a swap-on-vsync toggle — also disarms an
-in-progress palette-update sequence as a side effect (§4.4). A program that
-needs to touch other control bits mid-sequence must hold bit 3 set on every
-such write.
+Bit 3 always reads back 0. Writing it as 1 (re)starts the palette-update
+sequence; writing it as 0 has no effect and leaves any in-progress sequence
+untouched — there is no way to disarm an armed sequence short of completing
+it or re-arming it, so writes touching only bits 0/1/7 (e.g. a plain swap
+request) never disturb a palette update in progress.
 
 ### 4.3 Status register (offset `0x07D1`, read side)
 
@@ -132,10 +129,10 @@ such write.
 
 The status/data register's write side (offset `0x07D1`) lets a running program
 change a palette slot's RGB24 color without restarting the emulator. By
-default — before bit 3 of the control register (§4.2) has ever been set, or
-whenever it reads back disarmed — writes to this register are ignored
-entirely, preserving this revision's original "status register writes are
-ignored" behavior as the idle-state default.
+default — before bit 3 of the control register (§4.2) has ever been set —
+writes to this register are ignored entirely, preserving this revision's
+original "status register writes are ignored" behavior as the idle-state
+default.
 
 Writing control bit 3 = 1 arms a 4-byte write sequence on the status/data
 register. The four bytes, written in order, are consumed as:
@@ -154,13 +151,12 @@ vsync, so no additional signaling is needed.
 
 Re-arming (writing control bit 3 = 1 again) at any point — including
 mid-sequence — resets the state machine back to "expect index," discarding
-whatever partial sequence was in progress. Writing control bit 3 = 0
-explicitly disarms, also discarding any in-progress sequence, and returns to
-the idle default described above. As noted in §4.2, because bit 3 is
-level-sensitive on every control write, an unrelated control write that
-leaves bit 3 clear has this same disarming effect as a side effect. None of
-this signals an error — it mirrors the existing idempotent-ignore treatment
-of duplicate swap requests (§5.2).
+whatever partial sequence was in progress. There is no way to explicitly
+disarm an armed sequence: a control write with bit 3 clear, whatever else it
+does (e.g. a swap request), leaves the palette-update state untouched. This
+keeps other control-register bits fully independent of palette-update state,
+at the cost of no cancel operation — a program that starts a sequence must
+either finish it or re-arm to abandon it.
 
 ## 5. Double buffering semantics
 
