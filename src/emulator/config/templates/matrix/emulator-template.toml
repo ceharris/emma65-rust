@@ -21,3 +21,7 @@ labels = "{{LABELS}}"
 type = "lfsr"
 address = 0xfff6
 mode = "step"
+
+[[devices]]
+type = "console"
+address = 0xfff8
