@@ -8,6 +8,7 @@ pub(super) mod asset;
 mod ehbasic;
 mod msbasic;
 mod snake;
+mod taliforth;
 
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -40,8 +41,8 @@ impl Template {
 pub static TEMPLATES: &[Template] = &[
     Template {
         id: "default",
-        name: "TaliForth2",
-        description: "Forth-2012 with 32K RAM, 32K ROM, VIA, and MC6850",
+        name: "Digital Rain",
+        description: "Digital Rain demo using memory-mapped display and LFSR",
         materialize_fn: super::default::materialize_config,
     },
     Template {
@@ -55,6 +56,12 @@ pub static TEMPLATES: &[Template] = &[
         name: "EhBASIC",
         description: "Lee Davison's EhBASIC with 48K RAM, 12K ROM, and VIA",
         materialize_fn: ehbasic::materialize_config,
+    },
+    Template {
+        id: "taliforth",
+        name: "TaliForth2",
+        description: "Forth-2012 with 32K RAM, 32K ROM, VIA, and MC6850",
+        materialize_fn: taliforth::materialize_config,
     },
     Template {
         id: "snake",

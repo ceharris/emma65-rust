@@ -1,0 +1,44 @@
+# Bundled TaliForth starter-profile configuration for emma65.
+# This is a TEMPLATE: {{ROM_IMAGE}} and {{LABELS}} are replaced with
+# materialized paths when the profile is instantiated.
+
+cpu-variant = "WDC65C02"
+clock-speed-hz = 1843200
+
+[[devices]]
+type = "ram"
+address = 0x0000
+size = 32768
+fill = 0
+
+[[devices]]
+type = "rom"
+address = 0x8000
+size = 32768
+image = "{{ROM_IMAGE}}"
+labels = "{{LABELS}}"
+
+[[devices]]
+type = "via/6522"
+address = 0xff80
+transport = "unix:~/.emma/sock/via6522"
+
+[[devices]]
+type = "acia/6551"
+address = 0xfff0
+transport = "pty:~/.emma/dev/ttyS0"
+
+[[devices]]
+type = "acia/6850"
+address = 0xfff4
+transport = "pty:~/.emma/dev/ttyS1"
+
+[[devices]]
+type = "lfsr"
+address = 0xfff6
+mode = "step"
+
+[[devices]]
+type = "console"
+address = 0xfff8
+break = 0x3
