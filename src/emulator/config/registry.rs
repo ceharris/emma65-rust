@@ -1,7 +1,6 @@
 use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrModule, Mc6840Module, Mc6850Module, PhoebeModule, PicFinchModule, R6551Module, RamModule, RomModule, Via6522Module, VireoModule};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::config::display::CharDisplayModule;
-use crate::emulator::config::keyboard::KeyboardModule;
 use crate::emulator::config::led_matrix::LedMatrixModule;
 use crate::emulator::device::display::DisplayFrame;
 use crate::emulator::transport::{ChannelRelay, Transport, TransportError, TransportReporter};
@@ -65,10 +64,12 @@ pub struct InstantiationContext {
     /// constructing one from a `TransportSpec`. The slot's contents are taken
     /// (consumed) on first use, leaving `None` in its place.
     pub console_transport: Option<TransportSlot>,
-    /// A pre-created transport, relay, and reporter to inject into the
-    /// keyboard device, mirroring [`InstantiationContext::console_transport`]. Unlike the console,
-    /// the keyboard device module exposes no `transport=` attribute of its own -- this slot is the
-    /// only way it ever receives input.
+    /// A pre-created transport, relay, and reporter to inject into a display device's optional
+    /// keyboard sub-range (`keyboard_address=`), mirroring
+    /// [`InstantiationContext::console_transport`]. Consumed only by a `display/char` device that
+    /// configures `keyboard_address`; this slot is the only way such a device ever receives
+    /// keyboard input under the debugger (the plain CLI's keyboard input instead rides the same
+    /// `transport=` pipe as its frames).
     pub keyboard_transport: Option<TransportSlot>,
     /// Shared sender for diagnostic messages (e.g. device `reset()`), cloned into any device
     /// module that calls `set_log_sender`. `None` means no file sink is configured; devices keep
@@ -145,7 +146,6 @@ impl DeviceRegistry {
         r.register(RamModule);
         r.register(RomModule);
         r.register(ConsoleModule);
-        r.register(KeyboardModule);
         r.register(FinchModule);
         r.register(LedMatrixModule);
         r.register(CharDisplayModule);
