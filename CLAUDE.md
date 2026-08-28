@@ -6,11 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build              # build the emma65 and emma65-tracer binaries + library
-cargo build --workspace  # also build the debugger crate (emma65-debugger)
+cargo build --workspace  # also build the debugger crate (emma65-debugger) and the display crate (emma65-display)
+cargo build -p emma65-display  # build just the SDL2 display peripheral (needs libsdl2-dev)
 cargo test                # run the library/binary test suite
-cargo test --workspace    # also run the debugger crate's tests
+cargo test --workspace    # also run the debugger and display crates' tests
 cargo test <name>         # run a single test by name (partial match)
-cargo clippy              # lint (covers the debugger crate too — it's a workspace member)
+cargo clippy              # lint (covers the debugger and display crates too — both are workspace members)
 ```
 
 The debugger's frontend (`debugger/frontend/`) is a separate React/TypeScript/Vite project.
@@ -19,12 +20,16 @@ Tauri invokes `npm run build` there automatically as part of `cargo tauri build`
 
 ## Architecture
 
-`emma65` is a Cargo workspace (Rust 2024 edition) with two members:
+`emma65` is a Cargo workspace (Rust 2024 edition) with three members:
 
 - **`.`** (crate `emma65`) — the emulator library plus two binaries: `emma65` (the emulator)
   and `emma65-tracer` (decodes binary trace files)
 - **`debugger/src-tauri`** (crate `emma65-debugger`) — a Tauri 2 desktop app that hosts the
   emulator and exposes a full-featured debugger UI
+- **`display`** (crate `emma65-display`) — an SDL2 peripheral binary that renders the
+  `display/char` device's composited output for the plain `emma65` CLI (the debugger renders
+  it in-process instead); spawned by the emulator as a child process over a `pipe:` transport,
+  per `doc/char-display-external-protocol.md`
 
 The `emma65` library exposes two top-level public modules:
 
@@ -96,8 +101,8 @@ ExpandedPathBuf     // PathBuf that expands ~/ at construction; used for path at
 ```
 
 Built-in device modules (registered by `DeviceRegistry::with_builtins()`), by config `type` string:
-`ram`, `rom`, `console`, `mem/finch`, `display/matrix`, `lfsr`, `acia/6551`, `ptm/6840`,
-`acia/6850`, `mem/phoebe`, `via/6522`, `mem/vireo`.
+`ram`, `rom`, `console`, `mem/finch`, `display/matrix`, `display/char`, `lfsr`, `acia/6551`,
+`ptm/6840`, `acia/6850`, `mem/phoebe`, `via/6522`, `mem/vireo`.
 
 `Config::build(&registry)` iterates `devices`, dispatches each to its `DeviceModule`,
 builds the `BusConfig`, constructs `Cpu`, and returns `EmulatorSession`.
@@ -165,7 +170,7 @@ fn peek(&self, offset: u16) -> u8;   // side-effect-free (watchpoints, disassemb
 ```
 
 Built-in devices: `Console`, `R6551`, `Mc6850`, `Via6522`, `Mc6840`, `Finch`, `Phoebe`, `Vireo`,
-`LedMatrix`, `Lfsr16`. Devices that need byte-stream I/O hold a `TransportRelay` connected to
+`LedMatrix`, `CharDisplay`, `Lfsr16`. Devices that need byte-stream I/O hold a `TransportRelay` connected to
 an `Option<Box<dyn Transport>>`; the VIA and MC6840 additionally support a structured
 peer-communication protocol (ASCII or binary framing) implemented in `device::protocol`
 (`device::protocol::via`, `device::protocol::ptm`) for exchanging port/pin state with real or
@@ -275,3 +280,22 @@ React/TypeScript frontend (`debugger/frontend/`) via `#[tauri::command]`s. UI pr
 Devices requiring a byte-stream peer (VIA, MC6840, ACIAs) still use their configured
 `Transport` independent of the debugger UI; only the console is special-cased to route
 through the debugger's own terminal window.
+
+---
+
+### `display` crate (`display/`)
+
+An SDL2 desktop app (`emma65-display`) that renders a `display/char` device's composited
+output for the plain `emma65` CLI standalone (no Tauri debugger); see
+`doc/char-display-external-protocol.md` for the wire format it consumes. `emma65` spawns it as
+a child process via a `display/char` device's `transport = "pipe:..."` attribute — its own
+stdin is the pipe, so it is never run standalone against a live `emma65` process any other way.
+`src/protocol.rs` is a decode-only mirror of `emma65::emulator::device::display::protocol`
+(private to the `emma65` crate); `src/main.rs` reads the one-time header, then loops reading
+fixed-size frames on a background thread (so SDL window-close events keep pumping even if
+frames stall), compositing each with the `emma65` crate's own
+`emulator::device::display::compositing::composite` (already `pub`, reused directly — no
+rendering logic is duplicated) and blitting it via `SDL_UpdateTexture`/`SDL_RenderCopy`/
+`SDL_RenderPresent`. Building it requires SDL2 development headers (`libsdl2-dev` on
+Debian/Ubuntu); it is not built by plain `cargo build` — use `cargo build -p emma65-display`
+or `cargo build --workspace`.

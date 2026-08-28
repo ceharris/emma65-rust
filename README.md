@@ -7,7 +7,7 @@ Emma65 is a software emulator for the 65C02-family of 8-bit microprocessors.
 It provides a complete execution environment suitable for running and
 debugging programs written for classic 65C02-based systems, with support for
 flexible memory configuration, a rich set of virtual I/O devices, and
-expression-based watchpoints. The project ships three tools built on the same
+expression-based watchpoints. The project ships four tools built on the same
 emulator core:
 
 - **`emma65`** — a command-line emulator for running programs directly
@@ -16,6 +16,9 @@ emulator core:
   app) for interactively developing and troubleshooting programs
 - **`emma65-tracer`** — a utility that decodes a recorded binary execution
   trace into a human-readable, symbol-annotated disassembly listing
+- **`emma65-display`** — an SDL2 peripheral process that renders the
+  character display device (`display/char`) in its own window when running
+  `emma65` standalone (no debugger)
 
 Together they form a foundation for building retro-computing tools,
 educational simulators, and hardware-in-the-loop test rigs.
@@ -301,10 +304,11 @@ does not slow down execution. Two tools consume these traces:
 
 ## I/O Devices
 
-Ten built-in devices implement the `IoDevice` trait. Seven — Console, R6551,
-Mc6850, Via6522, Mc6840, LedMatrix, and Lfsr16 — are register-window devices
-that can be mapped into any address range on the bus; each integrates with
-the interrupt controller via `irq_active()` and `take_nmi()`, and most of
+Eleven built-in devices implement the `IoDevice` trait. Eight — Console,
+R6551, Mc6850, Via6522, Mc6840, LedMatrix, CharDisplay, and Lfsr16 — are
+register-window devices that can be mapped into any address range on the
+bus; each integrates with the interrupt controller via `irq_active()` and
+`take_nmi()` (CharDisplay is the one exception — see below), and most of
 them exchange data with the outside world over a configurable
 [Transport](#transport-options). The other three — Finch, Phoebe, and Vireo —
 are complete bank-switched memory subsystems that occupy the entire 64 KB
@@ -422,6 +426,44 @@ microcontroller:
 
 The display uses a [Transport](#transport-options) to exchange commands and
 status with a real or emulated display peripheral.
+
+### Character Display (`display/char`)
+
+A memory-mapped character/color-cell text display, with a configurable grid
+size (default 40×25 cells), an 8×8 glyph font, and a runtime-writable color
+palette:
+
+- Character RAM and color RAM, one byte per cell each — a glyph index and a
+  palette index, respectively
+- Double-buffered like `display/matrix`: writes target an off-screen buffer,
+  swapped to visible either on request or automatically on every vsync
+- Runtime palette updates via a small armed write sequence to the
+  status/data register (index, red, green, blue)
+- Not IRQ-capable — nothing in its register map asserts an interrupt
+
+See `doc/memory-mapped-display-device-spec.md` for the full register-level
+specification. Unlike the other register-window devices, `display/char` has
+no in-process console-style rendering when running the plain `emma65` CLI:
+it needs an external peripheral to actually put pixels on screen. Two ways
+to view it:
+
+- **The debugger** — the Display panel renders composited frames in-process,
+  no configuration needed.
+- **Standalone `emma65`** — configure a `pipe:` transport pointing at the
+  bundled `emma65-display` SDL2 peripheral binary (see
+  [Running the Display Peripheral](#running-the-display-peripheral) below).
+  Composited frame data (char RAM, color RAM, palette, and the font) streams
+  to the peripheral once per vsync over a wire protocol specified in
+  `doc/char-display-external-protocol.md`.
+
+```toml
+[[devices]]
+type = "display/char"
+address = 0xF000
+columns = 40
+rows = 25
+transport = "pipe:/path/to/emma65-display"
+```
 
 ### 16-bit Galois LFSR (`lfsr`)
 
@@ -587,6 +629,7 @@ EMMA65_CLOCK_SPEED_HZ=1843200
 | `via/6522`      |    16     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
 | `ptm/6840`      |     8     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
 | `display/matrix`|     8     | `transport` (optional)                                                              |
+| `display/char`  |  variable | `columns`, `rows` (optional, default 40×25), `palette`, `font` (optional paths), `double-buffered` (bool), `frame-rate-hz`, `transport` (optional, `pipe:` only) |
 | `lfsr`          |     2     | `taps` (optional u16), `mode` (`continuous` or `step`, optional)                    |
 | `mem/finch`     |     2     | `bank-registers`, `control-register` (required addresses), `image` (required path), `write-policy`, `fill`, `offset`, `labels` (all optional) |
 | `mem/phoebe`    |     1     | `control-register` (required address), `image` (required path), `write-policy`, `fill`, `ram-fill`, `offset`, `labels` (all optional) |
@@ -596,6 +639,10 @@ EMMA65_CLOCK_SPEED_HZ=1843200
 address space rather than a fixed-size register window; their register count
 above is the count of dedicated MMU/bank-control registers, placed at the
 configurable addresses shown, not a contiguous block.
+
+`display/char`'s register window is `2 * columns * rows + 2` bytes (char RAM
++ color RAM + a control register + a status/data register), so it grows with
+the configured grid size rather than being fixed.
 
 Transport shorthand values for CLI and TOML string form:
 `pipe:/path/to/exe,arg1,arg2`, `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`,
@@ -618,6 +665,45 @@ emma65-tracer [--output <path>] [--symbol-file <path>]... [--verbose] [<input>]
 - `--verbose` — additionally print the bus reads and writes performed by each
   instruction
 
+## Running the Display Peripheral
+
+`emma65-display` is an SDL2 window that renders a `display/char` device's
+composited output when running the plain `emma65` CLI standalone (the
+debugger doesn't need it — its own Display panel renders in-process). It's
+not run directly against a live emulator process; instead, the emulator
+spawns it as a child and streams frame data to it over the pipe transport's
+stdin, per the wire protocol in `doc/char-display-external-protocol.md`.
+
+Building it requires SDL2 development headers (`libsdl2-dev` on
+Debian/Ubuntu, `sdl2` on Homebrew), the same way building the debugger
+requires `gtk` on Linux:
+
+```bash
+cargo build --release -p emma65-display
+```
+
+Configure a `display/char` device with a `pipe:` transport pointing at the
+built binary:
+
+```toml
+[[devices]]
+type = "display/char"
+address = 0xF000
+transport = "pipe:/path/to/target/release/emma65-display"
+```
+
+```
+emma65 --device display/char@0xF000,transport=pipe:/path/to/target/release/emma65-display
+```
+
+The window opens as soon as the emulator attaches the transport (immediately
+on startup for a TOML/CLI-configured device), sized to the device's
+configured grid at an initial `--scale` (default `3`, an integer multiple of
+the native `columns*8` by `rows*8` pixel size); it remains resizable
+afterward and letterboxes/scales to fit. Closing the window ends
+`emma65-display`; it also exits cleanly if the emulator process exits or is
+killed first, since that closes its stdin.
+
 ## For Contributors
 
 Emma65 is written in Rust (2024 edition), as a Cargo workspace. Key
@@ -636,10 +722,14 @@ dependencies of the root `emma65` crate:
 | `figment`           | Multi-source configuration merging (TOML, env vars, CLI)            |
 | `tempfile`          | Temporary file for the embedded default ROM at startup              |
 
-The other workspace member, `debugger/src-tauri` (crate `emma65-debugger`),
-adds Tauri 2, `tauri-plugin-dialog`/`tauri-plugin-log`, and (on Linux) `gtk`
-on the Rust side, plus a React/TypeScript/Vite frontend in
-`debugger/frontend` — see [Running the Debugger](#running-the-debugger).
+The other two workspace members are thin binary crates. `debugger/src-tauri`
+(crate `emma65-debugger`) adds Tauri 2, `tauri-plugin-dialog`/
+`tauri-plugin-log`, and (on Linux) `gtk` on the Rust side, plus a
+React/TypeScript/Vite frontend in `debugger/frontend` — see
+[The Debugger](#the-debugger). `display` (crate `emma65-display`) adds the
+`sdl2` crate (requires SDL2 development headers to build — see
+[Running the Display Peripheral](#running-the-display-peripheral)) and reuses
+the root crate's compositing code directly rather than duplicating it.
 
 The root crate exposes a library (`emma65`) and two binaries, `emma65` and
 `emma65-tracer`. The library has two top-level public modules:
@@ -949,8 +1039,9 @@ transport = { pty = { path = "~/.emma/dev/ttyEcho" } }
 
 ```
 cargo build                # build the emma65 and emma65-tracer binaries
-cargo build --workspace    # also build the emma65-debugger crate
+cargo build --workspace    # also build the emma65-debugger and emma65-display crates
+cargo build -p emma65-display  # build just the SDL2 display peripheral (needs libsdl2-dev)
 cargo test                 # run all tests (includes Klaus Dormann and Bruce Clark suites)
-cargo test --workspace     # also run the debugger crate's tests
+cargo test --workspace     # also run the debugger and display crates' tests
 cargo clippy               # lint the whole workspace
 ```
