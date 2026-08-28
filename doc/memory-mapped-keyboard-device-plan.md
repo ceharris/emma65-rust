@@ -1,5 +1,9 @@
 # Memory-Mapped Keyboard Input Device — Design & Implementation Plan
 
+> **Superseded**: the standalone `Keyboard` device this plan built has been deleted. Keyboard input
+> is now an optional feature of `CharDisplay` itself — see
+> `doc/display-keyboard-integration-plan.md`. This document is kept for historical context only.
+
 ## Context
 
 The recently-shipped `CharDisplay` device (`display/char`, PRs #496-500) is output-only and
