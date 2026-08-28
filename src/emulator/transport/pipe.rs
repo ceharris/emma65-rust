@@ -14,6 +14,14 @@
 //! the child exits for any reason, the supplied `on_exit` callback is called
 //! with a describing [`io::Error`] so the event can be surfaced as an
 //! emulator-level error.
+//!
+//! [`Transport::send_bytes`] is overridden here to push a whole buffer into
+//! the outbound ring atomically (via `rtrb`'s `push_entire_slice`): either
+//! every byte fits or none do, so a caller relying on fixed-size framing
+//! (e.g. a bulk per-frame payload) never sees a partial write that would
+//! desync it. `drain_outbound` reads the ring in the same bulk fashion (via
+//! `read_chunk`), so a drain writes to `stdin` in one or two `write_all`
+//! calls (the ring can wrap) instead of one call per byte.
 
 use std::io;
 use std::process::Stdio;
@@ -67,9 +75,12 @@ impl PipeTransport {
     }
 
     /// Same as [`spawn`](Self::spawn), with the inbound/outbound ring
-    /// capacity parameterized. `pub(crate)` and used only by tests, to force
-    /// a deterministic ring overflow (capacity 1) rather than relying on
-    /// timing.
+    /// capacity parameterized. `pub(crate)`: used by tests to force a
+    /// deterministic ring overflow (capacity 1) rather than relying on
+    /// timing, and by
+    /// [`TransportSpec::to_transport_with_reporter_and_capacity`](crate::emulator::TransportSpec::to_transport_with_reporter_and_capacity)
+    /// so a device module that knows its own bulk payload size (e.g. a
+    /// per-vsync frame) can size the ring to fit it exactly.
     pub(crate) async fn spawn_with_capacity<F>(
         command: &[String],
         reporter: TransportReporter,
@@ -143,6 +154,30 @@ impl Transport for PipeTransport {
         match self.outbound.push(byte) {
             Ok(()) => self.outbound_notify.notify_one(),
             Err(PushError::Full(_)) => self.reporter.note_outbound_drop(),
+        }
+    }
+
+    /// Pushes `bytes` into the outbound ring as a single atomic chunk: if
+    /// the whole buffer doesn't fit, none of it is written and the entire
+    /// buffer is counted as dropped — never a partial push. See the module
+    /// documentation for why partial writes aren't acceptable here.
+    fn send_bytes(&mut self, bytes: &[u8]) -> bool {
+        if !self.connected.load(Ordering::Acquire) {
+            self.reporter.note_outbound_drop_n(bytes.len() as u64);
+            return false;
+        }
+        if bytes.is_empty() {
+            return true;
+        }
+        match self.outbound.push_entire_slice(bytes) {
+            Ok(()) => {
+                self.outbound_notify.notify_one();
+                true
+            }
+            Err(_) => {
+                self.reporter.note_outbound_drop_n(bytes.len() as u64);
+                false
+            }
         }
     }
 
@@ -230,6 +265,13 @@ async fn run_pipe_task<F>(
     on_exit(exit_error);
 }
 
+/// Drains everything currently available in `outbound` and writes it to
+/// `stdin` in one or two `write_all` calls (the ring can wrap, so a single
+/// drain may span two contiguous slices) rather than one call per byte.
+/// Only the portion actually written successfully is committed back to the
+/// ring as consumed, so a `write_all` failure partway through leaves the
+/// unwritten remainder in place for the next drain to retry — matching the
+/// old per-byte loop's behavior on error.
 async fn drain_outbound(
     stdin: &mut tokio::process::ChildStdin,
     outbound: &mut Consumer<u8>,
@@ -237,12 +279,33 @@ async fn drain_outbound(
     reporter: &TransportReporter,
 ) {
     notify.notified().await;
-    while let Ok(byte) = outbound.pop() {
-        if let Err(e) = stdin.write_all(&[byte]).await {
-            reporter.report_error(TransportError::Io(e));
-            return;
-        }
+    let available = outbound.slots();
+    if available == 0 {
+        return;
     }
+    let chunk = match outbound.read_chunk(available) {
+        Ok(chunk) => chunk,
+        Err(_) => return,
+    };
+
+    let (first, second) = chunk.as_slices();
+    let first_len = first.len();
+
+    if let Err(e) = stdin.write_all(first).await {
+        reporter.report_error(TransportError::Io(e));
+        chunk.commit(0);
+        return;
+    }
+
+    if !second.is_empty()
+        && let Err(e) = stdin.write_all(second).await
+    {
+        reporter.report_error(TransportError::Io(e));
+        chunk.commit(first_len);
+        return;
+    }
+
+    chunk.commit_all();
 }
 
 #[cfg(test)]
@@ -372,6 +435,74 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+
+        close(transport, relay);
+    }
+
+    #[tokio::test]
+    async fn send_bytes_round_trips_a_bulk_buffer() {
+        let (mut transport, mut relay) = PipeTransport::spawn(
+            &["cat".to_string()],
+            TransportReporter::pending(None),
+            |_| {},
+        ).await.unwrap();
+
+        let payload: Vec<u8> = (0..200u16).map(|n| (n % 256) as u8).collect();
+        assert!(transport.send_bytes(&payload));
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let mut got = Vec::new();
+        relay.drain_into(|b| got.push(b));
+        assert_eq!(got, payload);
+
+        close(transport, relay);
+    }
+
+    #[tokio::test]
+    async fn send_bytes_empty_buffer_is_a_no_op() {
+        let (mut transport, relay) = PipeTransport::spawn(
+            &["cat".to_string()],
+            TransportReporter::pending(None),
+            |_| {},
+        ).await.unwrap();
+
+        assert!(transport.send_bytes(&[]));
+
+        close(transport, relay);
+    }
+
+    #[tokio::test]
+    async fn send_bytes_drops_entire_buffer_on_overflow_not_partially() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind("test-device-100");
+        let (mut transport, mut relay) = PipeTransport::spawn_with_capacity(
+            &["cat".to_string()],
+            reporter.clone(),
+            |_| {},
+            4,
+        ).await.unwrap();
+        assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
+
+        // Ring capacity is 4; a 5-byte buffer can never fit, so the whole
+        // buffer must be dropped — not the 4 bytes that would fit.
+        let oversized = [1u8, 2, 3, 4, 5];
+        assert!(!transport.send_bytes(&oversized));
+
+        reporter.report_counts();
+        match receiver.try_recv() {
+            Ok(DeviceEvent::OutboundBytesDropped { device, count }) => {
+                assert_eq!(device, "test-device-100");
+                assert_eq!(count, oversized.len() as u64);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        // Nothing from the dropped buffer should have reached the child.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let mut got = Vec::new();
+        relay.drain_into(|b| got.push(b));
+        assert!(got.is_empty(), "expected no bytes to arrive, got {got:?}");
 
         close(transport, relay);
     }

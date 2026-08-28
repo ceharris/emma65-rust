@@ -40,10 +40,31 @@ impl TransportSpec {
     where
         F: FnOnce(std::io::Error) + Send + 'static,
     {
+        self.to_transport_with_reporter_and_capacity(reporter, on_child_exit, None).await
+    }
+
+    /// Same as [`to_transport_with_reporter`](Self::to_transport_with_reporter), but lets
+    /// the caller override the outbound/inbound ring capacity for a
+    /// [`Pipe`](TransportSpec::Pipe) variant — e.g. a device module that knows its own
+    /// bulk per-frame payload size at instantiate time can size the ring to fit it exactly,
+    /// rather than the crate's default `CHANNEL_CAPACITY`. `capacity: None` behaves exactly
+    /// like [`to_transport_with_reporter`](Self::to_transport_with_reporter); ignored for
+    /// every variant other than `Pipe`.
+    pub async fn to_transport_with_reporter_and_capacity<F>(
+        &self,
+        reporter: TransportReporter,
+        on_child_exit: F,
+        capacity: Option<usize>,
+    ) -> Result<(Box<dyn Transport>, TransportRelay), TransportError>
+    where
+        F: FnOnce(std::io::Error) + Send + 'static,
+    {
         match self {
             TransportSpec::Pipe { command } => {
-                let (transport, relay) = PipeTransport::spawn(command, reporter, on_child_exit).await
-                    .map_err(TransportError::Io)?;
+                let (transport, relay) = match capacity {
+                    Some(capacity) => PipeTransport::spawn_with_capacity(command, reporter, on_child_exit, capacity).await,
+                    None => PipeTransport::spawn(command, reporter, on_child_exit).await,
+                }.map_err(TransportError::Io)?;
                 Ok((Box::new(transport), TransportRelay::Byte(relay)))
             }
             other => other.to_transport(reporter).await,
