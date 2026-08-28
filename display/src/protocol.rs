@@ -75,7 +75,9 @@ pub fn decode_frame(bytes: &[u8], columns: u32, rows: u32) -> Frame {
     let char_ram = bytes[0..cells].to_vec();
     let color_ram = bytes[cells..2 * cells].to_vec();
     let palette = bytes[2 * cells..]
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| Rgb24::new(c[0], c[1], c[2]))
         .collect();
     Frame { char_ram, color_ram, palette }
