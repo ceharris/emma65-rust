@@ -69,6 +69,13 @@ impl Font {
         let start = glyph_index as usize * GLYPH_BYTES;
         self.data[start..start + GLYPH_BYTES].try_into().expect("glyph slice is always GLYPH_BYTES long")
     }
+
+    /// Returns the raw, `FONT_BYTES`-long bitmap data (all 256 glyphs, concatenated) -- used to
+    /// serialize the font wholesale, e.g. in the `CharDisplay` external protocol header (see
+    /// `doc/char-display-external-protocol.md`).
+    pub fn as_bytes(&self) -> &[u8] {
+        self.data.as_slice()
+    }
 }
 
 impl Default for Font {
