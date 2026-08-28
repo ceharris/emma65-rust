@@ -443,7 +443,10 @@ impl BusConfig {
         Ok(self)
     }
 
-    /// Maps an IO device over `range`.
+    /// Maps an IO device over `range`, registering it under `id`.
+    ///
+    /// `id` must be unique among all registered devices. Use `extend_device()` to map
+    /// this same device at additional ranges once it's registered.
     pub fn device(
         mut self,
         range: AddressRange,
@@ -456,6 +459,20 @@ impl BusConfig {
         self.check_overlap(range)?;
         let device_index = self.devices.len();
         self.devices.push((id, device));
+        self.regions.push(Region::Device { range, device_index });
+        Ok(self)
+    }
+
+    /// Maps an additional region over `range` for a device already registered via `device()`.
+    ///
+    /// Returns `BusConfigError::UnknownDeviceId` if `id` hasn't been registered yet.
+    pub fn extend_device(mut self, range: AddressRange, id: DeviceId) -> Result<Self, BusConfigError> {
+        let device_index = self
+            .devices
+            .iter()
+            .position(|(existing, _)| *existing == id)
+            .ok_or(BusConfigError::UnknownDeviceId(id))?;
+        self.check_overlap(range)?;
         self.regions.push(Region::Device { range, device_index });
         Ok(self)
     }
@@ -743,6 +760,90 @@ mod tests {
         assert_eq!(bus.read(0xDF05).unwrap(), 0x42);
     }
 
+    /// A device mapped at two regions — a 1-byte register and a small data window —
+    /// used to exercise `BusConfig::extend_device`.
+    struct MultiRegionDevice {
+        register_addr: u16,
+        window: AddressRange,
+        register: u8,
+        window_data: Vec<u8>,
+    }
+
+    impl MultiRegionDevice {
+        fn new(register_addr: u16, window: AddressRange) -> Self {
+            Self {
+                register_addr,
+                window,
+                register: 0,
+                window_data: vec![0u8; window.len() as usize],
+            }
+        }
+    }
+
+    impl IoDevice for MultiRegionDevice {
+        fn read(&mut self, addr: u16) -> u8 {
+            if addr == self.register_addr {
+                self.register
+            } else {
+                self.window_data[(addr - self.window.start) as usize]
+            }
+        }
+        fn write(&mut self, addr: u16, value: u8) {
+            if addr == self.register_addr {
+                self.register = value;
+            } else {
+                self.window_data[(addr - self.window.start) as usize] = value;
+            }
+        }
+        fn peek(&self, addr: u16) -> u8 {
+            if addr == self.register_addr {
+                self.register
+            } else {
+                self.window_data[(addr - self.window.start) as usize]
+            }
+        }
+        fn identity_address(&self) -> u16 {
+            self.register_addr
+        }
+    }
+
+    #[test]
+    fn extend_device_dispatches_both_ranges_to_same_device_instance() {
+        let window = AddressRange::new(0x8000, 0x8003);
+        let device = Box::new(MultiRegionDevice::new(0xFF00, window));
+        let mut bus = Bus::config()
+            .device(window, DeviceId(1), device)
+            .unwrap()
+            .extend_device(AddressRange::new(0xFF00, 0xFF00), DeviceId(1))
+            .unwrap()
+            .build();
+
+        bus.write(0xFF00, 0x03).unwrap();
+        assert_eq!(bus.read(0xFF00).unwrap(), 0x03);
+
+        bus.write(0x8000, 0xAA).unwrap();
+        bus.write(0x8001, 0xBB).unwrap();
+        assert_eq!(bus.read(0x8000).unwrap(), 0xAA);
+        assert_eq!(bus.read(0x8001).unwrap(), 0xBB);
+        // Register and window are independent storage within the same device instance.
+        assert_eq!(bus.peek(0xFF00).unwrap(), 0x03);
+    }
+
+    #[test]
+    fn extend_device_errors_for_unknown_device_id() {
+        let result = Bus::config().extend_device(AddressRange::new(0xFF00, 0xFF00), DeviceId(1));
+        assert!(matches!(result, Err(BusConfigError::UnknownDeviceId(DeviceId(1)))));
+    }
+
+    #[test]
+    fn extend_device_still_checks_overlap() {
+        let result = Bus::config()
+            .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), Box::new(MockDevice::new(0xDF00, 16)))
+            .unwrap()
+            .extend_device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1));
+        assert!(matches!(result, Err(BusConfigError::AmbiguousOverlap { .. })));
+    }
+
     #[test]
     fn peek_range_across_region_boundaries() {
         let rom_data = vec![0xAAu8; 256];
@@ -974,6 +1075,8 @@ mod tests {
         });
         let mut bus = Bus::config()
             .device(AddressRange::new(0xDF00, 0xDF0F), DeviceId(1), device)
+            .unwrap()
+            .extend_device(AddressRange::new(0xFF00, 0xFF00), DeviceId(1))
             .unwrap()
             .build();
 
