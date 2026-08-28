@@ -1,11 +1,11 @@
 [package]
-name = "emma65-display-sdl2"
+name = "emma65-display"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
 [[bin]]
-name = "emma65-display-sdl2"
+name = "emma65-display"
 path = "src/main.rs"
 
 [dependencies]

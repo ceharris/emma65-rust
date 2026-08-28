@@ -1,4 +1,4 @@
-//! `emma65-display-sdl2` — an external peripheral process that renders `CharDisplay`'s
+//! `emma65-display` — an external peripheral process that renders `CharDisplay`'s
 //! composited output in an SDL2 window.
 //!
 //! Spawned by the emulator itself via a `display/char` device's `transport = "pipe:..."`
@@ -80,7 +80,7 @@ fn spawn_frame_reader(frame_len: usize, columns: u32, rows: u32) -> mpsc::Receiv
                 }
                 Ok(false) => break, // clean EOF: emulator exited or transport shut down
                 Err(e) => {
-                    eprintln!("emma65-display-sdl2: {e}");
+                    eprintln!("emma65-display: {e}");
                     break;
                 }
             }
@@ -95,13 +95,13 @@ fn main() {
     let header = match read_header(&mut io::stdin().lock()) {
         Ok(header) => header,
         Err(e) => {
-            eprintln!("emma65-display-sdl2: failed to read header: {e}");
+            eprintln!("emma65-display: failed to read header: {e}");
             std::process::exit(1);
         }
     };
 
     eprintln!(
-        "emma65-display-sdl2: connected, {}x{} cells @ {} Hz",
+        "emma65-display: connected, {}x{} cells @ {} Hz",
         header.columns, header.rows, header.frame_rate_hz
     );
 

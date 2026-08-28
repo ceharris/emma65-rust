@@ -1128,7 +1128,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "emma65-display-sdl2"
+name = "emma65-display"
 version = "0.1.0"
 dependencies = [
  "clap",
