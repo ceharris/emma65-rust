@@ -27,12 +27,19 @@
 //! [`compositing`] and [`font`]. Configuration wiring (parsing `palette=`/`font=` file
 //! attributes) lives in `emulator::config::display`; this module is bus-facing register and
 //! buffer-swap behavior only, plus the compiled-in default font/palette fallbacks.
+//!
+//! **External protocol**: when run outside the debugger (plain `emma65` CLI), a device can
+//! optionally stream its frame data to an external peripheral process instead of (or as well
+//! as) the debugger's in-process [`DisplayFrame`] sink, via [`CharDisplay::attach_external_transport`].
+//! See `doc/char-display-external-protocol.md` for the wire format; [`protocol`] implements it.
 
 pub mod compositing;
 pub mod font;
+mod protocol;
 
 use self::compositing::Rgb24;
 use self::font::Font;
+use crate::emulator::transport::Transport;
 use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
 use tokio::sync::mpsc;
 
@@ -123,6 +130,9 @@ pub struct CharDisplay {
     /// `frame_rate_hz`.
     cycles_per_frame: u64,
     cycle_accumulator: u64,
+    /// The configured vsync cadence, kept alongside the derived `cycles_per_frame` because the
+    /// external protocol header (`protocol::encode_header`) reports it directly.
+    frame_rate_hz: u32,
 
     /// Glyph font and color palette fixed at configuration time (spec §3, §7). Not yet consumed
     /// here -- compositing a frame and pushing it to a debugger-owned sink is added in a later
@@ -135,6 +145,12 @@ pub struct CharDisplay {
     /// [`Self::attach_frame_sink`] -- `None` when run outside the debugger (plain `emma65`
     /// CLI), in which case vsync never composites anything.
     frame_sink: Option<mpsc::Sender<DisplayFrame>>,
+
+    /// Outbound-only transport for the external display protocol (`doc/char-display-external-
+    /// protocol.md`), set post-construction via [`Self::attach_external_transport`] -- `None`
+    /// unless a `transport=` attribute is configured (config wiring is a later work unit of the
+    /// SDL2 display peripheral plan).
+    external_transport: Option<Box<dyn Transport>>,
 
     /// Sender for structured diagnostic messages (e.g. `reset()`).
     log_sender: LogSender,
@@ -182,9 +198,11 @@ impl CharDisplay {
             palette_update: PaletteUpdateState::Idle,
             cycles_per_frame,
             cycle_accumulator: 0,
+            frame_rate_hz,
             font,
             palette,
             frame_sink: None,
+            external_transport: None,
             log_sender: LogSender::default(),
         }
     }
@@ -221,6 +239,16 @@ impl CharDisplay {
     /// contract `LogSender` upholds for its own bounded channel.
     pub fn attach_frame_sink(&mut self, sink: mpsc::Sender<DisplayFrame>) {
         self.frame_sink = Some(sink);
+    }
+
+    /// Attaches an outbound-only transport for the external display protocol
+    /// (`doc/char-display-external-protocol.md`). Immediately sends the one-time header;
+    /// unlike [`Self::attach_frame_sink`], nothing is sent on individual register writes --
+    /// only the header now, then one bulk frame per vsync (see [`Self::on_vsync`]).
+    pub fn attach_external_transport(&mut self, mut transport: Box<dyn Transport>) {
+        let header = protocol::encode_header(self.columns, self.rows, self.frame_rate_hz, self.palette.len() as u16, &self.font);
+        transport.send_bytes(&header);
+        self.external_transport = Some(transport);
     }
 
     /// Installs a log sender for diagnostic messages (e.g. `reset()`).
@@ -298,7 +326,9 @@ impl CharDisplay {
 
     /// The vsync-equivalent tick (spec §5.3): sets the vsync status flag, performs a pending
     /// swap if any, and -- if a frame sink is attached (design §9) -- composites the resulting
-    /// scanout buffers and pushes the frame.
+    /// scanout buffers and pushes the frame. If an external transport is attached (`doc/char-
+    /// display-external-protocol.md`), also bulk-sends this vsync's char/color RAM and palette
+    /// as one frame message.
     fn on_vsync(&mut self) {
         self.status |= STATUS_VSYNC;
         if self.swap_pending {
@@ -310,6 +340,13 @@ impl CharDisplay {
             let pixels = compositing::composite(char_ram, color_ram, self.columns, self.rows, &self.palette, &self.font);
             let _ = sink.try_send(DisplayFrame { pixels, columns: self.columns, rows: self.rows });
         }
+        let mut external_transport = self.external_transport.take();
+        if let Some(transport) = external_transport.as_mut() {
+            let (char_ram, color_ram) = self.frame_source();
+            let frame = protocol::encode_frame(char_ram, color_ram, &self.palette);
+            transport.send_bytes(&frame);
+        }
+        self.external_transport = external_transport;
     }
 }
 
@@ -393,9 +430,13 @@ impl IoDevice for CharDisplay {
 
     /// Drops the frame sink, closing the channel from this end -- the channel equivalent of
     /// the terminal bridge seeing EOF on its pipe (design doc §10), ending the debugger's
-    /// display bridge task's `recv()` loop.
+    /// display bridge task's `recv()` loop. Also shuts down the external transport, if any
+    /// (`doc/char-display-external-protocol.md`).
     fn shutdown(&mut self) {
         self.frame_sink = None;
+        if let Some(transport) = self.external_transport.as_mut() {
+            transport.shutdown();
+        }
     }
 }
 
@@ -741,5 +782,65 @@ mod tests {
         device.shutdown();
         device.tick(10_000);
         assert!(rx.try_recv().is_err(), "channel should be closed once the sink is dropped");
+    }
+
+    /// `remote` is the peripheral's end of the pipe: everything the device sends over the
+    /// external transport lands here, byte by byte, and can be collected with
+    /// [`collect_bytes`]. Mirrors `LedMatrix`'s own `device_with_pipe` test helper.
+    fn device_with_external_transport(double_buffered: bool) -> (CharDisplay, crate::emulator::transport::InternalPipeTransport) {
+        let (local, remote) = crate::emulator::transport::InternalPipeTransport::pair_direct().unwrap();
+        let mut device = device(double_buffered);
+        device.attach_external_transport(Box::new(local));
+        (device, remote)
+    }
+
+    fn collect_bytes(remote: &mut crate::emulator::transport::InternalPipeTransport) -> Vec<u8> {
+        let mut buf = Vec::new();
+        while let Some(b) = remote.try_recv() {
+            buf.push(b);
+        }
+        buf
+    }
+
+    #[test]
+    fn attach_external_transport_sends_header_immediately() {
+        let (_device, mut remote) = device_with_external_transport(true);
+        let bytes = collect_bytes(&mut remote);
+
+        assert_eq!(&bytes[0..4], b"E65D");
+        assert_eq!(bytes[4], 1); // version
+        assert_eq!(&bytes[5..9], &COLUMNS.to_le_bytes());
+        assert_eq!(&bytes[9..13], &ROWS.to_le_bytes());
+        assert_eq!(&bytes[13..17], &100u32.to_le_bytes()); // frame_rate_hz from device()
+        assert_eq!(&bytes[17..19], &16u16.to_le_bytes()); // default_palette() length
+        assert_eq!(bytes.len(), 19 + font::FONT_BYTES);
+    }
+
+    #[test]
+    fn vsync_sends_one_frame_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(true);
+        collect_bytes(&mut remote); // drain the header
+
+        device.write(char_ram_addr(0), 0x41);
+        device.write(color_ram_addr(0), 1);
+        device.write(control_addr(), CONTROL_SWAP_REQUEST);
+        device.tick(10_000); // one vsync at this device's cycles_per_frame
+
+        let frame = collect_bytes(&mut remote);
+        let expected_len = 2 * CELLS as usize + compositing::default_palette().len() * 3;
+        assert_eq!(frame.len(), expected_len);
+        assert_eq!(frame[0], 0x41); // char RAM cell 0
+        assert_eq!(frame[CELLS as usize], 1); // color RAM cell 0
+    }
+
+    #[test]
+    fn shutdown_stops_further_sends_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(true);
+        collect_bytes(&mut remote); // drain the header
+
+        device.shutdown();
+        device.tick(10_000); // one vsync -- must not send after shutdown
+
+        assert!(collect_bytes(&mut remote).is_empty());
     }
 }
