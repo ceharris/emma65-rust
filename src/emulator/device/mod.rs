@@ -3,7 +3,6 @@ pub mod r6551;
 pub mod console;
 pub mod finch;
 pub(crate) mod input_buffer;
-pub mod keyboard;
 pub mod lfsr;
 pub mod mc6840;
 pub mod mc6850;
@@ -18,7 +17,6 @@ pub mod display;
 
 pub use self::console::Console;
 pub use self::finch::Finch;
-pub use self::keyboard::Keyboard;
 pub use self::lfsr::Lfsr16;
 pub use self::mc6840::Mc6840;
 pub use self::mc6850::Mc6850;

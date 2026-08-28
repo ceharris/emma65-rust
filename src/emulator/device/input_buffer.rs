@@ -1,6 +1,6 @@
 //! Shared input-buffering support for memory-mapped devices that receive a byte stream from a
 //! connected transport (e.g. [`Console`](super::console::Console)'s input half, and
-//! [`Keyboard`](super::keyboard::Keyboard)).
+//! [`CharDisplay`](super::display::CharDisplay)'s optional keyboard sub-range).
 //!
 //! This is a direct extraction of the ring/latch/break-key logic those devices need, factored out
 //! so it can be shared without either device depending on the other. It has no `Transport`/

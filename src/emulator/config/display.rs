@@ -4,6 +4,7 @@ use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::display::compositing::default_palette;
 use crate::emulator::device::display::font::{FONT_BYTES, Font};
 use crate::emulator::device::display::{CharDisplay, DEFAULT_COLUMNS, DEFAULT_FRAME_RATE_HZ, DEFAULT_ROWS};
+use crate::emulator::transport::TransportRelay;
 use crate::emulator::{AddressRange, BusConfig, IoDevice};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
@@ -13,6 +14,10 @@ use std::sync::{Arc, Mutex};
 
 // Type name used in registering the character display as a device.
 const DEVICE_TYPE: &str = "display/char";
+
+// Default device/IRQ identifier for the optional keyboard sub-range, reused verbatim from the
+// deleted `KeyboardModule`.
+const DEFAULT_KEYBOARD_IRQ: u32 = 7;
 
 /// Memory-mapped character/color-cell display device module.
 #[derive(Clone)]
@@ -27,6 +32,10 @@ struct CharDisplayAttributes {
     double_buffered: Option<bool>,
     frame_rate_hz: Option<u32>,
     transport: Option<TransportSpecFormat>,
+    keyboard_address: Option<u16>,
+    #[serde(rename = "break")]
+    break_key: Option<u8>,
+    irq: Option<u32>,
 }
 
 impl DeviceModule for CharDisplayModule {
@@ -92,8 +101,17 @@ impl DeviceModule for CharDisplayModule {
         let bus_size = 2 * (columns * rows) + 2;
         let address_range = AddressRange::new(address, address + (bus_size - 1) as u16);
 
-        // Not IRQ-capable (design doc §1): plain allocation, no interrupt line reserved.
-        let device_id = id_allocator.lock().unwrap().next_available();
+        // Only IRQ-capable when a keyboard sub-range is configured (design doc §1); a plain
+        // `next_available()` ID falls outside the IRQ bitmask range and is silently ignored by
+        // `Bus::device_interrupt_states`/`InterruptController::poll_devices`, so a device with no
+        // keyboard range keeps the cheaper, non-IRQ allocation.
+        let device_id = if config.keyboard_address.is_some() {
+            id_allocator.lock().unwrap()
+                .for_irq(config.irq.unwrap_or(DEFAULT_KEYBOARD_IRQ))
+                .map_err(DeviceModuleError::BusConfig)?
+        } else {
+            id_allocator.lock().unwrap().next_available()
+        };
 
         let mut device = CharDisplay::new(
             self.name(),
@@ -111,6 +129,15 @@ impl DeviceModule for CharDisplayModule {
             device.set_log_sender(sender.clone());
         }
 
+        let keyboard_range = config.keyboard_address
+            .map(|addr| AddressRange::new(addr, addr + 1));
+        if let Some(range) = keyboard_range {
+            device = device.with_keyboard_range(range);
+            if let Some(break_key) = config.break_key {
+                device.set_break_key(break_key);
+            }
+        }
+
         if let Some(transport_spec) = transport_spec {
             // Size the pipe's ring to comfortably fit the larger of the two messages this
             // protocol ever sends -- the one-time header (dominated by the font) and each
@@ -119,14 +146,29 @@ impl DeviceModule for CharDisplayModule {
             let frame_len = 2 * (columns * rows) as usize + device.palette().len() * 3;
             let capacity = header_len.max(frame_len);
 
-            let (transport, _relay) = transport_spec
+            let (transport, relay) = transport_spec
                 .to_transport_with_reporter_and_capacity(
                     context.transport_reporter(device.identity()),
                     context.pipe_exit_reporter(device.identity()),
                     Some(capacity))
                 .await
                 .map_err(DeviceModuleError::Transport)?;
-            device.attach_external_transport(transport);
+            device.attach_external_transport(transport, relay);
+        }
+
+        // Gated on `keyboard_address` being configured: an earlier `display/char` device with no
+        // keyboard configured must not consume and discard the debugger's only keyboard slot,
+        // starving a later device that does configure one.
+        if keyboard_range.is_some()
+            && let Some((transport, relay, reporter)) = context.keyboard_transport.as_ref()
+                .and_then(|slot| slot.lock().ok()?.take())
+        {
+            // The reporter was constructed via `TransportReporter::pending` before this device
+            // existed (the `TransportSlot` injection path builds its transport ahead of
+            // `DeviceModule::instantiate`); bind it now so every clone already handed to the
+            // transport's background machinery starts reporting under the right identity.
+            reporter.bind(device.identity());
+            device.attach_keyboard_transport(transport, TransportRelay::Byte(relay));
         }
 
         // Both slots (design doc §9) are consumed the same way `console_transport` is: present
@@ -147,8 +189,14 @@ impl DeviceModule for CharDisplayModule {
             device.attach_frame_sink(sender);
         }
 
-        bus_config.device(address_range, device_id, Box::new(device))
-            .map_err(DeviceModuleError::BusConfig)
+        let bus_config = bus_config.device(address_range, device_id, Box::new(device))
+            .map_err(DeviceModuleError::BusConfig)?;
+
+        match keyboard_range {
+            Some(range) => bus_config.extend_device(range, device_id)
+                .map_err(DeviceModuleError::BusConfig),
+            None => Ok(bus_config),
+        }
     }
 
 }
@@ -207,5 +255,101 @@ mod tests {
         // is accepted by `PipeTransport::spawn_with_capacity` and `attach_external_transport`'s
         // immediate header send doesn't panic against a live pipe.
         assert!(result.is_ok());
+    }
+
+    // -- Keyboard sub-range config wiring: mirrors the deleted `KeyboardModule`'s own config-
+    // level test suite, now exercised against `CharDisplayModule`. --
+
+    use crate::emulator::transport::{InternalPipeTransport, Transport, TransportReporter};
+
+    /// Builds a `TransportSlot` the same way `main.rs`/`load_session` do: a real relay-backed
+    /// `InternalPipeTransport` pair, plus an unbound `TransportReporter` (device name bound
+    /// later, by `instantiate`). Returns the slot, and the pair's remote end.
+    fn injected_keyboard_slot() -> (super::super::TransportSlot, InternalPipeTransport) {
+        let reporter = TransportReporter::pending(None);
+        let ((local, relay), remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
+        let slot = Arc::new(Mutex::new(Some((Box::new(local) as Box<dyn Transport>, relay, reporter))));
+        (slot, remote)
+    }
+
+    fn context_with_keyboard_slot(slot: super::super::TransportSlot) -> InstantiationContext {
+        InstantiationContext { keyboard_transport: Some(slot), ..context() }
+    }
+
+    #[tokio::test]
+    async fn keyboard_address_maps_a_second_range_on_the_same_device() {
+        let mut attributes = HashMap::new();
+        attributes.insert("keyboard_address".to_string(), Value::from(0x9000u16));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let bus_config = CharDisplayModule.instantiate(
+            BusConfig::new(), 0x8000, &attributes, &context(), id_allocator).await.unwrap();
+        let mut bus = bus_config.build();
+
+        let _ = bus.write(0x9001, 0x42); // keyboard latch register
+        assert_eq!(bus.read(0x9001).unwrap(), 0x42);
+        // Confirms one device instance backs both ranges, not two separately-registered ones.
+        assert_eq!(bus.device_interrupt_states().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn keyboard_address_absent_does_not_consume_the_injected_slot() {
+        let (slot, _remote) = injected_keyboard_slot();
+        let context = context_with_keyboard_slot(Arc::clone(&slot));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let _bus_config = CharDisplayModule.instantiate(
+            BusConfig::new(), 0x8000, &HashMap::new(), &context, id_allocator).await.unwrap();
+
+        assert!(slot.lock().unwrap().is_some(), "an unconfigured keyboard sub-range must not \
+            starve a later device that configures one");
+    }
+
+    #[tokio::test]
+    async fn keyboard_address_present_consumes_the_injected_slot_and_applies_break_key() {
+        let (slot, mut remote) = injected_keyboard_slot();
+        let mut attributes = HashMap::new();
+        attributes.insert("keyboard_address".to_string(), Value::from(0x9000u16));
+        attributes.insert("break".to_string(), Value::from(3u8));
+        let context = context_with_keyboard_slot(slot);
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let bus_config = CharDisplayModule.instantiate(
+            BusConfig::new(), 0x8000, &attributes, &context, id_allocator).await.unwrap();
+        let mut bus = bus_config.build();
+
+        remote.send(0x03);
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        bus.tick_devices(1);
+        assert!(
+            bus.device_interrupt_states().any(|s| s.irq_active),
+            "expected break key to assert IRQ"
+        );
+    }
+
+    #[tokio::test]
+    async fn keyboard_address_uses_configured_irq() {
+        let mut attributes = HashMap::new();
+        attributes.insert("keyboard_address".to_string(), Value::from(0x9000u16));
+        attributes.insert("irq".to_string(), Value::from(9u32));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let _bus_config = CharDisplayModule.instantiate(
+            BusConfig::new(), 0x8000, &attributes, &context(), id_allocator.clone()).await.unwrap();
+
+        // IRQ 9 is now taken -- allocating it again should fail.
+        assert!(id_allocator.lock().unwrap().for_irq(9).is_err());
+    }
+
+    #[tokio::test]
+    async fn no_keyboard_address_is_not_irq_capable() {
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let _bus_config = CharDisplayModule.instantiate(
+            BusConfig::new(), 0x8000, &HashMap::new(), &context(), id_allocator.clone()).await.unwrap();
+
+        // The default IRQ line (7, `DEFAULT_KEYBOARD_IRQ`) must remain unclaimed since this
+        // device has no keyboard range and so was allocated a plain, non-IRQ device ID.
+        assert!(id_allocator.lock().unwrap().for_irq(7).is_ok());
     }
 }

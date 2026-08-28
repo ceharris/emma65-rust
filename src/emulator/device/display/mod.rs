@@ -12,7 +12,10 @@
 //! | Control register | `2*cells`     | 1           | R/W    | See [`CONTROL_SWAP_REQUEST`] etc |
 //! | Status/data reg. | `2*cells + 1` | 1           | R/W    | Read: status (bit 0 vsync, bit 1 palette-update-accepted, both read-to-clear). Write: a data byte for an in-progress runtime palette update, ignored unless armed via control bit 3 (see [`CONTROL_PALETTE_ARM`]) |
 //!
-//! This device is not IRQ-capable; nothing in its register map asserts an interrupt.
+//! The register map above is not IRQ-capable on its own. This device gains IRQ capability only
+//! when an optional keyboard data/latch sub-range is configured (`keyboard_address=`, a disjoint
+//! 2-byte range elsewhere in the address space, mirroring `Console`'s input half) and a
+//! configured break key is received on it -- see `doc/display-keyboard-integration-plan.md`.
 //!
 //! **Runtime palette updates**: writing [`CONTROL_PALETTE_ARM`] (bit 3) to the control register
 //! arms a 4-byte write sequence to the status/data register: `index`, `red`, `green`, `blue`.
@@ -39,7 +42,8 @@ mod protocol;
 
 use self::compositing::Rgb24;
 use self::font::Font;
-use crate::emulator::transport::Transport;
+use super::input_buffer::InputBuffer;
+use crate::emulator::transport::{Transport, TransportRelay};
 use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
 use tokio::sync::mpsc;
 
@@ -99,6 +103,13 @@ enum PaletteUpdateState {
     ExpectBlue(u8, u8, u8),
 }
 
+/// The optional keyboard sub-range's range and buffered input state, bundled together so the
+/// two can't drift apart (design doc §1).
+struct KeyboardInput {
+    range: AddressRange,
+    input: InputBuffer,
+}
+
 /// A memory-mapped character/color-cell display device.
 pub struct CharDisplay {
     name: &'static str,
@@ -152,6 +163,27 @@ pub struct CharDisplay {
     /// SDL2 display peripheral plan).
     external_transport: Option<Box<dyn Transport>>,
 
+    /// Optional keyboard data/latch sub-range (design doc §1), set post-construction via
+    /// [`Self::with_keyboard_range`] -- `None` unless a `keyboard_address=` attribute is
+    /// configured.
+    keyboard: Option<KeyboardInput>,
+
+    /// Relay for the keyboard sub-range's inbound byte stream, drained unconditionally every
+    /// `tick()` regardless of whether `keyboard` is set. This is a correctness requirement, not
+    /// just a capability: the CLI path's relay rides the same [`PipeTransport`] as
+    /// `external_transport`, and an undrained relay's channel closing tears down *that entire
+    /// transport* -- frames included -- the instant the peripheral sends its first keystroke (see
+    /// `doc/display-keyboard-integration-plan.md`'s Context section). Set alongside
+    /// `external_transport` (via [`Self::attach_external_transport`]) or alongside
+    /// `keyboard_transport` (via [`Self::attach_keyboard_transport`]).
+    keyboard_relay: Option<TransportRelay>,
+
+    /// Debugger-path-only transport for the keyboard sub-range, set post-construction via
+    /// [`Self::attach_keyboard_transport`]. The CLI path's inbound keyboard stream instead rides
+    /// `external_transport`, whose `shutdown()` already tears down both directions of that one
+    /// child's stdio.
+    keyboard_transport: Option<Box<dyn Transport>>,
+
     /// Sender for structured diagnostic messages (e.g. `reset()`).
     log_sender: LogSender,
 }
@@ -203,6 +235,9 @@ impl CharDisplay {
             palette,
             frame_sink: None,
             external_transport: None,
+            keyboard: None,
+            keyboard_relay: None,
+            keyboard_transport: None,
             log_sender: LogSender::default(),
         }
     }
@@ -241,14 +276,45 @@ impl CharDisplay {
         self.frame_sink = Some(sink);
     }
 
-    /// Attaches an outbound-only transport for the external display protocol
-    /// (`doc/char-display-external-protocol.md`). Immediately sends the one-time header;
-    /// unlike [`Self::attach_frame_sink`], nothing is sent on individual register writes --
-    /// only the header now, then one bulk frame per vsync (see [`Self::on_vsync`]).
-    pub fn attach_external_transport(&mut self, mut transport: Box<dyn Transport>) {
+    /// Attaches a transport for the external display protocol (`doc/char-display-external-
+    /// protocol.md`), now bidirectional: `transport` remains outbound-only for frames, but
+    /// `relay` is the same transport's inbound relay, held and drained unconditionally every
+    /// `tick()` (see the `keyboard_relay` field doc comment). Immediately sends the one-time
+    /// header over `transport`; unlike [`Self::attach_frame_sink`], nothing else is sent on
+    /// individual register writes -- only the header now, then one bulk frame per vsync (see
+    /// [`Self::on_vsync`]).
+    pub fn attach_external_transport(&mut self, mut transport: Box<dyn Transport>, relay: TransportRelay) {
         let header = protocol::encode_header(self.columns, self.rows, self.frame_rate_hz, self.palette.len() as u16, &self.font);
         transport.send_bytes(&header);
         self.external_transport = Some(transport);
+        self.keyboard_relay = Some(relay);
+    }
+
+    /// Claims an additional, disjoint 2-byte address range (data/latch registers, mirroring
+    /// `Console`'s input half) for keyboard input, paired with a `BusConfig::extend_device` call
+    /// by the caller (the config module) at the same range/`DeviceId`. Must be called before the
+    /// device is boxed onto the bus.
+    pub fn with_keyboard_range(mut self, range: AddressRange) -> Self {
+        self.keyboard = Some(KeyboardInput { range, input: InputBuffer::new() });
+        self
+    }
+
+    /// Sets the break key to recognize on the keyboard sub-range's inbound stream. A no-op if no
+    /// keyboard range is configured.
+    pub fn set_break_key(&mut self, break_key: u8) {
+        if let Some(keyboard) = self.keyboard.as_mut() {
+            keyboard.input.set_break_key(break_key);
+        }
+    }
+
+    /// Attaches a transport for the keyboard sub-range's inbound byte stream, along with its
+    /// paired relay -- the debugger path, mirroring the deleted `Keyboard::attach_transport`. The
+    /// CLI path instead rides `external_transport`/`relay` via
+    /// [`Self::attach_external_transport`], since both directions share one child process's
+    /// stdio.
+    pub fn attach_keyboard_transport(&mut self, transport: Box<dyn Transport>, relay: TransportRelay) {
+        self.keyboard_transport = Some(transport);
+        self.keyboard_relay = Some(relay);
     }
 
     /// Installs a log sender for diagnostic messages (e.g. `reset()`).
@@ -352,6 +418,14 @@ impl CharDisplay {
 
 impl IoDevice for CharDisplay {
     fn read(&mut self, address: u16) -> u8 {
+        if let Some(keyboard) = self.keyboard.as_mut()
+            && keyboard.range.contains(address) {
+            return match address - keyboard.range.start {
+                0 => keyboard.input.read_data(),
+                1 => keyboard.input.read_latch(),
+                _ => 0,
+            };
+        }
         let offset = (address - self.address_range.start) as u32;
         let cells = self.cells() as u32;
         if offset < cells {
@@ -370,6 +444,15 @@ impl IoDevice for CharDisplay {
     }
 
     fn write(&mut self, address: u16, value: u8) {
+        if let Some(keyboard) = self.keyboard.as_mut()
+            && keyboard.range.contains(address) {
+            // Data register (offset 0) is input-only, matching the deleted `Keyboard`'s own
+            // no-op write semantics: this device has no outbound byte stream to send to.
+            if address - keyboard.range.start == 1 {
+                keyboard.input.write_latch(value);
+            }
+            return;
+        }
         let offset = (address - self.address_range.start) as u32;
         let cells = self.cells() as u32;
         if offset < cells {
@@ -384,6 +467,14 @@ impl IoDevice for CharDisplay {
     }
 
     fn peek(&self, address: u16) -> u8 {
+        if let Some(keyboard) = self.keyboard.as_ref()
+            && keyboard.range.contains(address) {
+            return match address - keyboard.range.start {
+                0 => keyboard.input.peek_data(),
+                1 => keyboard.input.peek_latch(),
+                _ => 0,
+            };
+        }
         let offset = (address - self.address_range.start) as u32;
         let cells = self.cells() as u32;
         if offset < cells {
@@ -401,9 +492,21 @@ impl IoDevice for CharDisplay {
 
     fn claims(&self, address: u16) -> bool {
         self.address_range.contains(address)
+            || self.keyboard.as_ref().is_some_and(|keyboard| keyboard.range.contains(address))
     }
 
     fn tick(&mut self, cycles: u32) {
+        // Drained unconditionally, regardless of whether `keyboard` is configured -- see the
+        // `keyboard_relay` field doc comment for why this is a correctness requirement, not an
+        // optimization to skip when there's no keyboard sub-range.
+        if let Some(relay) = self.keyboard_relay.as_mut() {
+            let mut keyboard = self.keyboard.as_mut();
+            relay.drain_bytes_into(|b| {
+                if let Some(keyboard) = keyboard.as_mut() {
+                    keyboard.input.push(b);
+                }
+            });
+        }
         self.cycle_accumulator += cycles as u64;
         while self.cycle_accumulator >= self.cycles_per_frame {
             self.cycle_accumulator -= self.cycles_per_frame;
@@ -417,7 +520,14 @@ impl IoDevice for CharDisplay {
         self.status = 0;
         self.palette_update = PaletteUpdateState::Idle;
         self.cycle_accumulator = 0;
+        if let Some(keyboard) = self.keyboard.as_mut() {
+            keyboard.input.reset();
+        }
         log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
+    }
+
+    fn irq_active(&self) -> bool {
+        self.keyboard.as_ref().is_some_and(|keyboard| keyboard.input.irq_active())
     }
 
     fn name(&self) -> &str {
@@ -430,11 +540,15 @@ impl IoDevice for CharDisplay {
 
     /// Drops the frame sink, closing the channel from this end -- the channel equivalent of
     /// the terminal bridge seeing EOF on its pipe (design doc §10), ending the debugger's
-    /// display bridge task's `recv()` loop. Also shuts down the external transport, if any
-    /// (`doc/char-display-external-protocol.md`).
+    /// display bridge task's `recv()` loop. Also shuts down the external transport and the
+    /// debugger-path keyboard transport, if either is present (`doc/char-display-external-
+    /// protocol.md`; the CLI path's keyboard stream rides `external_transport`, already covered).
     fn shutdown(&mut self) {
         self.frame_sink = None;
         if let Some(transport) = self.external_transport.as_mut() {
+            transport.shutdown();
+        }
+        if let Some(transport) = self.keyboard_transport.as_mut() {
             transport.shutdown();
         }
     }
@@ -788,9 +902,10 @@ mod tests {
     /// external transport lands here, byte by byte, and can be collected with
     /// [`collect_bytes`]. Mirrors `LedMatrix`'s own `device_with_pipe` test helper.
     fn device_with_external_transport(double_buffered: bool) -> (CharDisplay, crate::emulator::transport::InternalPipeTransport) {
-        let (local, remote) = crate::emulator::transport::InternalPipeTransport::pair_direct().unwrap();
+        let reporter = crate::emulator::transport::TransportReporter::pending(None);
+        let ((local, relay), remote) = crate::emulator::transport::InternalPipeTransport::pair(reporter).unwrap();
         let mut device = device(double_buffered);
-        device.attach_external_transport(Box::new(local));
+        device.attach_external_transport(Box::new(local), TransportRelay::Byte(relay));
         (device, remote)
     }
 
@@ -842,5 +957,156 @@ mod tests {
         device.tick(10_000); // one vsync -- must not send after shutdown
 
         assert!(collect_bytes(&mut remote).is_empty());
+    }
+
+    /// **The correctness fix** (design doc Context section): the keyboard relay must be drained
+    /// unconditionally every `tick()`, even with no keyboard range configured -- otherwise the
+    /// first byte a peripheral ever writes to its own stdout kills the *entire* transport, frames
+    /// included, because an undrained relay's channel closing is treated as a broken pipe.
+    #[test]
+    fn tick_drains_keyboard_relay_even_without_keyboard_range_configured() {
+        let (mut device, mut remote) = device_with_external_transport(true);
+        collect_bytes(&mut remote); // drain the header
+
+        remote.send(0x42); // simulates emma65-display's first-ever stdout write
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        device.tick(10_000); // must not tear down the transport merely because this arrived
+
+        let frame = collect_bytes(&mut remote);
+        assert!(!frame.is_empty(), "expected the transport to remain alive and still send a frame");
+    }
+
+    // -- Keyboard sub-range: behavior re-homed from the deleted `Keyboard` device's own test
+    // module, now exercised through `CharDisplay`'s keyboard sub-range instead. --
+
+    const KEYBOARD_BASE: u16 = 0xE000;
+
+    fn keyboard_range() -> AddressRange {
+        AddressRange::new(KEYBOARD_BASE, KEYBOARD_BASE + 1)
+    }
+
+    fn keyboard_data_addr() -> u16 {
+        KEYBOARD_BASE
+    }
+
+    fn keyboard_latch_addr() -> u16 {
+        KEYBOARD_BASE + 1
+    }
+
+    fn device_with_keyboard(double_buffered: bool) -> CharDisplay {
+        device(double_buffered).with_keyboard_range(keyboard_range())
+    }
+
+    /// See `Console`'s test module for the rationale behind this hand-fed relay harness.
+    fn spawn_byte_relay(capacity: usize) -> (crossbeam_channel::Sender<u8>, crate::emulator::transport::ChannelRelay<u8>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        (tx, crate::emulator::transport::ChannelRelay::spawn(rx, capacity))
+    }
+
+    fn device_with_keyboard_pipe(relay_capacity: usize) -> (CharDisplay, crate::emulator::transport::InternalPipeTransport, crossbeam_channel::Sender<u8>) {
+        let (local, remote) = crate::emulator::transport::InternalPipeTransport::pair_direct().unwrap();
+        let (tx, relay) = spawn_byte_relay(relay_capacity);
+        let mut device = device_with_keyboard(true);
+        device.attach_keyboard_transport(Box::new(local), TransportRelay::Byte(relay));
+        (device, remote, tx)
+    }
+
+    #[test]
+    fn keyboard_read_data_register_delegates_to_input_buffer() {
+        let mut device = device_with_keyboard(true);
+        device.write(keyboard_latch_addr(), 0x42);
+        assert_eq!(device.read(keyboard_data_addr()), 0x42);
+    }
+
+    #[test]
+    fn keyboard_read_latch_register_delegates_to_input_buffer() {
+        let mut device = device_with_keyboard(true);
+        device.keyboard.as_mut().unwrap().input.push(0x42);
+        assert_eq!(device.read(keyboard_latch_addr()), 0x42);
+    }
+
+    #[test]
+    fn keyboard_write_data_register_is_noop() {
+        let (mut device, mut remote, _tx) = device_with_keyboard_pipe(256);
+        device.write(keyboard_data_addr(), 0x42);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert_eq!(remote.try_recv(), None, "expected no outbound byte");
+        assert_eq!(device.peek(keyboard_data_addr()), 0, "expected no state change");
+    }
+
+    #[test]
+    fn keyboard_write_latch_register_delegates_to_input_buffer() {
+        let mut device = device_with_keyboard(true);
+        device.write(keyboard_latch_addr(), 0x42);
+        assert_eq!(device.peek(keyboard_latch_addr()), 0x42);
+    }
+
+    #[test]
+    fn keyboard_peek_delegates_to_input_buffer_without_side_effects() {
+        let mut device = device_with_keyboard(true);
+        device.keyboard.as_mut().unwrap().input.push(0x42);
+        assert_eq!(device.peek(keyboard_data_addr()), 0x42);
+        assert_eq!(device.peek(keyboard_data_addr()), 0x42, "peek must not consume the buffered byte");
+    }
+
+    #[test]
+    fn keyboard_tick_buffers_input_from_transport() {
+        let (mut device, _remote, tx) = device_with_keyboard_pipe(256);
+        tx.send(0x42).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        device.tick(1);
+        assert_eq!(device.peek(keyboard_data_addr()), 0x42);
+    }
+
+    #[test]
+    fn keyboard_tick_latches_break_key_and_sets_interrupt_flag() {
+        let (mut device, _remote, tx) = device_with_keyboard_pipe(256);
+        device.set_break_key(0x3);
+        tx.send(0x3).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        device.tick(1);
+        assert_eq!(device.peek(keyboard_latch_addr()), 0x3);
+        assert!(device.irq_active(), "expected interrupt flag set");
+    }
+
+    #[test]
+    fn set_break_key_is_a_noop_without_a_keyboard_range() {
+        // Must not panic when no keyboard range is configured.
+        let mut device = device(true);
+        device.set_break_key(0x3);
+        assert!(!device.irq_active());
+    }
+
+    #[test]
+    fn keyboard_reset_clears_buffered_input() {
+        let mut device = device_with_keyboard(true);
+        device.keyboard.as_mut().unwrap().input.push(0x42);
+        device.reset();
+        assert_eq!(device.peek(keyboard_data_addr()), 0, "reset must clear buffered keyboard input");
+    }
+
+    #[test]
+    fn claims_covers_both_framebuffer_and_keyboard_ranges() {
+        let device = device_with_keyboard(true);
+        assert!(device.claims(BASE_ADDRESS));
+        assert!(device.claims(keyboard_data_addr()));
+        assert!(device.claims(keyboard_latch_addr()));
+        assert!(!device.claims(keyboard_latch_addr() + 1));
+    }
+
+    #[test]
+    fn keyboard_range_below_framebuffer_base_does_not_underflow() {
+        // The keyboard range's early check must run before the framebuffer offset arithmetic --
+        // otherwise a keyboard address below the framebuffer's base underflows that subtraction.
+        let low_range = AddressRange::new(0x0010, 0x0011);
+        let mut device = device(true).with_keyboard_range(low_range);
+        device.write(0x0011, 0x42);
+        assert_eq!(device.read(0x0011), 0x42);
+    }
+
+    #[test]
+    fn no_irq_capability_without_a_keyboard_range() {
+        let device = device(true);
+        assert!(!device.irq_active());
     }
 }
