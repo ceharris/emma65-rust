@@ -128,7 +128,16 @@ impl TransportReporter {
 
     /// Increments the outbound drop counter. Every transport has one.
     pub fn note_outbound_drop(&self) {
-        self.outbound_drops.fetch_add(1, Ordering::Relaxed);
+        self.note_outbound_drop_n(1);
+    }
+
+    /// Increments the outbound drop counter by `n`. For a bulk
+    /// [`Transport::send_bytes`] call whose entire buffer had to be
+    /// dropped at once (e.g. `PipeTransport::send_bytes` on ring
+    /// overflow), this keeps the counter measuring dropped *bytes* rather
+    /// than dropped *calls*.
+    pub fn note_outbound_drop_n(&self, n: u64) {
+        self.outbound_drops.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Increments the inbound ingress-drop counter. Multipoint only —
@@ -545,6 +554,25 @@ pub trait Transport: Send {
     /// are reported asynchronously via the `TransportReporter` supplied at
     /// construction, not through this call's return value.
     fn send(&mut self, byte: u8);
+
+    /// Sends a buffer of bytes. The default implementation simply loops
+    /// [`send`](Self::send) byte by byte — non-atomic (a mid-buffer overflow
+    /// drops only the remaining bytes) and unchanged in behavior from a
+    /// caller doing the same loop itself. Always returns `true`, matching
+    /// `send`'s own never-fails contract.
+    ///
+    /// A transport whose outbound path can accept a buffer atomically
+    /// (e.g. [`PipeTransport`](super::PipeTransport), backed by an `rtrb`
+    /// ring) should override this to push the whole buffer in one step and
+    /// return `false` without sending anything if it doesn't fit — callers
+    /// relying on fixed-size framing need "all or nothing," since a partial
+    /// bulk write would desync their framing permanently.
+    fn send_bytes(&mut self, bytes: &[u8]) -> bool {
+        for &byte in bytes {
+            self.send(byte);
+        }
+        true
+    }
 
     fn is_connected(&self) -> bool;
 
