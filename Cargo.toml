@@ -2,6 +2,7 @@
 members = [
     ".",
     "debugger/src-tauri",
+    "display",
 ]
 resolver = "2"
 
