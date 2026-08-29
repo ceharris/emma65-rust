@@ -34,12 +34,12 @@ const MATRIX_SIZE = 32;
 const MIN_PITCH_PX = 6;
 
 /** LED radius as a fraction of pitch, modeling a real hobbyist RGB LED matrix panel (Adafruit
- * product #2026: 32x32, 2.5-3.0mm round LEDs on a 5mm pitch, ~160mm square board). Diameter is
- * 50-60% of pitch on that reference panel (2.5/5 to 3.0/5); 0.28 sits at the midpoint. Centering
- * each LED at `(i + 0.5) * pitch` (see `drawMatrix`) also reproduces that panel's ~2.5mm edge
- * margin (half a pitch) for free — a 32-unit-wide grid at that pitch is exactly the board's
- * 160mm width, so no separate margin constant is needed. */
-const LED_RADIUS_RATIO = 0.28;
+ * product #2026: 32x32, 3mm round LEDs on a 5mm pitch, ~160mm square board). Diameter is 60% of
+ * pitch on that reference panel (3/5), so radius is half that, 0.3. Centering each LED at
+ * `(i + 0.5) * pitch` (see `drawMatrix`) also reproduces that panel's ~2.5mm edge margin (half a
+ * pitch) for free — a 32-unit-wide grid at that pitch is exactly the board's 160mm width, so no
+ * separate margin constant is needed. */
+const LED_RADIUS_RATIO = 0.3;
 
 /** Near-black PCB substrate color drawn behind the LEDs. */
 const PCB_BACKGROUND_COLOR = "#0a0a0a";
