@@ -45,12 +45,10 @@
 //! Data Register or Latch Register, or writing the Latch Register resets the interrupt condition.
 //!
 
-use super::ring::Ring;
+use super::input_buffer::InputBuffer;
 use crate::emulator::device::IoDevice;
 use crate::emulator::transport::{Transport, TransportRelay};
 use crate::emulator::{LogCategory, LogLevel, LogSender, log_msg};
-
-pub use super::ring::RING_CAPACITY;
 
 /// A buffered console device with support for an interrupt-driven break key input.
 pub struct Console {
@@ -62,10 +60,7 @@ pub struct Console {
     /// (a configured `TransportSpec` or an injected `TransportSlot`) also
     /// supplies its relay.
     relay: Option<TransportRelay>,
-    break_key: Option<u8>,
-    ring: Ring<u8>,
-    latch: u8,
-    interrupt_flag: bool,
+    input: InputBuffer,
     /// Sender for structured diagnostic messages (e.g. `reset()`).
     log_sender: LogSender,
 }
@@ -79,10 +74,7 @@ impl Console {
             address: 0,
             transport: None,
             relay: None,
-            break_key: None,
-            ring: Ring::new(0u8),
-            latch: 0,
-            interrupt_flag: false,
+            input: InputBuffer::new(),
             log_sender: LogSender::default(),
         }
     }
@@ -101,7 +93,7 @@ impl Console {
 
     /// Sets the break key to recognize when reading from the transport
     pub fn set_break_key(&mut self, break_key: u8) {
-        self.break_key = Some(break_key);
+        self.input.set_break_key(break_key);
     }
 
     /// Installs a log sender for diagnostic messages (e.g. `reset()`).
@@ -115,24 +107,8 @@ impl IoDevice for Console {
 
     fn read(&mut self, address: u16) -> u8 {
         match address - self.address {
-            0 => {          // data register
-                self.interrupt_flag = false;
-                if self.latch != 0 {
-                    let b = self.latch;
-                    self.latch = 0;
-                    b
-                } else {
-                    self.ring.get().unwrap_or(0)
-                }
-            },
-            1 => {          // latch register
-                self.interrupt_flag = false;
-                if self.latch == 0 {
-                    // if nothing latch, latch next input byte if any
-                    self.latch = self.ring.get().unwrap_or(0);
-                }
-                self.latch
-            },
+            0 => self.input.read_data(),
+            1 => self.input.read_latch(),
             _ => 0,
         }
     }
@@ -145,57 +121,32 @@ impl IoDevice for Console {
                     transport.send(value);
                 }
             },
-            1 => {          // latch register
-                self.latch = value;
-                self.ring.clear();
-                if let Some(break_key) = self.break_key {
-                    self.interrupt_flag = break_key == value;
-                } else {
-                    self.interrupt_flag = false;
-                }
-            },
+            1 => self.input.write_latch(value),
             _ => (),
         }
     }
 
     fn peek(&self, address: u16) -> u8 {
         match address - self.address {
-            0 => if self.latch != 0 {
-                self.latch
-            } else {
-                self.ring.peek().unwrap_or(0)
-            }
-            1 => self.latch,
+            0 => self.input.peek_data(),
+            1 => self.input.peek_latch(),
             _ => 0,
         }
     }
 
     fn tick(&mut self, _cycles: u32) {
-        let break_key = self.break_key;
-        let ring = &mut self.ring;
-        let latch = &mut self.latch;
-        let interrupt_flag = &mut self.interrupt_flag;
+        let input = &mut self.input;
         if let Some(relay) = self.relay.as_mut() {
-            relay.drain_bytes_into(|b| {
-                if let Some(break_key) = break_key && b == break_key {
-                    *latch = b;
-                    ring.clear();
-                    *interrupt_flag = true;
-                } else {
-                    ring.put(b);
-                }
-            });
+            relay.drain_bytes_into(|b| input.push(b));
         }
     }
 
     fn reset(&mut self) {
-        self.ring.clear();
-        self.latch = 0;
-        self.interrupt_flag = false;
+        self.input.reset();
         log_msg!(self.log_sender, LogLevel::Info, LogCategory::Device, "{} reset", self.identity());
     }
 
-    fn irq_active(&self) -> bool { self.interrupt_flag }
+    fn irq_active(&self) -> bool { self.input.irq_active() }
 
     fn name(&self) -> &str { self.name }
 
@@ -250,66 +201,17 @@ mod tests {
     }
 
     #[test]
-    fn read_data_register_resets_interrupt_flag() {
+    fn read_data_register_delegates_to_input_buffer() {
         let mut device = device();
-        device.interrupt_flag = true;
-        device.read(0);
-        assert!(!device.interrupt_flag, "expected interrupt flag reset")
-    }
-
-    #[test]
-    fn read_data_register_zero_when_nothing_latched_or_buffered() {
-        let mut device = device();
-        assert_eq!(device.read(0), 0);
-    }
-
-    #[test]
-    fn read_data_register_latched_value() {
-        let mut device = device();
-        device.latch = 0x42;
+        device.write(1, 0x42);
         assert_eq!(device.read(0), 0x42);
     }
 
     #[test]
-    fn read_data_register_buffered_value() {
+    fn read_latch_register_delegates_to_input_buffer() {
         let mut device = device();
-        device.latch = 0;
-        device.ring.put(0x42);
-        assert_eq!(device.read(0), 0x42);
-        assert_eq!(device.latch, 0);
-    }
-
-    #[test]
-    fn read_latch_register_resets_interrupt_flag() {
-        let mut device = device();
-        device.interrupt_flag = true;
-        device.read(1);
-        assert!(!device.interrupt_flag, "expected interrupt flag reset")
-    }
-
-    #[test]
-    fn read_latch_register_latched_value() {
-        let mut device = device();
-        device.latch = 0x42;
-        device.ring.put(0x43);
+        device.input.push(0x42);
         assert_eq!(device.read(1), 0x42);
-        assert_eq!(device.latch, 0x42);
-        assert!(!device.ring.is_empty());
-    }
-
-    #[test]
-    fn read_latch_register_latches_buffered_value() {
-        let mut device = device();
-        device.latch = 0;
-        device.ring.put(0x42);
-        assert_eq!(device.read(1), 0x42);
-        assert_eq!(device.latch, 0x42);
-    }
-
-    #[test]
-    fn read_latch_register_zero_when_nothing_latched_or_buffered() {
-        let mut device = device();
-        assert_eq!(device.read(1), 0);
     }
 
     #[test]
@@ -321,41 +223,27 @@ mod tests {
     }
 
     #[test]
-    fn write_latch_register_sets_latch() {
+    fn write_latch_register_delegates_to_input_buffer() {
         let mut device = device();
-        assert_eq!(device.latch, 0);
         device.write(1, 0x42);
-        assert_eq!(device.latch, 0x42);
-        device.write(1, 0);
-        assert_eq!(device.latch, 0);
-    }
-
-    #[test]
-    fn write_latch_register_clears_ring() {
-        let mut device = device();
-        device.ring.put(0x42);
-        device.write(1, 0);
-        assert_eq!(device.latch, 0);
-        assert!(device.ring.is_empty(), "expected empty ring");
+        assert_eq!(device.peek(1), 0x42);
     }
 
     #[test]
     fn write_break_key_to_latch_register_sets_interrupt_flag() {
         let mut device = device();
         device.set_break_key(0x3);
-        assert_eq!(device.latch, 0);
         device.write(1, 0x3);
-        assert_eq!(device.latch, 0x3);
-        assert!(device.interrupt_flag, "expected interrupt flag set");
+        assert_eq!(device.peek(1), 0x3);
+        assert!(device.irq_active(), "expected interrupt flag set");
     }
 
     #[test]
-    fn write_latch_register_clears_interrupt_flag() {
+    fn peek_delegates_to_input_buffer_without_side_effects() {
         let mut device = device();
-        device.interrupt_flag = true;
-        device.write(1, 0x42);
-        assert_eq!(device.latch, 0x42);
-        assert!(!device.interrupt_flag, "expected interrupt flag reset");
+        device.input.push(0x42);
+        assert_eq!(device.peek(0), 0x42);
+        assert_eq!(device.peek(0), 0x42, "peek must not consume the buffered byte");
     }
 
     #[test]
@@ -364,7 +252,7 @@ mod tests {
         tx.send(0x42).unwrap();
         std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
-        assert_eq!(device.ring.peek(), Some(0x42));
+        assert_eq!(device.peek(0), 0x42);
     }
 
     #[test]
@@ -374,40 +262,8 @@ mod tests {
         tx.send(0x3).unwrap();
         std::thread::sleep(Duration::from_millis(5));
         device.tick(1);
-        assert_eq!(device.latch, 0x3);
-        assert!(device.interrupt_flag, "expected interrupt flag set");
-    }
-
-    #[test]
-    fn tick_clears_ring_on_break_key() {
-        let (mut device, _remote, tx) = device_with_pipe(256);
-        device.set_break_key(0x3);
-        tx.send(0x3).unwrap();
-        device.ring.put(0x42);
-        device.ring.put(0x43);
-        std::thread::sleep(Duration::from_millis(5));
-        device.tick(1);
-        assert!(device.ring.is_empty(), "expected empty ring");
-    }
-
-    #[test]
-    fn tick_tail_drop_when_ring_full() {
-        let (mut device, _remote, tx) = device_with_pipe(RING_CAPACITY);
-        // send as many bytes as ring's capacity (one greater than what can be held)
-        for i in 0..RING_CAPACITY {
-            tx.send(i as u8).unwrap();
-        }
-        // RING_CAPACITY (65536) individual relay-thread recv+push cycles need
-        // more time to fully drain than the few-byte case elsewhere in this file.
-        std::thread::sleep(Duration::from_millis(200));
-        // attempt to buffer at ring's capacity (one greater than what can be held)
-        for _ in 0..RING_CAPACITY {
-            device.tick(1);
-        }
-        for i in 0..(RING_CAPACITY - 1) {
-            assert_eq!(device.ring.get(), Some(i as u8));
-        }
-        assert!(device.ring.is_empty(), "expected empty ring");
+        assert_eq!(device.peek(1), 0x3);
+        assert!(device.irq_active(), "expected interrupt flag set");
     }
 
     #[test]
@@ -528,9 +384,9 @@ mod tests {
     #[test]
     fn reset_clears_latch() {
         let mut console = device();
-        console.latch = 0xff;
+        console.write(1, 0xff);
         console.reset();
-        assert_eq!(console.latch, 0, "reset must clear the latch");
+        assert_eq!(console.peek(1), 0, "reset must clear the latch");
     }
 
     #[test]
