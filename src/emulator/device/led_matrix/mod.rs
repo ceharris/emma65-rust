@@ -2,14 +2,17 @@
 //!
 //! See `doc/memory-mapped-led-matrix-device-spec.md` for the full behavioral specification and
 //! `doc/memory-mapped-led-matrix-device-plan.md` for the design decisions this implementation
-//! follows. Summary of the bus-addressable memory map (offsets relative to the device's base
-//! address, `pixel_bytes = matrices * 1024`):
+//! follows. The device occupies two independently configured, disjoint bus ranges rather than one
+//! contiguous region -- pixel memory sized from `matrix-count` and based at the device's `address`,
+//! and the command/data register pair based at the separately configured `register-address` --
+//! so pixel memory can start at a K-aligned boundary without the register pair fragmenting the
+//! next one:
 //!
-//! | Region           | Offset            | Size          | Access | Notes                     |
-//! |------------------|-------------------|---------------|--------|-----------------------------|
-//! | Pixel memory     | `0`               | `pixel_bytes` | R/W    | Matrix *n* at `[n*1024, n*1024+1023]`, palette index per pixel, row-major |
-//! | Command register | `pixel_bytes`     | 1             | W      | Selects/arms an operation (spec §4.2). Always reads `0` |
-//! | Data register    | `pixel_bytes + 1` | 1             | R/W    | Argument byte(s) for the armed operation (spec §4.3)    |
+//! | Region           | Range                            | Size          | Access | Notes         |
+//! |------------------|-----------------------------------|---------------|--------|---------------|
+//! | Pixel memory     | `[address, address + pixel_bytes - 1]` (`pixel_bytes = matrices * 1024`) | `pixel_bytes` | R/W | Matrix *n* at `[n*1024, n*1024+1023]` relative to `address`, palette index per pixel, row-major |
+//! | Command register | `register-address`                | 1             | W      | Selects/arms an operation (spec §4.2). Always reads `0` |
+//! | Data register    | `register-address + 1`            | 1             | R/W    | Argument byte(s) for the armed operation (spec §4.3)    |
 //!
 //! Unlike `CharDisplay`, this device has no control/status registers and no IRQ capability --
 //! swaps are always synchronous (spec §5.2) -- and a single uniform command/data register pair
@@ -27,9 +30,6 @@
 //! Palette entries are stored as [`compositing::Rgb565`], not full RGB24 -- `CMD_PALETTE_WRITE`/
 //! `CMD_PALETTE_READ` still exchange 8-bit-per-channel bytes with the CPU, masked down on write
 //! and scaled back up on read (spec §4.2.1).
-//!
-//! This device is not yet reachable from configuration (`emulator::config`) or compositing/frame
-//! delivery -- those are later work units of the same plan.
 
 pub mod compositing;
 
@@ -94,7 +94,11 @@ pub struct LedMatrixFrame {
 /// A memory-mapped RGB LED matrix display device.
 pub struct LedMatrix {
     name: &'static str,
-    address_range: AddressRange,
+    /// Pixel memory's range, sized `matrices * 1024` bytes and based at the configured `address`.
+    pixel_range: AddressRange,
+    /// The command/data register pair's range, sized 2 bytes and based at the separately
+    /// configured `register-address` -- disjoint from `pixel_range` (design doc §2).
+    register_range: AddressRange,
     matrices: u32,
     pixel_bytes: usize,
 
@@ -140,8 +144,12 @@ pub struct LedMatrix {
 }
 
 impl LedMatrix {
-    /// Creates a new device. `address_range` must span exactly `matrices * 1024 + 2` bytes;
-    /// callers (the config module) are responsible for computing it from `matrices`.
+    /// Creates a new device. `pixel_range` must span exactly `matrices * 1024` bytes and
+    /// `register_range` must span exactly 2 bytes (command register first, data register second);
+    /// callers (the config module) are responsible for computing both from `matrices` and the
+    /// configured `register-address` attribute. The two ranges must be disjoint -- enforced by
+    /// `BusConfig::device`/`extend_device`'s overlap check at configuration time, not by this
+    /// constructor.
     ///
     /// `clock_hz` is the CPU's configured clock speed in Hz, or `None` if the CPU runs
     /// unthrottled (`ClockSpeed::unlimited()`); see
@@ -151,7 +159,8 @@ impl LedMatrix {
     /// runtime via `CMD_PALETTE_WRITE`.
     pub fn new(
         name: &'static str,
-        address_range: AddressRange,
+        pixel_range: AddressRange,
+        register_range: AddressRange,
         matrices: u32,
         clock_hz: Option<u64>,
         frame_rate_hz: u32,
@@ -165,7 +174,8 @@ impl LedMatrix {
         let mask = matrix_mask(matrices);
         Self {
             name,
-            address_range,
+            pixel_range,
+            register_range,
             matrices,
             pixel_bytes,
             pixels: vec![0; pixel_bytes],
@@ -337,44 +347,44 @@ impl LedMatrix {
 
 impl IoDevice for LedMatrix {
     fn read(&mut self, address: u16) -> u8 {
-        let offset = (address - self.address_range.start) as usize;
-        if offset < self.pixel_bytes {
-            self.pixels[offset]
-        } else if offset == self.pixel_bytes {
-            0
-        } else if offset == self.pixel_bytes + 1 {
-            self.read_data()
-        } else {
-            0
+        if self.register_range.contains(address) {
+            return match address - self.register_range.start {
+                1 => self.read_data(),
+                _ => 0, // command register (offset 0) always reads 0 (spec §4.2)
+            };
         }
+        let offset = (address - self.pixel_range.start) as usize;
+        if offset < self.pixel_bytes { self.pixels[offset] } else { 0 }
     }
 
     fn write(&mut self, address: u16, value: u8) {
-        let offset = (address - self.address_range.start) as usize;
+        if self.register_range.contains(address) {
+            match address - self.register_range.start {
+                0 => self.write_command(value),
+                1 => self.write_data(value),
+                _ => {}
+            }
+            return;
+        }
+        let offset = (address - self.pixel_range.start) as usize;
         if offset < self.pixel_bytes {
             self.write_pixel(offset, value);
-        } else if offset == self.pixel_bytes {
-            self.write_command(value);
-        } else if offset == self.pixel_bytes + 1 {
-            self.write_data(value);
         }
     }
 
     fn peek(&self, address: u16) -> u8 {
-        let offset = (address - self.address_range.start) as usize;
-        if offset < self.pixel_bytes {
-            self.pixels[offset]
-        } else if offset == self.pixel_bytes {
-            0
-        } else if offset == self.pixel_bytes + 1 {
-            self.peek_data()
-        } else {
-            0
+        if self.register_range.contains(address) {
+            return match address - self.register_range.start {
+                1 => self.peek_data(),
+                _ => 0,
+            };
         }
+        let offset = (address - self.pixel_range.start) as usize;
+        if offset < self.pixel_bytes { self.pixels[offset] } else { 0 }
     }
 
     fn claims(&self, address: u16) -> bool {
-        self.address_range.contains(address)
+        self.pixel_range.contains(address) || self.register_range.contains(address)
     }
 
     fn tick(&mut self, cycles: u32) {
@@ -400,7 +410,7 @@ impl IoDevice for LedMatrix {
     }
 
     fn identity_address(&self) -> u16 {
-        self.address_range.start
+        self.pixel_range.start
     }
 
     /// Drops the frame sink, closing the channel -- the debugger's bridge task's `recv()` loop
@@ -416,6 +426,9 @@ mod tests {
 
     const DEVICE_NAME: &str = "led_matrix";
     const BASE_ADDRESS: u16 = 0xD000;
+    // Deliberately far from BASE_ADDRESS, mirroring how a real config keeps the register pair out
+    // of the K-aligned pixel region (design: separate `register-address` attribute).
+    const REGISTER_ADDRESS: u16 = 0xE000;
 
     fn test_palette() -> Vec<Rgb565> {
         (0..PALETTE_LEN)
@@ -423,33 +436,37 @@ mod tests {
             .collect()
     }
 
-    fn address_range(matrices: u32) -> AddressRange {
-        let size = matrices as usize * PIXELS_PER_MATRIX + 2;
+    fn pixel_range(matrices: u32) -> AddressRange {
+        let size = matrices as usize * PIXELS_PER_MATRIX;
         AddressRange::new(BASE_ADDRESS, BASE_ADDRESS + (size as u16 - 1))
     }
 
+    fn register_range() -> AddressRange {
+        AddressRange::new(REGISTER_ADDRESS, REGISTER_ADDRESS + 1)
+    }
+
     fn device(matrices: u32) -> LedMatrix {
-        LedMatrix::new(DEVICE_NAME, address_range(matrices), matrices, Some(1_000_000), 100, test_palette())
+        LedMatrix::new(DEVICE_NAME, pixel_range(matrices), register_range(), matrices, Some(1_000_000), 100, test_palette())
     }
 
     fn pixel_addr(offset: u16) -> u16 {
         BASE_ADDRESS + offset
     }
 
-    fn command_addr(matrices: u32) -> u16 {
-        BASE_ADDRESS + (matrices as usize * PIXELS_PER_MATRIX) as u16
+    fn command_addr() -> u16 {
+        REGISTER_ADDRESS
     }
 
-    fn data_addr(matrices: u32) -> u16 {
-        command_addr(matrices) + 1
+    fn data_addr() -> u16 {
+        command_addr() + 1
     }
 
-    fn write_palette_write(device: &mut LedMatrix, matrices: u32, index: u8, r: u8, g: u8, b: u8) {
-        device.write(command_addr(matrices), CMD_PALETTE_WRITE);
-        device.write(data_addr(matrices), index);
-        device.write(data_addr(matrices), r);
-        device.write(data_addr(matrices), g);
-        device.write(data_addr(matrices), b);
+    fn write_palette_write(device: &mut LedMatrix, index: u8, r: u8, g: u8, b: u8) {
+        device.write(command_addr(), CMD_PALETTE_WRITE);
+        device.write(data_addr(), index);
+        device.write(data_addr(), r);
+        device.write(data_addr(), g);
+        device.write(data_addr(), b);
     }
 
     #[test]
@@ -468,9 +485,13 @@ mod tests {
     fn claims_only_within_configured_range() {
         let device = device(1);
         assert!(device.claims(BASE_ADDRESS));
-        assert!(device.claims(data_addr(1)));
+        assert!(device.claims(BASE_ADDRESS + PIXELS_PER_MATRIX as u16 - 1));
+        assert!(device.claims(command_addr()));
+        assert!(device.claims(data_addr()));
         assert!(!device.claims(BASE_ADDRESS - 1));
-        assert!(!device.claims(data_addr(1) + 1));
+        assert!(!device.claims(BASE_ADDRESS + PIXELS_PER_MATRIX as u16),
+            "the gap between pixel memory and the separately configured register pair must not be claimed");
+        assert!(!device.claims(data_addr() + 1));
     }
 
     #[test]
@@ -483,17 +504,17 @@ mod tests {
     #[test]
     fn command_register_always_reads_zero() {
         let mut device = device(1);
-        device.write(command_addr(1), CMD_PALETTE_WRITE);
-        assert_eq!(device.read(command_addr(1)), 0);
-        assert_eq!(device.peek(command_addr(1)), 0);
+        device.write(command_addr(), CMD_PALETTE_WRITE);
+        assert_eq!(device.read(command_addr()), 0);
+        assert_eq!(device.peek(command_addr()), 0);
     }
 
     #[test]
     fn writing_pixel_marks_only_that_matrix_dirty() {
         let mut device = device(2);
         // Clear the construction-time all-dirty default first.
-        device.write(command_addr(2), CMD_SWAP);
-        device.write(data_addr(2), 0b11);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b11);
         assert_eq!(device.dirty, 0);
 
         device.write(pixel_addr(0), 0x41); // matrix 0
@@ -503,8 +524,8 @@ mod tests {
     #[test]
     fn writing_pixel_marks_dirty_even_when_value_unchanged() {
         let mut device = device(1);
-        device.write(command_addr(1), CMD_SWAP);
-        device.write(data_addr(1), 0b1);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1);
         assert_eq!(device.dirty, 0);
 
         device.write(pixel_addr(0), 0); // already 0, still marks dirty
@@ -519,8 +540,8 @@ mod tests {
         assert_eq!(device.frame_source(0)[0], 0);
         assert_eq!(device.frame_source(1)[0], 0);
 
-        device.write(command_addr(2), CMD_SWAP);
-        device.write(data_addr(2), 0b11);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b11);
 
         assert_eq!(device.frame_source(0)[0], 0x41);
         assert_eq!(device.frame_source(1)[0], 0x55);
@@ -533,8 +554,8 @@ mod tests {
         device.write(pixel_addr(0), 0x41);
         device.write(pixel_addr(PIXELS_PER_MATRIX as u16), 0x55);
 
-        device.write(command_addr(2), CMD_SWAP);
-        device.write(data_addr(2), 0b01); // only matrix 0
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b01); // only matrix 0
 
         assert_eq!(device.frame_source(0)[0], 0x41);
         assert_eq!(device.frame_source(1)[0], 0, "matrix 1 must not have been swapped");
@@ -545,15 +566,15 @@ mod tests {
     fn cmd_swap_re_copies_even_when_matrix_is_already_clean() {
         let mut device = device(1);
         // Clear the construction-time dirty default first, without changing pixel content.
-        device.write(command_addr(1), CMD_SWAP);
-        device.write(data_addr(1), 0b1);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1);
         assert_eq!(device.dirty, 0);
 
         // Requesting a swap of an already-clean matrix must still copy pixel memory into scanout
         // (spec §5.3: CMD_SWAP ignores dirty state entirely).
         device.write(pixel_addr(0), 0x99);
-        device.write(command_addr(1), CMD_SWAP);
-        device.write(data_addr(1), 0b1);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1);
         assert_eq!(device.frame_source(0)[0], 0x99);
         assert_eq!(device.dirty, 0);
     }
@@ -587,24 +608,24 @@ mod tests {
     #[test]
     fn cmd_set_autorefresh_replaces_mask_wholesale() {
         let mut device = device(4);
-        device.write(command_addr(4), CMD_SET_AUTOREFRESH);
-        device.write(data_addr(4), 0b0101);
+        device.write(command_addr(), CMD_SET_AUTOREFRESH);
+        device.write(data_addr(), 0b0101);
         assert_eq!(device.autorefresh_mask, 0b0101);
     }
 
     #[test]
     fn cmd_set_power_replaces_mask_wholesale() {
         let mut device = device(4);
-        device.write(command_addr(4), CMD_SET_POWER);
-        device.write(data_addr(4), 0b0010);
+        device.write(command_addr(), CMD_SET_POWER);
+        device.write(data_addr(), 0b0010);
         assert_eq!(device.power_mask, 0b0010);
     }
 
     #[test]
     fn cmd_set_brightness_sets_global_level() {
         let mut device = device(1);
-        device.write(command_addr(1), CMD_SET_BRIGHTNESS);
-        device.write(data_addr(1), 0x7F);
+        device.write(command_addr(), CMD_SET_BRIGHTNESS);
+        device.write(data_addr(), 0x7F);
         assert_eq!(device.brightness, 0x7F);
     }
 
@@ -612,12 +633,12 @@ mod tests {
     fn auto_refresh_only_swaps_matrices_that_are_enabled_and_dirty() {
         let mut device = device(2);
         // Clear the construction-time dirty default first.
-        device.write(command_addr(2), CMD_SWAP);
-        device.write(data_addr(2), 0b11);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b11);
 
         // Disable auto-refresh for matrix 1.
-        device.write(command_addr(2), CMD_SET_AUTOREFRESH);
-        device.write(data_addr(2), 0b01);
+        device.write(command_addr(), CMD_SET_AUTOREFRESH);
+        device.write(data_addr(), 0b01);
 
         device.write(pixel_addr(0), 0x41); // matrix 0: enabled + dirty
         device.write(pixel_addr(PIXELS_PER_MATRIX as u16), 0x55); // matrix 1: dirty but disabled
@@ -632,8 +653,8 @@ mod tests {
     #[test]
     fn auto_refresh_does_not_swap_a_clean_matrix() {
         let mut device = device(1);
-        device.write(command_addr(1), CMD_SWAP);
-        device.write(data_addr(1), 0b1); // clear the construction-time dirty default
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1); // clear the construction-time dirty default
 
         device.tick(10_000);
         assert_eq!(device.dirty, 0, "no write occurred since the swap, so nothing should be dirty");
@@ -653,7 +674,7 @@ mod tests {
 
     #[test]
     fn nominal_clock_used_when_clock_hz_unavailable() {
-        let mut device = LedMatrix::new(DEVICE_NAME, address_range(1), 1, None, super::super::display::DEFAULT_FRAME_RATE_HZ, test_palette());
+        let mut device = LedMatrix::new(DEVICE_NAME, pixel_range(1), register_range(), 1, None, super::super::display::DEFAULT_FRAME_RATE_HZ, test_palette());
         let cycles_per_frame = super::super::display::NOMINAL_CLOCK_HZ / super::super::display::DEFAULT_FRAME_RATE_HZ as u64;
         device.write(pixel_addr(0), 0x41);
         device.tick(cycles_per_frame as u32 - 1);
@@ -665,7 +686,7 @@ mod tests {
     #[test]
     fn palette_write_masks_components_to_rgb565() {
         let mut device = device(1);
-        write_palette_write(&mut device, 1, 2, 10, 20, 30);
+        write_palette_write(&mut device, 2, 10, 20, 30);
         // spec §4.2.1: masked down to native bit width, then read back scaled -- not guaranteed
         // to equal the original bytes exactly.
         assert_eq!(device.palette()[2], Rgb565::from_rgb888(10, 20, 30));
@@ -674,55 +695,55 @@ mod tests {
     #[test]
     fn palette_read_returns_scaled_channel_bytes_in_order() {
         let mut device = device(1);
-        write_palette_write(&mut device, 1, 5, 0xFF, 0x00, 0xFF);
+        write_palette_write(&mut device, 5, 0xFF, 0x00, 0xFF);
 
-        device.write(command_addr(1), CMD_PALETTE_READ);
-        device.write(data_addr(1), 5); // index
+        device.write(command_addr(), CMD_PALETTE_READ);
+        device.write(data_addr(), 5); // index
 
-        assert_eq!(device.read(data_addr(1)), 0xFF); // red
-        assert_eq!(device.read(data_addr(1)), 0x00); // green
-        assert_eq!(device.read(data_addr(1)), 0xFF); // blue
-        assert_eq!(device.read(data_addr(1)), 0, "past the 3-byte sequence, reads return 0");
+        assert_eq!(device.read(data_addr()), 0xFF); // red
+        assert_eq!(device.read(data_addr()), 0x00); // green
+        assert_eq!(device.read(data_addr()), 0xFF); // blue
+        assert_eq!(device.read(data_addr()), 0, "past the 3-byte sequence, reads return 0");
     }
 
     #[test]
     fn palette_read_round_trip_may_change_the_original_byte() {
         let mut device = device(1);
-        write_palette_write(&mut device, 1, 7, 0x0F, 0x0F, 0x0F);
+        write_palette_write(&mut device, 7, 0x0F, 0x0F, 0x0F);
 
-        device.write(command_addr(1), CMD_PALETTE_READ);
-        device.write(data_addr(1), 7);
+        device.write(command_addr(), CMD_PALETTE_READ);
+        device.write(data_addr(), 7);
 
-        let red = device.read(data_addr(1));
+        let red = device.read(data_addr());
         assert_ne!(red, 0x0F, "spec §4.2.1: round trip is not guaranteed exact");
     }
 
     #[test]
     fn palette_read_zero_and_max_round_trip_exactly() {
         let mut device = device(1);
-        write_palette_write(&mut device, 1, 9, 0x00, 0x00, 0x00);
-        device.write(command_addr(1), CMD_PALETTE_READ);
-        device.write(data_addr(1), 9);
-        assert_eq!((device.read(data_addr(1)), device.read(data_addr(1)), device.read(data_addr(1))), (0, 0, 0));
+        write_palette_write(&mut device, 9, 0x00, 0x00, 0x00);
+        device.write(command_addr(), CMD_PALETTE_READ);
+        device.write(data_addr(), 9);
+        assert_eq!((device.read(data_addr()), device.read(data_addr()), device.read(data_addr())), (0, 0, 0));
 
-        write_palette_write(&mut device, 1, 9, 0xFF, 0xFF, 0xFF);
-        device.write(command_addr(1), CMD_PALETTE_READ);
-        device.write(data_addr(1), 9);
-        assert_eq!((device.read(data_addr(1)), device.read(data_addr(1)), device.read(data_addr(1))), (0xFF, 0xFF, 0xFF));
+        write_palette_write(&mut device, 9, 0xFF, 0xFF, 0xFF);
+        device.write(command_addr(), CMD_PALETTE_READ);
+        device.write(data_addr(), 9);
+        assert_eq!((device.read(data_addr()), device.read(data_addr()), device.read(data_addr())), (0xFF, 0xFF, 0xFF));
     }
 
     #[test]
     fn reissuing_command_mid_sequence_discards_partial_sequence() {
         let mut device = device(1);
-        device.write(command_addr(1), CMD_PALETTE_WRITE);
-        device.write(data_addr(1), 3); // index
-        device.write(data_addr(1), 0xFF); // red (would-be first sequence, discarded)
+        device.write(command_addr(), CMD_PALETTE_WRITE);
+        device.write(data_addr(), 3); // index
+        device.write(data_addr(), 0xFF); // red (would-be first sequence, discarded)
 
-        device.write(command_addr(1), CMD_PALETTE_WRITE); // re-issue resets to expect index
-        device.write(data_addr(1), 3);
-        device.write(data_addr(1), 11);
-        device.write(data_addr(1), 22);
-        device.write(data_addr(1), 33);
+        device.write(command_addr(), CMD_PALETTE_WRITE); // re-issue resets to expect index
+        device.write(data_addr(), 3);
+        device.write(data_addr(), 11);
+        device.write(data_addr(), 22);
+        device.write(data_addr(), 33);
 
         assert_eq!(device.palette()[3], Rgb565::from_rgb888(11, 22, 33));
     }
@@ -731,46 +752,46 @@ mod tests {
     fn data_register_writes_ignored_when_no_command_armed() {
         let mut device = device(1);
         let original = device.palette().to_vec();
-        device.write(data_addr(1), 10);
-        device.write(data_addr(1), 20);
+        device.write(data_addr(), 10);
+        device.write(data_addr(), 20);
         assert_eq!(device.palette(), original.as_slice());
     }
 
     #[test]
     fn data_register_write_ignored_while_a_read_sequence_is_armed() {
         let mut device = device(1);
-        write_palette_write(&mut device, 1, 1, 1, 2, 3);
-        device.write(command_addr(1), CMD_PALETTE_READ);
-        device.write(data_addr(1), 1);
+        write_palette_write(&mut device, 1, 1, 2, 3);
+        device.write(command_addr(), CMD_PALETTE_READ);
+        device.write(data_addr(), 1);
 
-        device.write(data_addr(1), 0xAA); // must not disturb the in-progress read sequence
-        assert_eq!(device.read(data_addr(1)), device.palette()[1].to_rgb888().0);
+        device.write(data_addr(), 0xAA); // must not disturb the in-progress read sequence
+        assert_eq!(device.read(data_addr()), device.palette()[1].to_rgb888().0);
     }
 
     #[test]
     fn peek_data_does_not_advance_the_read_sequence() {
         let mut device = device(1);
-        write_palette_write(&mut device, 1, 1, 1, 2, 3);
-        device.write(command_addr(1), CMD_PALETTE_READ);
-        device.write(data_addr(1), 1);
+        write_palette_write(&mut device, 1, 1, 2, 3);
+        device.write(command_addr(), CMD_PALETTE_READ);
+        device.write(data_addr(), 1);
 
         let expected = device.palette()[1].to_rgb888().0;
-        assert_eq!(device.peek(data_addr(1)), expected);
-        assert_eq!(device.peek(data_addr(1)), expected, "peek must not consume the byte");
-        assert_eq!(device.read(data_addr(1)), expected, "read still returns the same first byte");
+        assert_eq!(device.peek(data_addr()), expected);
+        assert_eq!(device.peek(data_addr()), expected, "peek must not consume the byte");
+        assert_eq!(device.read(data_addr()), expected, "read still returns the same first byte");
     }
 
     #[test]
     fn reset_restores_default_masks_and_clears_pending_sequence() {
         let mut device = device(4);
-        device.write(command_addr(4), CMD_SWAP);
-        device.write(data_addr(4), 0b1111);
-        device.write(command_addr(4), CMD_SET_AUTOREFRESH);
-        device.write(data_addr(4), 0b0001);
-        device.write(command_addr(4), CMD_SET_POWER);
-        device.write(data_addr(4), 0b0001);
-        device.write(command_addr(4), CMD_PALETTE_WRITE);
-        device.write(data_addr(4), 1); // mid-sequence
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1111);
+        device.write(command_addr(), CMD_SET_AUTOREFRESH);
+        device.write(data_addr(), 0b0001);
+        device.write(command_addr(), CMD_SET_POWER);
+        device.write(data_addr(), 0b0001);
+        device.write(command_addr(), CMD_PALETTE_WRITE);
+        device.write(data_addr(), 1); // mid-sequence
 
         device.reset();
 
@@ -780,9 +801,9 @@ mod tests {
         // The mid-sequence palette write must have been discarded: completing it with fresh
         // bytes must not apply a color built from a mix of pre- and post-reset bytes.
         let original = device.palette()[1];
-        device.write(data_addr(4), 1);
-        device.write(data_addr(4), 2);
-        device.write(data_addr(4), 3);
+        device.write(data_addr(), 1);
+        device.write(data_addr(), 2);
+        device.write(data_addr(), 3);
         assert_eq!(device.palette()[1], original, "data-only writes with nothing armed are ignored");
     }
 
@@ -819,8 +840,8 @@ mod tests {
         device.write(pixel_addr(0), 1);
         device.write(pixel_addr(PIXELS_PER_MATRIX as u16), 1);
 
-        device.write(command_addr(2), CMD_SWAP);
-        device.write(data_addr(2), 0b11);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b11);
 
         let first = rx.try_recv().expect("expected a frame for matrix 0");
         assert_eq!(first.matrix_index, 0);
@@ -836,8 +857,8 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(4);
         // Clear the construction-time dirty default first, without a sink attached, so the only
         // frame this test observes is the one auto-refresh pushes below.
-        device.write(command_addr(1), CMD_SWAP);
-        device.write(data_addr(1), 0b1);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1);
         device.attach_frame_sink(tx);
 
         device.write(pixel_addr(0), 0x41);
@@ -853,8 +874,8 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(4);
         device.attach_frame_sink(tx);
         device.shutdown();
-        device.write(command_addr(1), CMD_SWAP);
-        device.write(data_addr(1), 0b1);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1);
         assert!(rx.try_recv().is_err(), "channel should be closed once the sink is dropped");
     }
 
@@ -875,8 +896,8 @@ mod tests {
         for m in 0..8u16 {
             device.write(pixel_addr(m * PIXELS_PER_MATRIX as u16), 1);
         }
-        device.write(command_addr(8), CMD_SWAP);
-        device.write(data_addr(8), 0xFF);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0xFF);
 
         let mut received = vec![];
         while let Ok(f) = rx.try_recv() {
