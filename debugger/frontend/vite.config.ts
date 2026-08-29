@@ -39,6 +39,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         "terminal-detached": resolve(__dirname, "terminal-detached.html"),
         "display-detached": resolve(__dirname, "display-detached.html"),
+        "led-matrix-detached": resolve(__dirname, "led-matrix-detached.html"),
       },
     },
   },

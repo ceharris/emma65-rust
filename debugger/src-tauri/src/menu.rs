@@ -265,11 +265,12 @@ pub fn build_menu(
     // (issue #393), and Terminal's Ctrl+Shift+T and Display's Ctrl+Shift+D
     // remain the Window menu's detach/attach accelerators below, so reusing
     // either here would collide.
-    let view_panels: [(&str, &str); 13] = [
+    let view_panels: [(&str, &str); 14] = [
         ("assembler", "Assembler"),
         ("breakpoints", "Breakpoints"),
         ("disassembly", "Disassembly"),
         ("display", "Display"),
+        ("led-matrix", "LED Matrix"),
         ("log", "Log"),
         ("memory", "Memory"),
         ("registers", "Registers"),

@@ -12,6 +12,9 @@ const TERMINAL_DETACHED_WINDOW_LABEL = "terminal-detached";
 /** Label of the detached-Display window, per `DISPLAY_DETACHED_WINDOW_LABEL` in `debugger/src-tauri/src/display.rs`. */
 const DISPLAY_DETACHED_WINDOW_LABEL = "display-detached";
 
+/** Label of the detached-LED-Matrix window, per `LED_MATRIX_DETACHED_WINDOW_LABEL` in `debugger/src-tauri/src/led_matrix.rs`. */
+const LED_MATRIX_DETACHED_WINDOW_LABEL = "led-matrix-detached";
+
 export interface AppKeyBinding {
   matches: (e: KeyboardEvent) => boolean;
   /** Runs the binding's action. Called with `preventDefault()` already applied to the event. */
@@ -40,7 +43,7 @@ export interface AppKeyBinding {
  * cross-window emit, since it has no direct access to the main window's
  * dockview instance (separate webview, separate JS runtime).
  */
-function revealPanel(panelId: "terminal" | "display") {
+function revealPanel(panelId: "terminal" | "display" | "led-matrix") {
   emitTo(MAIN_WINDOW_LABEL, "reveal-panel", panelId).catch((err) =>
     console.error(`emitTo reveal-panel(${panelId}) failed:`, err),
   );
@@ -94,6 +97,26 @@ export const APP_KEY_BINDINGS: AppKeyBinding[] = [
         invoke("attach_display").catch((err) => console.error("attach_display failed:", err));
       } else {
         revealPanel("display");
+      }
+    },
+    hasMainWindowAccelerator: true,
+  },
+  {
+    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyM",
+    // Same shape as Ctrl+Shift+T/D above, for the detached-LED-Matrix window (memory-mapped LED
+    // matrix device plan, Work Unit 5) -- it has no app menu either
+    // (`led_matrix.rs`'s `install_detached_window` calls `remove_menu()` the same way
+    // `terminal.rs`'s/`display.rs`'s do), so it needs this binding as its only path back to
+    // docked. `attach_led_matrix` is the same reattach path the window's native close button and
+    // the Window > "Attach LED Matrix" menu item use. `menu.rs` already declares Ctrl+Shift+M as
+    // this action's native accelerator (`TOGGLE_LED_MATRIX_ID`), matching Terminal/Display's
+    // pattern of a letter-based combo (avoiding the Shift+backtick GTK accelerator issue noted
+    // above for Terminal).
+    run: () => {
+      if (getCurrentWindow().label === LED_MATRIX_DETACHED_WINDOW_LABEL) {
+        invoke("attach_led_matrix").catch((err) => console.error("attach_led_matrix failed:", err));
+      } else {
+        revealPanel("led-matrix");
       }
     },
     hasMainWindowAccelerator: true,

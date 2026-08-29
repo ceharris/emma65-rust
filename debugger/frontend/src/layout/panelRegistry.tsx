@@ -3,6 +3,7 @@ import AssemblerPanel from "../AssemblerPanel";
 import BreakpointPanel from "../BreakpointPanel";
 import DisassemblyPanel from "../DisassemblyPanel";
 import DisplayPanel from "../DisplayPanel";
+import LedMatrixPanel from "../LedMatrixPanel";
 import LogPanel from "../LogPanel";
 import MemoryPanel from "../MemoryPanel";
 import RegisterPanel from "../RegisterPanel";
@@ -19,6 +20,7 @@ export type MainPanelId =
   | "disassembly"
   | "memory"
   | "display"
+  | "led-matrix"
   | "stack"
   | "symbols"
   | "watchpoints"
@@ -35,6 +37,7 @@ export const PANEL_TITLES: Record<MainPanelId, string> = {
   disassembly: "Disassembly",
   memory: "Memory",
   display: "Display",
+  "led-matrix": "LED Matrix",
   stack: "Stack",
   symbols: "Symbols",
   watchpoints: "Watchpoints",
@@ -54,6 +57,9 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   // Threads the dockview panel API down so the canvas can auto-focus itself whenever this tab
   // becomes the active one (see DisplayPanel.tsx) — same pattern as Terminal's dockPanelApi below.
   display: ({ api }) => <DisplayPanel dockPanelApi={api} />,
+  // No dockPanelApi to thread through: LED Matrix has no keyboard/focus behavior for a dock-tab
+  // activation to drive (design §12), unlike Display and Terminal.
+  "led-matrix": () => <LedMatrixPanel />,
   stack: () => <StackPanel />,
   symbols: () => <SymbolsPanel />,
   watchpoints: () => <WatchpointPanel />,
