@@ -447,6 +447,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "c_vec"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd7a427adc0135366d99db65b36dae9237130997e560ed61118041fb72be6e8"
+
+[[package]]
 name = "cairo-rs"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1129,6 +1135,15 @@ dependencies = [
 
 [[package]]
 name = "emma65-display"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "emma65",
+ "sdl2",
+]
+
+[[package]]
+name = "emma65-led-matrix"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -3466,6 +3481,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d42407afc6a8ab67e36f92e80b8ba34cbdc55aaeed05249efe9a2e8d0e9feef"
 dependencies = [
  "bitflags 1.3.2",
+ "c_vec",
  "lazy_static",
  "libc",
  "sdl2-sys",
