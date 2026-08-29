@@ -47,6 +47,15 @@ pub struct AppConfig {
     #[clap(long = "park-on-halt")]
     #[serde(default)]
     pub park_on_halt: bool,
+
+    /// Keep the controlling terminal's signal-generation behavior (`ISIG`) enabled while the
+    /// console has it in raw mode, so Ctrl+C still exits the emulator instead of being delivered
+    /// to the emulated console as input. By default the console gets Ctrl+C as raw byte `0x03`,
+    /// like a real serial console; with this set, quitting via Ctrl+C works but the console never
+    /// sees that byte.
+    #[clap(long = "keep-isig")]
+    #[serde(default)]
+    pub keep_isig: bool,
 }
 
 /// The parsed `AppConfig` plus the raw `--profile` value, if given. The
@@ -139,6 +148,7 @@ mod tests {
             trace_file: None,
             log_file: None,
             park_on_halt: false,
+            keep_isig: false,
         }
     }
 

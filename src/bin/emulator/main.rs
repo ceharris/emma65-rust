@@ -114,7 +114,7 @@ async fn main() -> ExitCode {
     // fully succeeded, so no error exit above ever needs to restore the terminal first.
     let stdio_in_use = console_transport_slot.lock().is_ok_and(|slot| slot.is_none());
     let _raw_mode_guard = if stdio_in_use {
-        tty::enter_raw_mode()
+        tty::enter_raw_mode(config.keep_isig)
     } else {
         None
     };
