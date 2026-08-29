@@ -27,7 +27,14 @@ impl Drop for RawModeGuard {
 ///
 /// Does nothing (returns `None`) if stdin isn't a terminal, or if the termios calls fail;
 /// in either case the console still works, just without host-terminal raw mode.
-pub fn enter_raw_mode() -> Option<RawModeGuard> {
+///
+/// `cfmakeraw` clears `ISIG` along with canonical mode and echo, so by default a Ctrl+C keypress
+/// is no longer converted into `SIGINT` by the tty driver — it reaches the emulated console as a
+/// literal `0x03` byte instead, like a real serial console would see it. If `keep_isig` is `true`,
+/// `ISIG` is re-enabled after `cfmakeraw` so Ctrl+C still raises `SIGINT` (and exits the emulator
+/// via the `tokio::signal::ctrl_c()` select arm in `main`), at the cost of the console never
+/// seeing that byte.
+pub fn enter_raw_mode(keep_isig: bool) -> Option<RawModeGuard> {
     if !io::stdin().is_terminal() {
         return None;
     }
@@ -42,6 +49,9 @@ pub fn enter_raw_mode() -> Option<RawModeGuard> {
     let mut raw = original;
     unsafe {
         libc::cfmakeraw(&mut raw);
+        if keep_isig {
+            raw.c_lflag |= libc::ISIG;
+        }
         if libc::tcsetattr(io::stdin().as_raw_fd(), libc::TCSANOW, &raw) != 0 {
             eprintln!("warning: failed to set terminal to raw mode: {}", io::Error::last_os_error());
             return None;
