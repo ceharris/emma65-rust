@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 // Type name used in registering the character display as a device.
-const DEVICE_TYPE: &str = "display/char";
+const DEVICE_TYPE: &str = "display";
 
 // Default device/IRQ identifier for the optional keyboard sub-range, reused verbatim from the
 // deleted `KeyboardModule`.
@@ -59,7 +59,7 @@ impl DeviceModule for CharDisplayModule {
         let rows = config.rows.unwrap_or(DEFAULT_ROWS);
         if columns == 0 || rows == 0 {
             return Err(DeviceModuleError::Config(
-                "display/char: columns and rows must both be positive".to_string()));
+                "display: columns and rows must both be positive".to_string()));
         }
 
         let palette = match &config.palette {
@@ -93,7 +93,7 @@ impl DeviceModule for CharDisplayModule {
             && !matches!(spec, TransportSpec::Pipe { .. })
         {
             return Err(DeviceModuleError::Config(
-                "display/char requires a pipe transport; \
+                "display requires a pipe transport; \
                  tcp/unix/pty transports don't support the atomic bulk-send this protocol needs"
                     .to_string()));
         }
@@ -156,7 +156,7 @@ impl DeviceModule for CharDisplayModule {
             device.attach_external_transport(transport, relay);
         }
 
-        // Gated on `keyboard_address` being configured: an earlier `display/char` device with no
+        // Gated on `keyboard_address` being configured: an earlier `display` device with no
         // keyboard configured must not consume and discard the debugger's only keyboard slot,
         // starving a later device that does configure one.
         if keyboard_range.is_some()

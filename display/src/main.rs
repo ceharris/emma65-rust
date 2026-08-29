@@ -1,7 +1,7 @@
 //! `emma65-display` — an external peripheral process that renders `CharDisplay`'s
 //! composited output in an SDL2 window.
 //!
-//! Spawned by the emulator itself via a `display/char` device's `transport = "pipe:..."`
+//! Spawned by the emulator itself via a `display` device's `transport = "pipe:..."`
 //! attribute (see `doc/char-display-external-protocol.md`); this binary is never run
 //! standalone against a live `emma65` process any other way; its own stdin *is* the pipe. It
 //! reads the one-time header,
@@ -148,7 +148,7 @@ fn main() {
     let video = sdl_context.video().expect("SDL2 video subsystem init failed");
     let window = video
         .window(
-            &format!("emma65 display ({}x{} cells)", header.columns, header.rows),
+            &format!("emma65 display - {}x{}", header.columns, header.rows),
             pixel_width * args.scale.max(1),
             pixel_height * args.scale.max(1),
         )
@@ -176,7 +176,7 @@ fn main() {
                 break 'running;
             }
             if let Some(byte) = keystroke_byte(&event)
-                && stdout.write_all(&[byte]).is_err()
+                && (stdout.write_all(&[byte]).is_err() || stdout.flush().is_err())
             {
                 // The emulator side closed the pipe (process exited); nothing left to drive.
                 break 'running;

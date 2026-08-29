@@ -558,7 +558,7 @@ impl IoDevice for CharDisplay {
 mod tests {
     use super::*;
 
-    const DEVICE_NAME: &str = "display/char";
+    const DEVICE_NAME: &str = "display";
     const COLUMNS: u32 = 4;
     const ROWS: u32 = 2;
     const CELLS: u32 = COLUMNS * ROWS;

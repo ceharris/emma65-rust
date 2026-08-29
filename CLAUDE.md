@@ -27,7 +27,7 @@ Tauri invokes `npm run build` there automatically as part of `cargo tauri build`
 - **`debugger/src-tauri`** (crate `emma65-debugger`) — a Tauri 2 desktop app that hosts the
   emulator and exposes a full-featured debugger UI
 - **`display`** (crate `emma65-display`) — an SDL2 peripheral binary that renders the
-  `display/char` device's composited output for the plain `emma65` CLI (the debugger renders
+  `display` device's composited output for the plain `emma65` CLI (the debugger renders
   it in-process instead); spawned by the emulator as a child process over a `pipe:` transport,
   per `doc/char-display-external-protocol.md`
 
@@ -101,7 +101,7 @@ ExpandedPathBuf     // PathBuf that expands ~/ at construction; used for path at
 ```
 
 Built-in device modules (registered by `DeviceRegistry::with_builtins()`), by config `type` string:
-`ram`, `rom`, `console`, `mem/finch`, `display/matrix`, `display/char`, `lfsr`, `acia/6551`,
+`ram`, `rom`, `console`, `mem/finch`, `display/matrix`, `display`, `lfsr`, `acia/6551`,
 `ptm/6840`, `acia/6850`, `mem/phoebe`, `via/6522`, `mem/vireo`.
 
 `Config::build(&registry)` iterates `devices`, dispatches each to its `DeviceModule`,
@@ -285,10 +285,10 @@ through the debugger's own terminal window.
 
 ### `display` crate (`display/`)
 
-An SDL2 desktop app (`emma65-display`) that renders a `display/char` device's composited
+An SDL2 desktop app (`emma65-display`) that renders a `display` device's composited
 output for the plain `emma65` CLI standalone (no Tauri debugger); see
 `doc/char-display-external-protocol.md` for the wire format it consumes. `emma65` spawns it as
-a child process via a `display/char` device's `transport = "pipe:..."` attribute — its own
+a child process via a `display` device's `transport = "pipe:..."` attribute — its own
 stdin is the pipe, so it is never run standalone against a live `emma65` process any other way.
 `src/protocol.rs` is a decode-only mirror of `emma65::emulator::device::display::protocol`
 (private to the `emma65` crate); `src/main.rs` reads the one-time header, then loops reading
