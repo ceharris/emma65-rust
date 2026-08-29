@@ -278,6 +278,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     *app.state::<display::DisplayGeometryState>().0.lock().unwrap() = None;
     *app.state::<display::KeyboardTx>().0.lock().unwrap() = None;
     *app.state::<led_matrix::LedMatrixGeometryState>().0.lock().unwrap() = None;
+    app.state::<led_matrix::LedMatrixFrameCache>().0.lock().unwrap().clear();
 
     *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
 
@@ -552,6 +553,7 @@ pub fn run() {
         .manage(display::DisplayGeometryState::default())
         .manage(led_matrix::LedMatrixTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
         .manage(led_matrix::LedMatrixGeometryState::default())
+        .manage(led_matrix::LedMatrixFrameCache::default())
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
         .manage(disassembly::DisassemblerState(Mutex::new(None)))
@@ -731,6 +733,7 @@ pub fn run() {
             led_matrix::detach_led_matrix,
             led_matrix::attach_led_matrix,
             led_matrix::get_led_matrix_geometry,
+            led_matrix::get_led_matrix_frames,
             trace::record_trace,
             trace::stop_trace,
             trace::get_trace_window,

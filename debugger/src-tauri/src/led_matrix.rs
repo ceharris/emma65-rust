@@ -6,6 +6,7 @@
 //! (LED matrices have no input capability), and frames carry a `matrix_index` rather than a
 //! single whole-device buffer.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -79,18 +80,40 @@ fn current_target(app: &AppHandle) -> String {
     app.state::<LedMatrixTargetWindow>().0.lock().unwrap().clone()
 }
 
-/// Tokio task that drains `rx` and `emit_to`s a `led-matrix-frame` event to the current target
-/// window for every frame received. Unlike `display::run_display_bridge`, there's no wall-clock
-/// rate limiting here: a frame is only ever pushed on an actual matrix swap (design doc §10),
-/// already far less frequent than `CharDisplay`'s per-vsync whole-grid recomposite, and the
-/// device's own bounded channel (`try_send`, never blocking `tick()`) already caps how much a
-/// misbehaving CPU loop issuing `CMD_SWAP` repeatedly can queue up. Ends (returns) once every
-/// `LedMatrixFrame` sender is dropped — the channel equivalent of the terminal bridge seeing EOF
-/// on its pipe (see `LedMatrix::shutdown`).
+/// The last composited frame delivered for each matrix index, keyed by `matrix_index`. Since a
+/// frame is only ever pushed on an actual swap (design doc §10) rather than every vsync like
+/// `CharDisplay`, a panel that starts listening *after* a matrix's last swap — the initial docked
+/// mount, a fresh detached window, or the docked panel reappearing after a reattach — would
+/// otherwise see nothing for that matrix until some unrelated later write happens to touch it
+/// again. Caching every frame as it passes through `run_led_matrix_bridge` below and replaying the
+/// cache to a newly-mounted panel (`get_led_matrix_frames`) fixes that without needing to reach
+/// into the live device at all — `LedMatrixPanel.tsx` just fetches this once on mount, the same
+/// moment it already fetches geometry.
+#[derive(Default)]
+pub struct LedMatrixFrameCache(pub Mutex<HashMap<u8, LedMatrixFramePayload>>);
+
+/// Tauri command: every matrix's last delivered frame, for a freshly-mounted panel to paint
+/// immediately instead of waiting for the next swap. Order is unspecified — the frontend routes
+/// each entry to its own canvas by `matrix_index`.
+#[tauri::command]
+pub fn get_led_matrix_frames(state: State<LedMatrixFrameCache>) -> Vec<LedMatrixFramePayload> {
+    state.0.lock().unwrap().values().cloned().collect()
+}
+
+/// Tokio task that drains `rx`, caches each frame (see `LedMatrixFrameCache`), and `emit_to`s a
+/// `led-matrix-frame` event to the current target window for every frame received. Unlike
+/// `display::run_display_bridge`, there's no wall-clock rate limiting here: a frame is only ever
+/// pushed on an actual matrix swap (design doc §10), already far less frequent than
+/// `CharDisplay`'s per-vsync whole-grid recomposite, and the device's own bounded channel
+/// (`try_send`, never blocking `tick()`) already caps how much a misbehaving CPU loop issuing
+/// `CMD_SWAP` repeatedly can queue up. Ends (returns) once every `LedMatrixFrame` sender is
+/// dropped — the channel equivalent of the terminal bridge seeing EOF on its pipe (see
+/// `LedMatrix::shutdown`).
 pub async fn run_led_matrix_bridge(mut rx: mpsc::Receiver<LedMatrixFrame>, app: AppHandle) {
     while let Some(frame) = rx.recv().await {
         let target = current_target(&app);
         let payload: LedMatrixFramePayload = frame.into();
+        app.state::<LedMatrixFrameCache>().0.lock().unwrap().insert(payload.matrix_index, payload.clone());
         let _ = app.emit_to(target, "led-matrix-frame", payload);
     }
 }

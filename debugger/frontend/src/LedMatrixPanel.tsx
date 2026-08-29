@@ -51,6 +51,15 @@ function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
   return bytes;
 }
 
+/** Blits one matrix's frame into its canvas — shared by the live `led-matrix-frame` listener and
+ * the cached-frames replay on mount, so both paint pixels identically. */
+function paintFrame(canvas: HTMLCanvasElement, pixels: string) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const imageData = new ImageData(decodeBase64(pixels), MATRIX_SIZE, MATRIX_SIZE);
+  ctx.putImageData(imageData, 0, 0);
+}
+
 /**
  * The dock panel hosting the memory-mapped LED matrix device's composited output (memory-mapped
  * LED matrix device plan, Work Unit 5 — design §11/§12). One independent `<canvas>` per matrix,
@@ -63,9 +72,15 @@ function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
  *
  * Mounted in both the docked panel and the detached-LED-Matrix window
  * (`led-matrix-detached.tsx`), same reuse shape as `DisplayPanel`/`display-detached.tsx`: no
- * device-specific state lives outside this component, so a detach/reattach cycle's unmount+remount
- * just re-fetches geometry and starts blitting fresh frames, with no state to carry across the
- * boundary.
+ * device-specific state lives *in this component*, so a detach/reattach cycle's unmount+remount
+ * just re-fetches geometry and re-paints. The state it repaints from does persist across that
+ * boundary, though: unlike `DisplayPanel`'s per-vsync whole-grid push, a matrix's frame is only
+ * ever sent when it actually swaps (design §10), so a fresh mount with nothing to paint would
+ * otherwise show blank canvases until some unrelated later write happens to touch each matrix
+ * again. `get_led_matrix_frames` (`led_matrix.rs`'s `LedMatrixFrameCache`) answers with every
+ * matrix's last delivered frame, fetched once here alongside geometry and painted immediately —
+ * covering initial mount, detach, and reattach uniformly, since all three are just "a fresh
+ * `LedMatrixPanel` mounts" from this component's own point of view.
  *
  * All canvases share one integer CSS scale — `DisplayPanel`'s single-canvas scale computation
  * generalized to a row: a `ResizeObserver` on the container recomputes the largest whole-number
@@ -101,6 +116,23 @@ export default function LedMatrixPanel() {
     return () => observer.disconnect();
   }, [geometry]);
 
+  // Replays each matrix's last delivered frame once the canvases exist to paint into — runs after
+  // `geometry` settles (not on the initial, geometry-less render), since `canvasRefs.current` is
+  // only populated for matrices the geometry-driven render below has actually created. React
+  // attaches refs during commit, before effects run, so by the time this effect fires every
+  // canvas for `geometry.matrices` is already in place.
+  useEffect(() => {
+    if (!geometry) return;
+    invoke<LedMatrixFramePayload[]>("get_led_matrix_frames")
+      .then((frames) => {
+        for (const frame of frames) {
+          const canvas = canvasRefs.current[frame.matrix_index];
+          if (canvas) paintFrame(canvas, frame.pixels);
+        }
+      })
+      .catch((err) => console.error("get_led_matrix_frames failed:", err));
+  }, [geometry]);
+
   // Registered once, before `geometry` is even known, the same as `DisplayPanel`'s frame listener
   // — so a frame that arrives in the gap between mount and the geometry fetch resolving is never
   // missed; `canvasRefs.current[matrix_index]` is simply `undefined` until that matrix's canvas
@@ -108,11 +140,7 @@ export default function LedMatrixPanel() {
   useEffect(() => {
     const unlistenPromise = listen<LedMatrixFramePayload>("led-matrix-frame", (event) => {
       const canvas = canvasRefs.current[event.payload.matrix_index];
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const imageData = new ImageData(decodeBase64(event.payload.pixels), MATRIX_SIZE, MATRIX_SIZE);
-      ctx.putImageData(imageData, 0, 0);
+      if (canvas) paintFrame(canvas, event.payload.pixels);
     });
     return () => {
       unlistenPromise.then((f) => f());
