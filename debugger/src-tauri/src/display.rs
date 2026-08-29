@@ -7,6 +7,8 @@
 //! in-process `mpsc` channel, so there's no OS-level byte stream to bridge, just a
 //! channel-to-event forwarder.
 
+use std::fs::File;
+use std::io::Write as _;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -16,6 +18,27 @@ use tokio::sync::mpsc;
 use emma65::emulator::{DisplayFrame, DisplayGeometry};
 
 use crate::MAIN_WINDOW_LABEL;
+
+/// Holds the tx end of the remote pipe so `write_keyboard` can send bytes to the active
+/// `display/char` device's keyboard sub-range.
+///
+/// `None` before the first session load completes, and briefly `None` again mid-reload while the
+/// previous session's transport is being torn down. Populated on every successful session load
+/// regardless of whether the active profile's `display/char` device actually configures
+/// `keyboard_address=` — mirroring `terminal::TerminalTx` for `console`. If no keyboard range is
+/// configured, `CharDisplay::tick` still drains the pipe unconditionally (the relay-drain
+/// correctness fix from work units 2+3), so writes are silently absorbed there instead of by OS
+/// pipe buffering.
+pub struct KeyboardTx(pub Mutex<Option<File>>);
+
+/// Tauri command: send bytes typed in the Display panel to the active `display/char` device's
+/// keyboard sub-range.
+#[tauri::command]
+pub fn write_keyboard(bytes: Vec<u8>, state: State<KeyboardTx>) -> Result<(), String> {
+    let mut guard = state.0.lock().unwrap();
+    let tx = guard.as_mut().ok_or("Keyboard not ready")?;
+    tx.write_all(&bytes).map_err(|e| e.to_string())
+}
 
 /// Label of the detached-Display window, statically declared in `tauri.conf.json` — same
 /// shown/hidden-not-built/destroyed rationale as `terminal::TERMINAL_DETACHED_WINDOW_LABEL`

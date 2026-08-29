@@ -80,10 +80,11 @@ function keyboardByteForEvent(e: KeyboardEvent): number | null {
  * bridge task), so this component does nothing but size a `<canvas>` from `get_display_geometry`
  * and `putImageData` whatever arrives on `"display-frame"`.
  *
- * Also the input side of the memory-mapped keyboard device plan's Work Unit 4 (see
- * `doc/memory-mapped-keyboard-device-plan.md` §6): the canvas is focusable (`tabIndex={0}`) and
- * forwards `keydown` bytes to `write_keyboard`, silently absorbed if no `keyboard` device is
- * configured. Rather than requiring an explicit click into the canvas every time, it auto-focuses
+ * Also the input side of the display/keyboard integration plan (see
+ * `doc/display-keyboard-integration-plan.md` §4): the canvas is focusable (`tabIndex={0}`) and
+ * forwards `keydown` bytes to `write_keyboard`, silently absorbed if the active `display/char`
+ * device has no `keyboard_address=` configured. Rather than requiring an explicit click into the
+ * canvas every time, it auto-focuses
  * itself whenever this panel/window has focus (see the dedicated `useEffect` below) — docked,
  * that means whenever this tab becomes dockview's active tab, or whenever the main window regains
  * OS focus while this tab is already active; detached, any window focus, since the detached
