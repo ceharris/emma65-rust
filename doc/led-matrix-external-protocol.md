@@ -82,19 +82,42 @@ carrying the already-quantized `Rgb565` value stored in the device's palette tab
 value a subsequent `CMD_PALETTE_READ` of that entry would report (scaled back up to 8-bit
 components), not the original pre-quantization write bytes.
 
-No message is sent for `CMD_SET_POWER` or `CMD_SET_BRIGHTNESS` — both remain pure internal device
-state with no visible effect in the debugger panel today (design decision recorded in the
-companion binary plan), and this protocol does not invent rendering behavior for them. Adding a
-message type for either later is a pure addition to this tagged scheme, requiring no change to
-any existing message's framing.
+### 5.3 Power (`MSG_POWER = 3`, sent only on an actual `CMD_SET_POWER`)
+
+| Field  | Type | Size (bytes) | Notes                                                    |
+|--------|------|--------------|-----------------------------------------------------------|
+| `tag`  | `u8` | 1            | `3`                                                        |
+| `mask` | `u8` | 1            | new power-state bitmask, one bit per matrix (spec §4.2)    |
+
+Total message size: 2 bytes. Sent whenever `CMD_SET_POWER`'s effect is applied. The peripheral
+must retain this mask and reapply it (via `compositing::composite_matrix`'s `power_on` parameter)
+to every future composite of each affected matrix, the same way it already retains the palette
+(§7) — a powered-off matrix composites to fully black regardless of palette content.
+
+### 5.4 Brightness (`MSG_BRIGHTNESS = 4`, sent only on an actual `CMD_SET_BRIGHTNESS`)
+
+| Field       | Type | Size (bytes) | Notes                                          |
+|-------------|------|--------------|--------------------------------------------------|
+| `tag`       | `u8` | 1            | `4`                                               |
+| `level`     | `u8` | 1            | new global brightness level, `0..=255` (spec §4.2) |
+
+Total message size: 2 bytes. Sent whenever `CMD_SET_BRIGHTNESS`'s effect is applied. The
+peripheral must retain this value and reapply it (via `compositing::composite_matrix`'s
+`brightness` parameter) to every future composite of every matrix, the same way it already retains
+the palette (§7).
+
+Both §5.3 and §5.4 are a pure addition to this tagged scheme, requiring no change to any existing
+message's framing.
 
 ## 6. Startup state (device → peripheral)
 
 `LedMatrix` never re-sends the full contents of every matrix or the whole palette at connection
 time. A peripheral that attaches after the device has already been running sees only messages for
-matrices swapped and palette entries written from that point forward; anything unset renders using
-the peripheral's own reconstruction of `compositing::default_palette()` and all-zero (index 0)
-pixel data, matching the device's own construction-time defaults (spec §2, §2.1).
+matrices swapped, palette entries written, and power/brightness changes made from that point
+forward; anything unset renders using the peripheral's own reconstruction of
+`compositing::default_palette()`, all-zero (index 0) pixel data, and full power/brightness
+(`power_mask = 0xFF`, `brightness = 0xFF`), matching the device's own construction-time defaults
+(spec §2, §2.1, §4.2).
 
 ## 7. Runtime palette updates
 

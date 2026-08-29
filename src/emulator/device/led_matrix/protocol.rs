@@ -2,8 +2,9 @@
 //!
 //! See `doc/led-matrix-external-protocol.md` for the full specification. Summary: a one-time
 //! header ([`encode_header`]) sent immediately when an external transport is attached, followed
-//! by a tagged message per matrix swap ([`encode_block`]) and per actual palette write
-//! ([`encode_palette`]) -- unlike `CharDisplay`'s protocol, there is no single fixed-size
+//! by a tagged message per matrix swap ([`encode_block`]), per actual palette write
+//! ([`encode_palette`]), and per actual power/brightness change ([`encode_power`],
+//! [`encode_brightness`]) -- unlike `CharDisplay`'s protocol, there is no single fixed-size
 //! per-tick frame, since swaps happen per-matrix rather than in lockstep across the whole device.
 //! There is no length prefix on any message -- each tag has exactly one fixed following length --
 //! which is safe only because the attached transport's
@@ -23,6 +24,10 @@ const VERSION: u8 = 1;
 pub const MSG_BLOCK: u8 = 1;
 /// Tag identifying a palette message (spec §5.2).
 pub const MSG_PALETTE: u8 = 2;
+/// Tag identifying a power message (spec §5.3).
+pub const MSG_POWER: u8 = 3;
+/// Tag identifying a brightness message (spec §5.4).
+pub const MSG_BRIGHTNESS: u8 = 4;
 
 /// Builds the one-time header sent immediately on attach (spec §4): magic, version, matrix
 /// count, then the auto-refresh cadence.
@@ -54,6 +59,18 @@ pub fn encode_palette(index: u8, color: Rgb565) -> Vec<u8> {
     buf.push(index);
     buf.extend_from_slice(&color.to_packed565().to_le_bytes());
     buf
+}
+
+/// Builds one power message (spec §5.3): tag, then the new power-state bitmask -- sent only when
+/// `CMD_SET_POWER`'s effect is actually applied.
+pub fn encode_power(mask: u8) -> Vec<u8> {
+    vec![MSG_POWER, mask]
+}
+
+/// Builds one brightness message (spec §5.4): tag, then the new global brightness level -- sent
+/// only when `CMD_SET_BRIGHTNESS`'s effect is actually applied.
+pub fn encode_brightness(level: u8) -> Vec<u8> {
+    vec![MSG_BRIGHTNESS, level]
 }
 
 #[cfg(test)]
@@ -99,5 +116,23 @@ mod tests {
         let packed = color.to_packed565();
 
         assert_eq!(packed, 0b1010_1110_0110_1010);
+    }
+
+    #[test]
+    fn power_layout_matches_spec() {
+        let message = encode_power(0b0110);
+
+        assert_eq!(message[0], MSG_POWER);
+        assert_eq!(message[1], 0b0110);
+        assert_eq!(message.len(), 2);
+    }
+
+    #[test]
+    fn brightness_layout_matches_spec() {
+        let message = encode_brightness(0x7F);
+
+        assert_eq!(message[0], MSG_BRIGHTNESS);
+        assert_eq!(message[1], 0x7F);
+        assert_eq!(message.len(), 2);
     }
 }

@@ -21,6 +21,10 @@ const SUPPORTED_VERSION: u8 = 1;
 pub const MSG_BLOCK: u8 = 1;
 /// Tag identifying a palette message (spec §5.2).
 pub const MSG_PALETTE: u8 = 2;
+/// Tag identifying a power message (spec §5.3).
+pub const MSG_POWER: u8 = 3;
+/// Tag identifying a brightness message (spec §5.4).
+pub const MSG_BRIGHTNESS: u8 = 4;
 
 /// Fixed size of the one-time header (spec §4): magic + version + matrix_count + frame_rate_hz.
 pub const HEADER_LEN: usize = 4 + 1 + 1 + 4;
@@ -32,6 +36,13 @@ const BLOCK_BODY_LEN: usize = 1 + PIXELS_PER_MATRIX;
 /// Size of a palette message's body, *after* the already-consumed tag byte (spec §5.2):
 /// index + packed RGB565.
 const PALETTE_BODY_LEN: usize = 1 + 2;
+
+/// Size of a power message's body, *after* the already-consumed tag byte (spec §5.3): the mask.
+const POWER_BODY_LEN: usize = 1;
+
+/// Size of a brightness message's body, *after* the already-consumed tag byte (spec §5.4): the
+/// level.
+const BRIGHTNESS_BODY_LEN: usize = 1;
 
 /// The one-time header, decoded (spec §4). No palette or per-matrix dimensions — both sides
 /// already know matrix dimensions are a fixed 32x32 constant, and the palette is never
@@ -68,6 +79,10 @@ pub enum Message {
     Block { matrix_index: u8, pixels: Vec<u8> },
     /// One palette entry's new value, sent only on an actual `CMD_PALETTE_WRITE` (spec §5.2).
     Palette { index: u8, color: Rgb565 },
+    /// The new power-state bitmask, sent only on an actual `CMD_SET_POWER` (spec §5.3).
+    Power { mask: u8 },
+    /// The new global brightness level, sent only on an actual `CMD_SET_BRIGHTNESS` (spec §5.4).
+    Brightness { level: u8 },
 }
 
 /// Returns the number of body bytes that must follow `tag` before [`decode_message`] can be
@@ -77,6 +92,8 @@ pub fn body_len(tag: u8) -> Option<usize> {
     match tag {
         MSG_BLOCK => Some(BLOCK_BODY_LEN),
         MSG_PALETTE => Some(PALETTE_BODY_LEN),
+        MSG_POWER => Some(POWER_BODY_LEN),
+        MSG_BRIGHTNESS => Some(BRIGHTNESS_BODY_LEN),
         _ => None,
     }
 }
@@ -100,6 +117,18 @@ pub fn decode_message(tag: u8, body: &[u8]) -> Result<Message, String> {
             let g6 = ((packed >> 5) & 0x3F) as u8;
             let b5 = (packed & 0x1F) as u8;
             Ok(Message::Palette { index, color: Rgb565::new(r5, g6, b5) })
+        }
+        MSG_POWER => {
+            if body.len() != POWER_BODY_LEN {
+                return Err(format!("power body must be exactly {POWER_BODY_LEN} bytes, got {}", body.len()));
+            }
+            Ok(Message::Power { mask: body[0] })
+        }
+        MSG_BRIGHTNESS => {
+            if body.len() != BRIGHTNESS_BODY_LEN {
+                return Err(format!("brightness body must be exactly {BRIGHTNESS_BODY_LEN} bytes, got {}", body.len()));
+            }
+            Ok(Message::Brightness { level: body[0] })
         }
         _ => Err(format!("unrecognized message tag {tag}")),
     }
@@ -151,12 +180,14 @@ mod tests {
     fn body_len_matches_spec_for_known_tags() {
         assert_eq!(body_len(MSG_BLOCK), Some(1 + PIXELS_PER_MATRIX));
         assert_eq!(body_len(MSG_PALETTE), Some(3));
+        assert_eq!(body_len(MSG_POWER), Some(1));
+        assert_eq!(body_len(MSG_BRIGHTNESS), Some(1));
     }
 
     #[test]
     fn body_len_is_none_for_unknown_tag() {
         assert_eq!(body_len(0), None);
-        assert_eq!(body_len(3), None);
+        assert_eq!(body_len(99), None);
     }
 
     #[test]
@@ -199,6 +230,34 @@ mod tests {
     #[test]
     fn decode_message_palette_rejects_wrong_body_length() {
         let err = decode_message(MSG_PALETTE, &[0u8; 2]).unwrap_err();
+        assert!(err.contains("exactly"));
+    }
+
+    #[test]
+    fn decode_message_power_extracts_mask() {
+        match decode_message(MSG_POWER, &[0b0110]).unwrap() {
+            Message::Power { mask } => assert_eq!(mask, 0b0110),
+            _ => panic!("expected Power"),
+        }
+    }
+
+    #[test]
+    fn decode_message_power_rejects_wrong_body_length() {
+        let err = decode_message(MSG_POWER, &[0u8; 2]).unwrap_err();
+        assert!(err.contains("exactly"));
+    }
+
+    #[test]
+    fn decode_message_brightness_extracts_level() {
+        match decode_message(MSG_BRIGHTNESS, &[0x7F]).unwrap() {
+            Message::Brightness { level } => assert_eq!(level, 0x7F),
+            _ => panic!("expected Brightness"),
+        }
+    }
+
+    #[test]
+    fn decode_message_brightness_rejects_wrong_body_length() {
+        let err = decode_message(MSG_BRIGHTNESS, &[0u8; 2]).unwrap_err();
         assert!(err.contains("exactly"));
     }
 

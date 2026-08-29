@@ -209,11 +209,17 @@ fn spawn_message_reader() -> mpsc::Receiver<Message> {
     rx
 }
 
-/// Applies one decoded message to per-matrix raw pixel state or the shared palette. Recompositing
-/// happens lazily at render time (see [`render`]), so a palette message needs no special
-/// per-matrix fan-out here — the next redraw naturally recomposites every matrix's retained raw
-/// pixels against the updated palette (spec §7).
-fn apply_message(matrices: &mut [[u8; PIXELS_PER_MATRIX]], palette: &mut [Rgb565], message: Message) {
+/// Applies one decoded message to per-matrix raw pixel state, the shared palette, or the
+/// power/brightness state. Recompositing happens lazily at render time (see [`render`]), so none
+/// of these need special per-matrix fan-out here — the next redraw naturally recomposites every
+/// matrix's retained raw pixels against the updated palette/power/brightness state (spec §7).
+fn apply_message(
+    matrices: &mut [[u8; PIXELS_PER_MATRIX]],
+    palette: &mut [Rgb565],
+    power_mask: &mut u8,
+    brightness: &mut u8,
+    message: Message,
+) {
     match message {
         Message::Block { matrix_index, pixels } => {
             if let Some(slot) = matrices.get_mut(matrix_index as usize) {
@@ -225,6 +231,8 @@ fn apply_message(matrices: &mut [[u8; PIXELS_PER_MATRIX]], palette: &mut [Rgb565
                 *slot = color;
             }
         }
+        Message::Power { mask } => *power_mask = mask,
+        Message::Brightness { level } => *brightness = level,
     }
 }
 
@@ -235,6 +243,8 @@ fn render(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     matrices: &[[u8; PIXELS_PER_MATRIX]],
     palette: &[Rgb565],
+    power_mask: u8,
+    brightness: u8,
     arrangement: Arrangement,
     pitch: u32,
 ) -> Result<(), String> {
@@ -253,7 +263,8 @@ fn render(
         canvas.set_draw_color(PCB_BACKGROUND_COLOR);
         canvas.fill_rect(Rect::new(base_x as i32, base_y as i32, matrix_size_px, matrix_size_px))?;
 
-        let rgba = composite_matrix(pixels, palette);
+        let power_on = power_mask & (1u8 << index as u32) != 0;
+        let rgba = composite_matrix(pixels, palette, power_on, brightness);
         for r in 0..MATRIX_SIZE {
             for c in 0..MATRIX_SIZE {
                 let offset = ((r * MATRIX_SIZE + c) * 4) as usize;
@@ -289,6 +300,8 @@ fn main() {
     let arrangement = resolve_arrangement(&args, header.matrix_count as u32);
     let mut matrices = vec![[0u8; PIXELS_PER_MATRIX]; header.matrix_count as usize];
     let mut palette = default_palette();
+    let mut power_mask: u8 = 0xFF;
+    let mut brightness: u8 = 0xFF;
 
     let pixel_width = arrangement.columns * MATRIX_SIZE * args.pitch;
     let pixel_height = arrangement.rows * MATRIX_SIZE * args.pitch;
@@ -322,16 +335,17 @@ fn main() {
 
         match rx.recv_timeout(Duration::from_millis(33)) {
             Ok(message) => {
-                apply_message(&mut matrices, &mut palette, message);
+                apply_message(&mut matrices, &mut palette, &mut power_mask, &mut brightness, message);
                 while let Ok(message) = rx.try_recv() {
-                    apply_message(&mut matrices, &mut palette, message);
+                    apply_message(&mut matrices, &mut palette, &mut power_mask, &mut brightness, message);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break 'running,
         }
 
-        render(&mut canvas, &matrices, &palette, arrangement, args.pitch).expect("render failed");
+        render(&mut canvas, &matrices, &palette, power_mask, brightness, arrangement, args.pitch)
+            .expect("render failed");
     }
 }
 
@@ -372,5 +386,29 @@ mod tests {
         canvas.filled_circle(2, 2, 1, gfx_color(Color::RGB(0, 255, 0))).unwrap();
 
         assert_eq!(pixel_at(&canvas, 2, 2), (0, 255, 0, 255));
+    }
+
+    #[test]
+    fn apply_message_power_sets_power_mask() {
+        let mut matrices = [[0u8; PIXELS_PER_MATRIX]; 1];
+        let mut palette = default_palette();
+        let mut power_mask = 0xFFu8;
+        let mut brightness = 0xFFu8;
+
+        apply_message(&mut matrices, &mut palette, &mut power_mask, &mut brightness, Message::Power { mask: 0b0110 });
+
+        assert_eq!(power_mask, 0b0110);
+    }
+
+    #[test]
+    fn apply_message_brightness_sets_brightness() {
+        let mut matrices = [[0u8; PIXELS_PER_MATRIX]; 1];
+        let mut palette = default_palette();
+        let mut power_mask = 0xFFu8;
+        let mut brightness = 0xFFu8;
+
+        apply_message(&mut matrices, &mut palette, &mut power_mask, &mut brightness, Message::Brightness { level: 0x7F });
+
+        assert_eq!(brightness, 0x7F);
     }
 }
