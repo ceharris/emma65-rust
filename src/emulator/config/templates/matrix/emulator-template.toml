@@ -1,4 +1,4 @@
-cpu-variant = "65C02"
+cpu-variant = "WDC65C02"
 clock-speed-hz = 1843200
 
 [[devices]]
@@ -7,8 +7,9 @@ address = 0x0000
 size = 2048
 
 [[devices]]
-type = "display/char"
+type = "display"
 address = 0xc000
+keyboard-address = 0xfff8
 
 [[devices]]
 type = "rom"
@@ -21,7 +22,3 @@ labels = "{{LABELS}}"
 type = "lfsr"
 address = 0xfff6
 mode = "step"
-
-[[devices]]
-type = "console"
-address = 0xfff8
