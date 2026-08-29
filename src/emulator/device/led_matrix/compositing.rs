@@ -36,6 +36,13 @@ impl Rgb565 {
         let b = (self.b << 3) | (self.b >> 2);
         (r, g, b)
     }
+
+    /// Packs the stored 5/6/5-bit components into a single `rrrrrggggggbbbbb` `u16`, the wire
+    /// format `led_matrix::protocol::encode_palette` sends (`doc/led-matrix-external-
+    /// protocol.md` §5.2) -- distinct from [`Self::to_rgb888`]'s 8-bit-per-channel expansion.
+    pub fn to_packed565(self) -> u16 {
+        ((self.r as u16) << 11) | ((self.g as u16) << 5) | self.b as u16
+    }
 }
 
 /// Composites one matrix's 1,024 palette-index bytes (spec §2, row-major) into
