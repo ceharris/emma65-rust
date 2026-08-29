@@ -52,13 +52,22 @@ impl Rgb565 {
 ///
 /// Index resolution is `index as usize % palette.len()`, matching the modulo rule
 /// `display::compositing::resolve_palette_index` already established for `CharDisplay`.
-pub fn composite_matrix(pixels: &[u8], palette: &[Rgb565]) -> Vec<u8> {
+///
+/// `power_on` and `brightness` apply `CMD_SET_POWER`/`CMD_SET_BRIGHTNESS`'s visible effect: a
+/// powered-off matrix composites to fully black (opaque) regardless of palette content; otherwise
+/// each channel is linearly scaled by `brightness / 255` via [`scale_channel`].
+pub fn composite_matrix(pixels: &[u8], palette: &[Rgb565], power_on: bool, brightness: u8) -> Vec<u8> {
     debug_assert_eq!(pixels.len(), super::PIXELS_PER_MATRIX, "pixels must be exactly one matrix's worth");
     debug_assert!(!palette.is_empty(), "palette must be non-empty");
 
     let mut rgba = vec![0u8; pixels.len() * 4];
     for (i, &index) in pixels.iter().enumerate() {
-        let (r, g, b) = palette[index as usize % palette.len()].to_rgb888();
+        let (r, g, b) = if power_on {
+            let (r, g, b) = palette[index as usize % palette.len()].to_rgb888();
+            (scale_channel(r, brightness), scale_channel(g, brightness), scale_channel(b, brightness))
+        } else {
+            (0, 0, 0)
+        };
         let offset = i * 4;
         rgba[offset] = r;
         rgba[offset + 1] = g;
@@ -66,6 +75,14 @@ pub fn composite_matrix(pixels: &[u8], palette: &[Rgb565]) -> Vec<u8> {
         rgba[offset + 3] = 0xFF;
     }
     rgba
+}
+
+/// Linearly scales an 8-bit color channel by `brightness / 255`, rounded to the nearest integer.
+/// Exact at `brightness = 0xFF` (reproduces `channel` unscaled) and `brightness = 0` (always `0`).
+/// Distinct from [`round_scale`], which divides by an arbitrary `source_max`; this always divides
+/// by 255.
+fn scale_channel(channel: u8, brightness: u8) -> u8 {
+    ((channel as u32 * brightness as u32 + 127) / 255) as u8
 }
 
 /// Rounds `level * target_max / source_max` to the nearest integer (spec §2.1's `round`; none of
@@ -176,7 +193,7 @@ mod tests {
         pixels[0] = 1; // top-left: red
         pixels[super::super::PIXELS_PER_MATRIX - 1] = 2; // bottom-right: green
 
-        let rgba = composite_matrix(&pixels, &palette);
+        let rgba = composite_matrix(&pixels, &palette, true, 0xFF);
 
         assert_eq!(rgba.len(), super::super::PIXELS_PER_MATRIX * 4);
         assert_eq!(&rgba[0..4], &[0xFF, 0x00, 0x00, 0xFF]);
@@ -192,9 +209,61 @@ mod tests {
         let mut pixels = vec![0u8; super::super::PIXELS_PER_MATRIX];
         pixels[0] = 4; // 4 % 2 == 0 -> first entry
 
-        let rgba = composite_matrix(&pixels, &palette);
+        let rgba = composite_matrix(&pixels, &palette, true, 0xFF);
 
         assert_eq!(&rgba[0..4], &[palette[0].to_rgb888().0, palette[0].to_rgb888().1, palette[0].to_rgb888().2, 0xFF]);
+    }
+
+    #[test]
+    fn composite_matrix_powered_off_is_fully_black_opaque_regardless_of_palette() {
+        let palette = [Rgb565::new(0x1F, 0x3F, 0x1F)]; // white
+        let mut pixels = vec![0u8; super::super::PIXELS_PER_MATRIX];
+        pixels[0] = 0;
+
+        let rgba = composite_matrix(&pixels, &palette, false, 0xFF);
+
+        assert_eq!(&rgba[0..4], &[0x00, 0x00, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn composite_matrix_full_brightness_reproduces_unscaled_color() {
+        let palette = [Rgb565::new(0x1F, 0x3F, 0x1F)]; // white -> (0xFF, 0xFF, 0xFF)
+        let pixels = vec![0u8; super::super::PIXELS_PER_MATRIX];
+
+        let rgba = composite_matrix(&pixels, &palette, true, 0xFF);
+
+        assert_eq!(&rgba[0..4], &[0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn composite_matrix_zero_brightness_is_black_but_still_opaque() {
+        let palette = [Rgb565::new(0x1F, 0x3F, 0x1F)]; // white
+        let pixels = vec![0u8; super::super::PIXELS_PER_MATRIX];
+
+        let rgba = composite_matrix(&pixels, &palette, true, 0x00);
+
+        assert_eq!(&rgba[0..4], &[0x00, 0x00, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn composite_matrix_mid_brightness_scales_channel_with_rounding() {
+        // scale_channel(0xFF, 0x80) = (255*128 + 127) / 255 = 128
+        let palette = [Rgb565::new(0x1F, 0, 0)]; // pure red -> (0xFF, 0, 0)
+        let pixels = vec![0u8; super::super::PIXELS_PER_MATRIX];
+
+        let rgba = composite_matrix(&pixels, &palette, true, 0x80);
+
+        assert_eq!(&rgba[0..4], &[128, 0, 0, 0xFF]);
+    }
+
+    #[test]
+    fn composite_matrix_powered_off_and_zero_brightness_combined_is_black_no_panic() {
+        let palette = [Rgb565::new(0x1F, 0x3F, 0x1F)];
+        let pixels = vec![0u8; super::super::PIXELS_PER_MATRIX];
+
+        let rgba = composite_matrix(&pixels, &palette, false, 0x00);
+
+        assert_eq!(&rgba[0..4], &[0x00, 0x00, 0x00, 0xFF]);
     }
 
     #[test]

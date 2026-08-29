@@ -115,12 +115,12 @@ pub struct LedMatrix {
     dirty: u8,
     /// Persistent auto-refresh mask, one bit per matrix (spec §6).
     autorefresh_mask: u8,
-    /// Persistent power-state mask, one bit per matrix (spec §4.2, design doc §6). Pure state in
-    /// this work unit -- no visible effect yet.
+    /// Persistent power-state mask, one bit per matrix (spec §4.2, design doc §6). Applied by
+    /// [`compositing::composite_matrix`] at the next swap of each affected matrix.
     power_mask: u8,
-    /// Global brightness level, `0..=255` (spec §4.2, design doc §6). Pure state in this work
-    /// unit -- no visible effect yet. Defaults to full brightness, matching the "works out of the
-    /// box" rationale already applied to the auto-refresh and power defaults.
+    /// Global brightness level, `0..=255` (spec §4.2, design doc §6), linearly scaling composited
+    /// color channels. Defaults to full brightness, matching the "works out of the box" rationale
+    /// already applied to the auto-refresh and power defaults.
     brightness: u8,
 
     /// The single, shared 256-entry color palette (spec §2), mutable at runtime only via
@@ -269,7 +269,9 @@ impl LedMatrix {
         self.scanout[start..end].copy_from_slice(&self.pixels[start..end]);
         self.dirty &= !(1 << index);
         if let Some(sink) = &self.frame_sink {
-            let pixels = compositing::composite_matrix(&self.scanout[start..end], &self.palette);
+            let power_on = self.power_mask & (1 << index) != 0;
+            let pixels =
+                compositing::composite_matrix(&self.scanout[start..end], &self.palette, power_on, self.brightness);
             let _ = sink.try_send(LedMatrixFrame { matrix_index: index as u8, pixels });
         }
         if let Some(transport) = self.external_transport.as_mut() {
@@ -324,8 +326,20 @@ impl LedMatrix {
                 }
             }
             Command::SetAutorefresh => self.autorefresh_mask = buffer[0],
-            Command::SetPower => self.power_mask = buffer[0],
-            Command::SetBrightness => self.brightness = buffer[0],
+            Command::SetPower => {
+                self.power_mask = buffer[0];
+                if let Some(transport) = self.external_transport.as_mut() {
+                    let message = protocol::encode_power(self.power_mask);
+                    transport.send_bytes(&message);
+                }
+            }
+            Command::SetBrightness => {
+                self.brightness = buffer[0];
+                if let Some(transport) = self.external_transport.as_mut() {
+                    let message = protocol::encode_brightness(self.brightness);
+                    transport.send_bytes(&message);
+                }
+            }
             Command::PaletteWrite => {
                 let index = buffer[0] as usize;
                 self.palette[index] = Rgb565::from_rgb888(buffer[1], buffer[2], buffer[3]);
@@ -1047,16 +1061,27 @@ mod tests {
     }
 
     #[test]
-    fn set_power_and_set_brightness_send_no_message_over_external_transport() {
+    fn set_power_sends_a_power_message_over_external_transport() {
         let (mut device, mut remote) = device_with_external_transport(1);
         collect_bytes(&mut remote); // drain the header
 
         device.write(command_addr(), CMD_SET_POWER);
-        device.write(data_addr(), 0);
+        device.write(data_addr(), 0b0110);
+
+        let bytes = collect_bytes(&mut remote);
+        assert_eq!(bytes, vec![3, 0b0110]); // MSG_POWER, mask
+    }
+
+    #[test]
+    fn set_brightness_sends_a_brightness_message_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(1);
+        collect_bytes(&mut remote); // drain the header
+
         device.write(command_addr(), CMD_SET_BRIGHTNESS);
         device.write(data_addr(), 0x7F);
 
-        assert!(collect_bytes(&mut remote).is_empty(), "power/brightness are not part of this protocol");
+        let bytes = collect_bytes(&mut remote);
+        assert_eq!(bytes, vec![4, 0x7F]); // MSG_BRIGHTNESS, level
     }
 
     #[test]
