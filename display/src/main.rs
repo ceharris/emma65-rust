@@ -148,7 +148,7 @@ fn main() {
     let video = sdl_context.video().expect("SDL2 video subsystem init failed");
     let window = video
         .window(
-            &format!("emma65 display ({}x{} cells)", header.columns, header.rows),
+            &format!("emma65 display - {}x{}", header.columns, header.rows),
             pixel_width * args.scale.max(1),
             pixel_height * args.scale.max(1),
         )
