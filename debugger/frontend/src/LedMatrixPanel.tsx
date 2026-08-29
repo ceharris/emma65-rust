@@ -24,11 +24,6 @@ interface LedMatrixFramePayload {
  * columns/rows, there's nothing device-specific to compute here. */
 const MATRIX_SIZE = 32;
 
-/** Must match `.led-matrix-container`'s `gap` in `styles/global.scss` — the fit computation
- * below needs to know exactly how much horizontal space the row's gaps consume to fit the
- * canvases against the container's actual width. */
-const MATRIX_GAP_PX = 8;
-
 /** Floor the shared LED pitch (on-screen center-to-center spacing) never drops below, however
  * cramped the dock cell is. Unlike the old fixed-bitmap rendering this floor doesn't need to be an
  * integer — LEDs are drawn as vector circles, not upscaled pixels — it just keeps a matrix
@@ -137,12 +132,14 @@ function drawMatrix(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, pitch:
  *
  * Each matrix is rendered as a grid of round LEDs on a PCB-colored background (`drawMatrix`),
  * modeling a real hobbyist RGB LED matrix panel's proportions rather than the raw pixel buffer's
- * square cells — see `LED_RADIUS_RATIO`'s doc comment. All canvases share one on-screen `pitch`
+ * square cells — see `LED_RADIUS_RATIO`'s doc comment. Matrices are laid out with zero gap between
+ * them, since real matrix boards mount edge-to-edge flush, giving the appearance of one
+ * contiguous board rather than several separate ones. All canvases share one on-screen `pitch`
  * (LED center-to-center spacing, in CSS pixels): a `ResizeObserver` on the container recomputes
- * the largest pitch that fits every matrix side by side (accounting for the row's gaps), never
- * smaller than `MIN_PITCH_PX`. Unlike the previous bitmap-blit rendering, pitch is continuous
- * (not floored to an integer multiple) since there's no pixel grid to keep aligned to whole
- * multiples of — canvases resize smoothly rather than snapping between steps.
+ * the largest pitch that fits every matrix side by side, never smaller than `MIN_PITCH_PX`. Unlike
+ * the previous bitmap-blit rendering, pitch is continuous (not floored to an integer multiple)
+ * since there's no pixel grid to keep aligned to whole multiples of — canvases resize smoothly
+ * rather than snapping between steps.
  */
 export default function LedMatrixPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -176,8 +173,10 @@ export default function LedMatrixPanel() {
     const container = containerRef.current;
     if (!container || !geometry) return;
     const recomputePitch = () => {
-      const totalGap = MATRIX_GAP_PX * Math.max(0, geometry.matrices - 1);
-      const fitWidth = (container.clientWidth - totalGap) / (geometry.matrices * MATRIX_SIZE);
+      // Real matrix boards mount edge-to-edge flush (no bezel gap), so the row's canvases are
+      // laid out with zero spacing between them — the fit computation divides the container's
+      // full width across all matrices rather than reserving room for gaps.
+      const fitWidth = container.clientWidth / (geometry.matrices * MATRIX_SIZE);
       const fitHeight = container.clientHeight / MATRIX_SIZE;
       setPitch(Math.max(MIN_PITCH_PX, Math.min(fitWidth, fitHeight)));
     };
