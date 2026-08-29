@@ -217,20 +217,22 @@ body {
 
 // --- led matrix panel ---
 
-// Row of independent per-matrix canvases (LedMatrixPanel.tsx), left to right by index -- unlike
-// `.display-container`'s single centered canvas, this container can hold several, so it's a flex
-// row rather than a bare centering box. No `gap`: real matrix boards mount edge-to-edge flush, so
+// Grid of independent per-matrix canvases (LedMatrixPanel.tsx), placed in row-major matrix_index
+// order -- unlike `.display-container`'s single centered canvas, this container can hold several
+// arranged into the physical layout the user picked (arrangement menu), so it's a CSS grid rather
+// than a bare centering box. `gridTemplateColumns` (inline style, set from `arrangement.columns`)
+// drives how many canvases wrap per row; no `gap`: real matrix boards mount edge-to-edge flush, so
 // the canvases sit flush too, giving the appearance of one contiguous board.
 //
 // `overflow: auto`, not `hidden`: `LedMatrixPanel.tsx`'s `MIN_PITCH_PX` floor keeps every matrix
-// legible even in a cramped dock cell, which for a many-matrix config can mean the row is wider
+// legible even in a cramped dock cell, which for a many-matrix config can mean the grid is larger
 // than the container -- scrolling to see the rest beats silently clipping matrices off the edge.
 .led-matrix-container {
   width: 100%;
   height: 100%;
   overflow: auto;
-  display: flex;
-  align-items: center;
+  display: grid;
+  align-content: center;
   justify-content: center;
   background: var(--color-bg);
 }

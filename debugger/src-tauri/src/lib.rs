@@ -779,6 +779,8 @@ pub fn run() {
             preferences::set_last_file_dialog_dir,
             preferences::get_symbols_column_widths,
             preferences::set_symbols_column_widths,
+            preferences::get_led_matrix_arrangement,
+            preferences::set_led_matrix_arrangement,
             layout::get_dock_layout,
             layout::set_dock_layout,
             layout::restore_dock_layout,
