@@ -9,6 +9,8 @@ use tauri::{AppHandle, State, Wry};
 pub(crate) const TOGGLE_TERMINAL_ID: &str = "toggle-terminal";
 /// Menu item id for the Window > Display item.
 pub(crate) const TOGGLE_DISPLAY_ID: &str = "toggle-display";
+/// Menu item id for the Window > LED Matrix item.
+pub(crate) const TOGGLE_LED_MATRIX_ID: &str = "toggle-led-matrix";
 /// Menu item id for the Window > Restore Layout… item.
 pub(crate) const RESTORE_LAYOUT_ID: &str = "restore-layout";
 /// Id prefix for entries in the View menu; each item's full id is this
@@ -90,6 +92,9 @@ pub struct WindowMenuState {
     /// The Window > Display item. Toggles between "Detach Display…" and "Attach Display" the
     /// same way `terminal_item` does — see `set_display_menu_label`.
     pub display_item: MenuItem<Wry>,
+    /// The Window > LED Matrix item. Toggles between "Detach LED Matrix…" and "Attach LED
+    /// Matrix" the same way `terminal_item` does — see `set_led_matrix_menu_label`.
+    pub led_matrix_item: MenuItem<Wry>,
 }
 
 /// Holds the File > Open Recent submenu so its items can be replaced in
@@ -372,6 +377,13 @@ pub fn build_menu(
     // punctuation-based combo here too.
     let display_item = MenuItem::with_id(app, TOGGLE_DISPLAY_ID, "Detach Display…", true, Some("Ctrl+Shift+D"))?;
 
+    // Same toggle-label pattern as `terminal_item`/`display_item` above (memory-mapped LED
+    // matrix device plan, Work Unit 4), with its own accelerator letter (`M`) to avoid colliding
+    // with Terminal's/Display's — same GTK consumed-modifier reasoning documented on
+    // `terminal_item` rules out a punctuation-based combo here too.
+    let led_matrix_item =
+        MenuItem::with_id(app, TOGGLE_LED_MATRIX_ID, "Detach LED Matrix…", true, Some("Ctrl+Shift+M"))?;
+
     // Bottom of the Window menu, set off by its own separator (issue #398):
     // discards every panel's current position/size, restoring the same
     // default arrangement a brand-new profile starts with. Dialog-confirmed
@@ -384,7 +396,7 @@ pub fn build_menu(
         app,
         "Window",
         true,
-        &[&terminal_item, &display_item, &window_separator, &restore_layout_item],
+        &[&terminal_item, &display_item, &led_matrix_item, &window_separator, &restore_layout_item],
     )?;
 
     let github_item = MenuItem::with_id(app, GITHUB_ID, "View on GitHub", true, None::<&str>)?;
@@ -437,7 +449,7 @@ pub fn build_menu(
 
     Ok((
         menu,
-        WindowMenuState { exit_item, terminal_item, display_item },
+        WindowMenuState { exit_item, terminal_item, display_item, led_matrix_item },
         RecentMenuState(open_recent_submenu),
         RunMenuState { run_item, stop_item, step_into_item, step_over_item, step_return_item, toggle_auto_step_item },
         MemoryMenuState {
@@ -516,6 +528,13 @@ pub(crate) fn set_terminal_menu_label(state: &WindowMenuState, detached: bool) {
 pub(crate) fn set_display_menu_label(state: &WindowMenuState, detached: bool) {
     let label = if detached { "Attach Display" } else { "Detach Display…" };
     let _ = state.display_item.set_text(label);
+}
+
+/// Updates the Window > LED Matrix item's label the same way `set_terminal_menu_label` does for
+/// Terminal.
+pub(crate) fn set_led_matrix_menu_label(state: &WindowMenuState, detached: bool) {
+    let label = if detached { "Attach LED Matrix" } else { "Detach LED Matrix…" };
+    let _ = state.led_matrix_item.set_text(label);
 }
 
 /// Replaces the File > Open Recent submenu's items with `entries` (each a

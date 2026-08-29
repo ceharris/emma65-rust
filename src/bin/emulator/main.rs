@@ -73,6 +73,8 @@ async fn main() -> ExitCode {
         log_sender: Some(log_sender.clone()),
         display_frame_sink: None,
         display_geometry_sink: None,
+        led_matrix_frame_sink: None,
+        led_matrix_geometry_sink: None,
     };
     let session = match config.emulator.build_with_context(&registry, context).await {
         Ok(s) => s,

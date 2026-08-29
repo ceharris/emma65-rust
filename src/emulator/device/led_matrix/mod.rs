@@ -33,6 +33,8 @@
 
 pub mod compositing;
 
+use tokio::sync::mpsc;
+
 use self::compositing::Rgb565;
 use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
 
@@ -78,6 +80,17 @@ fn matrix_mask(matrices: u32) -> u8 {
     if matrices >= 8 { 0xFF } else { ((1u16 << matrices) - 1) as u8 }
 }
 
+/// One matrix's newly composited frame (design doc §10), pushed to an attached sink on every
+/// swap of that matrix -- whether by `CMD_SWAP` or auto-refresh. Unlike `DisplayFrame`, which
+/// `CharDisplay` pushes wholesale once per vsync, this is delivered per matrix actually swapped,
+/// since this device's swap granularity is per-matrix (design doc §7).
+pub struct LedMatrixFrame {
+    /// Which matrix this frame belongs to.
+    pub matrix_index: u8,
+    /// RGBA pixels (32x32x4 bytes), from `compositing::composite_matrix`.
+    pub pixels: Vec<u8>,
+}
+
 /// A memory-mapped RGB LED matrix display device.
 pub struct LedMatrix {
     name: &'static str,
@@ -120,6 +133,10 @@ pub struct LedMatrix {
 
     /// Sender for structured diagnostic messages (e.g. `reset()`).
     log_sender: LogSender,
+
+    /// Push channel for composited per-matrix frames (design doc §10), attached by the config
+    /// module when a host (the debugger) wants to receive them.
+    frame_sink: Option<mpsc::Sender<LedMatrixFrame>>,
 }
 
 impl LedMatrix {
@@ -162,12 +179,22 @@ impl LedMatrix {
             cycles_per_frame,
             cycle_accumulator: 0,
             log_sender: LogSender::default(),
+            frame_sink: None,
         }
     }
 
     /// Number of attached matrices, fixed at configuration time.
     pub fn matrices(&self) -> u32 {
         self.matrices
+    }
+
+    /// Attaches a push channel for composited per-matrix frames (design doc §10). Once set,
+    /// every matrix swap -- whether from `CMD_SWAP` or auto-refresh -- composites that matrix's
+    /// scanout buffer and pushes the result via [`mpsc::Sender::try_send`], the same
+    /// never-blocks contract `CharDisplay::attach_frame_sink` upholds: if the consumer isn't
+    /// keeping up, the frame is silently dropped rather than stalling CPU execution.
+    pub fn attach_frame_sink(&mut self, sink: mpsc::Sender<LedMatrixFrame>) {
+        self.frame_sink = Some(sink);
     }
 
     /// The color palette's current contents (spec §2, §2.1), reflecting any runtime
@@ -206,6 +233,10 @@ impl LedMatrix {
         let end = start + PIXELS_PER_MATRIX;
         self.scanout[start..end].copy_from_slice(&self.pixels[start..end]);
         self.dirty &= !(1 << index);
+        if let Some(sink) = &self.frame_sink {
+            let pixels = compositing::composite_matrix(&self.scanout[start..end], &self.palette);
+            let _ = sink.try_send(LedMatrixFrame { matrix_index: index as u8, pixels });
+        }
     }
 
     /// Writes the command register (spec §4.2): always replaces [`PendingOp`] wholesale,
@@ -370,6 +401,12 @@ impl IoDevice for LedMatrix {
 
     fn identity_address(&self) -> u16 {
         self.address_range.start
+    }
+
+    /// Drops the frame sink, closing the channel -- the debugger's bridge task's `recv()` loop
+    /// mirrors `CharDisplay::shutdown` exactly (this device has no transport to shut down).
+    fn shutdown(&mut self) {
+        self.frame_sink = None;
     }
 }
 
@@ -772,5 +809,52 @@ mod tests {
     fn no_irq_capability() {
         let device = device(1);
         assert!(!device.irq_active());
+    }
+
+    #[tokio::test]
+    async fn cmd_swap_pushes_a_composited_frame_for_each_requested_matrix() {
+        let mut device = device(2);
+        let (tx, mut rx) = mpsc::channel(4);
+        device.attach_frame_sink(tx);
+        device.write(pixel_addr(0), 1);
+        device.write(pixel_addr(PIXELS_PER_MATRIX as u16), 1);
+
+        device.write(command_addr(2), CMD_SWAP);
+        device.write(data_addr(2), 0b11);
+
+        let first = rx.try_recv().expect("expected a frame for matrix 0");
+        assert_eq!(first.matrix_index, 0);
+        assert_eq!(first.pixels.len(), PIXELS_PER_MATRIX * 4);
+        let second = rx.try_recv().expect("expected a frame for matrix 1");
+        assert_eq!(second.matrix_index, 1);
+        assert!(rx.try_recv().is_err(), "no further frames expected");
+    }
+
+    #[tokio::test]
+    async fn auto_refresh_pushes_a_composited_frame_for_the_swapped_matrix() {
+        let mut device = device(1);
+        let (tx, mut rx) = mpsc::channel(4);
+        // Clear the construction-time dirty default first, without a sink attached, so the only
+        // frame this test observes is the one auto-refresh pushes below.
+        device.write(command_addr(1), CMD_SWAP);
+        device.write(data_addr(1), 0b1);
+        device.attach_frame_sink(tx);
+
+        device.write(pixel_addr(0), 0x41);
+        device.tick(10_000); // one cadence tick (cycles_per_frame = 1_000_000 / 100)
+
+        let frame = rx.try_recv().expect("expected a frame pushed by auto-refresh");
+        assert_eq!(frame.matrix_index, 0);
+    }
+
+    #[tokio::test]
+    async fn shutdown_drops_the_frame_sink_closing_the_channel() {
+        let mut device = device(1);
+        let (tx, mut rx) = mpsc::channel(4);
+        device.attach_frame_sink(tx);
+        device.shutdown();
+        device.write(command_addr(1), CMD_SWAP);
+        device.write(data_addr(1), 0b1);
+        assert!(rx.try_recv().is_err(), "channel should be closed once the sink is dropped");
     }
 }

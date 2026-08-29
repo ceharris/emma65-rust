@@ -37,6 +37,16 @@
         "resizable": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "label": "led-matrix-detached",
+        "title": "Emma65 LED Matrix",
+        "url": "led-matrix-detached.html",
+        "width": 700,
+        "height": 300,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {
