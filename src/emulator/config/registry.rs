@@ -85,7 +85,7 @@ pub struct InstantiationContext {
     /// (consumed) on first use, leaving `None` in its place.
     pub console_transport: Option<TransportSlot>,
     /// A pre-created transport, relay, and reporter to inject into a display device's optional
-    /// keyboard sub-range (`keyboard_address=`), mirroring
+    /// keyboard sub-range (`keyboard-address=`), mirroring
     /// [`InstantiationContext::console_transport`]. Consumed only by a `display` device that
     /// configures `keyboard_address`; this slot is the only way such a device ever receives
     /// keyboard input under the debugger (the plain CLI's keyboard input instead rides the same

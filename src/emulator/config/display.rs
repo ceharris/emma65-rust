@@ -32,6 +32,7 @@ struct CharDisplayAttributes {
     double_buffered: Option<bool>,
     frame_rate_hz: Option<u32>,
     transport: Option<TransportSpecFormat>,
+    #[serde(rename = "keyboard-address")]
     keyboard_address: Option<u16>,
     #[serde(rename = "break")]
     break_key: Option<u8>,
@@ -281,7 +282,7 @@ mod tests {
     #[tokio::test]
     async fn keyboard_address_maps_a_second_range_on_the_same_device() {
         let mut attributes = HashMap::new();
-        attributes.insert("keyboard_address".to_string(), Value::from(0x9000u16));
+        attributes.insert("keyboard-address".to_string(), Value::from(0x9000u16));
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
 
         let bus_config = CharDisplayModule.instantiate(
@@ -311,7 +312,7 @@ mod tests {
     async fn keyboard_address_present_consumes_the_injected_slot_and_applies_break_key() {
         let (slot, mut remote) = injected_keyboard_slot();
         let mut attributes = HashMap::new();
-        attributes.insert("keyboard_address".to_string(), Value::from(0x9000u16));
+        attributes.insert("keyboard-address".to_string(), Value::from(0x9000u16));
         attributes.insert("break".to_string(), Value::from(3u8));
         let context = context_with_keyboard_slot(slot);
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
@@ -332,7 +333,7 @@ mod tests {
     #[tokio::test]
     async fn keyboard_address_uses_configured_irq() {
         let mut attributes = HashMap::new();
-        attributes.insert("keyboard_address".to_string(), Value::from(0x9000u16));
+        attributes.insert("keyboard-address".to_string(), Value::from(0x9000u16));
         attributes.insert("irq".to_string(), Value::from(9u32));
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
 

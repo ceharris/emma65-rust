@@ -133,7 +133,7 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// Also injects a second, independent pipe transport for `InstantiationContext::keyboard_transport`
 /// (display/keyboard integration plan), built and consumed the same way as the console one —
 /// present regardless of whether the active profile's `display` device actually configures
-/// `keyboard_address=`. Returns its remote end alongside the console one.
+/// `keyboard-address=`. Returns its remote end alongside the console one.
 ///
 /// Also creates a fresh composited-per-matrix-frame channel and geometry slot (design doc §10)
 /// for a possible `display/matrix` device to consume via

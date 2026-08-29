@@ -83,7 +83,7 @@ function keyboardByteForEvent(e: KeyboardEvent): number | null {
  * Also the input side of the display/keyboard integration plan (see
  * `doc/display-keyboard-integration-plan.md` §4): the canvas is focusable (`tabIndex={0}`) and
  * forwards `keydown` bytes to `write_keyboard`, silently absorbed if the active `display`
- * device has no `keyboard_address=` configured. Rather than requiring an explicit click into the
+ * device has no `keyboard-address=` configured. Rather than requiring an explicit click into the
  * canvas every time, it auto-focuses
  * itself whenever this panel/window has focus (see the dedicated `useEffect` below) — docked,
  * that means whenever this tab becomes dockview's active tab, or whenever the main window regains

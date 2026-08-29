@@ -75,7 +75,7 @@ the same vsync.
 Unlike §3–§5's outbound stream, this direction has no length prefix or framing at all: one byte
 per keystroke, sent whenever the peripheral captures a key press, with no relationship to vsync
 cadence or frame boundaries. `CharDisplay` forwards each byte into its keyboard sub-range's
-`InputBuffer` when a `keyboard_address=` range is configured for the device, and silently
+`InputBuffer` when a `keyboard-address=` range is configured for the device, and silently
 discards it otherwise (see `doc/display-keyboard-integration-plan.md`'s Context section for why
 discarding rather than erroring matters here).
 
