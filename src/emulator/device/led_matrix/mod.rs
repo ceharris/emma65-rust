@@ -857,4 +857,31 @@ mod tests {
         device.write(data_addr(1), 0b1);
         assert!(rx.try_recv().is_err(), "channel should be closed once the sink is dropped");
     }
+
+    /// Regression test for a bug reported against the debugger panel: with 8 matrices configured,
+    /// a full-mask `CMD_SWAP` synchronously `try_send`s up to 8 frames back to back with no yield
+    /// point between them, which silently overflowed the debugger's channel when it was bounded to
+    /// only 2 (`debugger/src-tauri/src/lib.rs`'s `led_matrix_frame_tx`) -- observed as one
+    /// particular matrix's canvas staying stale, since a dropped frame here (unlike `CharDisplay`'s
+    /// per-vsync whole-grid recomposite) is never superseded by a later one. This device itself
+    /// places no cap on the sink's capacity -- that's the caller's choice via `attach_frame_sink`
+    /// -- so this test just documents the requirement directly: a channel sized to the device's own
+    /// matrix count must never drop a frame from a single full-mask swap.
+    #[tokio::test]
+    async fn cmd_swap_of_all_8_matrices_delivers_every_frame_when_the_sink_is_sized_for_8() {
+        let mut device = device(8);
+        let (tx, mut rx) = mpsc::channel(8);
+        device.attach_frame_sink(tx);
+        for m in 0..8u16 {
+            device.write(pixel_addr(m * PIXELS_PER_MATRIX as u16), 1);
+        }
+        device.write(command_addr(8), CMD_SWAP);
+        device.write(data_addr(8), 0xFF);
+
+        let mut received = vec![];
+        while let Ok(f) = rx.try_recv() {
+            received.push(f.matrix_index);
+        }
+        assert_eq!(received, (0..8).collect::<Vec<u8>>(), "expected a frame for every matrix, in order");
+    }
 }
