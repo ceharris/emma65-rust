@@ -7,7 +7,7 @@ Emma65 is a software emulator for the 65C02-family of 8-bit microprocessors.
 It provides a complete execution environment suitable for running and
 debugging programs written for classic 65C02-based systems, with support for
 flexible memory configuration, a rich set of virtual I/O devices, and
-expression-based watchpoints. The project ships four tools built on the same
+expression-based watchpoints. The project ships five tools built on the same
 emulator core:
 
 - **`emma65`** — a command-line emulator for running programs directly
@@ -18,6 +18,9 @@ emulator core:
   trace into a human-readable, symbol-annotated disassembly listing
 - **`emma65-display`** — an SDL2 peripheral process that renders the
   character display device (`display`) in its own window when running
+  `emma65` standalone (no debugger)
+- **`emma65-led-matrix`** — an SDL2 peripheral process that renders the RGB
+  LED matrix device (`display/matrix`) in its own window when running
   `emma65` standalone (no debugger)
 
 Together they form a foundation for building retro-computing tools,
@@ -408,24 +411,49 @@ Adapter (ACIA):
 
 Connects to a virtual peripheral over any [Transport](#transport-options).
 
-### RGB LED Matrix Display Adapter (`display/matrix`)
+### RGB LED Matrix Display (`display/matrix`)
 
-A parallel-bus adapter for an RGB LED matrix display managed by its own
-microcontroller:
+A memory-mapped RGB LED matrix display supporting 1, 2, 4, or 8 attached
+32×32 matrices, fixed at configuration time:
 
-- 8 addressable registers: pixel X/Y, fill width/height, a 256-entry color
-  palette index, interrupt flag/enable registers, and a command/data register
-- Double-buffered: all drawing commands (set pixel, fill rectangle, blit
-  image, palette load, buffer swap) target an off-screen buffer that is
-  atomically exchanged with the visible one
-- 256-color palette using 16-bit RGB565 entries, organized like the Xterm
-  256-color palette (16 named colors, a 6×6×6 color cube, and a 24-level
-  grayscale ramp) by default
-- IFR/IER interrupt flag and enable registers signal display status (e.g.
-  command-ready) back to the CPU
+- Pixel memory is mapped directly into the address space, one byte per
+  pixel, row-major, per matrix — no per-pixel register bottleneck for bulk
+  updates
+- Each pixel byte indexes a single, shared 256-entry color palette; palette
+  entries store 16-bit RGB565 colors (matching real LED matrix driver
+  hardware's color depth), organized like the Xterm 256-color palette (16
+  named colors, a 6×6×6 color cube, and a 24-level grayscale ramp) by
+  default
+- Double-buffered per matrix: pixel writes target an off-screen buffer,
+  exchanged with the visible one via a command/data register pair — either
+  explicitly (a swap command) or automatically via a per-matrix,
+  dirty-gated auto-refresh cadence
+- A single command/data register pair drives every operation (swap,
+  auto-refresh mask, power, brightness, palette read/write) — there is no
+  per-drawing-primitive register; not IRQ-capable, since swaps are always
+  synchronous
 
-The display uses a [Transport](#transport-options) to exchange commands and
-status with a real or emulated display peripheral.
+See `doc/memory-mapped-led-matrix-device-spec.md` for the full register-level
+specification. Like `display`, `display/matrix` has no in-process
+console-style rendering when running the plain `emma65` CLI:
+
+- **The debugger** — the LED Matrix panel renders each matrix as an
+  independent, composited canvas in-process, no configuration needed.
+- **Standalone `emma65`** — configure a `pipe:` transport pointing at the
+  bundled `emma65-led-matrix` SDL2 peripheral binary (see
+  [Running the LED Matrix Peripheral](#running-the-led-matrix-peripheral)
+  below). A block message streams per matrix swap, and a palette message
+  streams per palette write, over a wire protocol specified in
+  `doc/led-matrix-external-protocol.md`.
+
+```toml
+[[devices]]
+type = "display/matrix"
+address = 0x9000
+matrix-count = 4
+register-address = 0x9400
+transport = "pipe:/path/to/emma65-led-matrix"
+```
 
 ### Character Display (`display`)
 
@@ -628,7 +656,7 @@ EMMA65_CLOCK_SPEED_HZ=1843200
 | `acia/6850`     |     2     | `transport` (optional)                                                              |
 | `via/6522`      |    16     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
 | `ptm/6840`      |     8     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
-| `display/matrix`|     8     | `transport` (optional)                                                              |
+| `display/matrix`| variable  | `matrix-count` (required: 1, 2, 4, or 8), `register-address` (required), `frame_rate_hz`, `transport` (optional, `pipe:` only) |
 | `display`  |  variable | `columns`, `rows` (optional, default 40×25), `palette`, `font` (optional paths), `double-buffered` (bool), `frame-rate-hz`, `transport` (optional, `pipe:` only) |
 | `lfsr`          |     2     | `taps` (optional u16), `mode` (`continuous` or `step`, optional)                    |
 | `mem/finch`     |     2     | `bank-registers`, `control-register` (required addresses), `image` (required path), `write-policy`, `fill`, `offset`, `labels` (all optional) |
@@ -643,6 +671,12 @@ configurable addresses shown, not a contiguous block.
 `display`'s register window is `2 * columns * rows + 2` bytes (char RAM
 + color RAM + a control register + a status/data register), so it grows with
 the configured grid size rather than being fixed.
+
+`display/matrix`'s pixel memory is `matrix-count * 1024` bytes, based at
+`address`; its command and data registers are a separate 2-byte range based
+at `register-address` rather than immediately following pixel memory, so the
+two can be placed independently on the bus (e.g. keeping pixel memory
+aligned to a 1 KiB/N KiB boundary).
 
 Transport shorthand values for CLI and TOML string form:
 `pipe:/path/to/exe,arg1,arg2`, `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`,
@@ -704,6 +738,48 @@ afterward and letterboxes/scales to fit. Closing the window ends
 `emma65-display`; it also exits cleanly if the emulator process exits or is
 killed first, since that closes its stdin.
 
+## Running the LED Matrix Peripheral
+
+`emma65-led-matrix` is an SDL2 window that renders a `display/matrix`
+device's per-matrix composited output when running the plain `emma65` CLI
+standalone (the debugger doesn't need it — its own LED Matrix panel renders
+in-process). Like `emma65-display`, it's spawned by the emulator as a child
+process and streams data to it over the pipe transport's stdin, per the wire
+protocol in `doc/led-matrix-external-protocol.md`.
+
+Building it requires SDL2 development headers (`libsdl2-dev` on
+Debian/Ubuntu, `sdl2` on Homebrew), the same as `emma65-display`:
+
+```bash
+cargo build --release -p emma65-led-matrix
+```
+
+Configure a `display/matrix` device with a `pipe:` transport pointing at the
+built binary:
+
+```toml
+[[devices]]
+type = "display/matrix"
+address = 0x9000
+matrix-count = 4
+register-address = 0x9400
+transport = "pipe:/path/to/target/release/emma65-led-matrix"
+```
+
+```
+emma65 --device display/matrix@0x9000,matrix-count=4,register-address=0x9400,transport=pipe:/path/to/target/release/emma65-led-matrix
+```
+
+The window opens as soon as the emulator attaches the transport, showing
+`matrix-count` matrices side by side as round LEDs on a PCB-colored
+background, flush against each other. `--arrangement COLSxROWS` lays the
+matrices out in a grid instead of a single row (must be a divisor pair of
+`matrix-count`, e.g. `2x2` for 4 matrices); `--pitch` sets the initial
+on-screen LED center-to-center spacing in pixels (default `12`). The window
+remains resizable afterward and letterboxes/scales to fit. Closing the
+window ends `emma65-led-matrix`; it also exits cleanly if the emulator
+process exits or is killed first, since that closes its stdin.
+
 ## For Contributors
 
 Emma65 is written in Rust (2024 edition), as a Cargo workspace. Key
@@ -722,14 +798,16 @@ dependencies of the root `emma65` crate:
 | `figment`           | Multi-source configuration merging (TOML, env vars, CLI)            |
 | `tempfile`          | Temporary file for the embedded default ROM at startup              |
 
-The other two workspace members are thin binary crates. `debugger/src-tauri`
+The other three workspace members are thin binary crates. `debugger/src-tauri`
 (crate `emma65-debugger`) adds Tauri 2, `tauri-plugin-dialog`/
 `tauri-plugin-log`, and (on Linux) `gtk` on the Rust side, plus a
 React/TypeScript/Vite frontend in `debugger/frontend` — see
-[The Debugger](#the-debugger). `display` (crate `emma65-display`) adds the
-`sdl2` crate (requires SDL2 development headers to build — see
-[Running the Display Peripheral](#running-the-display-peripheral)) and reuses
-the root crate's compositing code directly rather than duplicating it.
+[The Debugger](#the-debugger). `display` (crate `emma65-display`) and
+`led-matrix` (crate `emma65-led-matrix`) each add the `sdl2` crate (requires
+SDL2 development headers to build — see
+[Running the Display Peripheral](#running-the-display-peripheral) and
+[Running the LED Matrix Peripheral](#running-the-led-matrix-peripheral)) and
+reuse the root crate's compositing code directly rather than duplicating it.
 
 The root crate exposes a library (`emma65`) and two binaries, `emma65` and
 `emma65-tracer`. The library has two top-level public modules:
@@ -1039,9 +1117,10 @@ transport = { pty = { path = "~/.emma/dev/ttyEcho" } }
 
 ```
 cargo build                # build the emma65 and emma65-tracer binaries
-cargo build --workspace    # also build the emma65-debugger and emma65-display crates
-cargo build -p emma65-display  # build just the SDL2 display peripheral (needs libsdl2-dev)
+cargo build --workspace    # also build the emma65-debugger, emma65-display, and emma65-led-matrix crates
+cargo build -p emma65-display     # build just the SDL2 display peripheral (needs libsdl2-dev)
+cargo build -p emma65-led-matrix  # build just the SDL2 LED matrix peripheral (needs libsdl2-dev)
 cargo test                 # run all tests (includes Klaus Dormann and Bruce Clark suites)
-cargo test --workspace     # also run the debugger and display crates' tests
+cargo test --workspace     # also run the debugger, display, and led-matrix crates' tests
 cargo clippy               # lint the whole workspace
 ```

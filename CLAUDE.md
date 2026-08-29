@@ -6,12 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build              # build the emma65 and emma65-tracer binaries + library
-cargo build --workspace  # also build the debugger crate (emma65-debugger) and the display crate (emma65-display)
-cargo build -p emma65-display  # build just the SDL2 display peripheral (needs libsdl2-dev)
+cargo build --workspace  # also build the debugger crate (emma65-debugger), the display crate
+                          # (emma65-display), and the led-matrix crate (emma65-led-matrix)
+cargo build -p emma65-display     # build just the SDL2 display peripheral (needs libsdl2-dev)
+cargo build -p emma65-led-matrix  # build just the SDL2 LED matrix peripheral (needs libsdl2-dev)
 cargo test                # run the library/binary test suite
-cargo test --workspace    # also run the debugger and display crates' tests
+cargo test --workspace    # also run the debugger, display, and led-matrix crates' tests
 cargo test <name>         # run a single test by name (partial match)
-cargo clippy              # lint (covers the debugger and display crates too — both are workspace members)
+cargo clippy              # lint (covers the debugger, display, and led-matrix crates too — all are workspace members)
 ```
 
 The debugger's frontend (`debugger/frontend/`) is a separate React/TypeScript/Vite project.
@@ -20,7 +22,7 @@ Tauri invokes `npm run build` there automatically as part of `cargo tauri build`
 
 ## Architecture
 
-`emma65` is a Cargo workspace (Rust 2024 edition) with three members:
+`emma65` is a Cargo workspace (Rust 2024 edition) with four members:
 
 - **`.`** (crate `emma65`) — the emulator library plus two binaries: `emma65` (the emulator)
   and `emma65-tracer` (decodes binary trace files)
@@ -30,6 +32,10 @@ Tauri invokes `npm run build` there automatically as part of `cargo tauri build`
   `display` device's composited output for the plain `emma65` CLI (the debugger renders
   it in-process instead); spawned by the emulator as a child process over a `pipe:` transport,
   per `doc/char-display-external-protocol.md`
+- **`led-matrix`** (crate `emma65-led-matrix`) — an SDL2 peripheral binary that renders the
+  `display/matrix` device's per-matrix composited output for the plain `emma65` CLI (the
+  debugger renders it in-process instead); spawned by the emulator as a child process over a
+  `pipe:` transport, per `doc/led-matrix-external-protocol.md`
 
 The `emma65` library exposes two top-level public modules:
 
@@ -299,3 +305,25 @@ rendering logic is duplicated) and blitting it via `SDL_UpdateTexture`/`SDL_Rend
 `SDL_RenderPresent`. Building it requires SDL2 development headers (`libsdl2-dev` on
 Debian/Ubuntu); it is not built by plain `cargo build` — use `cargo build -p emma65-display`
 or `cargo build --workspace`.
+
+---
+
+### `led-matrix` crate (`led-matrix/`)
+
+An SDL2 desktop app (`emma65-led-matrix`) that renders a `display/matrix` device's per-matrix
+composited output for the plain `emma65` CLI standalone (no Tauri debugger); see
+`doc/led-matrix-external-protocol.md` for the wire format it consumes. `emma65` spawns it as a
+child process via a `display/matrix` device's `transport = "pipe:..."` attribute — its own
+stdin is the pipe, so it is never run standalone against a live `emma65` process any other way.
+`src/protocol.rs` is a decode-only mirror of `emma65::emulator::device::led_matrix`'s (private)
+encode side — same split as `display/src/protocol.rs` mirrors `display::protocol`, but with
+tagged, variable-arrival messages (a block message per matrix swap, a palette message per
+`CMD_PALETTE_WRITE`) rather than one fixed-size frame per vsync, since `LedMatrix` swaps happen
+per matrix rather than in lockstep. `src/main.rs` reads the one-time header, then loops decoding
+the tagged message stream on a background thread; each matrix's most recently received raw pixel
+indices are retained and recomposited against the current palette on every redraw via the
+`emma65` crate's own `emulator::device::led_matrix::compositing::composite_matrix` (already
+`pub`, reused directly), drawn as filled circles on a PCB-colored background via SDL2_gfx's
+`DrawRenderer`, flush per `--arrangement COLSxROWS`. Building it requires SDL2 development
+headers (`libsdl2-dev` on Debian/Ubuntu); it is not built by plain `cargo build` — use
+`cargo build -p emma65-led-matrix` or `cargo build --workspace`.
