@@ -32,10 +32,12 @@
 //! and scaled back up on read (spec §4.2.1).
 
 pub mod compositing;
+mod protocol;
 
 use tokio::sync::mpsc;
 
 use self::compositing::Rgb565;
+use crate::emulator::transport::Transport;
 use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
 
 /// Pixels per matrix: a fixed 32x32 grid (spec §2), one palette-index byte per pixel.
@@ -141,6 +143,16 @@ pub struct LedMatrix {
     /// Push channel for composited per-matrix frames (design doc §10), attached by the config
     /// module when a host (the debugger) wants to receive them.
     frame_sink: Option<mpsc::Sender<LedMatrixFrame>>,
+
+    /// Auto-refresh cadence in Hz, as configured -- retained (unlike `cycles_per_frame` alone)
+    /// so it can be reported in the external protocol's header (`doc/led-matrix-external-
+    /// protocol.md` §4) when a transport is attached.
+    frame_rate_hz: u32,
+    /// Outbound-only transport to an external peripheral process (`doc/led-matrix-external-
+    /// protocol.md`), set post-construction via [`Self::attach_external_transport`] -- `None`
+    /// when running under the debugger, which uses `frame_sink` instead. Unlike `CharDisplay`'s
+    /// `external_transport`, this device has no inbound direction to pair with a relay.
+    external_transport: Option<Box<dyn Transport>>,
 }
 
 impl LedMatrix {
@@ -190,6 +202,8 @@ impl LedMatrix {
             cycle_accumulator: 0,
             log_sender: LogSender::default(),
             frame_sink: None,
+            frame_rate_hz,
+            external_transport: None,
         }
     }
 
@@ -205,6 +219,17 @@ impl LedMatrix {
     /// keeping up, the frame is silently dropped rather than stalling CPU execution.
     pub fn attach_frame_sink(&mut self, sink: mpsc::Sender<LedMatrixFrame>) {
         self.frame_sink = Some(sink);
+    }
+
+    /// Attaches an outbound-only transport to an external peripheral process (`doc/led-matrix-
+    /// external-protocol.md`), immediately sending the one-time header over `transport`; unlike
+    /// [`Self::attach_frame_sink`], nothing else is sent on individual register writes -- only
+    /// the header now, then a block message per matrix swap and a palette message per actual
+    /// `CMD_PALETTE_WRITE` (see [`Self::swap_matrix`], [`Self::apply_command`]).
+    pub fn attach_external_transport(&mut self, mut transport: Box<dyn Transport>) {
+        let header = protocol::encode_header(self.matrices as u8, self.frame_rate_hz);
+        transport.send_bytes(&header);
+        self.external_transport = Some(transport);
     }
 
     /// The color palette's current contents (spec §2, §2.1), reflecting any runtime
@@ -246,6 +271,10 @@ impl LedMatrix {
         if let Some(sink) = &self.frame_sink {
             let pixels = compositing::composite_matrix(&self.scanout[start..end], &self.palette);
             let _ = sink.try_send(LedMatrixFrame { matrix_index: index as u8, pixels });
+        }
+        if let Some(transport) = self.external_transport.as_mut() {
+            let block = protocol::encode_block(index as u8, &self.scanout[start..end]);
+            transport.send_bytes(&block);
         }
     }
 
@@ -300,6 +329,10 @@ impl LedMatrix {
             Command::PaletteWrite => {
                 let index = buffer[0] as usize;
                 self.palette[index] = Rgb565::from_rgb888(buffer[1], buffer[2], buffer[3]);
+                if let Some(transport) = self.external_transport.as_mut() {
+                    let message = protocol::encode_palette(index as u8, self.palette[index]);
+                    transport.send_bytes(&message);
+                }
             }
             Command::PaletteRead => {
                 let index = buffer[0] as usize;
@@ -414,9 +447,12 @@ impl IoDevice for LedMatrix {
     }
 
     /// Drops the frame sink, closing the channel -- the debugger's bridge task's `recv()` loop
-    /// mirrors `CharDisplay::shutdown` exactly (this device has no transport to shut down).
+    /// mirrors `CharDisplay::shutdown` -- and shuts down the external transport, if attached.
     fn shutdown(&mut self) {
         self.frame_sink = None;
+        if let Some(transport) = self.external_transport.as_mut() {
+            transport.shutdown();
+        }
     }
 }
 
@@ -904,5 +940,135 @@ mod tests {
             received.push(f.matrix_index);
         }
         assert_eq!(received, (0..8).collect::<Vec<u8>>(), "expected a frame for every matrix, in order");
+    }
+
+    // -- External transport (`doc/led-matrix-external-protocol.md`) --
+
+    use crate::emulator::transport::InternalPipeTransport;
+
+    /// `remote` is the peripheral's end of the pipe: everything the device sends over the
+    /// external transport lands here, byte by byte, and can be collected with
+    /// [`collect_bytes`]. Unlike `CharDisplay`'s equivalent helper, no relay is needed -- this
+    /// device's transport is outbound-only, so `pair_direct()`'s bare, unrelayed ends suffice.
+    fn device_with_external_transport(matrices: u32) -> (LedMatrix, InternalPipeTransport) {
+        let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
+        let mut device = device(matrices);
+        device.attach_external_transport(Box::new(local));
+        (device, remote)
+    }
+
+    fn collect_bytes(remote: &mut InternalPipeTransport) -> Vec<u8> {
+        let mut buf = Vec::new();
+        while let Some(b) = remote.try_recv() {
+            buf.push(b);
+        }
+        buf
+    }
+
+    #[test]
+    fn attach_external_transport_sends_header_immediately() {
+        let (_device, mut remote) = device_with_external_transport(4);
+        let bytes = collect_bytes(&mut remote);
+
+        assert_eq!(&bytes[0..4], b"E65M");
+        assert_eq!(bytes[4], 1); // version
+        assert_eq!(bytes[5], 4); // matrix_count
+        assert_eq!(&bytes[6..10], &100u32.to_le_bytes()); // frame_rate_hz from device()
+        assert_eq!(bytes.len(), 10);
+    }
+
+    #[test]
+    fn cmd_swap_sends_a_block_message_per_requested_matrix_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(2);
+        collect_bytes(&mut remote); // drain the header
+
+        device.write(pixel_addr(0), 0x41);
+        device.write(pixel_addr(PIXELS_PER_MATRIX as u16), 0x55);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b11);
+
+        let bytes = collect_bytes(&mut remote);
+        let msg_len = 1 + 1 + PIXELS_PER_MATRIX;
+        assert_eq!(bytes.len(), msg_len * 2, "expected one block message per swapped matrix");
+
+        assert_eq!(bytes[0], 1); // MSG_BLOCK
+        assert_eq!(bytes[1], 0); // matrix_index 0
+        assert_eq!(bytes[2], 0x41);
+
+        let second = &bytes[msg_len..];
+        assert_eq!(second[0], 1); // MSG_BLOCK
+        assert_eq!(second[1], 1); // matrix_index 1
+        assert_eq!(second[2], 0x55);
+    }
+
+    #[test]
+    fn auto_refresh_sends_a_block_message_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(1);
+        // Clear the construction-time dirty default first, so the only block message this test
+        // observes is the one auto-refresh sends below.
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1);
+        collect_bytes(&mut remote); // drain the header and the clearing swap's own block message
+
+        device.write(pixel_addr(0), 0x41);
+        device.tick(10_000); // one cadence tick (cycles_per_frame = 1_000_000 / 100)
+
+        let bytes = collect_bytes(&mut remote);
+        assert_eq!(bytes[0], 1); // MSG_BLOCK
+        assert_eq!(bytes[1], 0); // matrix_index
+        assert_eq!(bytes[2], 0x41);
+    }
+
+    #[test]
+    fn palette_write_sends_a_palette_message_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(1);
+        collect_bytes(&mut remote); // drain the header
+
+        write_palette_write(&mut device, 9, 0xFF, 0x00, 0xFF);
+
+        let bytes = collect_bytes(&mut remote);
+        assert_eq!(bytes.len(), 4);
+        assert_eq!(bytes[0], 2); // MSG_PALETTE
+        assert_eq!(bytes[1], 9); // index
+        assert_eq!(&bytes[2..4], &device.palette()[9].to_packed565().to_le_bytes());
+    }
+
+    #[test]
+    fn palette_read_sends_no_message_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(1);
+        write_palette_write(&mut device, 1, 1, 2, 3);
+        collect_bytes(&mut remote); // drain the header and the write's own palette message
+
+        device.write(command_addr(), CMD_PALETTE_READ);
+        device.write(data_addr(), 1);
+        device.read(data_addr());
+
+        assert!(collect_bytes(&mut remote).is_empty(), "a read-only sequence must send nothing");
+    }
+
+    #[test]
+    fn set_power_and_set_brightness_send_no_message_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(1);
+        collect_bytes(&mut remote); // drain the header
+
+        device.write(command_addr(), CMD_SET_POWER);
+        device.write(data_addr(), 0);
+        device.write(command_addr(), CMD_SET_BRIGHTNESS);
+        device.write(data_addr(), 0x7F);
+
+        assert!(collect_bytes(&mut remote).is_empty(), "power/brightness are not part of this protocol");
+    }
+
+    #[test]
+    fn shutdown_stops_further_sends_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport(1);
+        collect_bytes(&mut remote); // drain the header
+
+        device.shutdown();
+        device.write(pixel_addr(0), 0x41);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1);
+
+        assert!(collect_bytes(&mut remote).is_empty());
     }
 }
