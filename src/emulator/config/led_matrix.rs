@@ -1,9 +1,9 @@
-use super::{DeviceModule, DeviceModuleError, InstantiationContext, LedMatrixGeometry};
+use super::{DeviceModule, DeviceModuleError, InstantiationContext, LedMatrixGeometry, TransportSpec, TransportSpecFormat};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::display::DEFAULT_FRAME_RATE_HZ;
 use crate::emulator::device::led_matrix::compositing::default_palette;
 use crate::emulator::device::led_matrix::{LedMatrix, PIXELS_PER_MATRIX};
-use crate::emulator::{AddressRange, BusConfig};
+use crate::emulator::{AddressRange, BusConfig, IoDevice};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
 use serde::Deserialize;
@@ -17,8 +17,7 @@ const VALID_MATRIX_COUNTS: [u32; 4] = [1, 2, 4, 8];
 ///
 /// Not IRQ-capable (design doc §1: "No control/status registers and no IRQ" -- swaps are always
 /// synchronous), so device IDs come from [`DeviceIdAllocator::next_available`] rather than
-/// [`DeviceIdAllocator::for_irq`]. There is no `transport=` attribute yet -- the external wire
-/// protocol and companion process are a follow-on plan (design doc, "Explicitly out of scope").
+/// [`DeviceIdAllocator::for_irq`].
 ///
 /// Pixel memory and the command/data register pair are two disjoint bus ranges rather than one
 /// contiguous region: pixel memory is sized from `matrix-count` and based at the device's
@@ -38,6 +37,7 @@ struct LedMatrixAttributes {
     #[serde(rename = "register-address")]
     register_address: u16,
     frame_rate_hz: Option<u32>,
+    transport: Option<TransportSpecFormat>,
 }
 
 impl DeviceModule for LedMatrixModule {
@@ -64,6 +64,24 @@ impl DeviceModule for LedMatrixModule {
         }
 
         let frame_rate_hz = config.frame_rate_hz.unwrap_or(DEFAULT_FRAME_RATE_HZ);
+
+        let transport_spec = config.transport
+            .map(TransportSpec::try_from)
+            .transpose()
+            .map_err(DeviceModuleError::Config)?;
+        // The external protocol's per-message sends (`doc/led-matrix-external-protocol.md`) rely
+        // on `Transport::send_bytes`'s all-or-nothing contract, which only `PipeTransport`
+        // provides (see `config::display`'s identical restriction) -- reject any other kind
+        // rather than silently desyncing the stream on the first dropped message.
+        if let Some(spec) = &transport_spec
+            && !matches!(spec, TransportSpec::Pipe { .. })
+        {
+            return Err(DeviceModuleError::Config(
+                "display/matrix requires a pipe transport; \
+                 tcp/unix/pty transports don't support the atomic bulk-send this protocol needs"
+                    .to_string()));
+        }
+
         let device_id = id_allocator.lock().unwrap().next_available();
 
         let pixel_bytes = config.matrix_count * PIXELS_PER_MATRIX as u32;
@@ -94,6 +112,24 @@ impl DeviceModule for LedMatrixModule {
             && let Some(sender) = slot.lock().unwrap().take()
         {
             device.attach_frame_sink(sender);
+        }
+
+        if let Some(transport_spec) = transport_spec {
+            // Size the pipe's ring to comfortably fit the largest message this protocol ever
+            // sends -- the block message (1 tag + 1 index + 1024 pixel bytes = 1026), well over
+            // the header (10) and palette (4) messages -- so `send_bytes`'s atomic push never
+            // has to drop one (protocol module stays private, so its consts aren't importable
+            // here; hand-computed per the design doc's message layout).
+            let capacity = 1026;
+
+            let (transport, _relay) = transport_spec
+                .to_transport_with_reporter_and_capacity(
+                    context.transport_reporter(device.identity()),
+                    context.pipe_exit_reporter(device.identity()),
+                    Some(capacity))
+                .await
+                .map_err(DeviceModuleError::Transport)?;
+            device.attach_external_transport(transport);
         }
 
         let bus_config = bus_config.device(pixel_range, device_id, Box::new(device))
@@ -194,6 +230,46 @@ mod tests {
         // immediately after pixel memory.
         assert!(bus.write(REGISTER_ADDRESS, 0).is_ok());
         assert!(bus.write(REGISTER_ADDRESS + 1, 0).is_ok());
+    }
+
+    #[tokio::test]
+    async fn instantiate_without_transport_attribute_succeeds() {
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+        let result = LedMatrixModule.instantiate(
+            BusConfig::new(), 0x8000, &attributes(4), &context(), id_allocator).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rejects_non_pipe_transport_spec() {
+        let mut attributes = attributes(4);
+        attributes.insert("transport".to_string(), Value::from("unix:/tmp/emma65_test_led_matrix.sock"));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let result = LedMatrixModule.instantiate(
+            BusConfig::new(), 0x8000, &attributes, &context(), id_allocator).await;
+
+        match result {
+            Err(DeviceModuleError::Config(message)) => assert!(message.contains("pipe transport")),
+            Err(other) => panic!("expected DeviceModuleError::Config, got a different error variant: {other}"),
+            Ok(_) => panic!("expected DeviceModuleError::Config, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn attaches_pipe_transport_and_sends_header_immediately() {
+        let mut attributes = attributes(4);
+        attributes.insert("transport".to_string(), Value::from("pipe:/usr/bin/cat"));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let result = LedMatrixModule.instantiate(
+            BusConfig::new(), 0x8000, &attributes, &context(), id_allocator).await;
+
+        // End-to-end smoke test with a real spawned child: confirms the computed ring capacity
+        // is accepted by `PipeTransport::spawn_with_capacity` and `attach_external_transport`'s
+        // immediate header send doesn't panic against a live pipe.
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
