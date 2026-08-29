@@ -13,7 +13,7 @@
 //! | Status/data reg. | `2*cells + 1` | 1           | R/W    | Read: status (bit 0 vsync, bit 1 palette-update-accepted, both read-to-clear). Write: a data byte for an in-progress runtime palette update, ignored unless armed via control bit 3 (see [`CONTROL_PALETTE_ARM`]) |
 //!
 //! The register map above is not IRQ-capable on its own. This device gains IRQ capability only
-//! when an optional keyboard data/latch sub-range is configured (`keyboard_address=`, a disjoint
+//! when an optional keyboard data/latch sub-range is configured (`keyboard-address=`, a disjoint
 //! 2-byte range elsewhere in the address space, mirroring `Console`'s input half) and a
 //! configured break key is received on it -- see `doc/display-keyboard-integration-plan.md`.
 //!
@@ -164,7 +164,7 @@ pub struct CharDisplay {
     external_transport: Option<Box<dyn Transport>>,
 
     /// Optional keyboard data/latch sub-range (design doc §1), set post-construction via
-    /// [`Self::with_keyboard_range`] -- `None` unless a `keyboard_address=` attribute is
+    /// [`Self::with_keyboard_range`] -- `None` unless a `keyboard-address=` attribute is
     /// configured.
     keyboard: Option<KeyboardInput>,
 

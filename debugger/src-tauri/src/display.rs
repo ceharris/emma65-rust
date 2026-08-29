@@ -25,7 +25,7 @@ use crate::MAIN_WINDOW_LABEL;
 /// `None` before the first session load completes, and briefly `None` again mid-reload while the
 /// previous session's transport is being torn down. Populated on every successful session load
 /// regardless of whether the active profile's `display` device actually configures
-/// `keyboard_address=` — mirroring `terminal::TerminalTx` for `console`. If no keyboard range is
+/// `keyboard-address=` — mirroring `terminal::TerminalTx` for `console`. If no keyboard range is
 /// configured, `CharDisplay::tick` still drains the pipe unconditionally (the relay-drain
 /// correctness fix from work units 2+3), so writes are silently absorbed there instead of by OS
 /// pipe buffering.
