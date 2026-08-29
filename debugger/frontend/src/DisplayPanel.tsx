@@ -82,14 +82,14 @@ function keyboardByteForEvent(e: KeyboardEvent): number | null {
  *
  * Also the input side of the display/keyboard integration plan (see
  * `doc/display-keyboard-integration-plan.md` §4): the canvas is focusable (`tabIndex={0}`) and
- * forwards `keydown` bytes to `write_keyboard`, silently absorbed if the active `display/char`
+ * forwards `keydown` bytes to `write_keyboard`, silently absorbed if the active `display`
  * device has no `keyboard_address=` configured. Rather than requiring an explicit click into the
  * canvas every time, it auto-focuses
  * itself whenever this panel/window has focus (see the dedicated `useEffect` below) — docked,
  * that means whenever this tab becomes dockview's active tab, or whenever the main window regains
  * OS focus while this tab is already active; detached, any window focus, since the detached
  * window hosts nothing else. This intentionally *does* risk stealing focus from Terminal if both
- * `console` and `display/char` are configured and the user switches to the Display tab — accepted
+ * `console` and `display` are configured and the user switches to the Display tab — accepted
  * as the point of the feature (no extra click needed) rather than the earlier no-auto-focus
  * stance, since the panel/window-focus gating (as opposed to unconditional focus-on-mount) means
  * it only takes focus when the user has actually navigated to this panel.

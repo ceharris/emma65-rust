@@ -66,7 +66,7 @@ mod terminal;
 
 /// Display panel: composited-frame push channel bridge, dockable/detachable window lifecycle
 /// (mirroring `terminal`'s dock/detach architecture), and the keyboard input bridge that
-/// forwards bytes typed in the Display panel to the active `display/char` device's keyboard
+/// forwards bytes typed in the Display panel to the active `display` device's keyboard
 /// sub-range (display/keyboard integration plan, unit 5).
 mod display;
 
@@ -119,7 +119,7 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// `spawn_log_collector`'s callback) that this function doesn't have.
 ///
 /// Also creates a fresh composited-frame channel and geometry slot (design doc §9) for a
-/// possible `display/char` device to consume via `InstantiationContext::display_frame_sink`/
+/// possible `display` device to consume via `InstantiationContext::display_frame_sink`/
 /// `display_geometry_sink` — present regardless of whether the active profile actually
 /// configures one, the same way `console_transport` is always injected whether or not a
 /// console device consumes it. Returns the receiver and whatever geometry ended up in the
@@ -127,7 +127,7 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 ///
 /// Also injects a second, independent pipe transport for `InstantiationContext::keyboard_transport`
 /// (display/keyboard integration plan), built and consumed the same way as the console one —
-/// present regardless of whether the active profile's `display/char` device actually configures
+/// present regardless of whether the active profile's `display` device actually configures
 /// `keyboard_address=`. Returns its remote end alongside the console one.
 async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, InternalPipeTransport, IrqSource, mpsc::Receiver<DisplayFrame>, Option<display::DisplayGeometryPayload>), String> {
     let config_path = profile_dir.join("emulator.toml");

@@ -3,7 +3,7 @@
 ## 1. Purpose and scope
 
 This document specifies the wire protocol `CharDisplay` (`src/emulator/device/display/`,
-config type `display/char`) uses to stream its composited frame data to an external peripheral
+config type `display`) uses to stream its composited frame data to an external peripheral
 process over a [`Transport`](../src/emulator/transport/mod.rs), for use when running the plain
 `emma65` CLI standalone (no Tauri debugger). It is unrelated to the debugger's in-process
 `DisplayFrame`/`attach_frame_sink` push channel, which remains the mechanism the debugger uses

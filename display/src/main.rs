@@ -1,7 +1,7 @@
 //! `emma65-display` — an external peripheral process that renders `CharDisplay`'s
 //! composited output in an SDL2 window.
 //!
-//! Spawned by the emulator itself via a `display/char` device's `transport = "pipe:..."`
+//! Spawned by the emulator itself via a `display` device's `transport = "pipe:..."`
 //! attribute (see `doc/char-display-external-protocol.md`); this binary is never run
 //! standalone against a live `emma65` process any other way; its own stdin *is* the pipe. It
 //! reads the one-time header,

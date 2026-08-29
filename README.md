@@ -17,7 +17,7 @@ emulator core:
 - **`emma65-tracer`** — a utility that decodes a recorded binary execution
   trace into a human-readable, symbol-annotated disassembly listing
 - **`emma65-display`** — an SDL2 peripheral process that renders the
-  character display device (`display/char`) in its own window when running
+  character display device (`display`) in its own window when running
   `emma65` standalone (no debugger)
 
 Together they form a foundation for building retro-computing tools,
@@ -427,7 +427,7 @@ microcontroller:
 The display uses a [Transport](#transport-options) to exchange commands and
 status with a real or emulated display peripheral.
 
-### Character Display (`display/char`)
+### Character Display (`display`)
 
 A memory-mapped character/color-cell text display, with a configurable grid
 size (default 40×25 cells), an 8×8 glyph font, and a runtime-writable color
@@ -442,7 +442,7 @@ palette:
 - Not IRQ-capable — nothing in its register map asserts an interrupt
 
 See `doc/memory-mapped-display-device-spec.md` for the full register-level
-specification. Unlike the other register-window devices, `display/char` has
+specification. Unlike the other register-window devices, `display` has
 no in-process console-style rendering when running the plain `emma65` CLI:
 it needs an external peripheral to actually put pixels on screen. Two ways
 to view it:
@@ -458,7 +458,7 @@ to view it:
 
 ```toml
 [[devices]]
-type = "display/char"
+type = "display"
 address = 0xF000
 columns = 40
 rows = 25
@@ -629,7 +629,7 @@ EMMA65_CLOCK_SPEED_HZ=1843200
 | `via/6522`      |    16     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
 | `ptm/6840`      |     8     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
 | `display/matrix`|     8     | `transport` (optional)                                                              |
-| `display/char`  |  variable | `columns`, `rows` (optional, default 40×25), `palette`, `font` (optional paths), `double-buffered` (bool), `frame-rate-hz`, `transport` (optional, `pipe:` only) |
+| `display`  |  variable | `columns`, `rows` (optional, default 40×25), `palette`, `font` (optional paths), `double-buffered` (bool), `frame-rate-hz`, `transport` (optional, `pipe:` only) |
 | `lfsr`          |     2     | `taps` (optional u16), `mode` (`continuous` or `step`, optional)                    |
 | `mem/finch`     |     2     | `bank-registers`, `control-register` (required addresses), `image` (required path), `write-policy`, `fill`, `offset`, `labels` (all optional) |
 | `mem/phoebe`    |     1     | `control-register` (required address), `image` (required path), `write-policy`, `fill`, `ram-fill`, `offset`, `labels` (all optional) |
@@ -640,7 +640,7 @@ address space rather than a fixed-size register window; their register count
 above is the count of dedicated MMU/bank-control registers, placed at the
 configurable addresses shown, not a contiguous block.
 
-`display/char`'s register window is `2 * columns * rows + 2` bytes (char RAM
+`display`'s register window is `2 * columns * rows + 2` bytes (char RAM
 + color RAM + a control register + a status/data register), so it grows with
 the configured grid size rather than being fixed.
 
@@ -667,7 +667,7 @@ emma65-tracer [--output <path>] [--symbol-file <path>]... [--verbose] [<input>]
 
 ## Running the Display Peripheral
 
-`emma65-display` is an SDL2 window that renders a `display/char` device's
+`emma65-display` is an SDL2 window that renders a `display` device's
 composited output when running the plain `emma65` CLI standalone (the
 debugger doesn't need it — its own Display panel renders in-process). It's
 not run directly against a live emulator process; instead, the emulator
@@ -682,18 +682,18 @@ requires `gtk` on Linux:
 cargo build --release -p emma65-display
 ```
 
-Configure a `display/char` device with a `pipe:` transport pointing at the
+Configure a `display` device with a `pipe:` transport pointing at the
 built binary:
 
 ```toml
 [[devices]]
-type = "display/char"
+type = "display"
 address = 0xF000
 transport = "pipe:/path/to/target/release/emma65-display"
 ```
 
 ```
-emma65 --device display/char@0xF000,transport=pipe:/path/to/target/release/emma65-display
+emma65 --device display@0xF000,transport=pipe:/path/to/target/release/emma65-display
 ```
 
 The window opens as soon as the emulator attaches the transport (immediately
