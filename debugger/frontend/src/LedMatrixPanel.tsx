@@ -24,21 +24,30 @@ interface LedMatrixFramePayload {
  * columns/rows, there's nothing device-specific to compute here. */
 const MATRIX_SIZE = 32;
 
-/** Must match `.led-matrix-container`'s `gap` in `styles/global.scss` — the scale computation
- * below needs to know exactly how much horizontal space the row's gaps consume to fit the
- * canvases against the container's actual width. */
-const MATRIX_GAP_PX = 8;
+/** Floor the shared LED pitch (on-screen center-to-center spacing) never drops below, however
+ * cramped the dock cell is. Unlike the old fixed-bitmap rendering this floor doesn't need to be an
+ * integer — LEDs are drawn as vector circles, not upscaled pixels — it just keeps a matrix
+ * legible (rather than a smear of overlapping dots) when the dock cell or detached window is very
+ * small. `.led-matrix-container`'s `overflow: auto` is what lets the row scroll horizontally on a
+ * many-matrix config too narrow to fit this floor for every matrix at once, rather than silently
+ * clipping them. */
+const MIN_PITCH_PX = 6;
 
-/** Floor the shared per-pixel scale never drops below, however cramped the dock cell is.
- * `DisplayPanel`'s equivalent fit-to-container computation floors at a bare 1x because its native
- * 320x200 canvas is already legible even unscaled; this panel's native 32x32 canvas is not — at
- * 1x a whole matrix is a 32px square, too small to read a written test pattern pixel by pixel
- * (the actual motivation for this panel during Work Unit 6's manual verification). 8 keeps every
- * emulated pixel a clearly separable on-screen square regardless of how little room the dock cell
- * or detached window happens to have; `.led-matrix-container`'s `overflow: auto` is what lets the
- * row scroll horizontally on a many-matrix config too narrow to fit this floor for every matrix
- * at once, rather than silently clipping them. */
-const MIN_SCALE = 8;
+/** LED radius as a fraction of pitch, modeling a real hobbyist RGB LED matrix panel (Adafruit
+ * product #2026: 32x32, 3mm round LEDs on a 5mm pitch, ~160mm square board). Diameter is 60% of
+ * pitch on that reference panel (3/5), so radius is half that, 0.3. Centering each LED at
+ * `(i + 0.5) * pitch` (see `drawMatrix`) also reproduces that panel's ~2.5mm edge margin (half a
+ * pitch) for free — a 32-unit-wide grid at that pitch is exactly the board's 160mm width, so no
+ * separate margin constant is needed. */
+const LED_RADIUS_RATIO = 0.3;
+
+/** Near-black PCB substrate color drawn behind the LEDs. */
+const PCB_BACKGROUND_COLOR = "#0a0a0a";
+
+/** Color for an unlit LED (RGB 0,0,0). Deliberately distinct from `PCB_BACKGROUND_COLOR` — a
+ * real unlit RGB LED reads as a dim dark dot against the board, not as invisible, and rendering it
+ * as true black would make a dark frame indistinguishable from the board itself. */
+const UNLIT_LED_COLOR = "rgb(30, 30, 34)";
 
 /** Decodes a base64 string into raw bytes — see `DisplayPanel.tsx` for why this beats
  * `JSON.parse`-ing a plain number array per frame. */
@@ -51,13 +60,45 @@ function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
   return bytes;
 }
 
-/** Blits one matrix's frame into its canvas — shared by the live `led-matrix-frame` listener and
- * the cached-frames replay on mount, so both paint pixels identically. */
-function paintFrame(canvas: HTMLCanvasElement, pixels: string) {
+/** Draws one LED. Deliberately isolated from `drawMatrix`'s grid-walking loop so a later
+ * enhancement (e.g. a radial-gradient glow for lit LEDs) only has to change this function. */
+function drawLed(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number, color: string) {
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+/** Renders one matrix's already-decoded RGBA pixel buffer into its canvas as a grid of round LEDs
+ * on a PCB-colored background, at the given on-screen `pitch` (center-to-center LED spacing, in
+ * CSS pixels). Called both when a fresh frame arrives and when `pitch` changes (a resize), so a
+ * resize can redraw already-known pixel data immediately rather than waiting on the next swap. */
+function drawMatrix(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, pitch: number) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  const imageData = new ImageData(decodeBase64(pixels), MATRIX_SIZE, MATRIX_SIZE);
-  ctx.putImageData(imageData, 0, 0);
+
+  const dpr = window.devicePixelRatio || 1;
+  const sizePx = MATRIX_SIZE * pitch;
+  canvas.width = Math.round(sizePx * dpr);
+  canvas.height = Math.round(sizePx * dpr);
+  canvas.style.width = `${sizePx}px`;
+  canvas.style.height = `${sizePx}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  ctx.fillStyle = PCB_BACKGROUND_COLOR;
+  ctx.fillRect(0, 0, sizePx, sizePx);
+
+  const radius = pitch * LED_RADIUS_RATIO;
+  for (let row = 0; row < MATRIX_SIZE; row++) {
+    for (let col = 0; col < MATRIX_SIZE; col++) {
+      const offset = (row * MATRIX_SIZE + col) * 4;
+      const r = pixels[offset];
+      const g = pixels[offset + 1];
+      const b = pixels[offset + 2];
+      const color = r === 0 && g === 0 && b === 0 ? UNLIT_LED_COLOR : `rgb(${r}, ${g}, ${b})`;
+      drawLed(ctx, (col + 0.5) * pitch, (row + 0.5) * pitch, radius, color);
+    }
+  }
 }
 
 /**
@@ -67,8 +108,8 @@ function paintFrame(canvas: HTMLCanvasElement, pixels: string) {
  * arrives — design §10 pushes one frame per matrix actually swapped (whether by `CMD_SWAP` or
  * auto-refresh), not a whole-device push every vsync the way `DisplayPanel` gets. There's no
  * font/palette compositing here at all (that's already done server-side by
- * `led_matrix::compositing`) and no keyboard input, so this component is a pure multi-canvas blit
- * target — simpler than `DisplayPanel`, which also owns keyboard focus/forwarding.
+ * `led_matrix::compositing`) and no keyboard input, so this component is a pure per-matrix
+ * render target — simpler than `DisplayPanel`, which also owns keyboard focus/forwarding.
  *
  * Mounted in both the docked panel and the detached-LED-Matrix window
  * (`led-matrix-detached.tsx`), reusing `DisplayPanel`/`display-detached.tsx`'s pattern with one
@@ -89,18 +130,29 @@ function paintFrame(canvas: HTMLCanvasElement, pixels: string) {
  * on this component's already-registered live listener below rather than needing it to re-fetch
  * anything.
  *
- * All canvases share one integer CSS scale — `DisplayPanel`'s single-canvas scale computation
- * generalized to a row: a `ResizeObserver` on the container recomputes the largest whole-number
- * multiple of `MATRIX_SIZE` that fits every matrix side by side (accounting for the row's gaps),
- * applied via each canvas's CSS `width`/`height` (never resampling the underlying pixel buffer) so
- * `image-rendering: pixelated` upscales with crisp, uniform pixel edges. Never smaller than
- * `MIN_SCALE`, even if that overflows the container — see `MIN_SCALE`'s own doc comment.
+ * Each matrix is rendered as a grid of round LEDs on a PCB-colored background (`drawMatrix`),
+ * modeling a real hobbyist RGB LED matrix panel's proportions rather than the raw pixel buffer's
+ * square cells — see `LED_RADIUS_RATIO`'s doc comment. Matrices are laid out with zero gap between
+ * them, since real matrix boards mount edge-to-edge flush, giving the appearance of one
+ * contiguous board rather than several separate ones. All canvases share one on-screen `pitch`
+ * (LED center-to-center spacing, in CSS pixels): a `ResizeObserver` on the container recomputes
+ * the largest pitch that fits every matrix side by side, never smaller than `MIN_PITCH_PX`. Unlike
+ * the previous bitmap-blit rendering, pitch is continuous (not floored to an integer multiple)
+ * since there's no pixel grid to keep aligned to whole multiples of — canvases resize smoothly
+ * rather than snapping between steps.
  */
 export default function LedMatrixPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  // Last-decoded pixel buffer per matrix, so a pitch change (resize) can redraw already-known
+  // frames immediately rather than waiting for the next `led-matrix-frame` event.
+  const pixelBuffersRef = useRef<(Uint8ClampedArray | null)[]>([]);
+  // Mirrors `pitch` state for the frame-event listener below, which is registered once (empty
+  // deps, so a frame arriving between mount and the geometry fetch resolving is never missed) and
+  // so can't close over state that changes later.
+  const pitchRef = useRef(MIN_PITCH_PX);
   const [geometry, setGeometry] = useState<LedMatrixGeometry | null>(null);
-  const [scale, setScale] = useState(1);
+  const [pitch, setPitch] = useState(MIN_PITCH_PX);
 
   useEffect(() => {
     invoke<LedMatrixGeometry | null>("get_led_matrix_geometry")
@@ -109,16 +161,27 @@ export default function LedMatrixPanel() {
   }, []);
 
   useEffect(() => {
+    pitchRef.current = pitch;
+    for (let i = 0; i < pixelBuffersRef.current.length; i++) {
+      const canvas = canvasRefs.current[i];
+      const pixels = pixelBuffersRef.current[i];
+      if (canvas && pixels) drawMatrix(canvas, pixels, pitch);
+    }
+  }, [pitch]);
+
+  useEffect(() => {
     const container = containerRef.current;
     if (!container || !geometry) return;
-    const recomputeScale = () => {
-      const totalGap = MATRIX_GAP_PX * Math.max(0, geometry.matrices - 1);
-      const fitWidth = (container.clientWidth - totalGap) / (geometry.matrices * MATRIX_SIZE);
+    const recomputePitch = () => {
+      // Real matrix boards mount edge-to-edge flush (no bezel gap), so the row's canvases are
+      // laid out with zero spacing between them — the fit computation divides the container's
+      // full width across all matrices rather than reserving room for gaps.
+      const fitWidth = container.clientWidth / (geometry.matrices * MATRIX_SIZE);
       const fitHeight = container.clientHeight / MATRIX_SIZE;
-      setScale(Math.max(MIN_SCALE, Math.floor(Math.min(fitWidth, fitHeight))));
+      setPitch(Math.max(MIN_PITCH_PX, Math.min(fitWidth, fitHeight)));
     };
-    recomputeScale();
-    const observer = new ResizeObserver(recomputeScale);
+    recomputePitch();
+    const observer = new ResizeObserver(recomputePitch);
     observer.observe(container);
     return () => observer.disconnect();
   }, [geometry]);
@@ -134,7 +197,9 @@ export default function LedMatrixPanel() {
       .then((frames) => {
         for (const frame of frames) {
           const canvas = canvasRefs.current[frame.matrix_index];
-          if (canvas) paintFrame(canvas, frame.pixels);
+          const pixels = decodeBase64(frame.pixels);
+          pixelBuffersRef.current[frame.matrix_index] = pixels;
+          if (canvas) drawMatrix(canvas, pixels, pitchRef.current);
         }
       })
       .catch((err) => console.error("get_led_matrix_frames failed:", err));
@@ -147,7 +212,9 @@ export default function LedMatrixPanel() {
   useEffect(() => {
     const unlistenPromise = listen<LedMatrixFramePayload>("led-matrix-frame", (event) => {
       const canvas = canvasRefs.current[event.payload.matrix_index];
-      if (canvas) paintFrame(canvas, event.payload.pixels);
+      const pixels = decodeBase64(event.payload.pixels);
+      pixelBuffersRef.current[event.payload.matrix_index] = pixels;
+      if (canvas) drawMatrix(canvas, pixels, pitchRef.current);
     });
     return () => {
       unlistenPromise.then((f) => f());
@@ -163,9 +230,6 @@ export default function LedMatrixPanel() {
             ref={(el) => {
               canvasRefs.current[i] = el;
             }}
-            width={MATRIX_SIZE}
-            height={MATRIX_SIZE}
-            style={{ width: MATRIX_SIZE * scale, height: MATRIX_SIZE * scale }}
             className="led-matrix-canvas"
           />
         ))}

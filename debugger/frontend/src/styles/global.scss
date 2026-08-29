@@ -219,10 +219,10 @@ body {
 
 // Row of independent per-matrix canvases (LedMatrixPanel.tsx), left to right by index -- unlike
 // `.display-container`'s single centered canvas, this container can hold several, so it's a flex
-// row rather than a bare centering box. `gap` here must match `MATRIX_GAP_PX` in
-// `LedMatrixPanel.tsx`, which accounts for it when computing the shared integer scale.
+// row rather than a bare centering box. No `gap`: real matrix boards mount edge-to-edge flush, so
+// the canvases sit flush too, giving the appearance of one contiguous board.
 //
-// `overflow: auto`, not `hidden`: `LedMatrixPanel.tsx`'s `MIN_SCALE` floor keeps every matrix
+// `overflow: auto`, not `hidden`: `LedMatrixPanel.tsx`'s `MIN_PITCH_PX` floor keeps every matrix
 // legible even in a cramped dock cell, which for a many-matrix config can mean the row is wider
 // than the container -- scrolling to see the rest beats silently clipping matrices off the edge.
 .led-matrix-container {
@@ -232,14 +232,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
   background: var(--color-bg);
 }
 
 .led-matrix-canvas {
-  // Crisp upscaling for a low-res pixel grid rather than a blurry resample -- same rationale as
-  // `.display-canvas`.
-  image-rendering: pixelated;
+  // Drawn at native resolution via devicePixelRatio (see `drawMatrix` in `LedMatrixPanel.tsx`),
+  // so circles should anti-alias normally rather than being kept crisp like a pixelated bitmap.
+  display: block;
 }
 
 // --- assembler editor ---
