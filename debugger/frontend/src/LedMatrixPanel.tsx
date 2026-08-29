@@ -29,6 +29,17 @@ const MATRIX_SIZE = 32;
  * canvases against the container's actual width. */
 const MATRIX_GAP_PX = 8;
 
+/** Floor the shared per-pixel scale never drops below, however cramped the dock cell is.
+ * `DisplayPanel`'s equivalent fit-to-container computation floors at a bare 1x because its native
+ * 320x200 canvas is already legible even unscaled; this panel's native 32x32 canvas is not — at
+ * 1x a whole matrix is a 32px square, too small to read a written test pattern pixel by pixel
+ * (the actual motivation for this panel during Work Unit 6's manual verification). 8 keeps every
+ * emulated pixel a clearly separable on-screen square regardless of how little room the dock cell
+ * or detached window happens to have; `.led-matrix-container`'s `overflow: auto` is what lets the
+ * row scroll horizontally on a many-matrix config too narrow to fit this floor for every matrix
+ * at once, rather than silently clipping them. */
+const MIN_SCALE = 8;
+
 /** Decodes a base64 string into raw bytes — see `DisplayPanel.tsx` for why this beats
  * `JSON.parse`-ing a plain number array per frame. */
 function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
@@ -60,7 +71,8 @@ function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
  * generalized to a row: a `ResizeObserver` on the container recomputes the largest whole-number
  * multiple of `MATRIX_SIZE` that fits every matrix side by side (accounting for the row's gaps),
  * applied via each canvas's CSS `width`/`height` (never resampling the underlying pixel buffer) so
- * `image-rendering: pixelated` upscales with crisp, uniform pixel edges.
+ * `image-rendering: pixelated` upscales with crisp, uniform pixel edges. Never smaller than
+ * `MIN_SCALE`, even if that overflows the container — see `MIN_SCALE`'s own doc comment.
  */
 export default function LedMatrixPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -81,7 +93,7 @@ export default function LedMatrixPanel() {
       const totalGap = MATRIX_GAP_PX * Math.max(0, geometry.matrices - 1);
       const fitWidth = (container.clientWidth - totalGap) / (geometry.matrices * MATRIX_SIZE);
       const fitHeight = container.clientHeight / MATRIX_SIZE;
-      setScale(Math.max(1, Math.floor(Math.min(fitWidth, fitHeight))));
+      setScale(Math.max(MIN_SCALE, Math.floor(Math.min(fitWidth, fitHeight))));
     };
     recomputeScale();
     const observer = new ResizeObserver(recomputeScale);

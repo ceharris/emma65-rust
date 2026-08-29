@@ -221,10 +221,14 @@ body {
 // `.display-container`'s single centered canvas, this container can hold several, so it's a flex
 // row rather than a bare centering box. `gap` here must match `MATRIX_GAP_PX` in
 // `LedMatrixPanel.tsx`, which accounts for it when computing the shared integer scale.
+//
+// `overflow: auto`, not `hidden`: `LedMatrixPanel.tsx`'s `MIN_SCALE` floor keeps every matrix
+// legible even in a cramped dock cell, which for a many-matrix config can mean the row is wider
+// than the container -- scrolling to see the rest beats silently clipping matrices off the edge.
 .led-matrix-container {
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  overflow: auto;
   display: flex;
   align-items: center;
   justify-content: center;
