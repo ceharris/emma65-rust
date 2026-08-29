@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions for all debugger windows",
-  "windows": ["main", "terminal-detached", "display-detached"],
+  "windows": ["main", "terminal-detached", "display-detached", "led-matrix-detached"],
   "permissions": [
     "core:default",
     "core:window:allow-set-size",
