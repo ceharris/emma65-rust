@@ -237,9 +237,9 @@ body {
 }
 
 .led-matrix-canvas {
-  // Crisp upscaling for a low-res pixel grid rather than a blurry resample -- same rationale as
-  // `.display-canvas`.
-  image-rendering: pixelated;
+  // Drawn at native resolution via devicePixelRatio (see `drawMatrix` in `LedMatrixPanel.tsx`),
+  // so circles should anti-alias normally rather than being kept crisp like a pixelated bitmap.
+  display: block;
 }
 
 // --- assembler editor ---
