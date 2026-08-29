@@ -82,22 +82,32 @@ fn current_target(app: &AppHandle) -> String {
 
 /// The last composited frame delivered for each matrix index, keyed by `matrix_index`. Since a
 /// frame is only ever pushed on an actual swap (design doc §10) rather than every vsync like
-/// `CharDisplay`, a panel that starts listening *after* a matrix's last swap — the initial docked
-/// mount, a fresh detached window, or the docked panel reappearing after a reattach — would
-/// otherwise see nothing for that matrix until some unrelated later write happens to touch it
-/// again. Caching every frame as it passes through `run_led_matrix_bridge` below and replaying the
-/// cache to a newly-mounted panel (`get_led_matrix_frames`) fixes that without needing to reach
-/// into the live device at all — `LedMatrixPanel.tsx` just fetches this once on mount, the same
-/// moment it already fetches geometry.
+/// `CharDisplay`, a panel that starts listening *after* a matrix's last swap would otherwise see
+/// nothing for that matrix until some unrelated later write happens to touch it again. Fixed two
+/// ways, for two different situations: `LedMatrixPanel.tsx` fetches this cache once on mount (via
+/// `get_led_matrix_frames` below), which covers every case where the panel is a genuinely fresh
+/// React mount — the initial docked mount, and the docked panel reappearing after a reattach
+/// (`DockLayout.tsx` really does destroy and recreate that dock tab). The detached window is
+/// *not* such a case: it's a statically-declared Tauri window created once and merely
+/// shown/hidden thereafter (`install_detached_window`), so its `LedMatrixPanel` instance mounts
+/// exactly once for the app's entire lifetime and never sees a fresh mount-time fetch again on a
+/// second or third detach. `show_detached_led_matrix` below instead replays the cache as ordinary
+/// `led-matrix-frame` events straight to that window every time it becomes the target, reusing
+/// the panel's already-registered live listener rather than needing it to re-fetch anything.
 #[derive(Default)]
 pub struct LedMatrixFrameCache(pub Mutex<HashMap<u8, LedMatrixFramePayload>>);
+
+/// Every matrix's currently cached frame, cloned out from behind the lock.
+fn cached_frames(app: &AppHandle) -> Vec<LedMatrixFramePayload> {
+    app.state::<LedMatrixFrameCache>().0.lock().unwrap().values().cloned().collect()
+}
 
 /// Tauri command: every matrix's last delivered frame, for a freshly-mounted panel to paint
 /// immediately instead of waiting for the next swap. Order is unspecified — the frontend routes
 /// each entry to its own canvas by `matrix_index`.
 #[tauri::command]
-pub fn get_led_matrix_frames(state: State<LedMatrixFrameCache>) -> Vec<LedMatrixFramePayload> {
-    state.0.lock().unwrap().values().cloned().collect()
+pub fn get_led_matrix_frames(app: AppHandle) -> Vec<LedMatrixFramePayload> {
+    cached_frames(&app)
 }
 
 /// Tokio task that drains `rx`, caches each frame (see `LedMatrixFrameCache`), and `emit_to`s a
@@ -118,10 +128,13 @@ pub async fn run_led_matrix_bridge(mut rx: mpsc::Receiver<LedMatrixFrame>, app: 
     }
 }
 
-/// Shows the detached-LED-Matrix window, focuses it, and retargets the bridge so future frames
-/// go there instead of the main window. Doesn't touch the main dock's "led-matrix" panel —
-/// mirrors `display::show_detached_display` exactly, including the caller-removes-the-dock-panel
-/// contract.
+/// Shows the detached-LED-Matrix window, focuses it, retargets the bridge so future frames go
+/// there instead of the main window, and replays every already-cached frame to it directly (see
+/// `LedMatrixFrameCache`'s doc comment for why this window specifically needs that replay, unlike
+/// the docked panel). Doesn't touch the main dock's "led-matrix" panel — mirrors
+/// `display::show_detached_display` exactly, including the caller-removes-the-dock-panel contract
+/// (plus the cache replay, which `display.rs` has no equivalent of: `CharDisplay` self-heals on
+/// its own next vsync push regardless of which window is listening).
 fn show_detached_led_matrix(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window(LED_MATRIX_DETACHED_WINDOW_LABEL)
@@ -133,6 +146,9 @@ fn show_detached_led_matrix(app: &AppHandle) -> Result<(), String> {
     window.show().map_err(|e| e.to_string())?;
     let _ = window.set_focus();
     *app.state::<LedMatrixTargetWindow>().0.lock().unwrap() = LED_MATRIX_DETACHED_WINDOW_LABEL.to_string();
+    for payload in cached_frames(app) {
+        let _ = app.emit_to(LED_MATRIX_DETACHED_WINDOW_LABEL, "led-matrix-frame", payload);
+    }
     Ok(())
 }
 

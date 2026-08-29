@@ -71,16 +71,23 @@ function paintFrame(canvas: HTMLCanvasElement, pixels: string) {
  * target — simpler than `DisplayPanel`, which also owns keyboard focus/forwarding.
  *
  * Mounted in both the docked panel and the detached-LED-Matrix window
- * (`led-matrix-detached.tsx`), same reuse shape as `DisplayPanel`/`display-detached.tsx`: no
- * device-specific state lives *in this component*, so a detach/reattach cycle's unmount+remount
- * just re-fetches geometry and re-paints. The state it repaints from does persist across that
- * boundary, though: unlike `DisplayPanel`'s per-vsync whole-grid push, a matrix's frame is only
- * ever sent when it actually swaps (design §10), so a fresh mount with nothing to paint would
- * otherwise show blank canvases until some unrelated later write happens to touch each matrix
- * again. `get_led_matrix_frames` (`led_matrix.rs`'s `LedMatrixFrameCache`) answers with every
- * matrix's last delivered frame, fetched once here alongside geometry and painted immediately —
- * covering initial mount, detach, and reattach uniformly, since all three are just "a fresh
- * `LedMatrixPanel` mounts" from this component's own point of view.
+ * (`led-matrix-detached.tsx`), reusing `DisplayPanel`/`display-detached.tsx`'s pattern with one
+ * important asymmetry: the *docked* panel really is a fresh React mount each time (`DockLayout.tsx`
+ * destroys and recreates that dock tab on detach/reattach), but the detached window is a
+ * statically-declared Tauri window merely shown/hidden thereafter — this component mounts there
+ * exactly once for the app's whole lifetime, not once per detach.
+ *
+ * That asymmetry matters because, unlike `DisplayPanel`'s per-vsync whole-grid push, a matrix's
+ * frame here is only ever sent when it actually swaps (design §10) — so a mount with nothing yet
+ * painted would otherwise show blank canvases until some unrelated later write touches each
+ * matrix again. The fetch-on-mount effect below (`get_led_matrix_frames`,
+ * `led_matrix.rs`'s `LedMatrixFrameCache`) covers every case that's a genuine fresh mount — initial
+ * docked mount, and the docked panel reappearing after a reattach — but does nothing for the
+ * detached window on its second or later detach, since that mount already happened long ago. The
+ * backend instead replays the cache as ordinary `led-matrix-frame` events straight to the detached
+ * window every time it becomes the target (`led_matrix.rs`'s `show_detached_led_matrix`), landing
+ * on this component's already-registered live listener below rather than needing it to re-fetch
+ * anything.
  *
  * All canvases share one integer CSS scale — `DisplayPanel`'s single-canvas scale computation
  * generalized to a row: a `ResizeObserver` on the container recomputes the largest whole-number
