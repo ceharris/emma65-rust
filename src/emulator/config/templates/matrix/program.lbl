@@ -12,6 +12,7 @@ al 00F1B6 .nmi
 al 00F18F .rand_cmp
 al 00F19B .rand_printable
 al 00F173 .rand_range
+al 00F00C .@drain
 al 00F009 .@loop
 al 00F000 .main
 al 00F14A .@done
