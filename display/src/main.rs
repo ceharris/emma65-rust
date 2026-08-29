@@ -7,11 +7,14 @@
 //! reads the one-time header,
 //! then one fixed-size frame per vsync, decoding each with [`protocol`] and compositing pixels
 //! with the same `emma65::emulator::device::display::compositing::composite` the debugger's
-//! in-process display panel uses — no rendering logic is duplicated here.
+//! in-process display panel uses — no rendering logic is duplicated here. It also captures
+//! keystrokes from the SDL2 window and writes them back over the same pipe (its own stdout) per
+//! `doc/char-display-external-protocol.md` §6 — the first thing that gives the plain `emma65`
+//! CLI keyboard input at all (see `doc/display-keyboard-integration-plan.md`).
 
 mod protocol;
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -19,6 +22,7 @@ use std::time::Duration;
 use clap::Parser;
 use emma65::emulator::device::display::compositing::composite;
 use sdl2::event::Event;
+use sdl2::keyboard::{Keycode, Mod};
 use sdl2::pixels::PixelFormatEnum;
 
 use protocol::{Frame, Header};
@@ -89,6 +93,35 @@ fn spawn_frame_reader(frame_len: usize, columns: u32, rows: u32) -> mpsc::Receiv
     rx
 }
 
+/// Encodes an SDL2 keyboard event into a single wire byte per
+/// `doc/char-display-external-protocol.md` §6, mirroring `keyboardByteForEvent` in
+/// `debugger/frontend/src/DisplayPanel.tsx`. `Event::TextInput` handles ordinary printable
+/// characters (shift/layout-correct without a keycode table); `Event::KeyDown` handles
+/// `Return`/`Backspace`/`Tab`/`Escape`/`Ctrl+<letter>`, none of which also fire `TextInput` in
+/// SDL2, so there's no double-send to guard against. Returns `None` for anything else
+/// (modifier-only presses, non-ASCII IME input, unmapped keys).
+fn keystroke_byte(event: &Event) -> Option<u8> {
+    match event {
+        Event::TextInput { text, .. } => text.bytes().next().filter(u8::is_ascii),
+        Event::KeyDown { keycode: Some(keycode), keymod, .. }
+            if keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+        {
+            match keycode.into_i32() {
+                code @ 97..=122 => Some((code - 97 + 1) as u8), // Ctrl+A..Z -> 0x01..0x1a
+                _ => None,
+            }
+        }
+        Event::KeyDown { keycode: Some(keycode), .. } => match *keycode {
+            Keycode::RETURN => Some(0x0d),
+            Keycode::BACKSPACE => Some(0x08),
+            Keycode::TAB => Some(0x09),
+            Keycode::ESCAPE => Some(0x1b),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -124,6 +157,8 @@ fn main() {
         .build()
         .expect("failed to create SDL2 window");
 
+    video.text_input().start();
+
     let mut canvas = window.into_canvas().build().expect("failed to create SDL2 canvas");
     canvas.set_logical_size(pixel_width, pixel_height).expect("failed to set logical render size");
     let texture_creator = canvas.texture_creator();
@@ -133,10 +168,17 @@ fn main() {
 
     let mut event_pump = sdl_context.event_pump().expect("failed to obtain SDL2 event pump");
     let pitch = (pixel_width * 4) as usize;
+    let mut stdout = io::stdout();
 
     'running: loop {
         for event in event_pump.poll_iter() {
             if let Event::Quit { .. } = event {
+                break 'running;
+            }
+            if let Some(byte) = keystroke_byte(&event)
+                && stdout.write_all(&[byte]).is_err()
+            {
+                // The emulator side closed the pipe (process exited); nothing left to drive.
                 break 'running;
             }
         }
