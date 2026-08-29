@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/debugger/src-tauri/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/display/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/emwatch/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/debugger/frontend/node_modules" />
