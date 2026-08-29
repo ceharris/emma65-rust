@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { useOptionalPanelHeaderAction } from "./layout/panelHeaderActions";
+import { arrangementsForCount, defaultArrangement, isValidArrangement, LedMatrixArrangement } from "./ledMatrixArrangement";
 
 /** `led_matrix::LedMatrixGeometryPayload`'s shape — fixed for the device's lifetime, so this is
  * fetched once on mount rather than tracked as changing state. `null` when no `display/matrix`
@@ -140,6 +142,14 @@ function drawMatrix(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, pitch:
  * the previous bitmap-blit rendering, pitch is continuous (not floored to an integer multiple)
  * since there's no pixel grid to keep aligned to whole multiples of — canvases resize smoothly
  * rather than snapping between steps.
+ *
+ * When more than one matrix is configured, a physical arrangement menu (header hamburger icon and
+ * right-click context menu, same shape as `TerminalPanel.tsx`'s size-preset menu) lets the user
+ * pick which of the wireable rectangular layouts (`ledMatrixArrangement.ts`) matches how the real
+ * boards are chained; canvases lay out into that grid in row-major `matrix_index` order. The choice
+ * is persisted (`get_led_matrix_arrangement`/`set_led_matrix_arrangement`) and broadcast live via
+ * `led-matrix-arrangement-changed`, since the docked panel and the detached window are separate
+ * mounts of this component with no other way to learn a choice made in the other one.
  */
 export default function LedMatrixPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -153,12 +163,100 @@ export default function LedMatrixPanel() {
   const pitchRef = useRef(MIN_PITCH_PX);
   const [geometry, setGeometry] = useState<LedMatrixGeometry | null>(null);
   const [pitch, setPitch] = useState(MIN_PITCH_PX);
+  // `null` until resolved against `geometry.matrices` below — the physical layout the panel's
+  // canvases are placed into. Falls back to a single row whenever nothing valid is persisted (see
+  // `ledMatrixArrangement.ts`'s `isValidArrangement`/`defaultArrangement`), which reproduces this
+  // panel's pre-arrangement-menu behavior.
+  const [arrangement, setArrangement] = useState<LedMatrixArrangement | null>(null);
+  // Position of the open arrangement menu — `null` when closed. Same hand-drawn `.context-menu`
+  // pattern as `TerminalPanel.tsx`'s size-preset menu.
+  const [arrangementMenu, setArrangementMenu] = useState<{ x: number; y: number } | null>(null);
+  const arrangementMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     invoke<LedMatrixGeometry | null>("get_led_matrix_geometry")
       .then(setGeometry)
       .catch((err) => console.error("get_led_matrix_geometry failed:", err));
   }, []);
+
+  // Resolves the persisted arrangement (if any) against this session's actual matrix count once
+  // geometry is known — a value left over from a profile with a different matrix count is
+  // discarded in favor of the single-row default, same as a fresh/never-chosen value.
+  useEffect(() => {
+    if (!geometry) return;
+    invoke<LedMatrixArrangement | null>("get_led_matrix_arrangement")
+      .then((fetched) => {
+        setArrangement(isValidArrangement(fetched, geometry.matrices) ? fetched! : defaultArrangement(geometry.matrices));
+      })
+      .catch((err) => console.error("get_led_matrix_arrangement failed:", err));
+  }, [geometry]);
+
+  // Keeps this mount's arrangement in sync with a choice made in the docked panel's or detached
+  // window's *other* mount of this component (see the arrangement-menu doc comment above).
+  useEffect(() => {
+    const unlistenPromise = listen<LedMatrixArrangement>("led-matrix-arrangement-changed", (event) => {
+      if (!geometry) return;
+      const next = event.payload;
+      setArrangement(isValidArrangement(next, geometry.matrices) ? next : defaultArrangement(geometry.matrices));
+    });
+    return () => {
+      unlistenPromise.then((f) => f());
+    };
+  }, [geometry]);
+
+  // Persists a chosen arrangement and applies it to this mount immediately, rather than waiting
+  // for the `led-matrix-arrangement-changed` echo — this mount is the source of the choice, not
+  // just an observer of it.
+  const chooseArrangement = (next: LedMatrixArrangement) => {
+    setArrangement(next);
+    invoke("set_led_matrix_arrangement", { arrangement: next }).catch((err) =>
+      console.error("set_led_matrix_arrangement failed:", err),
+    );
+  };
+
+  const openArrangementMenuAt = (x: number, y: number) => setArrangementMenu({ x, y });
+  const closeArrangementMenu = () => setArrangementMenu(null);
+
+  useEffect(() => {
+    if (arrangementMenu === null) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (arrangementMenuRef.current && !arrangementMenuRef.current.contains(e.target as Node)) closeArrangementMenu();
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeArrangementMenu();
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [arrangementMenu]);
+
+  // Right-click anywhere in the matrix row opens the same menu the header hamburger icon does —
+  // only wired up once there's more than one matrix to arrange.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !geometry || geometry.matrices <= 1) return;
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      openArrangementMenuAt(e.clientX, e.clientY);
+    };
+    container.addEventListener("contextmenu", handleContextMenu);
+    return () => container.removeEventListener("contextmenu", handleContextMenu);
+  }, [geometry]);
+
+  // No-op outside the docked host, same as `TerminalPanel.tsx`'s identically-shaped registration —
+  // the detached window's arrangement menu is reachable only via right-click.
+  useOptionalPanelHeaderAction("led-matrix", {
+    title: "LED Matrix Arrangement…",
+    disabled: !geometry || geometry.matrices <= 1,
+    disabledTitle: "Only one matrix — nothing to arrange",
+    onClick: (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      openArrangementMenuAt(r.left, r.bottom);
+    },
+  });
 
   useEffect(() => {
     pitchRef.current = pitch;
@@ -171,20 +269,21 @@ export default function LedMatrixPanel() {
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !geometry) return;
+    if (!container || !geometry || !arrangement) return;
     const recomputePitch = () => {
-      // Real matrix boards mount edge-to-edge flush (no bezel gap), so the row's canvases are
+      // Real matrix boards mount edge-to-edge flush (no bezel gap), so the grid's canvases are
       // laid out with zero spacing between them — the fit computation divides the container's
-      // full width across all matrices rather than reserving room for gaps.
-      const fitWidth = container.clientWidth / (geometry.matrices * MATRIX_SIZE);
-      const fitHeight = container.clientHeight / MATRIX_SIZE;
+      // full width/height across the arrangement's columns/rows rather than reserving room for
+      // gaps.
+      const fitWidth = container.clientWidth / (arrangement.columns * MATRIX_SIZE);
+      const fitHeight = container.clientHeight / (arrangement.rows * MATRIX_SIZE);
       setPitch(Math.max(MIN_PITCH_PX, Math.min(fitWidth, fitHeight)));
     };
     recomputePitch();
     const observer = new ResizeObserver(recomputePitch);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [geometry]);
+  }, [geometry, arrangement]);
 
   // Replays each matrix's last delivered frame once the canvases exist to paint into — runs after
   // `geometry` settles (not on the initial, geometry-less render), since `canvasRefs.current` is
@@ -222,17 +321,43 @@ export default function LedMatrixPanel() {
   }, []);
 
   return (
-    <div ref={containerRef} className="led-matrix-container">
-      {geometry &&
-        Array.from({ length: geometry.matrices }, (_, i) => (
-          <canvas
-            key={i}
-            ref={(el) => {
-              canvasRefs.current[i] = el;
-            }}
-            className="led-matrix-canvas"
-          />
-        ))}
-    </div>
+    <>
+      <div
+        ref={containerRef}
+        className="led-matrix-container"
+        style={{ gridTemplateColumns: `repeat(${arrangement?.columns ?? geometry?.matrices ?? 1}, auto)` }}
+      >
+        {geometry &&
+          Array.from({ length: geometry.matrices }, (_, i) => (
+            <canvas
+              key={i}
+              ref={(el) => {
+                canvasRefs.current[i] = el;
+              }}
+              className="led-matrix-canvas"
+            />
+          ))}
+      </div>
+      {arrangementMenu && geometry && (
+        <div ref={arrangementMenuRef} className="context-menu" style={{ top: arrangementMenu.y, left: arrangementMenu.x }}>
+          {arrangementsForCount(geometry.matrices).map((option) => {
+            const checked = arrangement?.columns === option.columns && arrangement?.rows === option.rows;
+            return (
+              <div
+                key={`${option.columns}x${option.rows}`}
+                className="context-menu-item"
+                onClick={() => {
+                  closeArrangementMenu();
+                  chooseArrangement(option);
+                }}
+              >
+                <span className="context-menu-item-check">{checked && <i className="codicon codicon-check" />}</span>
+                {option.columns} x {option.rows}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

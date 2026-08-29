@@ -143,6 +143,24 @@ pub struct UiConfig {
     /// panel — see issue #489.
     #[serde(default)]
     pub symbols_column_widths: SymbolsColumnWidths,
+    /// The physical layout the LED Matrix panel arranges its per-matrix canvases in —
+    /// `None` until the user picks one, in which case `LedMatrixPanel.tsx` falls back to a
+    /// single row (`columns = matrices, rows = 1`), matching its pre-arrangement-menu
+    /// behavior. Validated against the active profile's actual matrix count by the frontend,
+    /// not here, the same way `symbols_column_widths` trusts its caller — a stale value left
+    /// over from a profile with a different matrix count is simply ignored rather than
+    /// rejected at write time.
+    #[serde(default)]
+    pub led_matrix_arrangement: Option<LedMatrixArrangement>,
+}
+
+/// A physical LED matrix panel layout: `columns` matrices wide by `rows` matrices tall,
+/// daisy-chained in row-major order (matrix index 0 at top-left, increasing left-to-right then
+/// top-to-bottom) — one of the arrangements `columns * rows` physical matrices can be wired in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LedMatrixArrangement {
+    pub columns: u32,
+    pub rows: u32,
 }
 
 /// Active-cursor shape, mapping directly onto xterm.js's `cursorStyle`
@@ -471,6 +489,34 @@ pub fn set_symbols_column_widths(widths: SymbolsColumnWidths, state: State<UiCon
         guard.clone()
     };
     save_ui_config_to(&profile::config_dir()?, &config)
+}
+
+/// Returns the LED Matrix panel's configured physical arrangement, or `None` if the user
+/// hasn't picked one yet.
+#[tauri::command]
+pub fn get_led_matrix_arrangement(state: State<UiConfigState>) -> Option<LedMatrixArrangement> {
+    state.0.lock().unwrap().led_matrix_arrangement
+}
+
+/// Updates the LED Matrix panel's arrangement, persists it to
+/// `~/.emma/debugger/config/ui.toml`, and notifies all windows — needed because the docked panel
+/// and the detached-LED-Matrix window are separate `LedMatrixPanel` mounts (see
+/// `LedMatrixPanel.tsx`'s doc comment) that otherwise have no way to learn a choice made in the
+/// other one, the same reason `set_theme` broadcasts.
+#[tauri::command]
+pub fn set_led_matrix_arrangement(
+    arrangement: LedMatrixArrangement,
+    state: State<UiConfigState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let config = {
+        let mut guard = state.0.lock().unwrap();
+        guard.led_matrix_arrangement = Some(arrangement);
+        guard.clone()
+    };
+    save_ui_config_to(&profile::config_dir()?, &config)?;
+    let _ = app.emit("led-matrix-arrangement-changed", arrangement);
+    Ok(())
 }
 
 /// Persists `skip` as the "Don't ask again" exit-confirmation preference.
