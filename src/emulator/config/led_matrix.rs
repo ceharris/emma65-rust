@@ -115,12 +115,17 @@ impl DeviceModule for LedMatrixModule {
         }
 
         if let Some(transport_spec) = transport_spec {
-            // Size the pipe's ring to comfortably fit the largest message this protocol ever
-            // sends -- the block message (1 tag + 1 index + 1024 pixel bytes = 1026), well over
-            // the header (10) and palette (4) messages -- so `send_bytes`'s atomic push never
-            // has to drop one (protocol module stays private, so its consts aren't importable
-            // here; hand-computed per the design doc's message layout).
-            let capacity = 1026;
+            // Size the pipe's ring to hold every matrix's block message at once, not just one --
+            // a single `CMD_SWAP` bitmask (or one auto-refresh tick) can swap every configured
+            // matrix in the same synchronous call, and `swap_matrix` sends one block message
+            // (1 tag + 1 index + 1024 pixel bytes = 1026 bytes) per swap with no yield in
+            // between. A ring sized for exactly one message leaves zero room for the next send
+            // the instant the first message lands, so it races the background pipe-writer task's
+            // drain -- `send_bytes`'s atomic push then silently drops the whole message on loss,
+            // observed as some matrices in a multi-matrix swap never updating on the peripheral
+            // (protocol module stays private, so its consts aren't importable here; hand-computed
+            // per the design doc's message layout).
+            let capacity = config.matrix_count as usize * 1026;
 
             let (transport, _relay) = transport_spec
                 .to_transport_with_reporter_and_capacity(
@@ -270,6 +275,41 @@ mod tests {
         // is accepted by `PipeTransport::spawn_with_capacity` and `attach_external_transport`'s
         // immediate header send doesn't panic against a live pipe.
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn transport_capacity_holds_every_matrix_block_message_from_one_swap_burst() {
+        // Regression test for a real bug: a single `CMD_SWAP` bitmask (or one auto-refresh tick)
+        // can swap every configured matrix in the same synchronous call, and `swap_matrix` sends
+        // one 1026-byte block message per swap with no yield in between (design doc §10). A ring
+        // sized for exactly one message (the original bug) leaves zero room for the next `send_bytes`
+        // the instant the first message lands, so it races the background pipe-writer task's drain
+        // and silently drops the loser -- observed live as some matrices in a multi-matrix swap
+        // never updating on `emma65-led-matrix`. This spawns a real `cat` child (same as production)
+        // with the config module's actual capacity formula and fires `matrix_count` full-size block
+        // messages back-to-back with no `.await` between them -- the exact shape of one `CMD_SWAP`
+        // burst -- asserting every single one is accepted (`send_bytes` returns `true`), not just
+        // the first and last.
+        let matrix_count = 8u32;
+        let capacity = matrix_count as usize * 1026;
+        let (sender, _receiver) = crate::emulator::device_event_channel();
+        let reporter = crate::emulator::TransportReporter::pending(Some(sender));
+
+        let spec = TransportSpec::Pipe { command: vec!["/usr/bin/cat".to_string()] };
+        let (mut transport, _relay) = spec
+            .to_transport_with_reporter_and_capacity(reporter, |_| {}, Some(capacity))
+            .await
+            .unwrap();
+
+        for matrix_index in 0..matrix_count as u8 {
+            let mut block = vec![matrix_index; PIXELS_PER_MATRIX + 2];
+            block[0] = 1; // MSG_BLOCK tag
+            block[1] = matrix_index;
+            assert!(
+                transport.send_bytes(&block),
+                "block message for matrix {matrix_index} was dropped -- ring capacity too small for a full swap burst"
+            );
+        }
     }
 
     #[tokio::test]
