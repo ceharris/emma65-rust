@@ -175,9 +175,22 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
     let display_frame_slot: DisplayFrameSlot = Arc::new(Mutex::new(Some(display_frame_tx)));
     let display_geometry_slot: DisplayGeometrySlot = Arc::new(Mutex::new(None));
 
-    // Same bounded-to-2 reasoning as `display_frame_tx` above, mirrored for the LED matrix
-    // device's per-matrix frame channel (design doc §10).
-    let (led_matrix_frame_tx, led_matrix_frame_rx) = mpsc::channel::<LedMatrixFrame>(2);
+    // NOT the same bounded-to-2 reasoning as `display_frame_tx` above, despite looking parallel:
+    // `display_frame_tx`'s capacity-2 argument relies on the device pushing exactly one frame per
+    // vsync and recompositing its *entire* grid every time, so a `try_send` dropped under a brief
+    // backlog is immediately superseded by the next vsync's frame -- self-healing. LED matrix's
+    // per-matrix push model (design doc §10) breaks both halves of that: a single triggering event
+    // (a full-bitmask `CMD_SWAP`, or one auto-refresh tick finding several matrices dirty at once)
+    // can synchronously `try_send` up to `matrices` frames back to back with no yield point between
+    // them, and a dropped frame is *not* superseded by anything -- there's no periodic full-repaint,
+    // so a matrix whose swap frame got dropped stays visibly stale until some unrelated later write
+    // happens to touch that exact matrix again (see
+    // `cmd_swap_of_all_8_matrices_delivers_every_frame_when_the_sink_is_sized_for_8` in
+    // `led_matrix::mod::tests`, which documents the requirement this capacity exists to satisfy).
+    // 8 is the spec's hard cap on `matrices` (`VALID_MATRIX_COUNTS` in
+    // `emulator::config::led_matrix`), so it's sized to guarantee no single triggering event can
+    // ever overflow this channel, regardless of how many matrices are configured.
+    let (led_matrix_frame_tx, led_matrix_frame_rx) = mpsc::channel::<LedMatrixFrame>(8);
     let led_matrix_frame_slot: LedMatrixFrameSlot = Arc::new(Mutex::new(Some(led_matrix_frame_tx)));
     let led_matrix_geometry_slot: LedMatrixGeometrySlot = Arc::new(Mutex::new(None));
 
