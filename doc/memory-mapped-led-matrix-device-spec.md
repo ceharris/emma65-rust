@@ -25,6 +25,45 @@ Each matrix occupies 1,024 contiguous bytes of pixel memory, one byte per pixel,
 order (byte `row * 32 + col`). A pixel byte is an index into a single, shared 256-entry color
 palette — there is no per-matrix palette.
 
+Each palette entry stores a 16-bit RGB565 color (5 bits red, 6 bits green, 5 bits blue), not a
+24-bit RGB triple — this matches the color depth real RGB LED matrix driver hardware actually
+uses, unlike `CharDisplay`'s full RGB24 palette. `CMD_PALETTE_WRITE`/`CMD_PALETTE_READ` (§4.2)
+still exchange full 8-bit-per-channel byte values with the CPU for a simple command interface, but
+each write is masked down to the entry's native 5/6/5 bit depth before being stored, and each read
+reconstructs an 8-bit value by scaling the stored bits back up (§4.2.1) — a byte written and later
+read back is not guaranteed to round-trip exactly, by design.
+
+### 2.1 Default palette
+
+The palette is not user-configurable at bus configuration time (unlike `CharDisplay`'s optional
+`palette=` file) — the device always starts with one fixed, built-in 256-entry default, matching a
+real RGB LED matrix driver's own default palette exactly so behavior is comparable to actual
+hardware out of the box. It remains mutable at runtime via `CMD_PALETTE_WRITE` (§4.2) like any other
+palette entry. Because the transport (§7) does not transfer palette contents at startup, this exact
+scheme is specified here rather than left to the implementation — the device and the companion
+process are two independent implementations that must construct *bit-identical* default palettes
+without ever comparing notes over the wire.
+
+All entries are built directly in RGB565 component space (5-bit red, 6-bit green, 5-bit blue —
+§4.2.1's 8-bit byte interface is not involved in constructing the default), in this order:
+
+- **`[0..7]`**: 8 primary/secondary colors at half intensity: black `(0,0,0)`, red `(15,0,0)`,
+  green `(0,31,0)`, yellow `(15,31,0)`, blue `(0,0,15)`, magenta `(15,0,15)`, cyan `(0,31,15)`,
+  white `(23,47,23)`.
+- **`[8..15]`**: the same 8 colors at full intensity: gray `(7,15,7)`, bright red `(31,0,0)`,
+  bright green `(0,63,0)`, bright yellow `(31,63,0)`, bright blue `(0,0,31)`, bright magenta
+  `(31,0,31)`, bright cyan `(0,63,31)`, bright white `(31,63,31)`.
+- **`[16..231]`**: a 6×6×6 RGB color cube. For `r`, `g`, `b` each ranging `0..=5` (`r` outermost,
+  `b` innermost, filling indices in that nested order starting at 16): red = `round(r * 31 / 5)`,
+  green = `round(g * 63 / 5)`, blue = `round(b * 31 / 5)`.
+- **`[232..255]`**: a 24-step grayscale ramp. For `level` in `0..24`: red = blue =
+  `round(level * 31 / 23)`, green = `round(level * 63 / 23)` — green is scaled independently
+  because it has one more bit of range than red/blue, keeping the ramp visually neutral rather than
+  green-tinted.
+
+(`round` here rounds to the nearest integer; none of the above divisions land on an exact half, so
+the tie-breaking rule doesn't matter.)
+
 Like `CharDisplay`, the device is always double-buffered: there is no single-buffered mode,
 since single-buffering would reintroduce the bandwidth problem this redesign exists to solve.
 The CPU-addressable pixel memory has a single, fixed identity for the life of the device — the
@@ -92,13 +131,39 @@ partial sequence was in progress.
 |---|---|---|---|
 | `CMD_SWAP` | 1 (matrix bitmask) | — | Swaps (§5.2) each matrix whose bit is set, immediately, regardless of its dirty flag; clears each swapped matrix's dirty flag |
 | `CMD_SET_AUTOREFRESH` | 1 (matrix bitmask) | — | Replaces the persistent auto-refresh mask (§6) wholesale |
-| `CMD_SET_POWER` | 1 (matrix bitmask + on/off — exact encoding TBD, §8) | — | Turns the addressed matrices' drivers on or off |
-| `CMD_SET_BRIGHTNESS` | 1 (brightness level) | — | Sets overall display brightness (global vs. per-matrix: TBD, §8) |
-| `CMD_PALETTE_WRITE` | 4, consumed in order: `index`, `red`, `green`, `blue` | — | On the 4th byte, sets `palette[index] = RGB(red, green, blue)` and emits a palette-update message on the transport (§7) |
-| `CMD_PALETTE_READ` | 1 (`index`) | 3, produced in order: `red`, `green`, `blue` | Arms a read sequence; each subsequent data-register read returns the next channel byte |
+| `CMD_SET_POWER` | 1 (matrix power-state bitmask: bit *n* set = matrix *n* powered on) | — | Replaces the persistent power-state mask wholesale, mirroring `CMD_SET_AUTOREFRESH`; matrices whose bit is clear have their drivers turned off |
+| `CMD_SET_BRIGHTNESS` | 1 (brightness level, 0–255) | — | Sets overall display brightness uniformly across all attached matrices — global, not per-matrix; no bitmask argument |
+| `CMD_PALETTE_WRITE` | 4, consumed in order: `index`, `red`, `green`, `blue` | — | On the 4th byte, masks `red`/`green`/`blue` to RGB565 (§4.2.1) and sets `palette[index]` to the result; emits a palette-update message on the transport (§7) |
+| `CMD_PALETTE_READ` | 1 (`index`) | 3, produced in order: `red`, `green`, `blue` | Arms a read sequence; each subsequent data-register read returns the next channel byte, scaled up from `palette[index]`'s stored RGB565 value (§4.2.1) |
+
+The persistent power-state mask defaults to **all matrices powered on**, at construction and after
+`reset()` — the same "works out of the box" rationale as auto-refresh's all-enabled default (§6).
+Like `CMD_SET_AUTOREFRESH`, there is no way to toggle a single matrix's power state without writing
+the full desired mask — a program that wants to change one matrix's power without disturbing the
+others must already know (or track) the current mask itself, since neither command exposes a
+readback.
 
 Reading the command register is not meaningful (there are no persistent bitfields to reconstruct,
 unlike `CharDisplay`'s control register) and returns 0.
+
+### 4.2.1 Palette color masking and scaling
+
+Palette entries are stored as RGB565 (§2), so the 8-bit `red`/`green`/`blue` bytes
+`CMD_PALETTE_WRITE`/`CMD_PALETTE_READ` exchange with the CPU must be converted at the register
+boundary:
+
+- **Write (mask):** each incoming 8-bit component is truncated to the entry's native bit width by
+  discarding its low-order bits — red and blue keep their top 5 bits, green keeps its top 6.
+- **Read (scale):** each stored component is expanded back to 8 bits by replicating its high-order
+  bits into the newly available low-order bits, so that a stored `0` reads back as `0x00` and a
+  stored maximum value reads back as `0xFF` — not scaled by a naive left-shift alone, which would
+  leave the result short of `0xFF` at the top of the range.
+
+This is the same well-established RGB565↔RGB888 conversion used broadly for this exact purpose; it
+is specified precisely here (rather than left to the implementation) because it is
+CPU-observable — a `CMD_PALETTE_WRITE` byte and a subsequent `CMD_PALETTE_READ` of the same
+channel are not guaranteed to be equal, and a program relying on an exact round-trip would be
+relying on unspecified behavior otherwise.
 
 ### 4.3 Data register
 
@@ -156,28 +221,39 @@ A single point-to-point `pipe:` transport to a spawned companion process, mirror
 `CharDisplay`/`emma65-display`'s architecture (`doc/char-display-external-protocol.md`) rather
 than the current `LedMatrix`'s multipoint tagged transport. At minimum the wire protocol needs:
 
-- A one-time header (matrix count, 32×32 fixed per-matrix dimensions, palette length, initial
-  palette contents, `frame_rate_hz`).
+- A one-time header (matrix count, `frame_rate_hz`) — no palette contents and no per-matrix
+  dimensions, since both are fixed rather than configured (§2.1's default palette and the 32×32
+  per-matrix size are constants every implementation already knows, not values one side needs to
+  tell the other). The companion process independently constructs §2.1's default palette at
+  startup rather than receiving it; only a subsequent `CMD_PALETTE_WRITE` (via the palette-update
+  message below) ever changes what it renders after that.
 - A per-swap block message identifying the target matrix plus its 1,024 pixel bytes, sent
   whenever §5.2 performs a swap (not bundled to any fixed per-vsync cadence, since auto-refresh
   is dirty-gated).
-- A separate, small palette-update message (index + RGB), sent only when `CMD_PALETTE_WRITE`
-  actually applies a change (§4.2) — not resent with every block, since a full 256-entry palette
-  (768 bytes) would be a large overhead relative to a single matrix's 1,024-byte block.
+- A separate, small palette-update message (index + color), sent only when `CMD_PALETTE_WRITE`
+  actually applies a change (§4.2) — not resent with every block, since even at RGB565's 2 bytes
+  per entry a full 256-entry palette (512 bytes) would be a large overhead relative to a single
+  matrix's 1,024-byte block. Whether the color is sent as the raw 16-bit RGB565 value or expanded
+  to 8-bit-per-channel bytes (§4.2.1's scaling) is left to the follow-up wire-format document —
+  either way, the companion process is responsible for rendering at whatever fidelity the
+  transport carries, not for hiding RGB565's precision loss from the display.
 - Messages for `CMD_SET_POWER` and `CMD_SET_BRIGHTNESS`, forwarded to the companion process.
 
 The exact byte-level framing is left to a follow-up document, analogous to
 `doc/char-display-external-protocol.md`.
 
-## 8. Open questions for implementation
+## 8. Resolved implementation questions
 
-1. **`CMD_SET_POWER` and `CMD_SET_BRIGHTNESS` byte encoding**: whether these are addressed
-   per-matrix (a bitmask byte, consistent with `CMD_SWAP`/`CMD_SET_AUTOREFRESH`, needing 2
-   argument bytes for power's mask + on/off) or apply globally to all attached matrices with a
-   single argument byte. No strong preference either way — left to be decided during
-   implementation.
-2. **Command-register read value**: specified here as always 0 (§4.2); confirm no other use is
-   wanted (e.g. echoing the last-armed command code).
+This section originally raised three open questions; all are now settled and specified at the
+locations noted below, kept here as a single reference point rather than removed outright:
+
+1. **Command-register read value**: fixed at `0` (§4.2) — no echo of the last-armed command code,
+   no other use. Reading the command register is never meaningful, since it holds no persistent
+   bitfields to reconstruct (unlike `CharDisplay`'s control register).
+2. **`CMD_SET_POWER` byte encoding**: a single-byte wholesale power-state mask (§4.2), mirroring
+   `CMD_SET_AUTOREFRESH`'s existing wholesale-mask pattern.
+3. **`CMD_SET_BRIGHTNESS` byte encoding**: a single global `0–255` level (§4.2), applied uniformly
+   to all attached matrices — no bitmask, no per-matrix targeting.
 
 ## 9. Companion process
 
