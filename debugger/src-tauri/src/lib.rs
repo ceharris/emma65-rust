@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use emma65::disassembler::Disassembler;
 use emma65::emulator::bus::MAX_IRQ_SOURCES;
-use emma65::emulator::{Config, Cpu, DeviceRegistry, DisplayFrame, DisplayFrameSlot, DisplayGeometrySlot, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, LogSender, Transport, TransportReporter, TransportSlot};
+use emma65::emulator::{Config, Cpu, DeviceRegistry, DisplayFrame, DisplayFrameSlot, DisplayGeometrySlot, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, LedMatrixFrame, LedMatrixFrameSlot, LedMatrixGeometrySlot, LogSender, Transport, TransportReporter, TransportSlot};
 
 /// Label of the main debugger window, as assigned by the (unlabeled) first
 /// entry in `tauri.conf.json`'s `app.windows` list.
@@ -69,6 +69,11 @@ mod terminal;
 /// forwards bytes typed in the Display panel to the active `display` device's keyboard
 /// sub-range (display/keyboard integration plan, unit 5).
 mod display;
+
+/// LED matrix panel: composited per-matrix-frame push channel bridge and dockable/detachable
+/// window lifecycle (mirroring `display`'s architecture, minus the keyboard bridge — LED
+/// matrices have no input capability).
+mod led_matrix;
 
 /// Trace panel: live-recorded execution trace and windowed reads.
 mod trace;
@@ -129,7 +134,13 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// (display/keyboard integration plan), built and consumed the same way as the console one —
 /// present regardless of whether the active profile's `display` device actually configures
 /// `keyboard_address=`. Returns its remote end alongside the console one.
-async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, InternalPipeTransport, IrqSource, mpsc::Receiver<DisplayFrame>, Option<display::DisplayGeometryPayload>), String> {
+///
+/// Also creates a fresh composited-per-matrix-frame channel and geometry slot (design doc §10)
+/// for a possible `display/matrix` device to consume via
+/// `InstantiationContext::led_matrix_frame_sink`/`led_matrix_geometry_sink`, the same way as the
+/// display channel/slot above.
+#[allow(clippy::type_complexity)]
+async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, InternalPipeTransport, IrqSource, mpsc::Receiver<DisplayFrame>, Option<display::DisplayGeometryPayload>, mpsc::Receiver<LedMatrixFrame>, Option<led_matrix::LedMatrixGeometryPayload>), String> {
     let config_path = profile_dir.join("emulator.toml");
 
     let config: Config = Figment::new()
@@ -164,6 +175,12 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
     let display_frame_slot: DisplayFrameSlot = Arc::new(Mutex::new(Some(display_frame_tx)));
     let display_geometry_slot: DisplayGeometrySlot = Arc::new(Mutex::new(None));
 
+    // Same bounded-to-2 reasoning as `display_frame_tx` above, mirrored for the LED matrix
+    // device's per-matrix frame channel (design doc §10).
+    let (led_matrix_frame_tx, led_matrix_frame_rx) = mpsc::channel::<LedMatrixFrame>(2);
+    let led_matrix_frame_slot: LedMatrixFrameSlot = Arc::new(Mutex::new(Some(led_matrix_frame_tx)));
+    let led_matrix_geometry_slot: LedMatrixGeometrySlot = Arc::new(Mutex::new(None));
+
     // `log_sender` (built by the caller, see this function's doc comment) is shared by every
     // device, the CPU, and the event-logging loop spawned in `load_or_reload_session` below, so
     // every clone shares the same underlying cycle-count `Arc` (see `LogSender::set_cycles`)
@@ -177,6 +194,8 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
         log_sender: Some(log_sender.clone()),
         display_frame_sink: Some(display_frame_slot),
         display_geometry_sink: Some(display_geometry_slot.clone()),
+        led_matrix_frame_sink: Some(led_matrix_frame_slot),
+        led_matrix_geometry_sink: Some(led_matrix_geometry_slot.clone()),
     };
 
     let registry = DeviceRegistry::with_builtins();
@@ -189,7 +208,9 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
 
     let ui_irq_source = IrqSource::from(device_id);
     let display_geometry = display_geometry_slot.lock().unwrap().take().map(display::DisplayGeometryPayload::from);
-    Ok((session, remote, kbd_remote, ui_irq_source, display_frame_rx, display_geometry))
+    let led_matrix_geometry =
+        led_matrix_geometry_slot.lock().unwrap().take().map(led_matrix::LedMatrixGeometryPayload::from);
+    Ok((session, remote, kbd_remote, ui_irq_source, display_frame_rx, display_geometry, led_matrix_frame_rx, led_matrix_geometry))
 }
 
 /// Stops any free-running CPU (Run, Step Over, or Step Return) and waits for
@@ -243,6 +264,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     app.state::<terminal::TerminalHistory>().0.lock().unwrap().clear();
     *app.state::<display::DisplayGeometryState>().0.lock().unwrap() = None;
     *app.state::<display::KeyboardTx>().0.lock().unwrap() = None;
+    *app.state::<led_matrix::LedMatrixGeometryState>().0.lock().unwrap() = None;
 
     *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
 
@@ -262,7 +284,7 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
         });
 
     match load_session(profile_dir, log_sender.clone()).await {
-        Ok((session, remote, kbd_remote, ui_irq_source, display_frame_rx, display_geometry)) => {
+        Ok((session, remote, kbd_remote, ui_irq_source, display_frame_rx, display_geometry, led_matrix_frame_rx, led_matrix_geometry)) => {
             let (remote_rx, remote_tx) = remote.into_split();
             *app.state::<terminal::TerminalTx>().0.lock().unwrap() = Some(remote_tx);
 
@@ -278,6 +300,12 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
             let display_bridge_handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 display::run_display_bridge(display_frame_rx, display_bridge_handle, frame_rate_hz).await;
+            });
+
+            *app.state::<led_matrix::LedMatrixGeometryState>().0.lock().unwrap() = led_matrix_geometry;
+            let led_matrix_bridge_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                led_matrix::run_led_matrix_bridge(led_matrix_frame_rx, led_matrix_bridge_handle).await;
             });
 
             // Structured device/transport events now flow into the Log window via the
@@ -421,6 +449,13 @@ fn persist_window_geometries(app: &AppHandle) {
     {
         eprintln!("Failed to save display window geometry: {e}");
     }
+    if let Some(led_matrix_window) = app.get_webview_window(led_matrix::LED_MATRIX_DETACHED_WINDOW_LABEL)
+        && led_matrix_window.is_visible().unwrap_or(false)
+        && let Err(e) = preferences::save_window_geometry(
+            &led_matrix_window, &state, |c, g| c.led_matrix_window_geometry = Some(g))
+    {
+        eprintln!("Failed to save LED matrix window geometry: {e}");
+    }
 }
 
 /// Exits the application cleanly. Invoked directly by Ctrl+Q (handled
@@ -479,6 +514,7 @@ pub fn run() {
         if cli.restore_layout { layout::DockLayoutData::default() } else { layout::load_dock_layout_from(&config_dir) };
     let terminal_was_detached = dock_layout.terminal_detached;
     let display_was_detached = dock_layout.display_detached;
+    let led_matrix_was_detached = dock_layout.led_matrix_detached;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -501,6 +537,8 @@ pub fn run() {
         .manage(display::KeyboardTx(Mutex::new(None)))
         .manage(display::DisplayTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
         .manage(display::DisplayGeometryState::default())
+        .manage(led_matrix::LedMatrixTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
+        .manage(led_matrix::LedMatrixGeometryState::default())
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
         .manage(disassembly::DisassemblerState(Mutex::new(None)))
@@ -573,21 +611,33 @@ pub fn run() {
                 } else {
                     let _ = app.emit_to(MAIN_WINDOW_LABEL, "display-detach-requested", ());
                 }
+            } else if event.id() == menu::TOGGLE_LED_MATRIX_ID {
+                let detached = app.state::<layout::LayoutState>().0.lock().unwrap().led_matrix_detached;
+                if detached {
+                    led_matrix::reattach_led_matrix(app);
+                } else if let Err(e) = led_matrix::begin_led_matrix_detach(app) {
+                    eprintln!("Failed to detach LED matrix: {e}");
+                } else {
+                    let _ = app.emit_to(MAIN_WINDOW_LABEL, "led-matrix-detach-requested", ());
+                }
             } else if let Some(panel_id) = event.id().as_ref().strip_prefix(menu::VIEW_PANEL_ID_PREFIX) {
-                // Terminal and Display are both special-cased: while either is detached to its
-                // own window, that window (not a dock panel) is the thing to reveal — asking the
-                // dock to add a panel that duplicates it would fight the single-source-of-truth
-                // detach/reattach design in `terminal.rs`/`display.rs`. Every other panel id, and
-                // Terminal/Display while docked, goes through the generic dockview-driven
-                // `reveal-panel` handler in `DockLayout.tsx`, which adds the panel back (using
-                // its last dock position, or its default position) if it isn't present, or just
-                // activates its tab if it is.
+                // Terminal, Display, and LED Matrix are all special-cased: while any is detached
+                // to its own window, that window (not a dock panel) is the thing to reveal —
+                // asking the dock to add a panel that duplicates it would fight the
+                // single-source-of-truth detach/reattach design in
+                // `terminal.rs`/`display.rs`/`led_matrix.rs`. Every other panel id, and these
+                // three while docked, goes through the generic dockview-driven `reveal-panel`
+                // handler in `DockLayout.tsx`, which adds the panel back (using its last dock
+                // position, or its default position) if it isn't present, or just activates its
+                // tab if it is.
                 let detached_window_label = {
                     let layout_state = app.state::<layout::LayoutState>();
                     let detached = layout_state.0.lock().unwrap();
                     match panel_id {
                         "terminal" if detached.terminal_detached => Some(terminal::TERMINAL_DETACHED_WINDOW_LABEL),
                         "display" if detached.display_detached => Some(display::DISPLAY_DETACHED_WINDOW_LABEL),
+                        "led-matrix" if detached.led_matrix_detached =>
+                            Some(led_matrix::LED_MATRIX_DETACHED_WINDOW_LABEL),
                         _ => None,
                     }
                 };
@@ -665,6 +715,9 @@ pub fn run() {
             display::detach_display,
             display::attach_display,
             display::get_display_geometry,
+            led_matrix::detach_led_matrix,
+            led_matrix::attach_led_matrix,
+            led_matrix::get_led_matrix_geometry,
             trace::record_trace,
             trace::stop_trace,
             trace::get_trace_window,
@@ -783,6 +836,8 @@ pub fn run() {
             terminal::restore_detached_window_if_needed(app.handle(), terminal_was_detached);
             display::install_detached_window(app.handle());
             display::restore_detached_window_if_needed(app.handle(), display_was_detached);
+            led_matrix::install_detached_window(app.handle());
+            led_matrix::restore_detached_window_if_needed(app.handle(), led_matrix_was_detached);
 
             // Exit explicitly rather than relying on Tauri's default "exit when all
             // windows are closed" behavior, so the close control honors the exit

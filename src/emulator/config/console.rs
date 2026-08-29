@@ -119,6 +119,8 @@ mod tests {
             log_sender: None,
             display_frame_sink: None,
             display_geometry_sink: None,
+            led_matrix_frame_sink: None,
+            led_matrix_geometry_sink: None,
             console_transport: Some(slot),
             keyboard_transport: None,
         };
@@ -141,6 +143,8 @@ mod tests {
             log_sender: None,
             display_frame_sink: None,
             display_geometry_sink: None,
+            led_matrix_frame_sink: None,
+            led_matrix_geometry_sink: None,
             console_transport: Some(Arc::clone(&slot)),
             keyboard_transport: None,
         };
@@ -168,6 +172,8 @@ mod tests {
             log_sender: None,
             display_frame_sink: None,
             display_geometry_sink: None,
+            led_matrix_frame_sink: None,
+            led_matrix_geometry_sink: None,
             console_transport: Some(Arc::clone(&slot)),
             keyboard_transport: None,
         };
@@ -189,6 +195,8 @@ mod tests {
             log_sender: None,
             display_frame_sink: None,
             display_geometry_sink: None,
+            led_matrix_frame_sink: None,
+            led_matrix_geometry_sink: None,
             console_transport: Some(Arc::new(Mutex::new(Some((
                 Box::new(local) as Box<dyn Transport>, relay, reporter.clone(),
             ))))),
@@ -217,6 +225,8 @@ mod tests {
             log_sender: None,
             display_frame_sink: None,
             display_geometry_sink: None,
+            led_matrix_frame_sink: None,
+            led_matrix_geometry_sink: None,
             console_transport: None,
             keyboard_transport: None,
         };

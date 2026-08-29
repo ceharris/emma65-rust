@@ -1,4 +1,4 @@
-use super::{DeviceModule, DeviceModuleError, InstantiationContext};
+use super::{DeviceModule, DeviceModuleError, InstantiationContext, LedMatrixGeometry};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::display::DEFAULT_FRAME_RATE_HZ;
 use crate::emulator::device::led_matrix::compositing::default_palette;
@@ -70,6 +70,18 @@ impl DeviceModule for LedMatrixModule {
             device.set_log_sender(sender.clone());
         }
 
+        // Both slots (design doc §10) are consumed the same way `display_frame_sink`/
+        // `display_geometry_sink` are: present only when a host (the debugger) wants to receive
+        // this device's output, absent (a no-op here) for the plain `emma65` CLI.
+        if let Some(slot) = &context.led_matrix_geometry_sink {
+            *slot.lock().unwrap() = Some(LedMatrixGeometry { matrices: config.matrices });
+        }
+        if let Some(slot) = &context.led_matrix_frame_sink
+            && let Some(sender) = slot.lock().unwrap().take()
+        {
+            device.attach_frame_sink(sender);
+        }
+
         bus_config.device(address_range, device_id, Box::new(device))
             .map_err(DeviceModuleError::BusConfig)
     }
@@ -89,6 +101,8 @@ mod tests {
             log_sender: None,
             display_frame_sink: None,
             display_geometry_sink: None,
+            led_matrix_frame_sink: None,
+            led_matrix_geometry_sink: None,
         }
     }
 
