@@ -176,7 +176,7 @@ fn main() {
                 break 'running;
             }
             if let Some(byte) = keystroke_byte(&event)
-                && stdout.write_all(&[byte]).is_err()
+                && (stdout.write_all(&[byte]).is_err() || stdout.flush().is_err())
             {
                 // The emulator side closed the pipe (process exited); nothing left to drive.
                 break 'running;
