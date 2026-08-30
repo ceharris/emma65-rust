@@ -1,0 +1,14 @@
+al 000000 .B
+al 000001 .C
+al 000002 .V
+al 000004 .W
+al 00F004 .isr
+al 00F000 .main
+al 00F004 .nmi
+al 00F000 .main
+al 000004 .W
+al 000002 .V
+al 000001 .C
+al 000000 .B
+al 00F004 .nmi
+al 00F004 .isr

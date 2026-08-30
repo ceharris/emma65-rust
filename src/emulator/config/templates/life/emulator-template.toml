@@ -1,0 +1,27 @@
+cpu-variant = "WDC65C02"
+clock-speed-hz = 1843200
+
+[[devices]]
+type = "ram"
+address = 0x0000
+size = 2048
+
+[[devices]]
+type = "display/matrix"
+address = 0xc000
+
+[[devices]]
+type = "rom"
+address = 0xf000
+size = 4096
+image = "{{ROM_IMAGE}}"
+labels = "{{LABELS}}"
+
+[[devices]]
+type = "lfsr"
+address = 0xfff6
+mode = "step"
+
+[[devices]]
+type = "console"
+address = 0xfff8
