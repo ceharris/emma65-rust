@@ -3,7 +3,7 @@
 //! See `doc/memory-mapped-led-matrix-device-spec.md` for the full behavioral specification and
 //! `doc/memory-mapped-led-matrix-device-plan.md` for the design decisions this implementation
 //! follows. The device occupies two independently configured, disjoint bus ranges rather than one
-//! contiguous region -- pixel memory sized from `matrix-count` and based at the device's `address`,
+//! contiguous region -- pixel memory sized from `arrangement` and based at the device's `address`,
 //! and the command/data register pair based at the separately configured `register-address` --
 //! so pixel memory can start at a K-aligned boundary without the register pair fragmenting the
 //! next one:
@@ -32,16 +32,18 @@
 //! and scaled back up on read (spec §4.2.1).
 //!
 //! **Arrangement-aware pixel addressing**: pixel memory is one flat, byte-per-pixel raster of the
-//! *composed* canvas -- `arrangement-columns * 32` pixels wide by `(matrices / arrangement-
-//! columns) * 32` pixels tall -- addressed exactly like a real framebuffer: byte `row * width +
-//! col`. Matrix *n* (row-major over the arrangement grid: `n = matrix_row * arrangement_columns +
-//! matrix_col`) occupies the `32x32` sub-rectangle at `(matrix_row * 32, matrix_col * 32)`. With
-//! the default single-column arrangement (`arrangement` omitted, `arrangement-columns == 1`) the
-//! composed canvas is exactly `32` pixels wide and matrices stack top to bottom, reproducing the
-//! original one-matrix-per-1024-contiguous-bytes layout exactly; any wider arrangement interleaves
-//! matrices' rows in bus address order instead of concatenating whole matrices, since a real
-//! daisy-chained panel's rows are wired that way. See
-//! `doc/memory-mapped-led-matrix-device-spec.md` §2.2.
+//! *composed* canvas -- `arrangement-columns * 32` pixels wide by `arrangement-rows * 32` pixels
+//! tall -- addressed exactly like a real framebuffer: byte `row * width + col`. Matrix *n*
+//! (row-major over the arrangement grid: `n = matrix_row * arrangement_columns + matrix_col`)
+//! occupies the `32x32` sub-rectangle at `(matrix_row * 32, matrix_col * 32)`. There is no
+//! separate matrix-count attribute -- `matrices = arrangement_columns * arrangement_rows` is
+//! derived from `arrangement`, since a count alone doesn't say how the matrices are wired and
+//! having both invites them to silently disagree (the friction that motivated dropping
+//! matrix-count -- see the config module). A `1xN` (single-column) arrangement reproduces the
+//! original one-matrix-per-1024-contiguous-bytes layout exactly, since every matrix's 32 rows are
+//! then contiguous in the raster; any wider arrangement interleaves matrices' rows in bus address
+//! order instead of concatenating whole matrices, since a real daisy-chained panel's rows are
+//! wired that way. See `doc/memory-mapped-led-matrix-device-spec.md` §2.2.
 
 pub mod compositing;
 mod protocol;
@@ -185,9 +187,9 @@ impl LedMatrix {
     /// `palette` is the initial 256-entry color palette (spec §2.1); it remains mutable at
     /// runtime via `CMD_PALETTE_WRITE`.
     ///
-    /// `cols` is the arrangement grid's column count (design doc §2.2); it must evenly divide
-    /// `matrices` -- the config module is responsible for validating this and for defaulting it
-    /// to `1` (a single column) when no `arrangement` attribute is configured.
+    /// `cols` is the arrangement grid's column count (design doc §2.2), parsed from the required
+    /// `arrangement` config attribute; it must evenly divide `matrices` (in fact `matrices` is
+    /// itself derived as `cols * rows` by the config module, so this always holds).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &'static str,
@@ -566,8 +568,8 @@ mod tests {
 
     fn device(matrices: u32) -> LedMatrix {
         // A single column (matrices stacked vertically) reproduces the original
-        // one-matrix-per-1024-contiguous-bytes layout exactly -- see `device_with_arrangement`'s
-        // doc comment and the config module's default.
+        // one-matrix-per-1024-contiguous-bytes layout exactly, and is the simplest arrangement
+        // for tests that don't care about layout.
         device_with_arrangement(matrices, 1)
     }
 

@@ -20,7 +20,7 @@ const VALID_MATRIX_COUNTS: [u32; 4] = [1, 2, 4, 8];
 /// [`DeviceIdAllocator::for_irq`].
 ///
 /// Pixel memory and the command/data register pair are two disjoint bus ranges rather than one
-/// contiguous region: pixel memory is sized from `matrix-count` and based at the device's
+/// contiguous region: pixel memory is sized from `arrangement` and based at the device's
 /// `address`, while the register pair is based at the separately configured, required
 /// `register-address` (data register immediately follows at `register-address + 1`). This keeps
 /// pixel memory -- likely to be placed at a 1-KiB/N-KiB-aligned boundary -- free of the
@@ -32,24 +32,23 @@ pub struct LedMatrixModule;
 
 #[derive(Deserialize)]
 struct LedMatrixAttributes {
-    #[serde(rename = "matrix-count")]
-    matrix_count: u32,
+    /// Physical arrangement of the daisy-chained matrices (design doc §2.2), `COLSxROWS` (e.g.
+    /// `"2x1"`), determining both the matrix count (`columns * rows`) and how bus addresses map
+    /// onto the composed canvas -- see `led_matrix::mod`'s "Arrangement-aware pixel addressing"
+    /// doc comment. There is deliberately no separate `matrix-count` attribute: since a matrix
+    /// count alone doesn't say how the matrices are wired, requiring both invited the two to
+    /// silently disagree; `arrangement` alone is both necessary and sufficient.
+    arrangement: String,
     #[serde(rename = "register-address")]
     register_address: u16,
     frame_rate_hz: Option<u32>,
     transport: Option<TransportSpecFormat>,
-    /// Physical arrangement of the daisy-chained matrices (design doc §2.2), `COLSxROWS` (e.g.
-    /// `"2x1"`), determining how bus addresses map onto the composed canvas -- see
-    /// `led_matrix::mod`'s "Arrangement-aware pixel addressing" doc comment. Defaults to a single
-    /// column (`1`x`matrix-count`) when omitted, reproducing the original one-matrix-per-1024-
-    /// contiguous-bytes layout.
-    arrangement: Option<String>,
 }
 
-/// Parses `arrangement`'s `COLSxROWS` syntax into its column count, mirroring `led-matrix/src/
+/// Parses `arrangement`'s `COLSxROWS` syntax into `(columns, rows)`, mirroring `led-matrix/src/
 /// main.rs`'s identically-shaped `parse_arrangement` for the companion binary's `--arrangement`
 /// flag -- kept separate since that one only affects on-screen layout, not bus addressing.
-fn parse_arrangement_columns(spec: &str, matrix_count: u32) -> Result<u32, String> {
+fn parse_arrangement(spec: &str) -> Result<(u32, u32), String> {
     let (cols_str, rows_str) = spec.split_once('x')
         .ok_or_else(|| format!("display/matrix: arrangement must be COLSxROWS, got {spec:?}"))?;
     let columns: u32 = cols_str.parse()
@@ -59,12 +58,7 @@ fn parse_arrangement_columns(spec: &str, matrix_count: u32) -> Result<u32, Strin
     if columns == 0 || rows == 0 {
         return Err(format!("display/matrix: arrangement columns and rows must both be at least 1, got {spec:?}"));
     }
-    if columns * rows != matrix_count {
-        return Err(format!(
-            "display/matrix: arrangement {spec:?} ({columns}x{rows} = {} matrices) doesn't match matrix-count {matrix_count}",
-            columns * rows));
-    }
-    Ok(columns)
+    Ok((columns, rows))
 }
 
 impl DeviceModule for LedMatrixModule {
@@ -84,19 +78,14 @@ impl DeviceModule for LedMatrixModule {
             .extract()
             .map_err(|e| DeviceModuleError::Config(format!("configuration error: {e}")))?;
 
-        if !VALID_MATRIX_COUNTS.contains(&config.matrix_count) {
-            return Err(DeviceModuleError::Config(format!(
-                "display/matrix: matrix-count must be one of {VALID_MATRIX_COUNTS:?}, got {}",
-                config.matrix_count)));
-        }
+        let (cols, rows) = parse_arrangement(&config.arrangement).map_err(DeviceModuleError::Config)?;
+        let matrix_count = cols * rows;
 
-        let cols = match &config.arrangement {
-            Some(spec) => parse_arrangement_columns(spec, config.matrix_count)
-                .map_err(DeviceModuleError::Config)?,
-            // A single column (matrices stacked vertically) reproduces the original
-            // one-matrix-per-1024-contiguous-bytes layout exactly.
-            None => 1,
-        };
+        if !VALID_MATRIX_COUNTS.contains(&matrix_count) {
+            return Err(DeviceModuleError::Config(format!(
+                "display/matrix: arrangement {:?} implies {matrix_count} matrices, but matrix count must be one of {VALID_MATRIX_COUNTS:?}",
+                config.arrangement)));
+        }
 
         let frame_rate_hz = config.frame_rate_hz.unwrap_or(DEFAULT_FRAME_RATE_HZ);
 
@@ -119,7 +108,7 @@ impl DeviceModule for LedMatrixModule {
 
         let device_id = id_allocator.lock().unwrap().next_available();
 
-        let pixel_bytes = config.matrix_count * PIXELS_PER_MATRIX as u32;
+        let pixel_bytes = matrix_count * PIXELS_PER_MATRIX as u32;
         let pixel_range = AddressRange::new(address, address + (pixel_bytes as u16 - 1));
         let register_range = AddressRange::new(config.register_address, config.register_address + 1);
 
@@ -127,7 +116,7 @@ impl DeviceModule for LedMatrixModule {
             self.name(),
             pixel_range,
             register_range,
-            config.matrix_count,
+            matrix_count,
             cols,
             context.clock_hz,
             frame_rate_hz,
@@ -142,7 +131,7 @@ impl DeviceModule for LedMatrixModule {
         // `display_geometry_sink` are: present only when a host (the debugger) wants to receive
         // this device's output, absent (a no-op here) for the plain `emma65` CLI.
         if let Some(slot) = &context.led_matrix_geometry_sink {
-            *slot.lock().unwrap() = Some(LedMatrixGeometry { matrices: config.matrix_count });
+            *slot.lock().unwrap() = Some(LedMatrixGeometry { matrices: matrix_count });
         }
         if let Some(slot) = &context.led_matrix_frame_sink
             && let Some(sender) = slot.lock().unwrap().take()
@@ -161,7 +150,7 @@ impl DeviceModule for LedMatrixModule {
             // observed as some matrices in a multi-matrix swap never updating on the peripheral
             // (protocol module stays private, so its consts aren't importable here; hand-computed
             // per the design doc's message layout).
-            let capacity = config.matrix_count as usize * 1026;
+            let capacity = matrix_count as usize * 1026;
 
             let (transport, _relay) = transport_spec
                 .to_transport_with_reporter_and_capacity(
@@ -205,9 +194,15 @@ mod tests {
     // validation failure with an unrelated overlap error.
     const REGISTER_ADDRESS: u16 = 0xA000;
 
+    /// Builds attributes for a device with `matrix_count` matrices in a single column -- the
+    /// simplest arrangement that reaches a given count, for tests that don't care about layout.
     fn attributes(matrix_count: u32) -> HashMap<String, Value> {
+        attributes_with_arrangement(&format!("1x{matrix_count}"))
+    }
+
+    fn attributes_with_arrangement(arrangement: &str) -> HashMap<String, Value> {
         let mut attributes = HashMap::new();
-        attributes.insert("matrix-count".to_string(), Value::from(matrix_count));
+        attributes.insert("arrangement".to_string(), Value::from(arrangement));
         attributes.insert("register-address".to_string(), Value::from(REGISTER_ADDRESS));
         attributes
     }
@@ -222,7 +217,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn instantiate_without_matrix_count_fails() {
+    async fn instantiate_without_arrangement_fails() {
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let result = LedMatrixModule.instantiate(
             BusConfig::new(), 0x8000, &HashMap::new(), &context(), id_allocator).await;
@@ -231,13 +226,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn instantiate_with_invalid_matrix_count_fails() {
+    async fn instantiate_with_arrangement_implying_invalid_matrix_count_fails() {
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let result = LedMatrixModule.instantiate(
             BusConfig::new(), 0x8000, &attributes(3), &context(), id_allocator).await;
 
         match result {
-            Err(DeviceModuleError::Config(message)) => assert!(message.contains("matrix-count")),
+            Err(DeviceModuleError::Config(message)) => assert!(message.contains("matrix count")),
             Err(other) => panic!("expected DeviceModuleError::Config, got a different error variant: {other}"),
             Ok(_) => panic!("expected DeviceModuleError::Config, got Ok"),
         }
@@ -247,7 +242,7 @@ mod tests {
     async fn instantiate_without_register_address_fails() {
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let mut attributes = HashMap::new();
-        attributes.insert("matrix-count".to_string(), Value::from(4u32));
+        attributes.insert("arrangement".to_string(), Value::from("1x4"));
         let result = LedMatrixModule.instantiate(
             BusConfig::new(), 0x8000, &attributes, &context(), id_allocator).await;
 
@@ -350,53 +345,31 @@ mod tests {
 
     #[tokio::test]
     async fn instantiate_with_valid_arrangement_succeeds() {
-        let mut attributes = attributes(4);
-        attributes.insert("arrangement".to_string(), Value::from("2x2"));
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
 
         let result = LedMatrixModule.instantiate(
-            BusConfig::new(), 0x8000, &attributes, &context(), id_allocator).await;
+            BusConfig::new(), 0x8000, &attributes_with_arrangement("2x2"), &context(), id_allocator).await;
 
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn instantiate_with_arrangement_not_matching_matrix_count_fails() {
-        let mut attributes = attributes(4);
-        attributes.insert("arrangement".to_string(), Value::from("2x1")); // 2 matrices, not 4
-        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
-
-        let result = LedMatrixModule.instantiate(
-            BusConfig::new(), 0x8000, &attributes, &context(), id_allocator).await;
-
-        match result {
-            Err(DeviceModuleError::Config(message)) => assert!(message.contains("arrangement")),
-            Err(other) => panic!("expected DeviceModuleError::Config, got a different error variant: {other}"),
-            Ok(_) => panic!("expected DeviceModuleError::Config, got Ok"),
-        }
-    }
-
-    #[tokio::test]
     async fn instantiate_with_malformed_arrangement_fails() {
-        let mut attributes = attributes(4);
-        attributes.insert("arrangement".to_string(), Value::from("not-an-arrangement"));
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
 
         let result = LedMatrixModule.instantiate(
-            BusConfig::new(), 0x8000, &attributes, &context(), id_allocator).await;
+            BusConfig::new(), 0x8000, &attributes_with_arrangement("not-an-arrangement"), &context(), id_allocator).await;
 
         assert!(matches!(result, Err(DeviceModuleError::Config(_))));
     }
 
     #[tokio::test]
-    async fn instantiate_without_arrangement_defaults_to_a_single_column() {
-        // No direct way to observe `cols` from outside the device, so this exercises the
-        // addressing behavior it drives instead: with the default single-column layout, matrix
-        // 1's pixels start at byte offset `PIXELS_PER_MATRIX`, exactly like the original
-        // one-matrix-per-1024-contiguous-bytes layout.
+    async fn single_column_arrangement_matches_the_original_contiguous_layout() {
+        // With a "1xN" arrangement, matrix 1's pixels start at byte offset `PIXELS_PER_MATRIX`,
+        // exactly like the original one-matrix-per-1024-contiguous-bytes layout.
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let bus_config = LedMatrixModule.instantiate(
-            BusConfig::new(), 0x8000, &attributes(2), &context(), id_allocator).await.unwrap();
+            BusConfig::new(), 0x8000, &attributes_with_arrangement("1x2"), &context(), id_allocator).await.unwrap();
         let mut bus = bus_config.build();
 
         bus.write(0x8000, 0x11).unwrap();

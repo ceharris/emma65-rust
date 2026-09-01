@@ -67,19 +67,22 @@ the tie-breaking rule doesn't matter.)
 ### 2.2 Arrangement-aware pixel addressing
 
 Real matrix panels are daisy-chained into a rectangular grid, and pixel memory is addressed as a
-single, flat, byte-per-pixel raster of that *composed* canvas — not as `matrices` independent
-1,024-byte blocks. Given the configured `arrangement`'s `columns` and `rows` (`columns * rows =
-matrices`), the composed canvas is `columns * 32` pixels wide by `rows * 32` pixels tall, and is
-addressed exactly like a real framebuffer: byte `row * width + col`, `width = columns * 32`.
+single, flat, byte-per-pixel raster of that *composed* canvas — not as independent 1,024-byte
+blocks, one per matrix. The `arrangement` config attribute (§3) gives this grid's `columns` and
+`rows`; the matrix count is `columns * rows`, derived rather than separately configured (there is
+no `matrix-count` attribute — a bare count doesn't say how the matrices are wired, and requiring
+both would just invite them to disagree). The composed canvas is `columns * 32` pixels wide by
+`rows * 32` pixels tall, addressed exactly like a real framebuffer: byte `row * width + col`,
+`width = columns * 32`.
 
 Matrix *n* is placed row-major over the arrangement grid — `matrix_row = n / columns`,
 `matrix_col = n % columns` — occupying the composed canvas's `32x32` sub-rectangle at pixel
-`(matrix_row * 32, matrix_col * 32)`. With the default single-column arrangement (`columns = 1`,
-`rows = matrices`), every matrix's 32 rows are contiguous in the raster, reproducing the original
-one-matrix-per-1,024-contiguous-bytes layout exactly. Any wider arrangement interleaves matrices'
-rows in bus address order instead: for example, in a `2x1` arrangement (two matrices side by side),
-matrix 1's row 0 begins at byte 32, not byte 1,024, because it is the second half of the composed
-canvas's first 64-byte row rather than a separate contiguous block.
+`(matrix_row * 32, matrix_col * 32)`. With a single-column arrangement (`columns = 1`), every
+matrix's 32 rows are contiguous in the raster, reproducing the original one-matrix-per-1,024-
+contiguous-bytes layout exactly. Any wider arrangement interleaves matrices' rows in bus address
+order instead: for example, in a `2x1` arrangement (two matrices side by side), matrix 1's row 0
+begins at byte 32, not byte 1,024, because it is the second half of the composed canvas's first
+64-byte row rather than a separate contiguous block.
 
 This addressing only changes which bus address maps to a given matrix's given pixel — it does not
 change per-matrix dirty tracking, swap semantics (§5), or the external protocol (§7), all of which
@@ -105,20 +108,19 @@ Unlike `CharDisplay`, this device has:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `matrices` | integer | — (required) | Must be 1, 2, 4, or 8 |
 | `base_address` | integer | — | Where the device's memory-mapped region begins on the bus |
-| `arrangement` | `COLSxROWS` string | `1x<matrices>` (single column) | Physical daisy-chain layout (§2.2); `columns * rows` must equal `matrices` |
+| `arrangement` | `COLSxROWS` string | — (required) | Physical daisy-chain layout (§2.2); no separate matrix-count field exists, since one alone doesn't say how the matrices are wired |
 | `frame_rate_hz` | integer | mirrors `CharDisplay`'s default | Drives the auto-refresh cadence (§6) |
 | `transport` | transport spec | — | A single point-to-point `pipe:` transport to a spawned companion process, mirroring `CharDisplay`'s external-protocol transport requirements (`doc/char-display-external-protocol.md` §2) rather than the current `LedMatrix`'s multipoint tagged transport |
 
 Derived, not separately configurable:
 
+- `matrices = columns * rows` (from `arrangement`).
 - `pixel_bytes = matrices * 1024`.
 
 **Validation at configuration time:**
-- `matrices` must be one of `{1, 2, 4, 8}`.
-- `arrangement`, if given, must parse as `COLSxROWS` with both parts at least 1, and
-  `columns * rows` must equal `matrices`.
+- `arrangement` must parse as `COLSxROWS` with both parts at least 1, and the derived matrix count
+  (`columns * rows`) must be one of `{1, 2, 4, 8}`.
 
 ## 4. Bus-addressable memory map
 
