@@ -9,6 +9,8 @@ size = 2048
 [[devices]]
 type = "display/matrix"
 address = 0xc000
+register-address = 0xfff4
+matrix-count = 8
 
 [[devices]]
 type = "rom"
@@ -16,6 +18,10 @@ address = 0xf000
 size = 4096
 image = "{{ROM_IMAGE}}"
 labels = "{{LABELS}}"
+
+[[devices]]
+type = "via/6522"
+address = 0xff80
 
 [[devices]]
 type = "lfsr"
