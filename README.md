@@ -417,8 +417,8 @@ A memory-mapped RGB LED matrix display supporting 1, 2, 4, or 8 attached
 32×32 matrices, fixed at configuration time:
 
 - Pixel memory is mapped directly into the address space, one byte per
-  pixel, row-major, per matrix — no per-pixel register bottleneck for bulk
-  updates
+  pixel, as a single row-major raster of the composed canvas (see
+  `arrangement` below) — no per-pixel register bottleneck for bulk updates
 - Each pixel byte indexes a single, shared 256-entry color palette; palette
   entries store 16-bit RGB565 colors (matching real LED matrix driver
   hardware's color depth), organized like the Xterm 256-color palette (16
@@ -450,10 +450,21 @@ console-style rendering when running the plain `emma65` CLI:
 [[devices]]
 type = "display/matrix"
 address = 0x9000
-matrix-count = 4
 register-address = 0x9400
+arrangement = "2x2"
 transport = "pipe:/path/to/emma65-led-matrix"
 ```
+
+`arrangement` (required, `COLSxROWS`, e.g. `2x2`) describes how the matrices
+are physically daisy-chained: the matrix count (`columns * rows`) and how bus
+addresses map onto them. The composed canvas is `columns * 32` pixels wide by
+`rows * 32` pixels tall, addressed like a real framebuffer (byte
+`row * width + col`), with matrix *n* occupying the `32x32` sub-rectangle at
+`((n / columns) * 32, (n % columns) * 32)`. There is no separate
+`matrix-count` attribute — a bare count doesn't say how the matrices are
+wired, and having both invited them to silently disagree. A `1xN` (single
+column) arrangement reproduces the original one-matrix-per-1024-contiguous-
+bytes layout.
 
 ### Character Display (`display`)
 
@@ -656,7 +667,7 @@ EMMA65_CLOCK_SPEED_HZ=1843200
 | `acia/6850`     |     2     | `transport` (optional)                                                              |
 | `via/6522`      |    16     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
 | `ptm/6840`      |     8     | `transport` (optional), `protocol` (`ascii` or `binary`, optional)                  |
-| `display/matrix`| variable  | `matrix-count` (required: 1, 2, 4, or 8), `register-address` (required), `frame_rate_hz`, `transport` (optional, `pipe:` only) |
+| `display/matrix`| variable  | `arrangement` (required `COLSxROWS`; `columns * rows` must be 1, 2, 4, or 8), `register-address` (required), `frame_rate_hz`, `transport` (optional, `pipe:` only) |
 | `display`  |  variable | `columns`, `rows` (optional, default 40×25), `palette`, `font` (optional paths), `double-buffered` (bool), `frame-rate-hz`, `transport` (optional, `pipe:` only) |
 | `lfsr`          |     2     | `taps` (optional u16), `mode` (`continuous` or `step`, optional)                    |
 | `mem/finch`     |     2     | `bank-registers`, `control-register` (required addresses), `image` (required path), `write-policy`, `fill`, `offset`, `labels` (all optional) |
@@ -672,11 +683,11 @@ configurable addresses shown, not a contiguous block.
 + color RAM + a control register + a status/data register), so it grows with
 the configured grid size rather than being fixed.
 
-`display/matrix`'s pixel memory is `matrix-count * 1024` bytes, based at
-`address`; its command and data registers are a separate 2-byte range based
-at `register-address` rather than immediately following pixel memory, so the
-two can be placed independently on the bus (e.g. keeping pixel memory
-aligned to a 1 KiB/N KiB boundary).
+`display/matrix`'s pixel memory is `columns * rows * 1024` bytes (from its
+`arrangement`), based at `address`; its command and data registers are a
+separate 2-byte range based at `register-address` rather than immediately
+following pixel memory, so the two can be placed independently on the bus
+(e.g. keeping pixel memory aligned to a 1 KiB/N KiB boundary).
 
 Transport shorthand values for CLI and TOML string form:
 `pipe:/path/to/exe,arg1,arg2`, `tcp:PORT`, `tcp:IP:PORT`, `unix:PATH`, `pty`,
@@ -761,24 +772,30 @@ built binary:
 [[devices]]
 type = "display/matrix"
 address = 0x9000
-matrix-count = 4
+arrangement = "1x4"
 register-address = 0x9400
 transport = "pipe:/path/to/target/release/emma65-led-matrix"
 ```
 
 ```
-emma65 --device display/matrix@0x9000,matrix-count=4,register-address=0x9400,transport=pipe:/path/to/target/release/emma65-led-matrix
+emma65 --device display/matrix@0x9000,arrangement=1x4,register-address=0x9400,transport=pipe:/path/to/target/release/emma65-led-matrix
 ```
 
-The window opens as soon as the emulator attaches the transport, showing
-`matrix-count` matrices side by side as round LEDs on a PCB-colored
-background, flush against each other. `--arrangement COLSxROWS` lays the
-matrices out in a grid instead of a single row (must be a divisor pair of
-`matrix-count`, e.g. `2x2` for 4 matrices); `--pitch` sets the initial
+The window opens as soon as the emulator attaches the transport, showing the
+configured matrices side by side as round LEDs on a PCB-colored background,
+flush against each other. `--arrangement COLSxROWS` lays the matrices out in
+a grid instead of a single row (must be a divisor pair of the configured
+matrix count, e.g. `2x2` for 4 matrices); `--pitch` sets the initial
 on-screen LED center-to-center spacing in pixels (default `12`). The window
 remains resizable afterward and letterboxes/scales to fit. Closing the
 window ends `emma65-led-matrix`; it also exits cleanly if the emulator
 process exits or is killed first, since that closes its stdin.
+
+This `--arrangement` flag only controls on-screen layout and is independent
+of the device's own `arrangement` config attribute, which controls bus
+addressing (see above) — matrix *n*'s content is correct either way, but the
+two should normally be set to the same `COLSxROWS` value so the picture on
+screen matches the physical layout the program was written for.
 
 ## For Contributors
 

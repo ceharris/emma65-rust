@@ -20,10 +20,10 @@ address-space layout, and read/write/swap semantics. It deliberately does not sp
 
 ## 2. Conceptual model
 
-The device supports 1, 2, 4, or 8 attached 32×32 RGB LED matrices, fixed at configuration time.
-Each matrix occupies 1,024 contiguous bytes of pixel memory, one byte per pixel, in row-major
-order (byte `row * 32 + col`). A pixel byte is an index into a single, shared 256-entry color
-palette — there is no per-matrix palette.
+The device supports 1, 2, 4, or 8 attached 32×32 RGB LED matrices, fixed at configuration time,
+wired together in a physical `arrangement` grid (§2.2) that determines how bus addresses map onto
+them. A pixel byte is an index into a single, shared 256-entry color palette — there is no
+per-matrix palette.
 
 Each palette entry stores a 16-bit RGB565 color (5 bits red, 6 bits green, 5 bits blue), not a
 24-bit RGB triple — this matches the color depth real RGB LED matrix driver hardware actually
@@ -64,6 +64,30 @@ All entries are built directly in RGB565 component space (5-bit red, 6-bit green
 (`round` here rounds to the nearest integer; none of the above divisions land on an exact half, so
 the tie-breaking rule doesn't matter.)
 
+### 2.2 Arrangement-aware pixel addressing
+
+Real matrix panels are daisy-chained into a rectangular grid, and pixel memory is addressed as a
+single, flat, byte-per-pixel raster of that *composed* canvas — not as independent 1,024-byte
+blocks, one per matrix. The `arrangement` config attribute (§3) gives this grid's `columns` and
+`rows`; the matrix count is `columns * rows`, derived rather than separately configured (there is
+no `matrix-count` attribute — a bare count doesn't say how the matrices are wired, and requiring
+both would just invite them to disagree). The composed canvas is `columns * 32` pixels wide by
+`rows * 32` pixels tall, addressed exactly like a real framebuffer: byte `row * width + col`,
+`width = columns * 32`.
+
+Matrix *n* is placed row-major over the arrangement grid — `matrix_row = n / columns`,
+`matrix_col = n % columns` — occupying the composed canvas's `32x32` sub-rectangle at pixel
+`(matrix_row * 32, matrix_col * 32)`. With a single-column arrangement (`columns = 1`), every
+matrix's 32 rows are contiguous in the raster, reproducing the original one-matrix-per-1,024-
+contiguous-bytes layout exactly. Any wider arrangement interleaves matrices' rows in bus address
+order instead: for example, in a `2x1` arrangement (two matrices side by side), matrix 1's row 0
+begins at byte 32, not byte 1,024, because it is the second half of the composed canvas's first
+64-byte row rather than a separate contiguous block.
+
+This addressing only changes which bus address maps to a given matrix's given pixel — it does not
+change per-matrix dirty tracking, swap semantics (§5), or the external protocol (§7), all of which
+still operate in terms of one matrix's 1,024 palette-index bytes gathered from the composed raster.
+
 Like `CharDisplay`, the device is always double-buffered: there is no single-buffered mode,
 since single-buffering would reintroduce the bandwidth problem this redesign exists to solve.
 The CPU-addressable pixel memory has a single, fixed identity for the life of the device — the
@@ -84,23 +108,25 @@ Unlike `CharDisplay`, this device has:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `matrices` | integer | — (required) | Must be 1, 2, 4, or 8 |
 | `base_address` | integer | — | Where the device's memory-mapped region begins on the bus |
+| `arrangement` | `COLSxROWS` string | — (required) | Physical daisy-chain layout (§2.2); no separate matrix-count field exists, since one alone doesn't say how the matrices are wired |
 | `frame_rate_hz` | integer | mirrors `CharDisplay`'s default | Drives the auto-refresh cadence (§6) |
 | `transport` | transport spec | — | A single point-to-point `pipe:` transport to a spawned companion process, mirroring `CharDisplay`'s external-protocol transport requirements (`doc/char-display-external-protocol.md` §2) rather than the current `LedMatrix`'s multipoint tagged transport |
 
 Derived, not separately configurable:
 
+- `matrices = columns * rows` (from `arrangement`).
 - `pixel_bytes = matrices * 1024`.
 
 **Validation at configuration time:**
-- `matrices` must be one of `{1, 2, 4, 8}`.
+- `arrangement` must parse as `COLSxROWS` with both parts at least 1, and the derived matrix count
+  (`columns * rows`) must be one of `{1, 2, 4, 8}`.
 
 ## 4. Bus-addressable memory map
 
 | Region | Offset | Size | Access | Notes |
 |---|---|---|---|---|
-| Pixel memory | `0x0000` | `pixel_bytes` | R/W | Matrix *n* occupies `[n * 1024, n * 1024 + 1023]`; palette index per pixel, row-major |
+| Pixel memory | `0x0000` | `pixel_bytes` | R/W | One flat, arrangement-addressed raster of the composed canvas (§2.2); palette index per pixel |
 | Command register | `pixel_bytes` | 1 byte | W | Selects/arms an operation (§4.2) |
 | Data register | `pixel_bytes + 1` | 1 byte | R/W | Argument byte(s) for the armed operation (§4.3) |
 
@@ -109,8 +135,8 @@ Total mapped size is `pixel_bytes + 2`, scaling with the configured `matrices` c
 
 ### 4.1 Pixel memory and dirty tracking
 
-Every write to an address within a given matrix's 1,024-byte range marks that matrix **dirty**,
-regardless of whether the written value differs from what was already there — no value
+Every write to an address that maps (§2.2) onto a given matrix's pixels marks that matrix
+**dirty**, regardless of whether the written value differs from what was already there — no value
 comparison is performed. Each matrix's dirty flag defaults to `true` at construction and after
 `reset()`, so a matrix a program never touches still gets one initial swap+send rather than never
 reaching the peripheral at all.

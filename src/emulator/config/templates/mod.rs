@@ -6,7 +6,7 @@
 //! files change.
 pub(super) mod asset;
 mod ehbasic;
-mod matrix;
+mod rain;
 mod msbasic;
 mod snake;
 mod taliforth;
@@ -60,10 +60,10 @@ pub static TEMPLATES: &[Template] = &[
         materialize_fn: ehbasic::materialize_config,
     },
     Template {
-        id: "matrix",
+        id: "rain",
         name: "Digital Rain",
         description: "Digital Rain demo using memory-mapped display and LFSR",
-        materialize_fn: matrix::materialize_config,
+        materialize_fn: rain::materialize_config,
     },
     Template {
         id: "snake",
