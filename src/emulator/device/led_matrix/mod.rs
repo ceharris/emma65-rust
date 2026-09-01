@@ -10,7 +10,7 @@
 //!
 //! | Region           | Range                            | Size          | Access | Notes         |
 //! |------------------|-----------------------------------|---------------|--------|---------------|
-//! | Pixel memory     | `[address, address + pixel_bytes - 1]` (`pixel_bytes = matrices * 1024`) | `pixel_bytes` | R/W | Matrix *n* at `[n*1024, n*1024+1023]` relative to `address`, palette index per pixel, row-major |
+//! | Pixel memory     | `[address, address + pixel_bytes - 1]` (`pixel_bytes = matrices * 1024`) | `pixel_bytes` | R/W | One flat, arrangement-addressed raster of the composed canvas (see below), palette index per pixel |
 //! | Command register | `register-address`                | 1             | W      | Selects/arms an operation (spec §4.2). Always reads `0` |
 //! | Data register    | `register-address + 1`            | 1             | R/W    | Argument byte(s) for the armed operation (spec §4.3)    |
 //!
@@ -30,6 +30,18 @@
 //! Palette entries are stored as [`compositing::Rgb565`], not full RGB24 -- `CMD_PALETTE_WRITE`/
 //! `CMD_PALETTE_READ` still exchange 8-bit-per-channel bytes with the CPU, masked down on write
 //! and scaled back up on read (spec §4.2.1).
+//!
+//! **Arrangement-aware pixel addressing**: pixel memory is one flat, byte-per-pixel raster of the
+//! *composed* canvas -- `arrangement-columns * 32` pixels wide by `(matrices / arrangement-
+//! columns) * 32` pixels tall -- addressed exactly like a real framebuffer: byte `row * width +
+//! col`. Matrix *n* (row-major over the arrangement grid: `n = matrix_row * arrangement_columns +
+//! matrix_col`) occupies the `32x32` sub-rectangle at `(matrix_row * 32, matrix_col * 32)`. With
+//! the default single-column arrangement (`arrangement` omitted, `arrangement-columns == 1`) the
+//! composed canvas is exactly `32` pixels wide and matrices stack top to bottom, reproducing the
+//! original one-matrix-per-1024-contiguous-bytes layout exactly; any wider arrangement interleaves
+//! matrices' rows in bus address order instead of concatenating whole matrices, since a real
+//! daisy-chained panel's rows are wired that way. See
+//! `doc/memory-mapped-led-matrix-device-spec.md` §2.2.
 
 pub mod compositing;
 mod protocol;
@@ -102,6 +114,9 @@ pub struct LedMatrix {
     /// configured `register-address` -- disjoint from `pixel_range` (design doc §2).
     register_range: AddressRange,
     matrices: u32,
+    /// Matrices per row of the arrangement grid (design doc §2.2). `matrices / cols` gives the
+    /// grid's row count; the config module validates `cols` evenly divides `matrices`.
+    cols: u32,
     pixel_bytes: usize,
 
     /// CPU-addressable pixel memory. Fixed identity for the device's lifetime -- the CPU always
@@ -169,16 +184,24 @@ impl LedMatrix {
     ///
     /// `palette` is the initial 256-entry color palette (spec §2.1); it remains mutable at
     /// runtime via `CMD_PALETTE_WRITE`.
+    ///
+    /// `cols` is the arrangement grid's column count (design doc §2.2); it must evenly divide
+    /// `matrices` -- the config module is responsible for validating this and for defaulting it
+    /// to `1` (a single column) when no `arrangement` attribute is configured.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &'static str,
         pixel_range: AddressRange,
         register_range: AddressRange,
         matrices: u32,
+        cols: u32,
         clock_hz: Option<u64>,
         frame_rate_hz: u32,
         palette: Vec<Rgb565>,
     ) -> Self {
         debug_assert!((1..=8).contains(&matrices), "matrices must be 1..=8 (validated by the config module)");
+        debug_assert!(cols >= 1 && matrices.is_multiple_of(cols),
+            "cols must evenly divide matrices (validated by the config module)");
         debug_assert_eq!(palette.len(), PALETTE_LEN, "palette must have exactly PALETTE_LEN entries");
         let pixel_bytes = matrices as usize * PIXELS_PER_MATRIX;
         let effective_clock_hz = clock_hz.unwrap_or(super::display::NOMINAL_CLOCK_HZ);
@@ -189,6 +212,7 @@ impl LedMatrix {
             pixel_range,
             register_range,
             matrices,
+            cols,
             pixel_bytes,
             pixels: vec![0; pixel_bytes],
             scanout: vec![0; pixel_bytes],
@@ -239,11 +263,52 @@ impl LedMatrix {
     }
 
     /// Returns matrix `index`'s current scanout buffer (spec §5.1): the 1,024 palette-index bytes
-    /// last copied from CPU-addressable pixel memory by a swap, used by a later work unit's
-    /// compositing and by this unit's tests.
-    pub fn frame_source(&self, index: u32) -> &[u8] {
-        let start = index as usize * PIXELS_PER_MATRIX;
-        &self.scanout[start..start + PIXELS_PER_MATRIX]
+    /// last copied from CPU-addressable pixel memory by a swap, gathered from the composed raster
+    /// into a contiguous, row-major buffer for compositing and for this unit's tests. Unlike
+    /// before arrangement-aware addressing, this can no longer be a plain slice of `scanout` --
+    /// with more than one column in the arrangement, a matrix's rows are not contiguous in the
+    /// underlying raster.
+    pub fn frame_source(&self, index: u32) -> Vec<u8> {
+        self.gather_matrix_block(&self.scanout, index)
+    }
+
+    /// The composed canvas's width in pixels/bytes (design doc §2.2): `cols` matrices side by
+    /// side, each contributing 32 columns.
+    fn total_width(&self) -> usize {
+        self.cols as usize * 32
+    }
+
+    /// Returns the raster byte range covering local row `local_row` (`0..32`) of matrix `index`,
+    /// within a `pixel_bytes`-long buffer laid out like `pixels`/`scanout` (design doc §2.2).
+    fn matrix_row_range(&self, index: u32, local_row: usize) -> std::ops::Range<usize> {
+        let width = self.total_width();
+        let matrix_row = index as usize / self.cols as usize;
+        let matrix_col = index as usize % self.cols as usize;
+        let start = (matrix_row * 32 + local_row) * width + matrix_col * 32;
+        start..start + 32
+    }
+
+    /// Gathers matrix `index`'s 32x32 block out of a composed-canvas raster buffer (`pixels` or
+    /// `scanout`) into a contiguous, row-major 1,024-byte buffer (design doc §2.2) -- the shape
+    /// [`compositing::composite_matrix`], `protocol::encode_block`, and [`Self::frame_source`]
+    /// all expect.
+    fn gather_matrix_block(&self, buffer: &[u8], index: u32) -> Vec<u8> {
+        let mut block = Vec::with_capacity(PIXELS_PER_MATRIX);
+        for local_row in 0..32 {
+            block.extend_from_slice(&buffer[self.matrix_row_range(index, local_row)]);
+        }
+        block
+    }
+
+    /// Returns the index (row-major over the arrangement grid, design doc §2.2) of the matrix
+    /// that owns raster byte `offset` within a `pixel_bytes`-long buffer laid out like `pixels`.
+    fn matrix_index_for_offset(&self, offset: usize) -> u32 {
+        let width = self.total_width();
+        let grow = offset / width;
+        let gcol = offset % width;
+        let matrix_row = grow / 32;
+        let matrix_col = gcol / 32;
+        (matrix_row * self.cols as usize + matrix_col) as u32
     }
 
     /// Installs a log sender for diagnostic messages (e.g. `reset()`).
@@ -251,32 +316,36 @@ impl LedMatrix {
         self.log_sender = sender;
     }
 
-    /// Marks matrix `offset / PIXELS_PER_MATRIX` dirty and stores `value` in CPU-addressable
+    /// Marks the owning matrix (design doc §2.2) dirty and stores `value` in CPU-addressable
     /// pixel memory (spec §4.1): every write marks the matrix dirty, regardless of whether the
     /// value differs from what was already there.
     fn write_pixel(&mut self, offset: usize, value: u8) {
         self.pixels[offset] = value;
-        let matrix_index = offset / PIXELS_PER_MATRIX;
+        let matrix_index = self.matrix_index_for_offset(offset);
         self.dirty |= 1 << matrix_index;
     }
 
-    /// Copies matrix `index`'s CPU-addressable buffer into its scanout buffer and clears its
-    /// dirty flag (spec §5.1, §5.2), unconditionally -- callers decide whether dirty state gates
-    /// the swap (`CMD_SWAP` does not; auto-refresh does).
+    /// Copies matrix `index`'s CPU-addressable rows into its scanout buffer and clears its dirty
+    /// flag (spec §5.1, §5.2), unconditionally -- callers decide whether dirty state gates the
+    /// swap (`CMD_SWAP` does not; auto-refresh does). Copies row by row (design doc §2.2) since a
+    /// matrix's rows are not necessarily contiguous in the composed-canvas raster.
     fn swap_matrix(&mut self, index: u32) {
-        let start = index as usize * PIXELS_PER_MATRIX;
-        let end = start + PIXELS_PER_MATRIX;
-        self.scanout[start..end].copy_from_slice(&self.pixels[start..end]);
-        self.dirty &= !(1 << index);
-        if let Some(sink) = &self.frame_sink {
-            let power_on = self.power_mask & (1 << index) != 0;
-            let pixels =
-                compositing::composite_matrix(&self.scanout[start..end], &self.palette, power_on, self.brightness);
-            let _ = sink.try_send(LedMatrixFrame { matrix_index: index as u8, pixels });
+        for local_row in 0..32 {
+            let range = self.matrix_row_range(index, local_row);
+            self.scanout[range.clone()].copy_from_slice(&self.pixels[range]);
         }
-        if let Some(transport) = self.external_transport.as_mut() {
-            let block = protocol::encode_block(index as u8, &self.scanout[start..end]);
-            transport.send_bytes(&block);
+        self.dirty &= !(1 << index);
+        if self.frame_sink.is_some() || self.external_transport.is_some() {
+            let block = self.gather_matrix_block(&self.scanout, index);
+            if let Some(sink) = &self.frame_sink {
+                let power_on = self.power_mask & (1 << index) != 0;
+                let pixels = compositing::composite_matrix(&block, &self.palette, power_on, self.brightness);
+                let _ = sink.try_send(LedMatrixFrame { matrix_index: index as u8, pixels });
+            }
+            if let Some(transport) = self.external_transport.as_mut() {
+                let message = protocol::encode_block(index as u8, &block);
+                transport.send_bytes(&message);
+            }
         }
     }
 
@@ -496,7 +565,16 @@ mod tests {
     }
 
     fn device(matrices: u32) -> LedMatrix {
-        LedMatrix::new(DEVICE_NAME, pixel_range(matrices), register_range(), matrices, Some(1_000_000), 100, test_palette())
+        // A single column (matrices stacked vertically) reproduces the original
+        // one-matrix-per-1024-contiguous-bytes layout exactly -- see `device_with_arrangement`'s
+        // doc comment and the config module's default.
+        device_with_arrangement(matrices, 1)
+    }
+
+    /// Builds a device with an explicit arrangement column count, for tests exercising
+    /// arrangement-aware addressing (design doc §2.2).
+    fn device_with_arrangement(matrices: u32, cols: u32) -> LedMatrix {
+        LedMatrix::new(DEVICE_NAME, pixel_range(matrices), register_range(), matrices, cols, Some(1_000_000), 100, test_palette())
     }
 
     fn pixel_addr(offset: u16) -> u16 {
@@ -529,6 +607,71 @@ mod tests {
         assert_eq!(device.read(pixel_addr(PIXELS_PER_MATRIX as u16 - 1)), 0x42);
         assert_eq!(device.read(pixel_addr(2 * PIXELS_PER_MATRIX as u16 - 1)), 0x43);
         assert_eq!(device.peek(pixel_addr(0)), 0x41);
+    }
+
+    #[test]
+    fn wide_arrangement_addresses_second_matrix_at_its_column_offset() {
+        // 2x1: a 64x32 composed canvas. Matrix 1 sits at columns 32-63, row 0, so its local (0,0)
+        // is raster offset 0*64 + 32 = 32 -- not 1024, the old one-matrix-per-1024-bytes offset.
+        let mut device = device_with_arrangement(2, 2);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b11); // clear the construction-time dirty default
+
+        device.write(pixel_addr(32), 0x41);
+
+        assert_eq!(device.dirty, 0b10, "offset 32 must belong to matrix 1, not matrix 0");
+        assert_eq!(device.read(pixel_addr(32)), 0x41);
+    }
+
+    #[test]
+    fn tall_arrangement_addresses_second_matrix_at_its_row_offset() {
+        // 1x2: a 32x64 composed canvas. Matrix 1 sits at rows 32-63, column 0, so its local (0,0)
+        // is raster offset 32*32 + 0 = 1024, same as the old layout's second-matrix offset --
+        // this arrangement happens to coincide with simple concatenation.
+        let mut device = device_with_arrangement(2, 1);
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b11);
+
+        device.write(pixel_addr(PIXELS_PER_MATRIX as u16), 0x41);
+
+        assert_eq!(device.dirty, 0b10, "offset 1024 must belong to matrix 1");
+        assert_eq!(device.read(pixel_addr(PIXELS_PER_MATRIX as u16)), 0x41);
+    }
+
+    #[test]
+    fn swap_gathers_each_matrix_correctly_in_a_multi_column_arrangement() {
+        // 2x2: four matrices in a 64x64 composed canvas. Each matrix's rows are interleaved with
+        // its row-mates' in the raster, so this exercises the strided gather in `swap_matrix`/
+        // `frame_source` rather than a contiguous-slice copy.
+        let mut device = device_with_arrangement(4, 2);
+        let width = 64usize;
+        for (matrix_row, matrix_col, value) in [(0usize, 0usize, 0x11u8), (0, 1, 0x22), (1, 0, 0x33), (1, 1, 0x44)] {
+            let offset = (matrix_row * 32) * width + matrix_col * 32; // that matrix's local (0,0)
+            device.write(pixel_addr(offset as u16), value);
+        }
+
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b1111);
+
+        assert_eq!(device.frame_source(0)[0], 0x11);
+        assert_eq!(device.frame_source(1)[0], 0x22);
+        assert_eq!(device.frame_source(2)[0], 0x33);
+        assert_eq!(device.frame_source(3)[0], 0x44);
+    }
+
+    #[test]
+    fn single_column_arrangement_is_unaffected_default_behavior() {
+        // The default (a single column, matrices stacked vertically) must reproduce the original
+        // one-matrix-per-1024-contiguous-bytes layout exactly.
+        let mut device = device(2);
+        device.write(pixel_addr(0), 0x41);
+        device.write(pixel_addr(PIXELS_PER_MATRIX as u16), 0x55);
+
+        device.write(command_addr(), CMD_SWAP);
+        device.write(data_addr(), 0b11);
+
+        assert_eq!(device.frame_source(0)[0], 0x41);
+        assert_eq!(device.frame_source(1)[0], 0x55);
     }
 
     #[test]
@@ -724,7 +867,7 @@ mod tests {
 
     #[test]
     fn nominal_clock_used_when_clock_hz_unavailable() {
-        let mut device = LedMatrix::new(DEVICE_NAME, pixel_range(1), register_range(), 1, None, super::super::display::DEFAULT_FRAME_RATE_HZ, test_palette());
+        let mut device = LedMatrix::new(DEVICE_NAME, pixel_range(1), register_range(), 1, 1, None, super::super::display::DEFAULT_FRAME_RATE_HZ, test_palette());
         let cycles_per_frame = super::super::display::NOMINAL_CLOCK_HZ / super::super::display::DEFAULT_FRAME_RATE_HZ as u64;
         device.write(pixel_addr(0), 0x41);
         device.tick(cycles_per_frame as u32 - 1);
