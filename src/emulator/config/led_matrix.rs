@@ -45,9 +45,11 @@ struct LedMatrixAttributes {
     transport: Option<TransportSpecFormat>,
 }
 
-/// Parses `arrangement`'s `COLSxROWS` syntax into `(columns, rows)`, mirroring `led-matrix/src/
-/// main.rs`'s identically-shaped `parse_arrangement` for the companion binary's `--arrangement`
-/// flag -- kept separate since that one only affects on-screen layout, not bus addressing.
+/// Parses `arrangement`'s `COLSxROWS` syntax into `(columns, rows)`. This is the single source of
+/// truth for both bus addressing (design doc §2.2) and on-screen layout: the resulting `columns`
+/// flows to the debugger via `LedMatrixGeometry::columns` and to the external companion binary via
+/// the wire protocol header's `columns` field (`doc/led-matrix-external-protocol.md` §4), so
+/// neither host has its own independent arrangement to configure.
 fn parse_arrangement(spec: &str) -> Result<(u32, u32), String> {
     let (cols_str, rows_str) = spec.split_once('x')
         .ok_or_else(|| format!("display/matrix: arrangement must be COLSxROWS, got {spec:?}"))?;
@@ -131,7 +133,7 @@ impl DeviceModule for LedMatrixModule {
         // `display_geometry_sink` are: present only when a host (the debugger) wants to receive
         // this device's output, absent (a no-op here) for the plain `emma65` CLI.
         if let Some(slot) = &context.led_matrix_geometry_sink {
-            *slot.lock().unwrap() = Some(LedMatrixGeometry { matrices: matrix_count });
+            *slot.lock().unwrap() = Some(LedMatrixGeometry { matrices: matrix_count, columns: cols });
         }
         if let Some(slot) = &context.led_matrix_frame_sink
             && let Some(sender) = slot.lock().unwrap().take()

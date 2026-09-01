@@ -17,8 +17,10 @@ use super::compositing::Rgb565;
 /// Magic bytes identifying this protocol (spec §4) -- distinct from the CPU trace format's
 /// `"E65T"` and `CharDisplay`'s `"E65D"`.
 const MAGIC: [u8; 4] = *b"E65M";
-/// Protocol version (spec §4), incremented on any wire-incompatible change.
-const VERSION: u8 = 1;
+/// Protocol version (spec §4), incremented on any wire-incompatible change. Bumped to 2 when the
+/// header grew a `columns` field (arrangement-coupling follow-up), replacing the peripheral's own
+/// `--arrangement` flag with the device's actual configured arrangement.
+const VERSION: u8 = 2;
 
 /// Tag identifying a block message (spec §5.1).
 pub const MSG_BLOCK: u8 = 1;
@@ -30,12 +32,16 @@ pub const MSG_POWER: u8 = 3;
 pub const MSG_BRIGHTNESS: u8 = 4;
 
 /// Builds the one-time header sent immediately on attach (spec §4): magic, version, matrix
-/// count, then the auto-refresh cadence.
-pub fn encode_header(matrix_count: u8, frame_rate_hz: u32) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(4 + 1 + 1 + 4);
+/// count, arrangement column count, then the auto-refresh cadence. `columns` is the device's own
+/// configured arrangement (design doc §2.2) -- the peripheral derives row count as
+/// `matrix_count / columns`, which always divides evenly since the config module validates that
+/// invariant at instantiation time.
+pub fn encode_header(matrix_count: u8, columns: u8, frame_rate_hz: u32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4 + 1 + 1 + 1 + 4);
     buf.extend_from_slice(&MAGIC);
     buf.push(VERSION);
     buf.push(matrix_count);
+    buf.push(columns);
     buf.extend_from_slice(&frame_rate_hz.to_le_bytes());
     buf
 }
@@ -79,13 +85,14 @@ mod tests {
 
     #[test]
     fn header_layout_matches_spec() {
-        let header = encode_header(4, 100);
+        let header = encode_header(4, 2, 100);
 
         assert_eq!(&header[0..4], b"E65M");
-        assert_eq!(header[4], 1); // version
+        assert_eq!(header[4], 2); // version
         assert_eq!(header[5], 4); // matrix_count
-        assert_eq!(&header[6..10], &100u32.to_le_bytes());
-        assert_eq!(header.len(), 10);
+        assert_eq!(header[6], 2); // columns
+        assert_eq!(&header[7..11], &100u32.to_le_bytes());
+        assert_eq!(header.len(), 11);
     }
 
     #[test]

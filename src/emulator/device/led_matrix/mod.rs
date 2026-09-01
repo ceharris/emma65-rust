@@ -253,7 +253,7 @@ impl LedMatrix {
     /// the header now, then a block message per matrix swap and a palette message per actual
     /// `CMD_PALETTE_WRITE` (see [`Self::swap_matrix`], [`Self::apply_command`]).
     pub fn attach_external_transport(&mut self, mut transport: Box<dyn Transport>) {
-        let header = protocol::encode_header(self.matrices as u8, self.frame_rate_hz);
+        let header = protocol::encode_header(self.matrices as u8, self.cols as u8, self.frame_rate_hz);
         transport.send_bytes(&header);
         self.external_transport = Some(transport);
     }
@@ -1130,10 +1130,11 @@ mod tests {
         let bytes = collect_bytes(&mut remote);
 
         assert_eq!(&bytes[0..4], b"E65M");
-        assert_eq!(bytes[4], 1); // version
+        assert_eq!(bytes[4], 2); // version
         assert_eq!(bytes[5], 4); // matrix_count
-        assert_eq!(&bytes[6..10], &100u32.to_le_bytes()); // frame_rate_hz from device()
-        assert_eq!(bytes.len(), 10);
+        assert_eq!(bytes[6], 1); // columns, from device()'s single-column arrangement
+        assert_eq!(&bytes[7..11], &100u32.to_le_bytes()); // frame_rate_hz from device()
+        assert_eq!(bytes.len(), 11);
     }
 
     #[test]

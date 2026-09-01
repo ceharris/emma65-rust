@@ -25,18 +25,21 @@ pub const LED_MATRIX_DETACHED_WINDOW_LABEL: &str = "led-matrix-detached";
 /// Matrix detached). Mirrors `display::DisplayTargetWindow` exactly.
 pub struct LedMatrixTargetWindow(pub Mutex<String>);
 
-/// An LED matrix device's fixed geometry, in the shape the frontend needs to size its N
-/// canvases — see `emma65::emulator::LedMatrixGeometry`, which this mirrors field-for-field (this
-/// crate defines its own `#[derive(Serialize)]` payload types for Tauri commands rather than
-/// deriving `Serialize` on library types directly, matching `display::DisplayGeometryPayload`).
+/// An LED matrix device's fixed geometry, in the shape the frontend needs to size and lay out its
+/// N canvases — see `emma65::emulator::LedMatrixGeometry`, which this mirrors field-for-field
+/// (this crate defines its own `#[derive(Serialize)]` payload types for Tauri commands rather
+/// than deriving `Serialize` on library types directly, matching `display::DisplayGeometryPayload`).
+/// `columns` is the device's own configured arrangement (arrangement-coupling follow-up): the
+/// panel always mirrors it rather than offering an independent arrangement menu.
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct LedMatrixGeometryPayload {
     pub matrices: u32,
+    pub columns: u32,
 }
 
 impl From<LedMatrixGeometry> for LedMatrixGeometryPayload {
     fn from(geometry: LedMatrixGeometry) -> Self {
-        Self { matrices: geometry.matrices }
+        Self { matrices: geometry.matrices, columns: geometry.columns }
     }
 }
 

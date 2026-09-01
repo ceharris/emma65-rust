@@ -13,7 +13,8 @@
 //! in-process `LedMatrixPanel` uses — no rendering logic is duplicated here. Unlike
 //! `CharDisplay`'s peripheral, there is no keyboard forwarding (the LED matrix has no input
 //! capability) and no in-app arrangement menu (SDL2 has no context-menu widget) — the physical
-//! layout is fixed for the process's lifetime via `--arrangement`.
+//! layout comes from the header's `columns` field (§4), mirroring the device's own configured
+//! arrangement rather than an independently-chosen value.
 //!
 //! The main loop redraws unconditionally at a fixed ~30Hz cadence rather than only when a new
 //! message arrives: unlike `CharDisplay`'s continuous per-vsync pushes, `LedMatrix` messages are
@@ -76,13 +77,6 @@ fn gfx_color(color: Color) -> u32 {
 #[derive(Parser)]
 #[command(about = "SDL2 external peripheral for emma65's memory-mapped LED matrix display")]
 struct Args {
-    /// Physical arrangement of the configured matrices as COLSxROWS (e.g. "2x4"). Must be a
-    /// divisor pair of the matrix count reported by the device's header. Defaults to a single
-    /// row (all matrices side by side), matching `LedMatrixPanel.tsx`'s pre-arrangement-menu
-    /// behavior.
-    #[arg(long)]
-    arrangement: Option<String>,
-
     /// Initial on-screen LED center-to-center spacing, in pixels. The window remains resizable
     /// afterward; SDL2 letterboxes/scales its fixed logical size to fit.
     #[arg(long, default_value_t = 12)]
@@ -90,45 +84,20 @@ struct Args {
 }
 
 /// A physical layout of matrices into a grid, `matrix_index` placed row-major (index `i` at
-/// `(i % columns, i / columns)`) — matches `ledMatrixArrangement.ts`'s `LedMatrixArrangement`.
+/// `(i % columns, i / columns)`) — mirrors the device's own configured arrangement, threaded
+/// through the header's `columns` field (spec §4) rather than chosen independently by this
+/// binary.
 #[derive(Clone, Copy)]
 struct Arrangement {
     columns: u32,
     rows: u32,
 }
 
-/// Parses `--arrangement`'s `COLSxROWS` syntax.
-fn parse_arrangement(spec: &str) -> Result<Arrangement, String> {
-    let (cols, rows) = spec.split_once('x').ok_or_else(|| format!("arrangement must be COLSxROWS, got {spec:?}"))?;
-    let columns: u32 = cols.parse().map_err(|_| format!("invalid column count in {spec:?}"))?;
-    let rows: u32 = rows.parse().map_err(|_| format!("invalid row count in {spec:?}"))?;
-    if columns == 0 || rows == 0 {
-        return Err(format!("arrangement columns and rows must both be at least 1, got {spec:?}"));
-    }
-    Ok(Arrangement { columns, rows })
-}
-
-/// Resolves `--arrangement` against the header's `matrix_count`, defaulting to a single row and
-/// exiting the process on an invalid or non-matching arrangement — mirrors
-/// `ledMatrixArrangement.ts`'s `isValidArrangement`/`defaultArrangement` divisor-pair check.
-fn resolve_arrangement(args: &Args, matrix_count: u32) -> Arrangement {
-    match &args.arrangement {
-        Some(spec) => {
-            let arrangement = parse_arrangement(spec).unwrap_or_else(|e| {
-                eprintln!("emma65-led-matrix: {e}");
-                std::process::exit(1);
-            });
-            if arrangement.columns * arrangement.rows != matrix_count {
-                eprintln!(
-                    "emma65-led-matrix: arrangement {}x{} doesn't match {matrix_count} configured matrices",
-                    arrangement.columns, arrangement.rows
-                );
-                std::process::exit(1);
-            }
-            arrangement
-        }
-        None => Arrangement { columns: matrix_count, rows: 1 },
-    }
+/// Derives the on-screen arrangement from the header's `matrix_count`/`columns` fields — row
+/// count is `matrix_count / columns`, which always divides evenly since the device's config
+/// module validates that invariant before ever sending a header.
+fn arrangement_from_header(header: &Header) -> Arrangement {
+    Arrangement { columns: header.columns as u32, rows: header.matrix_count as u32 / header.columns as u32 }
 }
 
 /// Reads into `buf` until it is full, `Ok(false)` on a clean EOF with nothing read yet, or an
@@ -292,12 +261,12 @@ fn main() {
         }
     };
 
-    eprintln!(
-        "emma65-led-matrix: connected, {} matrices @ {} Hz",
-        header.matrix_count, header.frame_rate_hz
-    );
+    let arrangement = arrangement_from_header(&header);
 
-    let arrangement = resolve_arrangement(&args, header.matrix_count as u32);
+    eprintln!(
+        "emma65-led-matrix: connected, {} matrices @ {} Hz, arrangement {}x{}",
+        header.matrix_count, header.frame_rate_hz, arrangement.columns, arrangement.rows
+    );
     let mut matrices = vec![[0u8; PIXELS_PER_MATRIX]; header.matrix_count as usize];
     let mut palette = default_palette();
     let mut power_mask: u8 = 0xFF;

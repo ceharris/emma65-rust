@@ -15,7 +15,7 @@ use emma65::emulator::device::led_matrix::PIXELS_PER_MATRIX;
 use emma65::emulator::device::led_matrix::compositing::Rgb565;
 
 const MAGIC: [u8; 4] = *b"E65M";
-const SUPPORTED_VERSION: u8 = 1;
+const SUPPORTED_VERSION: u8 = 2;
 
 /// Tag identifying a block message (spec §5.1).
 pub const MSG_BLOCK: u8 = 1;
@@ -26,8 +26,9 @@ pub const MSG_POWER: u8 = 3;
 /// Tag identifying a brightness message (spec §5.4).
 pub const MSG_BRIGHTNESS: u8 = 4;
 
-/// Fixed size of the one-time header (spec §4): magic + version + matrix_count + frame_rate_hz.
-pub const HEADER_LEN: usize = 4 + 1 + 1 + 4;
+/// Fixed size of the one-time header (spec §4): magic + version + matrix_count + columns +
+/// frame_rate_hz.
+pub const HEADER_LEN: usize = 4 + 1 + 1 + 1 + 4;
 
 /// Size of a block message's body, *after* the already-consumed tag byte (spec §5.1):
 /// matrix_index + raw pixels.
@@ -46,10 +47,14 @@ const BRIGHTNESS_BODY_LEN: usize = 1;
 
 /// The one-time header, decoded (spec §4). No palette or per-matrix dimensions — both sides
 /// already know matrix dimensions are a fixed 32x32 constant, and the palette is never
-/// transferred at connection time (spec §7).
+/// transferred at connection time (spec §7). `columns` is the device's own configured
+/// arrangement (design doc §2.2) — added in protocol version 2 to replace this binary's former
+/// `--arrangement` flag, since the peripheral's on-screen layout must match the device's actual
+/// bus-addressing arrangement rather than an independently-chosen value.
 #[derive(Debug)]
 pub struct Header {
     pub matrix_count: u8,
+    pub columns: u8,
     pub frame_rate_hz: u32,
 }
 
@@ -68,8 +73,9 @@ pub fn decode_header(bytes: &[u8]) -> Result<Header, String> {
         return Err(format!("unsupported protocol version {version}, expected {SUPPORTED_VERSION}"));
     }
     let matrix_count = bytes[5];
-    let frame_rate_hz = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
-    Ok(Header { matrix_count, frame_rate_hz })
+    let columns = bytes[6];
+    let frame_rate_hz = u32::from_le_bytes(bytes[7..11].try_into().unwrap());
+    Ok(Header { matrix_count, columns, frame_rate_hz })
 }
 
 /// A decoded post-header message (spec §5).
@@ -138,31 +144,33 @@ pub fn decode_message(tag: u8, body: &[u8]) -> Result<Message, String> {
 mod tests {
     use super::*;
 
-    fn sample_header_bytes(matrix_count: u8, frame_rate_hz: u32) -> Vec<u8> {
+    fn sample_header_bytes(matrix_count: u8, columns: u8, frame_rate_hz: u32) -> Vec<u8> {
         let mut buf = Vec::with_capacity(HEADER_LEN);
         buf.extend_from_slice(&MAGIC);
         buf.push(SUPPORTED_VERSION);
         buf.push(matrix_count);
+        buf.push(columns);
         buf.extend_from_slice(&frame_rate_hz.to_le_bytes());
         buf
     }
 
     #[test]
     fn decode_header_round_trips_fields() {
-        let header = decode_header(&sample_header_bytes(4, 100)).unwrap();
+        let header = decode_header(&sample_header_bytes(4, 2, 100)).unwrap();
         assert_eq!(header.matrix_count, 4);
+        assert_eq!(header.columns, 2);
         assert_eq!(header.frame_rate_hz, 100);
     }
 
     #[test]
     fn decode_header_rejects_wrong_length() {
-        let err = decode_header(&sample_header_bytes(4, 100)[..HEADER_LEN - 1]).unwrap_err();
+        let err = decode_header(&sample_header_bytes(4, 2, 100)[..HEADER_LEN - 1]).unwrap_err();
         assert!(err.contains("exactly"));
     }
 
     #[test]
     fn decode_header_rejects_bad_magic() {
-        let mut bytes = sample_header_bytes(4, 100);
+        let mut bytes = sample_header_bytes(4, 2, 100);
         bytes[0] = b'X';
         let err = decode_header(&bytes).unwrap_err();
         assert!(err.contains("magic"));
@@ -170,7 +178,7 @@ mod tests {
 
     #[test]
     fn decode_header_rejects_unsupported_version() {
-        let mut bytes = sample_header_bytes(4, 100);
+        let mut bytes = sample_header_bytes(4, 2, 100);
         bytes[4] = 99;
         let err = decode_header(&bytes).unwrap_err();
         assert!(err.contains("version"));
