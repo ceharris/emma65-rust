@@ -5,8 +5,7 @@ composited output when running the plain `emma65` CLI standalone (the
 debugger doesn't need it — its own Display panel renders in-process). It's
 not run directly against a live emulator process; instead, the emulator
 spawns it as a child and streams frame data to it over the pipe transport's
-stdin, per the wire protocol in `plan/char-display-external-protocol.md` in
-the repository.
+stdin, per the [Character Display External Protocol](appendix-display-protocol.md).
 
 Building it requires SDL2 development headers (`libsdl2-dev` on
 Debian/Ubuntu, `sdl2` on Homebrew), the same way building the debugger

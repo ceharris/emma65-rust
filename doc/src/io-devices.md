@@ -51,7 +51,8 @@ Adapter (VIA):
 - Full IFR/IER interrupt flag and enable registers with independent masking
   per source
 
-The VIA uses a GPIO communication protocol over any attached
+The VIA uses a GPIO communication protocol (see the
+[VIA Peer Protocol](appendix-via-protocol.md) appendix) over any attached
 [`Transport`](#transport-options) to exchange port state and control signal
 transitions with real or emulated peripherals. On connection the VIA sends a
 full state dump so the peripheral starts with an accurate picture of all
@@ -68,7 +69,8 @@ Module (PTM).
 - Connects to a virtual peripheral over any [Transport](#transport-options)
 - Support for external gate and clock inputs and timer output
 
-The PTM uses a communication protocol over any attached
+The PTM uses a communication protocol (see the
+[PTM Peer Protocol](appendix-ptm-protocol.md) appendix) over any attached
 [`Transport`](#transport-options) to exchange port state and control signal
 transitions with real or emulated peripherals. On connection, the PTM sends
 a full state dump so the peripheral starts with an accurate picture of all
@@ -136,8 +138,8 @@ in-process console-style rendering when running the plain `emma65` CLI:
   bundled `emma65-led-matrix` SDL2 peripheral binary (see
   [Running the LED Matrix Peripheral](running-the-led-matrix-peripheral.md)
   below). A block message streams per matrix swap, and a palette message
-  streams per palette write, over a wire protocol specified in
-  `plan/led-matrix-external-protocol.md` in the repository.
+  streams per palette write, over the
+  [LED Matrix External Protocol](appendix-led-matrix-protocol.md).
 
 ```toml
 [[devices]]
@@ -185,8 +187,8 @@ screen. Two ways to view it:
   bundled `emma65-display` SDL2 peripheral binary (see
   [Running the Display Peripheral](running-the-display-peripheral.md) below).
   Composited frame data (char RAM, color RAM, palette, and the font) streams
-  to the peripheral once per vsync over a wire protocol specified in
-  `plan/char-display-external-protocol.md` in the repository.
+  to the peripheral once per vsync over the
+  [Character Display External Protocol](appendix-display-protocol.md).
 
 ```toml
 [[devices]]
@@ -271,4 +273,5 @@ The VIA and MC6840 additionally support framing their transport traffic with
 a structured peer-communication protocol (`protocol = "ascii"` or `"binary"`)
 that exchanges full port/pin state on connection and incremental updates
 thereafter, so a real or emulated peripheral always has an accurate picture
-of the device's signals.
+of the device's signals — see the [VIA Peer Protocol](appendix-via-protocol.md)
+and [PTM Peer Protocol](appendix-ptm-protocol.md) appendices.

@@ -4,8 +4,8 @@
 device's per-matrix composited output when running the plain `emma65` CLI
 standalone (the debugger doesn't need it — its own LED Matrix panel renders
 in-process). Like `emma65-display`, it's spawned by the emulator as a child
-process and streams data to it over the pipe transport's stdin, per the wire
-protocol in `plan/led-matrix-external-protocol.md` in the repository.
+process and streams data to it over the pipe transport's stdin, per the
+[LED Matrix External Protocol](appendix-led-matrix-protocol.md).
 
 Building it requires SDL2 development headers (`libsdl2-dev` on
 Debian/Ubuntu, `sdl2` on Homebrew), the same as `emma65-display`:
