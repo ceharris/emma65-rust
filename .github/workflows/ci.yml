@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       debugger: ${{ steps.filter.outputs.debugger }}
+      display: ${{ steps.filter.outputs.display }}
+      led-matrix: ${{ steps.filter.outputs.led-matrix }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -21,6 +23,10 @@ jobs:
           filters: |
             debugger:
               - 'debugger/**'
+            display:
+              - 'display/**'
+            led-matrix:
+              - 'led-matrix/**'
 
   ci:
     name: Build, Clippy, Test
@@ -32,30 +38,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
+        uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build -p emma65
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy -p emma65 --all-targets -- -D warnings
 
       - name: Test
         run: cargo test -p emma65
@@ -72,24 +61,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-debugger-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-debugger-
+        uses: Swatinem/rust-cache@v2
 
       - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libwebkit2gtk-4.1-dev build-essential libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          version: 1.0
 
       - name: Build
         run: cargo build -p emma65-debugger
@@ -97,3 +75,55 @@ jobs:
       - name: Clippy
         working-directory: debugger/src-tauri
         run: cargo clippy -- -D warnings
+
+  ci-display:
+    name: Display Build and Clippy
+    needs: changes
+    if: needs.changes.outputs.display == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install SDL2 system dependencies
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libsdl2-dev
+          version: 1.0
+
+      - name: Build
+        run: cargo build -p emma65-display
+
+      - name: Clippy
+        run: cargo clippy -p emma65-display --all-targets -- -D warnings
+
+  ci-led-matrix:
+    name: LED Matrix Build and Clippy
+    needs: changes
+    if: needs.changes.outputs.led-matrix == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install SDL2 system dependencies
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libsdl2-dev libsdl2-gfx-dev
+          version: 1.0
+
+      - name: Build
+        run: cargo build -p emma65-led-matrix
+
+      - name: Clippy
+        run: cargo clippy -p emma65-led-matrix --all-targets -- -D warnings

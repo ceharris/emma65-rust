@@ -55,6 +55,8 @@ const BRIGHTNESS_BODY_LEN: usize = 1;
 pub struct Header {
     pub matrix_count: u8,
     pub columns: u8,
+    // Decoded for protocol completeness; not currently consumed by the renderer.
+    #[allow(dead_code)]
     pub frame_rate_hz: u32,
 }
 
