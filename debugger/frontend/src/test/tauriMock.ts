@@ -10,6 +10,9 @@
  * Usage: call `resetTauriMocks()` in a `beforeEach`, then configure
  * `invoke`/`getCurrentWindow`'s return values per test as needed
  * (`invoke.mockResolvedValueOnce(...)`, `getCurrentWindow.mockReturnValue(...)`).
+ * `invoke` resolves to `undefined` by default (matching the real API's
+ * always-a-Promise contract) so fire-and-forget `invoke(...).catch(...)`
+ * call sites don't need per-test stubbing just to avoid throwing.
  * Use `emitMockEvent(event, payload)` to simulate a backend-pushed event
  * reaching whatever handler(s) a test registered via `listen`.
  */
@@ -32,7 +35,7 @@ const {
   nextEventId,
 } = vi.hoisted(() => {
   return {
-    invoke: vi.fn(),
+    invoke: vi.fn().mockResolvedValue(undefined),
     listen: vi.fn((event: string, handler: MockEventHandler) => {
       let handlers = listenersByEvent.get(event);
       if (!handlers) {
@@ -72,6 +75,7 @@ export function emitMockEvent<T>(event: string, payload: T): void {
  */
 export function resetTauriMocks(): void {
   invoke.mockReset();
+  invoke.mockResolvedValue(undefined);
   emitTo.mockClear();
   emitTo.mockResolvedValue(undefined);
   getCurrentWindow.mockClear();
