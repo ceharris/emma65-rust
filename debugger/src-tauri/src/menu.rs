@@ -1,6 +1,7 @@
 //! Native application menu bar: File/Edit/View/Run/Memory/Window/Help.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, State, Wry};
@@ -102,7 +103,34 @@ pub struct WindowMenuState {
 /// Holds the File > Open Recent submenu so its items can be replaced in
 /// place whenever the recent-profiles list changes (see
 /// `recent::record_recent_profile`), without rebuilding the whole app menu.
-pub struct RecentMenuState(pub Submenu<Wry>);
+///
+/// The submenu is enabled only when both halves of `gate` are true:
+/// `has_recent` (the recent-profiles list is non-empty, updated by
+/// `rebuild_open_recent_submenu`) and `cpu_stopped` (pushed from the
+/// frontend via `set_recent_menu_enabled`, mirroring `ProfileMenuState` —
+/// activating a recent profile reloads the session the same way New/Open/
+/// Reload Profile do, so it needs the same CPU-not-running gate; see issue
+/// #549).
+pub struct RecentMenuState {
+    pub submenu: Submenu<Wry>,
+    gate: Mutex<RecentMenuGate>,
+}
+
+/// The two independent conditions gating `RecentMenuState::submenu`; see
+/// its doc comment.
+struct RecentMenuGate {
+    has_recent: bool,
+    cpu_stopped: bool,
+}
+
+impl RecentMenuState {
+    /// Re-applies `submenu`'s enabled state from the current `gate`. Called
+    /// after either half of the gate changes.
+    fn recompute_enabled(&self) {
+        let gate = self.gate.lock().unwrap();
+        let _ = self.submenu.set_enabled(gate.has_recent && gate.cpu_stopped);
+    }
+}
 
 /// Holds the Run menu's six item handles so `set_run_controls_enabled`
 /// (issue #395) can toggle each one's enabled state in place, mirroring the
@@ -197,12 +225,20 @@ pub struct AssemblerMenuState {
     pub assemble_load_item: MenuItem<Wry>,
 }
 
-/// Holds the File > Reload Profile item handle so
-/// `set_reload_profile_menu_enabled` (issue #547) can toggle it in place,
-/// mirroring `AssemblerMenuState`. Reloading tears down and rebuilds the
-/// active session, so — like Assemble & Load — it only makes sense while the
-/// CPU is stopped.
-pub struct ReloadProfileMenuState {
+/// Holds the File > New Profile, Open Profile, and Reload Profile item
+/// handles so `set_profile_menu_enabled` can toggle all three in place
+/// together, mirroring `MemoryMenuState`. Each ultimately reloads the active
+/// session (`create_profile`/`open_profile`/`reload_profile`, all funneling
+/// into `load_or_reload_session`, which force-stops any free run before
+/// tearing the session down), so all three only make sense while the CPU is
+/// already stopped — the same condition Reload Profile alone was gated on
+/// when it was added (issue #547); New Profile and Open Profile were left
+/// ungated until issue #549.
+pub struct ProfileMenuState {
+    /// The File > New Profile item.
+    pub new_item: MenuItem<Wry>,
+    /// The File > Open Profile item.
+    pub open_item: MenuItem<Wry>,
     /// The File > Reload Profile item.
     pub reload_item: MenuItem<Wry>,
 }
@@ -222,7 +258,7 @@ pub fn build_menu(
     MemoryMenuState,
     AssemblerMenuState,
     EditMenuState,
-    ReloadProfileMenuState,
+    ProfileMenuState,
 )> {
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
@@ -235,10 +271,10 @@ pub fn build_menu(
     // `APP_KEY_BINDINGS` array.
     let new_profile_item = MenuItem::with_id(app, NEW_PROFILE_ID, "New Profile", true, Some("CmdOrCtrl+N"))?;
     let open_profile_item = MenuItem::with_id(app, OPEN_PROFILE_ID, "Open Profile", true, Some("CmdOrCtrl+O"))?;
-    // Enabled state (CPU must be stopped, since reloading tears down and
+    // Enabled state (CPU must be stopped, since each of these tears down and
     // rebuilds the active session) is pushed from the frontend via
-    // `set_reload_profile_menu_enabled`, not tracked here — same pattern as
-    // the Run menu's items above.
+    // `set_profile_menu_enabled`, not tracked here — same pattern as the Run
+    // menu's items above.
     let reload_profile_item =
         MenuItem::with_id(app, RELOAD_PROFILE_ID, "Reload Profile", true, Some("CmdOrCtrl+Shift+R"))?;
     let open_recent_submenu = Submenu::with_id(app, "open-recent", "Open Recent", false)?;
@@ -485,7 +521,10 @@ pub fn build_menu(
     Ok((
         menu,
         WindowMenuState { exit_item, terminal_item, display_item, led_matrix_item },
-        RecentMenuState(open_recent_submenu),
+        RecentMenuState {
+            submenu: open_recent_submenu,
+            gate: Mutex::new(RecentMenuGate { has_recent: false, cpu_stopped: true }),
+        },
         RunMenuState { run_item, stop_item, step_into_item, step_over_item, step_return_item, toggle_auto_step_item },
         MemoryMenuState {
             load_item: load_memory_item,
@@ -495,7 +534,7 @@ pub fn build_menu(
         },
         AssemblerMenuState { assemble_load_item },
         EditMenuState { cut_item, copy_item, paste_item },
-        ReloadProfileMenuState { reload_item: reload_profile_item },
+        ProfileMenuState { new_item: new_profile_item, open_item: open_profile_item, reload_item: reload_profile_item },
     ))
 }
 
@@ -534,12 +573,31 @@ pub fn set_assembler_menu_enabled(enabled: bool, state: State<AssemblerMenuState
     let _ = state.assemble_load_item.set_enabled(enabled);
 }
 
-/// Enables or disables the File > Reload Profile item — the CPU must be
-/// stopped, same condition and same push-from-frontend pattern as
-/// `set_assembler_menu_enabled` (issue #547).
+/// Enables or disables the File > New Profile, Open Profile, and Reload
+/// Profile items together — the CPU must be stopped, since all three
+/// ultimately reload the active session (`load_or_reload_session`
+/// force-stops any free run first). Same condition and same
+/// push-from-frontend pattern as `set_assembler_menu_enabled` (issue #547,
+/// extended to cover all three profile-switching items in issue #549). See
+/// `set_recent_menu_enabled` for the File > Open Recent submenu, which
+/// shares the same condition but is gated separately since its enabled
+/// state also depends on whether there are any recent profiles to show.
 #[tauri::command]
-pub fn set_reload_profile_menu_enabled(enabled: bool, state: State<ReloadProfileMenuState>) {
+pub fn set_profile_menu_enabled(enabled: bool, state: State<ProfileMenuState>) {
+    let _ = state.new_item.set_enabled(enabled);
+    let _ = state.open_item.set_enabled(enabled);
     let _ = state.reload_item.set_enabled(enabled);
+}
+
+/// Pushes the CPU-not-running half of the File > Open Recent submenu's gate
+/// (see `RecentMenuState`) — same condition and push-from-frontend pattern
+/// as `set_profile_menu_enabled`, kept as a separate command since this
+/// submenu's actual enabled state also depends on `has_recent`, which only
+/// `rebuild_open_recent_submenu` knows.
+#[tauri::command]
+pub fn set_recent_menu_enabled(enabled: bool, state: State<RecentMenuState>) {
+    state.gate.lock().unwrap().cpu_stopped = enabled;
+    state.recompute_enabled();
 }
 
 /// Pushes `flags` onto the Run menu's six items' enabled state
@@ -585,7 +643,8 @@ pub(crate) fn set_led_matrix_menu_label(state: &WindowMenuState, detached: bool)
 /// display label paired with the profile's absolute directory path) followed
 /// by a separator and a "Clear Recent…" item, provided `has_recent` is true
 /// — the submenu (and, when there are no entries to show, just the "Clear
-/// Recent…" item on its own) is otherwise left empty and disabled.
+/// Recent…" item on its own) is otherwise left empty, and disabled regardless
+/// of the CPU-running gate (see `RecentMenuState`).
 ///
 /// `has_recent` is driven by whether the stored recent-profiles list is
 /// non-empty, not by whether `entries` is — the active profile is always
@@ -601,7 +660,7 @@ pub(crate) fn rebuild_open_recent_submenu(
     entries: &[(String, PathBuf)],
     has_recent: bool,
 ) -> tauri::Result<()> {
-    let submenu = &state.0;
+    let submenu = &state.submenu;
     let existing = submenu.items()?.len();
     for _ in 0..existing {
         submenu.remove_at(0)?;
@@ -618,6 +677,7 @@ pub(crate) fn rebuild_open_recent_submenu(
         let clear_item = MenuItem::with_id(app, CLEAR_RECENT_ID, "Clear Recent…", true, None::<&str>)?;
         submenu.append(&clear_item)?;
     }
-    submenu.set_enabled(has_recent)?;
+    state.gate.lock().unwrap().has_recent = has_recent;
+    state.recompute_enabled();
     Ok(())
 }

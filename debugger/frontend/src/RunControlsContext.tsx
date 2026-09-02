@@ -318,20 +318,26 @@ export function RunControlsProvider({ children }: { children: ReactNode }) {
     );
   }, [stepping, isAutoStepping, isFreeRunning, cpuStopped]);
 
-  // Keeps the native File > Reload Profile item's enabled state in lockstep
-  // with `isStopped` (issue #547) — unlike the Run menu's items above, this
-  // doesn't also gate on `cpuStopped` (STP halt): reloading is safe whenever
-  // the CPU isn't actively running/stepping, matching how the Memory and
-  // Assembler menus interpret "the CPU must be stopped" for their own
-  // items. Lives here (rather than in a panel, like those two) since Reload
-  // Profile isn't owned by any one panel — this provider is already the
-  // established place a menu-item's enabled state is pushed globally.
-  const lastReloadEnabledRef = useRef<boolean | null>(null);
+  // Keeps the native File > New Profile, Open Profile, and Reload Profile
+  // items, plus the Open Recent submenu, in lockstep with `isStopped`
+  // (issue #547 gated Reload Profile alone; issue #549 extended this to the
+  // other three profile-switching entries, which reload the session the same
+  // way) — unlike the Run menu's items above, this doesn't also gate on
+  // `cpuStopped` (STP halt): switching profiles is safe whenever the CPU
+  // isn't actively running/stepping, matching how the Memory and Assembler
+  // menus interpret "the CPU must be stopped" for their own items. Lives
+  // here (rather than in a panel) since none of these are owned by any one
+  // panel — this provider is already the established place a menu-item's
+  // enabled state is pushed globally.
+  const lastProfileEnabledRef = useRef<boolean | null>(null);
   useEffect(() => {
-    if (lastReloadEnabledRef.current === isStopped) return;
-    lastReloadEnabledRef.current = isStopped;
-    invoke("set_reload_profile_menu_enabled", { enabled: isStopped }).catch((e) =>
-      console.error("set_reload_profile_menu_enabled failed:", e),
+    if (lastProfileEnabledRef.current === isStopped) return;
+    lastProfileEnabledRef.current = isStopped;
+    invoke("set_profile_menu_enabled", { enabled: isStopped }).catch((e) =>
+      console.error("set_profile_menu_enabled failed:", e),
+    );
+    invoke("set_recent_menu_enabled", { enabled: isStopped }).catch((e) =>
+      console.error("set_recent_menu_enabled failed:", e),
     );
   }, [isStopped]);
 

@@ -798,7 +798,8 @@ pub fn run() {
             menu::set_memory_menu_enabled,
             menu::set_assembler_menu_enabled,
             menu::set_edit_menu_enabled,
-            menu::set_reload_profile_menu_enabled,
+            menu::set_profile_menu_enabled,
+            menu::set_recent_menu_enabled,
             about::get_about_info,
         ])
         .setup(move |app| {
@@ -810,7 +811,7 @@ pub fn run() {
                 memory_menu_state,
                 assembler_menu_state,
                 edit_menu_state,
-                reload_profile_menu_state,
+                profile_menu_state,
             ) = menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
@@ -846,7 +847,7 @@ pub fn run() {
             app.manage(memory_menu_state);
             app.manage(assembler_menu_state);
             app.manage(edit_menu_state);
-            app.manage(reload_profile_menu_state);
+            app.manage(profile_menu_state);
 
             // Detached-Terminal window: strip its menu and install the
             // close-hides-and-reattaches lifecycle once, regardless of
