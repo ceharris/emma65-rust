@@ -2,15 +2,15 @@
 //! composited output in an SDL2 window.
 //!
 //! Spawned by the emulator itself via a `display` device's `transport = "pipe:..."`
-//! attribute (see `doc/char-display-external-protocol.md`); this binary is never run
+//! attribute (see `plan/char-display-external-protocol.md`); this binary is never run
 //! standalone against a live `emma65` process any other way; its own stdin *is* the pipe. It
 //! reads the one-time header,
 //! then one fixed-size frame per vsync, decoding each with [`protocol`] and compositing pixels
 //! with the same `emma65::emulator::device::display::compositing::composite` the debugger's
 //! in-process display panel uses — no rendering logic is duplicated here. It also captures
 //! keystrokes from the SDL2 window and writes them back over the same pipe (its own stdout) per
-//! `doc/char-display-external-protocol.md` §6 — the first thing that gives the plain `emma65`
-//! CLI keyboard input at all (see `doc/display-keyboard-integration-plan.md`).
+//! `plan/char-display-external-protocol.md` §6 — the first thing that gives the plain `emma65`
+//! CLI keyboard input at all (see `plan/display-keyboard-integration-plan.md`).
 
 mod protocol;
 
@@ -38,7 +38,7 @@ struct Args {
 
 /// Reads into `buf` until it is full, `Ok(false)` on a clean EOF with nothing read yet, or an
 /// error if the stream closes mid-message (a protocol desync, since every message here has a
-/// size fixed in advance — see `doc/char-display-external-protocol.md` §3).
+/// size fixed in advance — see `plan/char-display-external-protocol.md` §3).
 fn read_exact_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> io::Result<bool> {
     let mut filled = 0;
     while filled < buf.len() {
@@ -94,7 +94,7 @@ fn spawn_frame_reader(frame_len: usize, columns: u32, rows: u32) -> mpsc::Receiv
 }
 
 /// Encodes an SDL2 keyboard event into a single wire byte per
-/// `doc/char-display-external-protocol.md` §6, mirroring `keyboardByteForEvent` in
+/// `plan/char-display-external-protocol.md` §6, mirroring `keyboardByteForEvent` in
 /// `debugger/frontend/src/DisplayPanel.tsx`. `Event::TextInput` handles ordinary printable
 /// characters (shift/layout-correct without a keycode table); `Event::KeyDown` handles
 /// `Return`/`Backspace`/`Tab`/`Escape`/`Ctrl+<letter>`, none of which also fire `TextInput` in

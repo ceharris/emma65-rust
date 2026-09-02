@@ -31,11 +31,11 @@ Tauri invokes `npm run build` there automatically as part of `cargo tauri build`
 - **`display`** (crate `emma65-display`) — an SDL2 peripheral binary that renders the
   `display` device's composited output for the plain `emma65` CLI (the debugger renders
   it in-process instead); spawned by the emulator as a child process over a `pipe:` transport,
-  per `doc/char-display-external-protocol.md`
+  per `plan/char-display-external-protocol.md`
 - **`led-matrix`** (crate `emma65-led-matrix`) — an SDL2 peripheral binary that renders the
   `display/matrix` device's per-matrix composited output for the plain `emma65` CLI (the
   debugger renders it in-process instead); spawned by the emulator as a child process over a
-  `pipe:` transport, per `doc/led-matrix-external-protocol.md`
+  `pipe:` transport, per `plan/led-matrix-external-protocol.md`
 
 The `emma65` library exposes two top-level public modules:
 
@@ -293,7 +293,7 @@ through the debugger's own terminal window.
 
 An SDL2 desktop app (`emma65-display`) that renders a `display` device's composited
 output for the plain `emma65` CLI standalone (no Tauri debugger); see
-`doc/char-display-external-protocol.md` for the wire format it consumes. `emma65` spawns it as
+`plan/char-display-external-protocol.md` for the wire format it consumes. `emma65` spawns it as
 a child process via a `display` device's `transport = "pipe:..."` attribute — its own
 stdin is the pipe, so it is never run standalone against a live `emma65` process any other way.
 `src/protocol.rs` is a decode-only mirror of `emma65::emulator::device::display::protocol`
@@ -312,7 +312,7 @@ or `cargo build --workspace`.
 
 An SDL2 desktop app (`emma65-led-matrix`) that renders a `display/matrix` device's per-matrix
 composited output for the plain `emma65` CLI standalone (no Tauri debugger); see
-`doc/led-matrix-external-protocol.md` for the wire format it consumes. `emma65` spawns it as a
+`plan/led-matrix-external-protocol.md` for the wire format it consumes. `emma65` spawns it as a
 child process via a `display/matrix` device's `transport = "pipe:..."` attribute — its own
 stdin is the pipe, so it is never run standalone against a live `emma65` process any other way.
 `src/protocol.rs` is a decode-only mirror of `emma65::emulator::device::led_matrix`'s (private)

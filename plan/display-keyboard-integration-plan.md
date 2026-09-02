@@ -5,9 +5,9 @@
 `CharDisplay` (`display/char`, `src/emulator/device/display/mod.rs`) currently streams composited
 frames outbound only — over an in-process `mpsc` channel in the debugger (`attach_frame_sink`), or
 over an external `PipeTransport` connected to a spawned `emma65-display` SDL2 child process for the
-plain CLI (`attach_external_transport`; see `doc/char-display-external-protocol.md`). Keyboard
+plain CLI (`attach_external_transport`; see `plan/char-display-external-protocol.md`). Keyboard
 input is handled by a completely separate device, `Keyboard` (`src/emulator/device/keyboard.rs`,
-`doc/memory-mapped-keyboard-device-plan.md`), which is debugger-only — the plain `emma65` CLI has
+`plan/memory-mapped-keyboard-device-plan.md`), which is debugger-only — the plain `emma65` CLI has
 no way to feed it at all today.
 
 This plan folds keyboard input directly into `CharDisplay`, for a concrete technical reason:
@@ -143,12 +143,12 @@ from `src/emulator/config/mod.rs`. `InstantiationContext::keyboard_transport`'s 
 currently describes "the keyboard device module") is reworded to describe the display device's
 keyboard sub-feature instead.
 
-`doc/memory-mapped-display-device-spec.md` (the locked formal spec) is left unamended, with this plan
+`plan/memory-mapped-display-device-spec.md` (the locked formal spec) is left unamended, with this plan
 doc plus `CharDisplay`'s own module doc comment serving as the spec for the extension — matching the
-precedent `doc/memory-mapped-keyboard-device-plan.md` itself set for `Keyboard`. A one-line
+precedent `plan/memory-mapped-keyboard-device-plan.md` itself set for `Keyboard`. A one-line
 cross-reference is added at its top instead.
 
-### 3. External protocol + `emma65-display` (`doc/char-display-external-protocol.md`, `display/src/main.rs`)
+### 3. External protocol + `emma65-display` (`plan/char-display-external-protocol.md`, `display/src/main.rs`)
 
 The protocol doc currently states explicitly (§2, §7) that the device consumes no inbound data at
 all. Revise: §2 notes the connection is now used in both directions; a new section documents the
@@ -186,11 +186,11 @@ table, and `write_keyboard` call already exist and already work generically.
 memory-mapped keyboard device plan" / "the (possibly absent) `keyboard` device" are reworded to point
 at this plan and describe the display device's optional keyboard sub-range instead.
 
-### 5. `doc/memory-mapped-keyboard-device-plan.md`
+### 5. `plan/memory-mapped-keyboard-device-plan.md`
 
-Gets a short "superseded by `doc/display-keyboard-integration-plan.md`" banner at the top rather than
+Gets a short "superseded by `plan/display-keyboard-integration-plan.md`" banner at the top rather than
 being deleted, matching this repo's convention of keeping past design-decision docs as history (e.g.
-`doc/memory-mapped-display-device-plan.md` still exists after later work built on it).
+`plan/memory-mapped-display-device-plan.md` still exists after later work built on it).
 
 ## Work Units
 
@@ -198,8 +198,8 @@ One branch + PR per unit, stop and await review after each. No GitHub issue trac
 as the display and keyboard device plans. Unit 0 is a direct commit to `main`, matching how the prior
 two plan docs were landed.
 
-- **0. Plan doc.** This document + superseded-banner edit to `doc/memory-mapped-keyboard-device-plan.md`
-  + cross-reference note in `doc/memory-mapped-display-device-spec.md`.
+- **0. Plan doc.** This document + superseded-banner edit to `plan/memory-mapped-keyboard-device-plan.md`
+  + cross-reference note in `plan/memory-mapped-display-device-spec.md`.
 - **1. Bus: restore `extend_device`.** `src/emulator/bus/mod.rs`: restore
   `BusConfig::extend_device(range, id) -> Result<Self, BusConfigError>`, recovered verbatim from
   `git show 52951eee^:src/emulator/bus/mod.rs` (looks up `device_index` by `id`, returns
@@ -221,7 +221,7 @@ two plan docs were landed.
   spawned `emma65-display` process (no automated SDL2 test harness exists in this crate today).
 - **5. Debugger backend fold.** Design §4 above. `cargo build --workspace` / `cargo clippy` to catch
   the module-path rename ripple; no frontend changes.
-- **6. Manual verification.** `cargo tauri dev` checklist mirroring `doc/memory-mapped-keyboard-device-plan.md`'s
+- **6. Manual verification.** `cargo tauri dev` checklist mirroring `plan/memory-mapped-keyboard-device-plan.md`'s
   own §5: type into the Display panel with `keyboard_address` configured (bytes arrive at the
   configured address); with it absent (no error); with `break=` configured (`Ctrl+C` asserts IRQ);
   detached-window case; session reload while typing. Plus a first-ever plain-CLI checklist: `emma65`

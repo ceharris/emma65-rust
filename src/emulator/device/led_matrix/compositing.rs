@@ -1,6 +1,6 @@
 //! RGB565 palette color storage, pixel compositing, and the fixed default palette.
 //!
-//! `Rgb565` and the masking/scaling conversions specified by `doc/memory-mapped-led-matrix-
+//! `Rgb565` and the masking/scaling conversions specified by `plan/memory-mapped-led-matrix-
 //! device-spec.md` §4.2.1; [`composite_matrix`] (design doc §9); [`default_palette`], ported
 //! verbatim from spec §2.1 (design doc §4).
 
@@ -38,7 +38,7 @@ impl Rgb565 {
     }
 
     /// Packs the stored 5/6/5-bit components into a single `rrrrrggggggbbbbb` `u16`, the wire
-    /// format `led_matrix::protocol::encode_palette` sends (`doc/led-matrix-external-
+    /// format `led_matrix::protocol::encode_palette` sends (`plan/led-matrix-external-
     /// protocol.md` §5.2) -- distinct from [`Self::to_rgb888`]'s 8-bit-per-channel expansion.
     pub fn to_packed565(self) -> u16 {
         ((self.r as u16) << 11) | ((self.g as u16) << 5) | self.b as u16

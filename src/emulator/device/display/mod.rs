@@ -1,7 +1,7 @@
 //! A memory-mapped character/color-cell display device.
 //!
-//! See `doc/memory-mapped-display-device-spec.md` for the full behavioral specification and
-//! `doc/memory-mapped-display-device-plan.md` for the design decisions this implementation
+//! See `plan/memory-mapped-display-device-spec.md` for the full behavioral specification and
+//! `plan/memory-mapped-display-device-plan.md` for the design decisions this implementation
 //! follows. Summary of the bus-addressable memory map (offsets relative to the device's base
 //! address, `cells = columns * rows`):
 //!
@@ -15,7 +15,7 @@
 //! The register map above is not IRQ-capable on its own. This device gains IRQ capability only
 //! when an optional keyboard data/latch sub-range is configured (`keyboard-address=`, a disjoint
 //! 2-byte range elsewhere in the address space, mirroring `Console`'s input half) and a
-//! configured break key is received on it -- see `doc/display-keyboard-integration-plan.md`.
+//! configured break key is received on it -- see `plan/display-keyboard-integration-plan.md`.
 //!
 //! **Runtime palette updates**: writing [`CONTROL_PALETTE_ARM`] (bit 3) to the control register
 //! arms a 4-byte write sequence to the status/data register: `index`, `red`, `green`, `blue`.
@@ -34,7 +34,7 @@
 //! **External protocol**: when run outside the debugger (plain `emma65` CLI), a device can
 //! optionally stream its frame data to an external peripheral process instead of (or as well
 //! as) the debugger's in-process [`DisplayFrame`] sink, via [`CharDisplay::attach_external_transport`].
-//! See `doc/char-display-external-protocol.md` for the wire format; [`protocol`] implements it.
+//! See `plan/char-display-external-protocol.md` for the wire format; [`protocol`] implements it.
 
 pub mod compositing;
 pub mod font;
@@ -157,7 +157,7 @@ pub struct CharDisplay {
     /// CLI), in which case vsync never composites anything.
     frame_sink: Option<mpsc::Sender<DisplayFrame>>,
 
-    /// Outbound-only transport for the external display protocol (`doc/char-display-external-
+    /// Outbound-only transport for the external display protocol (`plan/char-display-external-
     /// protocol.md`), set post-construction via [`Self::attach_external_transport`] -- `None`
     /// unless a `transport=` attribute is configured (config wiring is a later work unit of the
     /// SDL2 display peripheral plan).
@@ -173,7 +173,7 @@ pub struct CharDisplay {
     /// just a capability: the CLI path's relay rides the same [`PipeTransport`] as
     /// `external_transport`, and an undrained relay's channel closing tears down *that entire
     /// transport* -- frames included -- the instant the peripheral sends its first keystroke (see
-    /// `doc/display-keyboard-integration-plan.md`'s Context section). Set alongside
+    /// `plan/display-keyboard-integration-plan.md`'s Context section). Set alongside
     /// `external_transport` (via [`Self::attach_external_transport`]) or alongside
     /// `keyboard_transport` (via [`Self::attach_keyboard_transport`]).
     keyboard_relay: Option<TransportRelay>,
@@ -276,7 +276,7 @@ impl CharDisplay {
         self.frame_sink = Some(sink);
     }
 
-    /// Attaches a transport for the external display protocol (`doc/char-display-external-
+    /// Attaches a transport for the external display protocol (`plan/char-display-external-
     /// protocol.md`), now bidirectional: `transport` remains outbound-only for frames, but
     /// `relay` is the same transport's inbound relay, held and drained unconditionally every
     /// `tick()` (see the `keyboard_relay` field doc comment). Immediately sends the one-time
@@ -392,7 +392,7 @@ impl CharDisplay {
 
     /// The vsync-equivalent tick (spec §5.3): sets the vsync status flag, performs a pending
     /// swap if any, and -- if a frame sink is attached (design §9) -- composites the resulting
-    /// scanout buffers and pushes the frame. If an external transport is attached (`doc/char-
+    /// scanout buffers and pushes the frame. If an external transport is attached (`plan/char-
     /// display-external-protocol.md`), also bulk-sends this vsync's char/color RAM and palette
     /// as one frame message.
     fn on_vsync(&mut self) {
@@ -541,7 +541,7 @@ impl IoDevice for CharDisplay {
     /// Drops the frame sink, closing the channel from this end -- the channel equivalent of
     /// the terminal bridge seeing EOF on its pipe (design doc §10), ending the debugger's
     /// display bridge task's `recv()` loop. Also shuts down the external transport and the
-    /// debugger-path keyboard transport, if either is present (`doc/char-display-external-
+    /// debugger-path keyboard transport, if either is present (`plan/char-display-external-
     /// protocol.md`; the CLI path's keyboard stream rides `external_transport`, already covered).
     fn shutdown(&mut self) {
         self.frame_sink = None;

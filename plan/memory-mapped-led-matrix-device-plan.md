@@ -2,7 +2,7 @@
 
 ## Context
 
-`doc/memory-mapped-led-matrix-device-spec.md` specifies this device's behavior from the 6502
+`plan/memory-mapped-led-matrix-device-spec.md` specifies this device's behavior from the 6502
 program's point of view: configuration surface, bus-addressable memory map, command/data register
 semantics, and per-matrix double-buffering/dirty-tracking/auto-refresh. It deliberately left open
 the bus device trait shape, instantiation/wiring mechanics, the open questions originally raised in
@@ -12,7 +12,7 @@ that last point explicitly deferred to "a follow-up document ... once this devic
 is settled."
 
 This plan resolves the open items against Emma65's existing conventions -- most of which were
-already established by `doc/memory-mapped-display-device-plan.md` for `CharDisplay`, whose
+already established by `plan/memory-mapped-display-device-plan.md` for `CharDisplay`, whose
 register-generalization, dirty/swap, and cycle-accounted-cadence patterns this device reuses almost
 directly -- and lays out a phased implementation plan for the device itself, its compositing, and
 the debugger's dockable/detachable panel. It does **not** cover the external wire protocol or the

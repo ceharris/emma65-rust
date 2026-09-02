@@ -153,7 +153,7 @@ The user can observe the current stack state.
 **Scope:**
 - Right column (middle): stack view showing word pairs aligned to the
   current stack pointer, as specified (chevron marker, `--`
-  placeholder, ~8 visible word pairs) -- see `doc/debugger-ui-spec.md` for 
+  placeholder, ~8 visible word pairs) -- see `plan/debugger-ui-spec.md` for 
   the detailed design example.
 - Alignment toggle (even/odd).
 - View updates on each step.
@@ -561,7 +561,7 @@ The user can view the state of the CPU and key bus signals.
     color.
   - The current count of CPU cycles executed since the last reset, displayed
     with thousands separators (e.g. commas)
-- See `doc/debugger-ui-spec.md` for position in the overall layout, and the
+- See `plan/debugger-ui-spec.md` for position in the overall layout, and the
   detailed design for the view panel
 
 **Acceptance Criteria**:

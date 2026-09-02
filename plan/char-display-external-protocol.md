@@ -13,7 +13,7 @@ It is also unrelated to `LedMatrix`'s "Virtual Display Communication Protocol"
 (`device::protocol::via`/`ptm`-adjacent, register-level, multipoint) — a different device with
 different needs. Do not confuse the two.
 
-See `doc/memory-mapped-display-device-spec.md` for `CharDisplay`'s bus-facing register
+See `plan/memory-mapped-display-device-spec.md` for `CharDisplay`'s bus-facing register
 behavior (control/status registers, buffer swapping, runtime palette updates) — this document
 only covers what crosses the transport.
 
@@ -21,7 +21,7 @@ only covers what crosses the transport.
 
 Exactly one connection, used in both directions: outbound (device → peripheral) for the header
 and frames (§4, §5), and inbound (peripheral → device) for keystrokes (§6) — see
-`doc/display-keyboard-integration-plan.md` for why the inbound direction exists at all. The
+`plan/display-keyboard-integration-plan.md` for why the inbound direction exists at all. The
 outbound direction's [`Transport::send_bytes`] must be atomic: either the whole buffer is written
 or none of it is (see the transport module's documentation and the SDL2 display peripheral
 plan's Unit 1). This rules out any transport whose `send_bytes` is the default per-byte-loop
@@ -76,7 +76,7 @@ Unlike §3–§5's outbound stream, this direction has no length prefix or frami
 per keystroke, sent whenever the peripheral captures a key press, with no relationship to vsync
 cadence or frame boundaries. `CharDisplay` forwards each byte into its keyboard sub-range's
 `InputBuffer` when a `keyboard-address=` range is configured for the device, and silently
-discards it otherwise (see `doc/display-keyboard-integration-plan.md`'s Context section for why
+discards it otherwise (see `plan/display-keyboard-integration-plan.md`'s Context section for why
 discarding rather than erroring matters here).
 
 Encoding mirrors the scheme `debugger/src-tauri/src/keyboard.rs` already forwards from

@@ -86,7 +86,7 @@ impl DeviceModule for CharDisplayModule {
             .map(TransportSpec::try_from)
             .transpose()
             .map_err(DeviceModuleError::Config)?;
-        // The external protocol's per-vsync bulk send (`doc/char-display-external-protocol.md`)
+        // The external protocol's per-vsync bulk send (`plan/char-display-external-protocol.md`)
         // relies on `Transport::send_bytes`'s all-or-nothing contract, which only `PipeTransport`
         // provides (see Unit 1 of the SDL2 display peripheral plan) -- reject any other kind
         // rather than silently desyncing the stream on the first dropped frame.

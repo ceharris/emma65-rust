@@ -12,9 +12,9 @@ panel**. This plan breaks that remaining work into four sequential units,
 each its own branch + PR, following this repo's established per-unit
 workflow (used for issues #462, #467, and #474's own 5-unit library plan).
 
-The plan doc itself should be committed to `doc/assembler-debugger-integration-plan.md`
-on `main` before Unit 1 starts (mirrors how `doc/assembler-plan.md` and
-`doc/debugger-terminal-preferences-plan.md` were committed ahead of their
+The plan doc itself should be committed to `plan/assembler-debugger-integration-plan.md`
+on `main` before Unit 1 starts (mirrors how `plan/assembler-plan.md` and
+`plan/debugger-terminal-preferences-plan.md` were committed ahead of their
 unit branches), so each unit's implementing session can read it cold.
 
 This plan was drafted after reading the relevant code directly (`memory.rs`,
@@ -45,7 +45,7 @@ first-pass sketch.
   (`src/emulator/bus/mod.rs:267`) is an O(1) precomputed 64K-entry address
   lookup table, so a per-byte `bus.patch()` loop — identical to
   `memory.rs::fill_memory`'s existing pattern — is cheap even for a full
-  64KB `.res` segment. This closes out `doc/assembler-plan.md`'s old hedge
+  64KB `.res` segment. This closes out `plan/assembler-plan.md`'s old hedge
   ("a bulk helper would be small and additive if it turns out to be worth
   having") with "not worth having" — do not add one.
 - **Failure-channel split.** `Err(String)` from `assemble_and_load` is

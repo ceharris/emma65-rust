@@ -19,7 +19,7 @@ detached window):
    available space.
 
 The issue's author also left historical notes (mirrored in
-`doc/terminal-sizing-plan.md`, June 2026) about display-scaling and
+`plan/terminal-sizing-plan.md`, June 2026) about display-scaling and
 scrollbar-gutter miscalculation that made earlier sizing attempts brittle
 under Wayland/GTK. Two things have changed since that doc was written and
 should be re-verified rather than assumed still broken:

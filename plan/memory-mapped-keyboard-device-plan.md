@@ -2,7 +2,7 @@
 
 > **Superseded**: the standalone `Keyboard` device this plan built has been deleted. Keyboard input
 > is now an optional feature of `CharDisplay` itself — see
-> `doc/display-keyboard-integration-plan.md`. This document is kept for historical context only.
+> `plan/display-keyboard-integration-plan.md`. This document is kept for historical context only.
 
 ## Context
 

@@ -5,7 +5,7 @@ Tracked by issue #490.
 ## Context
 
 This work grew out of the issue #474 assembler-debugger integration
-(`doc/assembler-debugger-integration-plan.md`), which named a known,
+(`plan/assembler-debugger-integration-plan.md`), which named a known,
 accepted limitation and a "deferred mitigation" for it: `assemble_and_load`
 merges assembled symbols into the bus's `SymbolTable` additively (no
 `clear()`, to preserve ROM-loaded labels), but `SymbolTable::insert` never
@@ -145,7 +145,7 @@ symbol" UI or Tauri command — that's future scope, laid on top of the
   `Symbol` and repoints `by_name`, but the *old* slot in `symbols` is never
   set to `None` — so `names_for(old_address)` keeps yielding it forever.
 - `debugger/src-tauri/src/assembler.rs:82`: confirmed the "deferred
-  mitigation" named in `doc/assembler-debugger-integration-plan.md` was
+  mitigation" named in `plan/assembler-debugger-integration-plan.md` was
   never implemented — this line is a bare `insert_from`, no tracking, no
   `remove()`. The bug is live today, not just theoretical.
 - `debugger/src-tauri/src/memory.rs:147-151`: `load_memory`'s existing
@@ -267,4 +267,4 @@ instruction** before starting the next unit. Do not batch both units into
 one PR.
 
 This plan doc should be committed to `main` before Unit 1 starts, mirroring
-`doc/assembler-plan.md` and `doc/assembler-debugger-integration-plan.md`.
+`plan/assembler-plan.md` and `plan/assembler-debugger-integration-plan.md`.

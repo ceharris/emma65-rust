@@ -1,7 +1,7 @@
 //! A memory-mapped RGB LED matrix display device.
 //!
-//! See `doc/memory-mapped-led-matrix-device-spec.md` for the full behavioral specification and
-//! `doc/memory-mapped-led-matrix-device-plan.md` for the design decisions this implementation
+//! See `plan/memory-mapped-led-matrix-device-spec.md` for the full behavioral specification and
+//! `plan/memory-mapped-led-matrix-device-plan.md` for the design decisions this implementation
 //! follows. The device occupies two independently configured, disjoint bus ranges rather than one
 //! contiguous region -- pixel memory sized from `arrangement` and based at the device's `address`,
 //! and the command/data register pair based at the separately configured `register-address` --
@@ -43,7 +43,7 @@
 //! original one-matrix-per-1024-contiguous-bytes layout exactly, since every matrix's 32 rows are
 //! then contiguous in the raster; any wider arrangement interleaves matrices' rows in bus address
 //! order instead of concatenating whole matrices, since a real daisy-chained panel's rows are
-//! wired that way. See `doc/memory-mapped-led-matrix-device-spec.md` §2.2.
+//! wired that way. See `plan/memory-mapped-led-matrix-device-spec.md` §2.2.
 
 pub mod compositing;
 mod protocol;
@@ -162,10 +162,10 @@ pub struct LedMatrix {
     frame_sink: Option<mpsc::Sender<LedMatrixFrame>>,
 
     /// Auto-refresh cadence in Hz, as configured -- retained (unlike `cycles_per_frame` alone)
-    /// so it can be reported in the external protocol's header (`doc/led-matrix-external-
+    /// so it can be reported in the external protocol's header (`plan/led-matrix-external-
     /// protocol.md` §4) when a transport is attached.
     frame_rate_hz: u32,
-    /// Outbound-only transport to an external peripheral process (`doc/led-matrix-external-
+    /// Outbound-only transport to an external peripheral process (`plan/led-matrix-external-
     /// protocol.md`), set post-construction via [`Self::attach_external_transport`] -- `None`
     /// when running under the debugger, which uses `frame_sink` instead. Unlike `CharDisplay`'s
     /// `external_transport`, this device has no inbound direction to pair with a relay.
@@ -247,7 +247,7 @@ impl LedMatrix {
         self.frame_sink = Some(sink);
     }
 
-    /// Attaches an outbound-only transport to an external peripheral process (`doc/led-matrix-
+    /// Attaches an outbound-only transport to an external peripheral process (`plan/led-matrix-
     /// external-protocol.md`), immediately sending the one-time header over `transport`; unlike
     /// [`Self::attach_frame_sink`], nothing else is sent on individual register writes -- only
     /// the header now, then a block message per matrix swap and a palette message per actual
@@ -1101,7 +1101,7 @@ mod tests {
         assert_eq!(received, (0..8).collect::<Vec<u8>>(), "expected a frame for every matrix, in order");
     }
 
-    // -- External transport (`doc/led-matrix-external-protocol.md`) --
+    // -- External transport (`plan/led-matrix-external-protocol.md`) --
 
     use crate::emulator::transport::InternalPipeTransport;
 

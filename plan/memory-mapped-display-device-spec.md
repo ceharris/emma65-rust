@@ -1,7 +1,7 @@
 # Memory-Mapped Display Device — Specification
 
 > **Note**: `CharDisplay` also supports an optional, separately-addressed keyboard input
-> sub-feature not covered by this document — see `doc/display-keyboard-integration-plan.md`, which
+> sub-feature not covered by this document — see `plan/display-keyboard-integration-plan.md`, which
 > serves as its spec.
 
 ## 1. Purpose and scope

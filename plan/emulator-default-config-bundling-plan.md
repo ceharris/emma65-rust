@@ -165,12 +165,12 @@ No `Cargo.toml` changes: `tempfile::TempDir` is already available from the exist
 
 ### 5. Migration check
 
-Repo-wide `default.bin` references are exactly three, all handled above: `src/bin/emulator/main.rs` (`include_bytes!`, deleted), `CLAUDE.md` (doc reference, updated below), `doc/emulator-default-config.md` (superseded, updated below). No `build.rs`, `tauri.conf.json` resources, or `.gitignore` entries reference it.
+Repo-wide `default.bin` references are exactly three, all handled above: `src/bin/emulator/main.rs` (`include_bytes!`, deleted), `CLAUDE.md` (doc reference, updated below), `plan/emulator-default-config.md` (superseded, updated below). No `build.rs`, `tauri.conf.json` resources, or `.gitignore` entries reference it.
 
 ### 6. Documentation updates
 
 - `CLAUDE.md`: drop "embeds default.bin ROM" from the `main.rs` bullet (the binary no longer embeds it directly); update the "binary applies a built-in default..." paragraph to point at the bundled-template mechanism in `src/emulator/config/default/` instead of describing hand-assembled devices; note in the debugger-crate section that the `default` profile directory is now auto-seeded on first run rather than left empty.
-- `doc/emulator-default-config.md`: this is the original design doc for the CLI-only, hand-assembled version of this feature and is now stale (describes `NamedTempFile` + literal `DeviceSpec` strings). Update it in place to describe the new bundled-template/shared-materialization design, so it doesn't mislead a future reader.
+- `plan/emulator-default-config.md`: this is the original design doc for the CLI-only, hand-assembled version of this feature and is now stale (describes `NamedTempFile` + literal `DeviceSpec` strings). Update it in place to describe the new bundled-template/shared-materialization design, so it doesn't mislead a future reader.
 
 ## Verification
 

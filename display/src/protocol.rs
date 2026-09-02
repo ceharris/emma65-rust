@@ -1,4 +1,4 @@
-//! Pure decode side of the `CharDisplay` external protocol (`doc/char-display-external-protocol.md`).
+//! Pure decode side of the `CharDisplay` external protocol (`plan/char-display-external-protocol.md`).
 //!
 //! The encode side lives in `emma65::emulator::device::display` (private to that crate, since
 //! only `CharDisplay` itself ever encodes); this binary only ever decodes, so it gets its own

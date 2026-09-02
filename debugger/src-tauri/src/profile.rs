@@ -29,7 +29,7 @@ pub struct CliArgs {
     /// window `LogicalSize` for the size-preset menu's programmatic resizes
     /// (issue #462). An escape hatch for hosts where
     /// `Window::scale_factor()` auto-detection misreports the effective
-    /// display scale — see `doc/debugger-terminal-size-menu-plan.md`'s Work
+    /// display scale — see `plan/debugger-terminal-size-menu-plan.md`'s Work
     /// Unit 2.
     #[clap(long = "scale-factor")]
     pub scale_factor: Option<f64>,

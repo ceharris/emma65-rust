@@ -11,7 +11,7 @@ session with an empty bus too — the debugger looks alive but is non-functional
 The default device layout — 32K RAM, the TaliForth ROM, a VIA, a PTM, two ACIAs, an LFSR, and a
 console — is defined once, as a checked-in TOML template plus its bundled ROM image and VICE
 labels file, and shared by both consumers via a single materialization function. See
-`doc/emulator-default-config-bundling-plan.md` for the implementation plan this design followed.
+`plan/emulator-default-config-bundling-plan.md` for the implementation plan this design followed.
 
 ---
 

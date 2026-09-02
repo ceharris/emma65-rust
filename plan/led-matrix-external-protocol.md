@@ -9,11 +9,11 @@ the plain `emma65` CLI standalone (no Tauri debugger). It is unrelated to the de
 in-process `LedMatrixFrame`/`attach_frame_sink` push channel, which remains the mechanism the
 debugger uses and needs no protocol at all (same address space, same process).
 
-It is also unrelated to `CharDisplay`'s external protocol (`doc/char-display-external-protocol.md`)
+It is also unrelated to `CharDisplay`'s external protocol (`plan/char-display-external-protocol.md`)
 — a different device with different needs, most notably that `LedMatrix` swaps happen per-matrix
 rather than in lockstep across the whole device on a single vsync. Do not confuse the two.
 
-See `doc/memory-mapped-led-matrix-device-spec.md` for `LedMatrix`'s bus-facing register behavior
+See `plan/memory-mapped-led-matrix-device-spec.md` for `LedMatrix`'s bus-facing register behavior
 (command/data registers, matrix swapping, runtime palette updates) — this document only covers
 what crosses the transport.
 
@@ -127,7 +127,7 @@ forward; anything unset renders using the peripheral's own reconstruction of
 
 ## 7. Runtime palette updates
 
-Unlike `CharDisplay`, which resends its entire palette with every frame (`doc/char-display-
+Unlike `CharDisplay`, which resends its entire palette with every frame (`plan/char-display-
 external-protocol.md` §7), `LedMatrix`'s palette is comparatively large (256 entries, RGB565) and
 changes independently of any single matrix's swap cadence, so each write is sent as its own small
 message (§5.2) instead. A peripheral must therefore retain every matrix's most recently received

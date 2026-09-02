@@ -1,6 +1,6 @@
 //! Wire codec for `CharDisplay`'s external display protocol.
 //!
-//! See `doc/char-display-external-protocol.md` for the full specification. Summary: a one-time
+//! See `plan/char-display-external-protocol.md` for the full specification. Summary: a one-time
 //! header ([`encode_header`]) sent immediately when an external transport is attached, followed
 //! by one fixed-size frame message ([`encode_frame`]) per vsync. There is no per-frame length
 //! prefix or delimiter -- the header alone fixes every subsequent frame's size, which is safe

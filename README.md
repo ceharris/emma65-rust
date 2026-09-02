@@ -527,7 +527,7 @@ A memory-mapped RGB LED matrix display supporting 1, 2, 4, or 8 attached
   per-drawing-primitive register; not IRQ-capable, since swaps are always
   synchronous
 
-See `doc/memory-mapped-led-matrix-device-spec.md` for the full register-level
+See `plan/memory-mapped-led-matrix-device-spec.md` for the full register-level
 specification. Like `display`, `display/matrix` has no in-process
 console-style rendering when running the plain `emma65` CLI:
 
@@ -538,7 +538,7 @@ console-style rendering when running the plain `emma65` CLI:
   [Running the LED Matrix Peripheral](#running-the-led-matrix-peripheral)
   below). A block message streams per matrix swap, and a palette message
   streams per palette write, over a wire protocol specified in
-  `doc/led-matrix-external-protocol.md`.
+  `plan/led-matrix-external-protocol.md`.
 
 ```toml
 [[devices]]
@@ -574,7 +574,7 @@ palette:
   status/data register (index, red, green, blue)
 - Not IRQ-capable — nothing in its register map asserts an interrupt
 
-See `doc/memory-mapped-display-device-spec.md` for the full register-level
+See `plan/memory-mapped-display-device-spec.md` for the full register-level
 specification. Unlike the other register-window devices, `display` has
 no in-process console-style rendering when running the plain `emma65` CLI:
 it needs an external peripheral to actually put pixels on screen. Two ways
@@ -587,7 +587,7 @@ to view it:
   [Running the Display Peripheral](#running-the-display-peripheral) below).
   Composited frame data (char RAM, color RAM, palette, and the font) streams
   to the peripheral once per vsync over a wire protocol specified in
-  `doc/char-display-external-protocol.md`.
+  `plan/char-display-external-protocol.md`.
 
 ```toml
 [[devices]]
@@ -811,7 +811,7 @@ composited output when running the plain `emma65` CLI standalone (the
 debugger doesn't need it — its own Display panel renders in-process). It's
 not run directly against a live emulator process; instead, the emulator
 spawns it as a child and streams frame data to it over the pipe transport's
-stdin, per the wire protocol in `doc/char-display-external-protocol.md`.
+stdin, per the wire protocol in `plan/char-display-external-protocol.md`.
 
 Building it requires SDL2 development headers (`libsdl2-dev` on
 Debian/Ubuntu, `sdl2` on Homebrew), the same way building the debugger
@@ -850,7 +850,7 @@ device's per-matrix composited output when running the plain `emma65` CLI
 standalone (the debugger doesn't need it — its own LED Matrix panel renders
 in-process). Like `emma65-display`, it's spawned by the emulator as a child
 process and streams data to it over the pipe transport's stdin, per the wire
-protocol in `doc/led-matrix-external-protocol.md`.
+protocol in `plan/led-matrix-external-protocol.md`.
 
 Building it requires SDL2 development headers (`libsdl2-dev` on
 Debian/Ubuntu, `sdl2` on Homebrew), the same as `emma65-display`:

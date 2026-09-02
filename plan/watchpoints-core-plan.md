@@ -4,7 +4,7 @@
 
 The debugger's initial watchpoints feature (a read-only panel showing each
 watchpoint expression's current value and true/false/error status — see
-`doc/watchpoint-ui-initial-support.md`) needs a way to evaluate *every*
+`plan/watchpoint-ui-initial-support.md`) needs a way to evaluate *every*
 watchpoint in a set against live CPU state and get a value back for each one,
 independently of the CPU's own breakpoint-style watch-triggered halting.
 
@@ -104,7 +104,7 @@ does **not** cause a subsequent `cpu.step(...)` to return
 
 ## Downstream dependency
 
-`doc/watchpoint-ui-initial-support.md` (the debugger backend/frontend unit)
+`plan/watchpoint-ui-initial-support.md` (the debugger backend/frontend unit)
 depends on both `WatchEvaluator::evaluate_each` and
 `Cpu::evaluate_watchpoints` existing and merged before it can call them from
 `debugger/src-tauri/src/watchpoints.rs`.
