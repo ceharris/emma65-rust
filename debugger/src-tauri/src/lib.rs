@@ -409,6 +409,16 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
             // Emit the initial halted state so the frontend can render the
             // disassembly view immediately.
             let _ = app.emit("debugger-halted", initial_pc);
+
+            // The Disassembly view's `debugger-halted` handler skips re-fetching when the new
+            // PC's address is already present in its displayed rows, assuming the bytes there
+            // are unchanged (true for a same-session step/breakpoint halt). That assumption
+            // breaks here: most profiles reset to the same address (e.g. 0x8000), so the new
+            // profile's reset PC often matches an address already shown from the *previous*
+            // profile, leaving its stale disassembly on screen. `memory-modified` is the
+            // existing signal that forces an unconditional re-fetch (see `write_memory`,
+            // `fill_memory`, and `load_memory` in `memory.rs`), so broadcast it here too.
+            let _ = app.emit("memory-modified", ());
         }
         Err(message) => {
             emit_status(app, SessionStatus { message, ok: false });
