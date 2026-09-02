@@ -133,11 +133,6 @@ fn main() {
         }
     };
 
-    eprintln!(
-        "emma65-display: connected, {}x{} cells @ {} Hz",
-        header.columns, header.rows, header.frame_rate_hz
-    );
-
     let pixel_width = header.columns * 8;
     let pixel_height = header.rows * 8;
     let frame_len = header.frame_len();

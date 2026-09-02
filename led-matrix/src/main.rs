@@ -263,10 +263,6 @@ fn main() {
 
     let arrangement = arrangement_from_header(&header);
 
-    eprintln!(
-        "emma65-led-matrix: connected, {} matrices @ {} Hz, arrangement {}x{}",
-        header.matrix_count, header.frame_rate_hz, arrangement.columns, arrangement.rows
-    );
     let mut matrices = vec![[0u8; PIXELS_PER_MATRIX]; header.matrix_count as usize];
     let mut palette = default_palette();
     let mut power_mask: u8 = 0xFF;
