@@ -1494,7 +1494,7 @@ mod tests {
                 let mut rng_state: u64 = 0x1234_5678_9abc_def0 ^ (latch as u64) ^ ((mode as u64) << 16);
                 let mut done = 0u64;
                 while done < total_cycles {
-                    let chunk = (lcg_next(&mut rng_state) % 11) as u64; // 0..=10
+                    let chunk = lcg_next(&mut rng_state) % 11; // 0..=10
                     let chunk = chunk.min(total_cycles - done);
                     for _ in 0..chunk {
                         expected.tick();
