@@ -44,7 +44,7 @@ jobs:
         run: cargo build -p emma65
 
       - name: Clippy
-        run: cargo clippy -p emma65 --all-targets -- -D warnings
+        run: cargo clippy -p emma65 --all-targets --no-deps -- -D warnings
 
       - name: Test
         run: cargo test -p emma65
@@ -78,7 +78,7 @@ jobs:
 
       - name: Clippy
         working-directory: debugger/src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --no-deps -- -D warnings
 
   ci-display:
     name: Display Build and Clippy
@@ -103,7 +103,7 @@ jobs:
         run: cargo build -p emma65-display
 
       - name: Clippy
-        run: cargo clippy -p emma65-display --all-targets -- -D warnings
+        run: cargo clippy -p emma65-display --all-targets --no-deps -- -D warnings
 
   ci-led-matrix:
     name: LED Matrix Build and Clippy
@@ -128,4 +128,4 @@ jobs:
         run: cargo build -p emma65-led-matrix
 
       - name: Clippy
-        run: cargo clippy -p emma65-led-matrix --all-targets -- -D warnings
+        run: cargo clippy -p emma65-led-matrix --all-targets --no-deps -- -D warnings
