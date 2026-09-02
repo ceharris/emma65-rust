@@ -1,0 +1,10 @@
+[book]
+title = "Emma65"
+description = "A software emulator for the 65C02-family of 8-bit microprocessors"
+authors = ["Carl Harris"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/ceharris/emma65-rust"
+edit-url-template = "https://github.com/ceharris/emma65-rust/edit/main/doc/{path}"
