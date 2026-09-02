@@ -594,6 +594,11 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let _ = profile::open_profile(app_handle).await;
                 });
+            } else if event.id() == menu::RELOAD_PROFILE_ID {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = profile::reload_profile(app_handle).await;
+                });
             } else if event.id() == menu::CLEAR_RECENT_ID {
                 recent::emit_open_clear_recent_dialog(app);
             } else if event.id() == menu::RESTORE_LAYOUT_ID {
@@ -720,6 +725,7 @@ pub fn run() {
             profile::create_profile,
             profile::list_templates,
             profile::open_profile,
+            profile::reload_profile,
             get_session_status,
             terminal::write_terminal,
             terminal::get_terminal_history,
@@ -792,6 +798,7 @@ pub fn run() {
             menu::set_memory_menu_enabled,
             menu::set_assembler_menu_enabled,
             menu::set_edit_menu_enabled,
+            menu::set_reload_profile_menu_enabled,
             about::get_about_info,
         ])
         .setup(move |app| {
@@ -803,6 +810,7 @@ pub fn run() {
                 memory_menu_state,
                 assembler_menu_state,
                 edit_menu_state,
+                reload_profile_menu_state,
             ) = menu::build_menu(app)?;
             app.set_menu(app_menu)?;
 
@@ -838,6 +846,7 @@ pub fn run() {
             app.manage(memory_menu_state);
             app.manage(assembler_menu_state);
             app.manage(edit_menu_state);
+            app.manage(reload_profile_menu_state);
 
             // Detached-Terminal window: strip its menu and install the
             // close-hides-and-reattaches lifecycle once, regardless of
