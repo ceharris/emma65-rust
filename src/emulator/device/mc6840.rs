@@ -773,11 +773,21 @@ impl IoDevice for Mc6840 {
                     }
                 } else {
                     self.timers[T3].set_control_register(value);
-                    self.timers[T3].prescaler = if value & CTRL_T3_PRESCALE != 0 {
-                        Some(Prescaler::new(8))
+                    // The prescaler is a free-running divide-by-8 counter, not
+                    // state owned by the control register: only reset it on an
+                    // off-to-on transition. A CR3 rewrite that leaves the
+                    // prescale bit already set (e.g. firmware toggling an
+                    // unrelated bit like IRQ_ENABLE) must not disturb whatever
+                    // count it has already accumulated -- doing so injects up
+                    // to 7 cycles of jitter into Timer 3's period every time
+                    // CR3 is rewritten.
+                    if value & CTRL_T3_PRESCALE != 0 {
+                        if self.timers[T3].prescaler.is_none() {
+                            self.timers[T3].prescaler = Some(Prescaler::new(8));
+                        }
                     } else {
-                        None
-                    };
+                        self.timers[T3].prescaler = None;
+                    }
                 }
             }
             1 => {
@@ -1001,6 +1011,31 @@ mod tests {
         let mut device = device();
         device.write(0, CTRL_T3_PRESCALE);
         assert!(device.timers[T3].prescaler.is_some(), "expected prescaler");
+    }
+
+    // A rewrite of CR3 that leaves the prescale bit set (e.g. firmware
+    // toggling IRQ_ENABLE on T3 mid-run) must not disturb the prescaler's
+    // in-flight divide-by-8 count. If it does, the same nominal period
+    // (in E cycles) elapses a variable number of *extra* cycles depending
+    // on exactly how much of the divide-by-8 count had already accumulated
+    // at the moment of the CR3 rewrite -- injecting up to 7 cycles of
+    // jitter into Timer 3's period every time CR3 is rewritten.
+    #[test]
+    fn rewriting_cr3_with_prescale_bit_unchanged_preserves_prescaler_count() {
+        let mut device = device();
+        // enable prescale, internal clock, mode = generate/continuous/immediate-init, latch=1
+        device.write(0, CTRL_T3_PRESCALE | CTRL_INTERNAL_CLOCK | CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_INIT);
+        device.timers[T3].latch = 1;
+        device.timers[T3].init();
+        // advance the prescaler partway through its divide-by-8 count
+        device.tick(3);
+        let count_before = device.timers[T3].prescaler.as_ref().unwrap().count;
+        assert_ne!(count_before, 8, "expected prescaler to have already advanced");
+        // rewrite CR3 with the prescale bit still set (unrelated bits changed) --
+        // must not disturb the in-flight divide-by-8 count
+        device.write(0, CTRL_T3_PRESCALE | CTRL_INTERNAL_CLOCK | CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS | CTRL_MODE_IMMEDIATE_INIT | CTRL_IRQ_ENABLE);
+        assert_eq!(device.timers[T3].prescaler.as_ref().unwrap().count, count_before,
+                   "CR3 rewrite with prescale bit unchanged reset the in-flight prescaler count");
     }
 
     #[test]
@@ -1423,6 +1458,52 @@ mod tests {
                     }
                     actual.tick_batch(cycles);
                     let context = format!("mode={mode:#04x} latch={latch} cycles={cycles}");
+                    assert_eq!(actual.counter, expected.counter, "counter mismatch: {context}");
+                    assert_eq!(actual.carry_in, expected.carry_in, "carry_in mismatch: {context}");
+                    assert_eq!(actual.triggered, expected.triggered, "triggered mismatch: {context}");
+                    assert_eq!(actual.output_state, expected.output_state, "output_state mismatch: {context}");
+                    assert_eq!(actual.irq_active, expected.irq_active, "irq_active mismatch: {context}");
+                }
+            }
+        }
+    }
+
+    // Chains many small tick_batch() calls of varying size (as instruction-
+    // by-instruction ticking actually does in the CPU's execution loop)
+    // instead of one big call, to check that the closed-form fast path
+    // composes correctly across repeated invocations, not just in one shot
+    // from a freshly-init'd state.
+    #[test]
+    fn tick_batch_chained_small_calls_match_sequential_tick() {
+        fn lcg_next(state: &mut u64) -> u64 {
+            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *state >> 33
+        }
+
+        let modes = [
+            CTRL_MODE_GENERATE | CTRL_MODE_CONTINUOUS,
+            CTRL_MODE_GENERATE | CTRL_MODE_SINGLE_SHOT,
+        ];
+        let latches = [0u16, 1, 2, 5, 0xFFFF];
+        let total_cycles = 200_000u64;
+
+        for &mode in &modes {
+            for &latch in &latches {
+                let mut expected = setup_generate_mode_timer(mode, latch, true, false, 0);
+                let mut actual = setup_generate_mode_timer(mode, latch, true, false, 0);
+                let mut rng_state: u64 = 0x1234_5678_9abc_def0 ^ (latch as u64) ^ ((mode as u64) << 16);
+                let mut done = 0u64;
+                while done < total_cycles {
+                    let chunk = lcg_next(&mut rng_state) % 11; // 0..=10
+                    let chunk = chunk.min(total_cycles - done);
+                    for _ in 0..chunk {
+                        expected.tick();
+                    }
+                    actual.tick_batch(chunk as u32);
+                    done += chunk;
+                    let context = format!(
+                        "mode={mode:#04x} latch={latch} done={done}"
+                    );
                     assert_eq!(actual.counter, expected.counter, "counter mismatch: {context}");
                     assert_eq!(actual.carry_in, expected.carry_in, "carry_in mismatch: {context}");
                     assert_eq!(actual.triggered, expected.triggered, "triggered mismatch: {context}");
