@@ -28,6 +28,8 @@ pub(crate) const PASTE_ID: &str = "paste";
 pub(crate) const NEW_PROFILE_ID: &str = "new-profile";
 /// Menu item id for the File > Open Profile item.
 pub(crate) const OPEN_PROFILE_ID: &str = "open-profile";
+/// Menu item id for the File > Reload Profile item.
+pub(crate) const RELOAD_PROFILE_ID: &str = "reload-profile";
 /// Id prefix for entries in the File > Open Recent submenu; each item's full
 /// id is this prefix followed by the profile's absolute directory path.
 pub(crate) const OPEN_RECENT_ID_PREFIX: &str = "open-recent:";
@@ -195,6 +197,16 @@ pub struct AssemblerMenuState {
     pub assemble_load_item: MenuItem<Wry>,
 }
 
+/// Holds the File > Reload Profile item handle so
+/// `set_reload_profile_menu_enabled` (issue #547) can toggle it in place,
+/// mirroring `AssemblerMenuState`. Reloading tears down and rebuilds the
+/// active session, so — like Assemble & Load — it only makes sense while the
+/// CPU is stopped.
+pub struct ReloadProfileMenuState {
+    /// The File > Reload Profile item.
+    pub reload_item: MenuItem<Wry>,
+}
+
 /// Builds the native app menu (File/Edit/View/Run/Memory/Window/Help) and the `exit_item`
 /// handle `on_menu_event` needs to dispatch an Exit click. The File > Open
 /// Recent submenu starts empty — populated once the recent-profiles list is
@@ -202,7 +214,16 @@ pub struct AssemblerMenuState {
 #[allow(clippy::type_complexity)]
 pub fn build_menu(
     app: &tauri::App,
-) -> tauri::Result<(Menu<Wry>, WindowMenuState, RecentMenuState, RunMenuState, MemoryMenuState, AssemblerMenuState, EditMenuState)> {
+) -> tauri::Result<(
+    Menu<Wry>,
+    WindowMenuState,
+    RecentMenuState,
+    RunMenuState,
+    MemoryMenuState,
+    AssemblerMenuState,
+    EditMenuState,
+    ReloadProfileMenuState,
+)> {
     // A plain `MenuItem` rather than `PredefinedMenuItem::quit`: muda's GTK
     // backend silently drops `Quit` (it isn't in its short list of supported
     // predefined types on Linux), so the item never appeared at all. The
@@ -214,6 +235,12 @@ pub fn build_menu(
     // `APP_KEY_BINDINGS` array.
     let new_profile_item = MenuItem::with_id(app, NEW_PROFILE_ID, "New Profile", true, Some("CmdOrCtrl+N"))?;
     let open_profile_item = MenuItem::with_id(app, OPEN_PROFILE_ID, "Open Profile", true, Some("CmdOrCtrl+O"))?;
+    // Enabled state (CPU must be stopped, since reloading tears down and
+    // rebuilds the active session) is pushed from the frontend via
+    // `set_reload_profile_menu_enabled`, not tracked here — same pattern as
+    // the Run menu's items above.
+    let reload_profile_item =
+        MenuItem::with_id(app, RELOAD_PROFILE_ID, "Reload Profile", true, Some("CmdOrCtrl+Shift+R"))?;
     let open_recent_submenu = Submenu::with_id(app, "open-recent", "Open Recent", false)?;
     let exit_item = MenuItem::with_id(app, EXIT_ID, "Exit", true, Some("CmdOrCtrl+Q"))?;
     let separator = PredefinedMenuItem::separator(app)?;
@@ -221,7 +248,14 @@ pub fn build_menu(
         app,
         "File",
         true,
-        &[&new_profile_item, &open_profile_item, &open_recent_submenu, &separator, &exit_item],
+        &[
+            &new_profile_item,
+            &open_profile_item,
+            &reload_profile_item,
+            &open_recent_submenu,
+            &separator,
+            &exit_item,
+        ],
     )?;
 
     // Plain `MenuItem`s rather than `PredefinedMenuItem::cut/copy/paste`:
@@ -461,6 +495,7 @@ pub fn build_menu(
         },
         AssemblerMenuState { assemble_load_item },
         EditMenuState { cut_item, copy_item, paste_item },
+        ReloadProfileMenuState { reload_item: reload_profile_item },
     ))
 }
 
@@ -497,6 +532,14 @@ pub fn set_memory_menu_enabled(enabled: bool, state: State<MemoryMenuState>) {
 #[tauri::command]
 pub fn set_assembler_menu_enabled(enabled: bool, state: State<AssemblerMenuState>) {
     let _ = state.assemble_load_item.set_enabled(enabled);
+}
+
+/// Enables or disables the File > Reload Profile item — the CPU must be
+/// stopped, same condition and same push-from-frontend pattern as
+/// `set_assembler_menu_enabled` (issue #547).
+#[tauri::command]
+pub fn set_reload_profile_menu_enabled(enabled: bool, state: State<ReloadProfileMenuState>) {
+    let _ = state.reload_item.set_enabled(enabled);
 }
 
 /// Pushes `flags` onto the Run menu's six items' enabled state

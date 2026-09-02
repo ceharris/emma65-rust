@@ -278,6 +278,22 @@ pub async fn open_profile(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Reloads the currently active profile — the same effect as re-selecting it
+/// via File > Open Profile, but without a picker: fills in any files missing
+/// relative to the default profile, then reloads the session against the
+/// directory already recorded in `ProfileDirState`. File > Reload Profile /
+/// Ctrl+Shift+R (issue #547), letting a separate IDE's edits to the 6502
+/// program/labels be picked up without restarting the debugger. Enabled only
+/// while the CPU is stopped (see `set_reload_profile_menu_enabled` in
+/// `menu.rs`).
+#[tauri::command]
+pub async fn reload_profile(app: AppHandle) -> Result<(), String> {
+    let dir = app.state::<ProfileDirState>().0.lock().unwrap().clone();
+    copy_missing_files_from_default(&dir)?;
+    crate::load_or_reload_session(&app, &dir).await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
