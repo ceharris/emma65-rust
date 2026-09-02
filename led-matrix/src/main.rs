@@ -2,7 +2,7 @@
 //! composited output in an SDL2 window.
 //!
 //! Spawned by the emulator itself via a `display/matrix` device's `transport = "pipe:..."`
-//! attribute (see `doc/led-matrix-external-protocol.md`); this binary is never run standalone
+//! attribute (see `plan/led-matrix-external-protocol.md`); this binary is never run standalone
 //! against a live `emma65` process any other way — its own stdin *is* the pipe. It reads the
 //! one-time header, then a background thread decodes the tagged message stream that follows
 //! (§5) into [`protocol::Message`]s. Each matrix's most recently received raw pixel indices are
@@ -102,7 +102,7 @@ fn arrangement_from_header(header: &Header) -> Arrangement {
 
 /// Reads into `buf` until it is full, `Ok(false)` on a clean EOF with nothing read yet, or an
 /// error if the stream closes mid-message (a protocol desync, since every message here has a
-/// size fixed in advance — see `doc/led-matrix-external-protocol.md` §3).
+/// size fixed in advance — see `plan/led-matrix-external-protocol.md` §3).
 fn read_exact_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> io::Result<bool> {
     let mut filled = 0;
     while filled < buf.len() {

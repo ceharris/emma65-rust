@@ -48,7 +48,7 @@ struct LedMatrixAttributes {
 /// Parses `arrangement`'s `COLSxROWS` syntax into `(columns, rows)`. This is the single source of
 /// truth for both bus addressing (design doc §2.2) and on-screen layout: the resulting `columns`
 /// flows to the debugger via `LedMatrixGeometry::columns` and to the external companion binary via
-/// the wire protocol header's `columns` field (`doc/led-matrix-external-protocol.md` §4), so
+/// the wire protocol header's `columns` field (`plan/led-matrix-external-protocol.md` §4), so
 /// neither host has its own independent arrangement to configure.
 fn parse_arrangement(spec: &str) -> Result<(u32, u32), String> {
     let (cols_str, rows_str) = spec.split_once('x')
@@ -95,7 +95,7 @@ impl DeviceModule for LedMatrixModule {
             .map(TransportSpec::try_from)
             .transpose()
             .map_err(DeviceModuleError::Config)?;
-        // The external protocol's per-message sends (`doc/led-matrix-external-protocol.md`) rely
+        // The external protocol's per-message sends (`plan/led-matrix-external-protocol.md`) rely
         // on `Transport::send_bytes`'s all-or-nothing contract, which only `PipeTransport`
         // provides (see `config::display`'s identical restriction) -- reject any other kind
         // rather than silently desyncing the stream on the first dropped message.

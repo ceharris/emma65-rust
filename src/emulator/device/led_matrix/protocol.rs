@@ -1,6 +1,6 @@
 //! Wire codec for `LedMatrix`'s external protocol.
 //!
-//! See `doc/led-matrix-external-protocol.md` for the full specification. Summary: a one-time
+//! See `plan/led-matrix-external-protocol.md` for the full specification. Summary: a one-time
 //! header ([`encode_header`]) sent immediately when an external transport is attached, followed
 //! by a tagged message per matrix swap ([`encode_block`]), per actual palette write
 //! ([`encode_palette`]), and per actual power/brightness change ([`encode_power`],

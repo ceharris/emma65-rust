@@ -74,14 +74,14 @@ function keyboardByteForEvent(e: KeyboardEvent): number | null {
 
 /**
  * The dock panel hosting the memory-mapped display device's composited output (Work Unit 5 of
- * the memory-mapped display device plan — see `doc/memory-mapped-display-device-plan.md`
+ * the memory-mapped display device plan — see `plan/memory-mapped-display-device-plan.md`
  * design §11). A dumb blit target only: compositing (char/color RAM + palette + font -> RGBA)
  * happens entirely in the Rust backend (`emulator::device::display::compositing`, `display.rs`'s
  * bridge task), so this component does nothing but size a `<canvas>` from `get_display_geometry`
  * and `putImageData` whatever arrives on `"display-frame"`.
  *
  * Also the input side of the display/keyboard integration plan (see
- * `doc/display-keyboard-integration-plan.md` §4): the canvas is focusable (`tabIndex={0}`) and
+ * `plan/display-keyboard-integration-plan.md` §4): the canvas is focusable (`tabIndex={0}`) and
  * forwards `keydown` bytes to `write_keyboard`, silently absorbed if the active `display`
  * device has no `keyboard-address=` configured. Rather than requiring an explicit click into the
  * canvas every time, it auto-focuses

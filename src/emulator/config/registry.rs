@@ -48,7 +48,7 @@ pub type LedMatrixGeometrySlot = Arc<Mutex<Option<LedMatrixGeometry>>>;
 /// [`InstantiationContext::led_matrix_geometry_sink`] so its panel can size and lay out its
 /// per-matrix canvases on mount, before any frame has been composited -- mirroring the device's
 /// own bus-addressing arrangement rather than letting the panel pick an independent one (see
-/// `doc/led-matrix-external-protocol.md` §4, which threads the same `columns` value to the
+/// `plan/led-matrix-external-protocol.md` §4, which threads the same `columns` value to the
 /// external companion binary).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LedMatrixGeometry {

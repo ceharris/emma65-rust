@@ -72,7 +72,7 @@ impl Font {
 
     /// Returns the raw, `FONT_BYTES`-long bitmap data (all 256 glyphs, concatenated) -- used to
     /// serialize the font wholesale, e.g. in the `CharDisplay` external protocol header (see
-    /// `doc/char-display-external-protocol.md`).
+    /// `plan/char-display-external-protocol.md`).
     pub fn as_bytes(&self) -> &[u8] {
         self.data.as_slice()
     }

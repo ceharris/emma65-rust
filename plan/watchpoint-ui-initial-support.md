@@ -3,8 +3,8 @@
 ## Context
 
 Story 12 of the debugger implementation plan
-(`doc/debugger-implementation-plan.md:300-326`). Depends on #59 (closed) and
-on the core-library additions in `doc/watchpoints-core-plan.md`
+(`plan/debugger-implementation-plan.md:300-326`). Depends on #59 (closed) and
+on the core-library additions in `plan/watchpoints-core-plan.md`
 (`WatchEvaluator::evaluate_each`, `Cpu::evaluate_watchpoints`) — that unit
 must land first.
 
@@ -58,7 +58,7 @@ Two deviations from the literal issue text, confirmed with the user:
   indicator-dot-with-CSS-class-driven-color pattern for the true/false/error
   dot.
 - `WatchEvaluator::evaluate_each` and `Cpu::evaluate_watchpoints` from
-  `doc/watchpoints-core-plan.md` — the non-short-circuiting, non-halting
+  `plan/watchpoints-core-plan.md` — the non-short-circuiting, non-halting
   evaluation primitives this unit is built on. **The debugger must own its
   own separate `WatchEvaluator` instance and never call
   `cpu.evaluator_mut()`** — that's the CPU's own internal evaluator, already

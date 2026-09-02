@@ -7,7 +7,7 @@ register/blit-command `LedMatrix` (`src/emulator/device/led_matrix.rs`). The ori
 8-register command interface bottlenecks on 6502 bus-write bandwidth for anything that updates a
 significant portion of the display. This redesign maps pixel memory directly into the address
 space instead, following the same double-buffering approach already used by `CharDisplay`
-(`doc/memory-mapped-display-device-spec.md`).
+(`plan/memory-mapped-display-device-spec.md`).
 
 It captures the *behavior and interface contract* of the device: its configuration surface,
 address-space layout, and read/write/swap semantics. It deliberately does not specify:
@@ -15,7 +15,7 @@ address-space layout, and read/write/swap semantics. It deliberately does not sp
 - The shape of Emma65's bus device trait(s).
 - How the device is instantiated, registered, or wired into bus configuration.
 - The exact wire format of the transport protocol to the external peripheral — that belongs in a
-  follow-up document analogous to `doc/char-display-external-protocol.md`, once this device-level
+  follow-up document analogous to `plan/char-display-external-protocol.md`, once this device-level
   contract is settled.
 
 ## 2. Conceptual model
@@ -91,7 +91,7 @@ still operate in terms of one matrix's 1,024 palette-index bytes gathered from t
 Like `CharDisplay`, the device is always double-buffered: there is no single-buffered mode,
 since single-buffering would reintroduce the bandwidth problem this redesign exists to solve.
 The CPU-addressable pixel memory has a single, fixed identity for the life of the device — the
-CPU always reads back exactly what it last wrote, regardless of swap state (`doc/memory-mapped-
+CPU always reads back exactly what it last wrote, regardless of swap state (`plan/memory-mapped-
 display-device-spec.md` §5.1's model, applied per-matrix here).
 
 Unlike `CharDisplay`, this device has:
@@ -111,7 +111,7 @@ Unlike `CharDisplay`, this device has:
 | `base_address` | integer | — | Where the device's memory-mapped region begins on the bus |
 | `arrangement` | `COLSxROWS` string | — (required) | Physical daisy-chain layout (§2.2); no separate matrix-count field exists, since one alone doesn't say how the matrices are wired |
 | `frame_rate_hz` | integer | mirrors `CharDisplay`'s default | Drives the auto-refresh cadence (§6) |
-| `transport` | transport spec | — | A single point-to-point `pipe:` transport to a spawned companion process, mirroring `CharDisplay`'s external-protocol transport requirements (`doc/char-display-external-protocol.md` §2) rather than the current `LedMatrix`'s multipoint tagged transport |
+| `transport` | transport spec | — | A single point-to-point `pipe:` transport to a spawned companion process, mirroring `CharDisplay`'s external-protocol transport requirements (`plan/char-display-external-protocol.md` §2) rather than the current `LedMatrix`'s multipoint tagged transport |
 
 Derived, not separately configurable:
 
@@ -148,7 +148,7 @@ triggered explicitly (`CMD_SWAP`) or by auto-refresh (§6).
 
 Write-only trigger. Writing a command code selects the operation and, for commands that take
 more than zero argument bytes, arms a byte-sequence state machine on the data register (§4.3) —
-the same shape as `CharDisplay`'s runtime palette-update sequence (`doc/memory-mapped-display-
+the same shape as `CharDisplay`'s runtime palette-update sequence (`plan/memory-mapped-display-
 device-spec.md` §4.4), generalized to every command rather than just palette writes. Re-issuing a
 command at any point — including mid-sequence — resets the state machine, discarding whatever
 partial sequence was in progress.
@@ -201,14 +201,14 @@ Write and read behavior both depend on which command is currently armed (§4.2):
 - **Read-sequence commands** (`CMD_PALETTE_READ`): the single write arms the sequence; each
   subsequent *read* of the data register advances the state machine by one byte and returns it.
 - Writes or reads with no command armed, or past a command's expected byte count, are ignored /
-  return 0 — mirroring `CharDisplay`'s "writes ignored unless armed" default (`doc/memory-mapped-
+  return 0 — mirroring `CharDisplay`'s "writes ignored unless armed" default (`plan/memory-mapped-
   display-device-spec.md` §4.4).
 
 ## 5. Swap semantics
 
 ### 5.1 Model
 
-As in `CharDisplay` (`doc/memory-mapped-display-device-spec.md` §5.1), each matrix has a
+As in `CharDisplay` (`plan/memory-mapped-display-device-spec.md` §5.1), each matrix has a
 CPU-addressable buffer (§4's pixel memory) and a scanout buffer, not bus-addressable. A swap
 copies the CPU-addressable buffer into the scanout buffer; the CPU-addressable buffer's identity
 never changes, so the CPU always reads back what it last wrote regardless of swap state.
@@ -244,7 +244,7 @@ want to force an immediate update outside the auto-refresh cadence.
 ## 7. Transport
 
 A single point-to-point `pipe:` transport to a spawned companion process, mirroring
-`CharDisplay`/`emma65-display`'s architecture (`doc/char-display-external-protocol.md`) rather
+`CharDisplay`/`emma65-display`'s architecture (`plan/char-display-external-protocol.md`) rather
 than the current `LedMatrix`'s multipoint tagged transport. At minimum the wire protocol needs:
 
 - A one-time header (matrix count, `frame_rate_hz`) — no palette contents and no per-matrix
@@ -266,7 +266,7 @@ than the current `LedMatrix`'s multipoint tagged transport. At minimum the wire 
 - Messages for `CMD_SET_POWER` and `CMD_SET_BRIGHTNESS`, forwarded to the companion process.
 
 The exact byte-level framing is left to a follow-up document, analogous to
-`doc/char-display-external-protocol.md`.
+`plan/char-display-external-protocol.md`.
 
 ## 8. Resolved implementation questions
 

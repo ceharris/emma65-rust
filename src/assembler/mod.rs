@@ -3,7 +3,7 @@
 //! `assemble(source)` turns 6502 assembly source text into one or more
 //! output segments (each an origin plus a byte vector) and a symbol table,
 //! ready to be written into emulator memory (e.g. via `Bus::patch`) or
-//! disassembled back for verification. See `doc/assembler-plan.md` for the
+//! disassembled back for verification. See `plan/assembler-plan.md` for the
 //! full design.
 
 mod driver;

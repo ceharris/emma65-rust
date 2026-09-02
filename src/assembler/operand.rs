@@ -4,7 +4,7 @@
 //! into an [`OperandSyntax`] (what the user wrote), and [`encode`] resolves it
 //! against a symbol table into actual opcode + operand bytes (or `None` when
 //! the operand isn't fully resolvable yet — see the module doc on the
-//! multi-pass design in `doc/assembler-plan.md`).
+//! multi-pass design in `plan/assembler-plan.md`).
 
 use std::collections::HashMap;
 

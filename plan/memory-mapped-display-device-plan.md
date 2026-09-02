@@ -2,7 +2,7 @@
 
 ## Context
 
-`doc/memory-mapped-display-device-spec.md` specifies this device's behavior from the
+`plan/memory-mapped-display-device-spec.md` specifies this device's behavior from the
 6502 program's point of view: configuration surface, bus-addressable memory map, and
 double-buffering/swap semantics. It deliberately left open the bus device trait shape,
 instantiation/wiring mechanics, timing integration, and four explicit questions (§8).
@@ -218,7 +218,7 @@ device composites nothing — no frame consumer, no wasted work, matching how
 
 ### 10. Debugger panel: dockable and detachable
 
-Follows the Terminal panel's established pattern (`doc/debugger-terminal-architecture.md`,
+Follows the Terminal panel's established pattern (`plan/debugger-terminal-architecture.md`,
 `terminal.rs`, `layout.rs`) as closely as the two devices' different data shapes allow:
 Terminal streams bytes through an OS pipe and a Tokio `AsyncFd` poll loop; this device
 pushes pre-composited frames through an in-process `mpsc` channel — simpler, since there's

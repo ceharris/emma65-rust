@@ -1,4 +1,4 @@
-//! Pure decode side of the `LedMatrix` external protocol (`doc/led-matrix-external-protocol.md`).
+//! Pure decode side of the `LedMatrix` external protocol (`plan/led-matrix-external-protocol.md`).
 //!
 //! The encode side lives in `emma65::emulator::device::led_matrix` (private to that crate, since
 //! only `LedMatrix` itself ever encodes); this binary only ever decodes, so it gets its own small

@@ -173,7 +173,7 @@ export function pixelSizeForGrid(term: Terminal, cols: number, rows: number): Pi
  * `scaleFactorOverride`, when given (the `--scale-factor` CLI flag, read via
  * `get_terminal_scale_factor_override`), replaces this whole ratio — an
  * escape hatch for hosts where scale auto-detection misreports the
- * effective display scale, the same class of bug `doc/terminal-sizing-plan.md`
+ * effective display scale, the same class of bug `plan/terminal-sizing-plan.md`
  * (June 2026) hit under GNOME text scaling before `main.rs` started forcing
  * `GDK_BACKEND=x11`.
  */

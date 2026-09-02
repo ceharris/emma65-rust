@@ -4,7 +4,7 @@
 //! symbols, segment overlaps, duplicate labels, non-convergence).
 //!
 //! See the "Multi-pass resolution and zero-page optimization" and
-//! "`.org` / multiple segments" sections of `doc/assembler-plan.md` for the
+//! "`.org` / multiple segments" sections of `plan/assembler-plan.md` for the
 //! algorithm this implements.
 
 use std::collections::HashMap;
