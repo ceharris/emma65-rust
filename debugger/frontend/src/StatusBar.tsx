@@ -20,13 +20,13 @@ interface CpuBusState {
 }
 
 /** Splits "1.8432 MHz" into ["1.8432", "MHz"] so the value and unit can be styled separately. */
-function splitSpeed(speed: string): [string, string] {
+export function splitSpeed(speed: string): [string, string] {
   const idx = speed.lastIndexOf(" ");
   return idx === -1 ? [speed, ""] : [speed.slice(0, idx), speed.slice(idx + 1)];
 }
 
 /** Formats a number with comma thousands separators. */
-function formatCycles(n: number): string {
+export function formatCycles(n: number): string {
   return n.toLocaleString();
 }
 
