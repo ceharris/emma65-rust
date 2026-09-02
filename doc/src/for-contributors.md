@@ -1,10 +1,149 @@
 # For Contributors
 
-Emma65 is written in Rust (2024 edition), as a Cargo workspace. Key
-dependencies of the root `emma65` crate:
+Emma65 is written in Rust (2024 edition), as a Cargo workspace. The root
+crate (`emma65`) exposes a library plus two binaries, `emma65` and
+`emma65-tracer`; three further workspace members — `debugger/src-tauri`
+(`emma65-debugger`), `display` (`emma65-display`), and `led-matrix`
+(`emma65-led-matrix`) — are thin front ends built on that library. Its
+central public module is `emulator`, which implements everything those front
+ends are built on: a 65C02 CPU model, a configurable memory bus, a library of
+memory-mapped I/O devices, and the pluggable transports that connect those
+devices to the outside world. The sections below describe how those pieces
+fit together internally, for a contributor adding a new device or working on
+the emulator core itself; see [The Emulator Core](the-emulator-core.md) for a
+feature-level tour of the same territory.
+
+## CPU
+
+`emulator::cpu::Cpu` is built with `Cpu::builder(variant)`, which takes a
+`CpuVariant` (`Cmos65C02` or `Wdc65C02`), a `ClockSpeed`, and a `Bus`, and
+owns the `Registers`, the interrupt-priority logic, and the fetch/decode/
+execute loop. `cpu::opcodes::decode_table()` builds a fixed `[DecodedOp; 256]`
+lookup table once, keyed by opcode byte — decoding an instruction is an array
+index, not a match statement, keeping `Cpu::step()` cheap enough to run
+unthrottled at full host speed. Every effective-address computation and ALU
+operation lives behind that same table entry's `AddressingMode` and
+`Mnemonic`, so adding an instruction is a matter of extending the table and
+`execute()`'s corresponding match arm — variant gating (which opcodes exist
+on CMOS vs. WDC 65C02) is a property of the table itself, checked once at
+decode time rather than scattered through execution.
+
+`Cpu::step()` runs a fixed sequence every instruction: service a pending
+RESET, then NMI, then a recognized IRQ (in that priority order) if one is
+pending; otherwise fetch, decode, and execute one instruction. After the
+instruction (or the STP/WAI idle case) it calls `bus.tick_devices(cycles)`
+with the exact cycle count that instruction took, then polls
+`bus.device_interrupt_states()` to refresh the interrupt controller. This is
+the mechanism that keeps every device's timers and interrupt lines
+synchronized with CPU time without per-cycle callbacks — see
+[Device Interfacing](#device-interfacing) below for the device side of that
+same contract. `exec::run()`/`run_from()` drive this loop on a background
+thread (throttled to a target `ClockSpeed` by batching cycle-vs-wall-time
+comparisons over ~1,000 instructions), exposing a `RunHandle`/`RunStopper`
+for control and a `CpuLiveSnapshot` read without pausing the CPU;
+`step_into()`, `step_over_subroutine()`, `step_over_breakpoint()`, and
+`step_return()` build the debugger's single-step commands on top of the same
+`step()` primitive.
+
+## Bus
+
+`emulator::bus::BusConfig` is a builder: `.ram()`, `.rom()`, and `.device()`
+each add a named `AddressRange`, and `.build()` resolves all 65,536 possible
+addresses to their most-specific owner exactly once — consulting
+`IoDevice::claims()` on any overlapping device candidate to settle
+conditional chip-select — into a flat lookup table. Every subsequent
+`Bus::read()`/`write()` the CPU performs is then a single array index into
+that table, with no region walk or `claims()` re-check at runtime, so bus
+access cost stays effectively constant regardless of how many devices are
+configured. This is also the seam that keeps `IoDevice` implementations
+decoupled from addressing: a device is only ever handed the absolute bus
+address it was invoked with, never told which region it lives in, so the
+same device type can be remapped to a different address purely through
+configuration. `bus::symbol::load_vice_labels` loads a VICE-format label file
+into a `SymbolTable`, shared by the disassembler, the tracer, and the
+debugger's address-to-name resolution.
+
+## Device Interfacing
+
+Every device — built-in or custom — implements `IoDevice`
+(`emulator::device`), stored in the bus as a boxed trait object behind a
+`DeviceId`. Three methods are required: `read`/`write` (always passed the
+*absolute* bus address, never a device-relative offset) and `peek`, which
+must be side-effect-free since it backs the debugger's Memory panel,
+watchpoints, and the disassembler rather than a real CPU access. Everything
+else — `tick(cycles)`, `irq_active()`, `take_nmi()`, `reset()`, `patch()`,
+`shutdown()`, `claims()` — defaults to a no-op and is opted into only as a
+device actually needs it; `tick()` and the two interrupt hooks are the ones
+built-in devices rely on most, since they're what `Cpu::step()` calls into
+after every instruction (see [CPU](#cpu) above). A device signals NMI by
+setting its own internal pending flag on the triggering event and reporting
+it once, from `take_nmi()`; it never calls anything on itself to raise an
+interrupt directly. Device *construction* is a separate concern from the
+`IoDevice` trait: a `DeviceModule` implementation is the piece that turns a
+TOML `[[devices]]` entry or `--device` CLI flag into an `IoDevice` instance
+and a call to `BusConfig::device()` — see
+[Adding a Custom Device Module](#adding-a-custom-device-module) below, which
+walks through implementing both halves for a new device type.
+
+## Peripheral Transport
+
+Devices that exchange byte streams with something outside the emulator —
+the console, the VIA, the PTM, both ACIAs — hold a `Transport`
+(`emulator::transport`), a small byte-stream trait with implementations for
+TCP sockets, Unix sockets, PTYs, spawned child processes over a pipe
+(`PipeTransport`), and an in-process variant (`InternalPipeTransport`) used
+internally to wire a console straight to the host's own stdin/stdout or
+terminal window. Every transport's actual I/O runs on its own thread or
+async task; a lock-free ring buffer (`ChannelRelay`/`TransportRelay`)
+decouples that from the device's synchronous `tick()` call, so a device
+drains whatever bytes have arrived — none, one, or a burst — without ever
+blocking, and the transport side never blocks waiting for the CPU thread
+either. `TransportReporter` surfaces connect/disconnect/error events as
+`DeviceEvent`s over a channel obtained from `device_event_channel()`, which
+is how the debugger UI shows transport status without polling it. A device
+that needs a transport is configured the same way as `EchoDevice` in
+[A Device That Uses a Transport](#a-device-that-uses-a-transport) below:
+deserialize a `TransportSpec` from the device's attributes and call
+`to_transport_with_reporter()` to obtain a connected `Transport` and its
+paired relay during `DeviceModule::instantiate()`.
+
+## Configuration
+
+The `emma65` binary (`src/bin/emulator/`) uses the `emulator::config` module
+to load configuration from all sources (TOML, environment, CLI), build an
+`EmulatorSession`, and run the free loop. The `emulator::config` module is
+the integration point for contributors adding new device types. The
+`emma65-tracer` binary (`src/bin/tracer/`) and the `emma65-debugger` crate
+(`debugger/src-tauri/`) are both thin front ends over the same library.
+
+## Other Public Modules
+
+Beyond `emulator`, the crate exposes three more top-level public modules:
+
+- **`assembler`** — assembles 6502 assembly source into one or more
+  `.org`-delimited output segments plus a symbol table, via `assemble(source)`
+  (`src/assembler/`; see `plan/assembler-plan.md` for the full design).
+  Output segments are ready to load into emulator memory (e.g. via
+  `Bus::patch`) or round-trip through the disassembler for verification.
+- **`disassembler`** — decodes bus memory into human-readable instruction
+  listings via side-effect-free `peek` reads, sharing the same opcode decode
+  table and variant logic as the CPU (see [CPU](#cpu) above); its `trace`
+  submodule reconstructs a disassembly listing from a previously recorded
+  binary execution trace, used by the `emma65-tracer` binary and the
+  debugger's Trace window.
+- **`watch`** — a self-contained watchpoint expression pipeline: `Scanner` →
+  `Vec<Token>` → `Parser` → `Expr` AST → `Compiler` → `Vec<OpCode>` →
+  `Evaluator` → `Operand`. The scanner and parser use zero-copy techniques —
+  token text slices borrow directly from the source string — so the pipeline
+  produces no heap allocations until bytecode emission. `WatchCompiler` and
+  `WatchEvaluator` are the primary entry points; `WatchEvaluator` owns
+  variable name-to-index mappings and persistent variable storage so that
+  watchpoint variables survive across steps.
+
+## Key Dependencies
 
 | Crate               | Purpose                                                             |
-|---------------------|---------------------------------------------------------------------|
+|---------------------|-----------------------------------------------------------------------|
 | `bitflags`          | Processor status register flag sets                                 |
 | `thiserror`         | Structured, typed error enums                                       |
 | `rand`              | Random fill for uninitialized RAM                                   |
@@ -26,38 +165,6 @@ SDL2 development headers to build — see
 [Running the Display Peripheral](running-the-display-peripheral.md) and
 [Running the LED Matrix Peripheral](running-the-led-matrix-peripheral.md)) and
 reuse the root crate's compositing code directly rather than duplicating it.
-
-The root crate exposes a library (`emma65`) and two binaries, `emma65` and
-`emma65-tracer`. The library has two top-level public modules:
-
-- **`emulator`** — the CPU, memory bus, and device infrastructure. Submodules:
-  `cpu` (opcode decode table, addressing modes, status register, variant
-  selection, bus-access trace recording), `bus` (address regions, bus
-  operations, IRQ/NMI controller, device ID allocation, VICE symbol loading),
-  `device` (device trait, built-in devices, and the `protocol` submodule for
-  VIA/PTM peer-communication framing), `exec` (clock speed, step results, live
-  snapshots, free-running and single-step execution), `transport`
-  (byte-stream abstraction, implementations, and the relay/reporter types
-  that connect devices to them), `disasm` (instruction disassembler, and a
-  `trace` submodule that reconstructs disassembly from a recorded trace), and
-  `error` (typed errors for every failure category).
-
-- **`watch`** — a self-contained watchpoint expression pipeline: `Scanner` →
-  `Vec<Token>` → `Parser` → `Expr` AST → `Compiler` → `Vec<OpCode>` →
-  `Evaluator` →
-  `Operand`. The scanner and parser use zero-copy techniques — token text
-  slices borrow directly from the source string — so the pipeline produces no
-  heap allocations until bytecode emission. `WatchCompiler` and
-  `WatchEvaluator` are the primary entry points;
-  `WatchEvaluator` owns variable name-to-index mappings and persistent
-  variable storage so that watchpoint variables survive across steps.
-
-The `emma65` binary (`src/bin/emulator/`) uses the `emulator::config` module
-to load configuration from all sources (TOML, environment, CLI), build an
-`EmulatorSession`, and run the free loop. The `emulator::config` module is
-the integration point for contributors adding new device types. The
-`emma65-tracer` binary (`src/bin/tracer/`) and the `emma65-debugger` crate
-(`debugger/src-tauri/`) are both thin front ends over the same library.
 
 ## Adding a Custom Device Module
 
