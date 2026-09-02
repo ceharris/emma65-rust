@@ -42,14 +42,20 @@ pub type LedMatrixFrameSlot = Arc<Mutex<Option<mpsc::Sender<LedMatrixFrame>>>>;
 /// during instantiation, mirroring [`DisplayGeometrySlot`]'s shape.
 pub type LedMatrixGeometrySlot = Arc<Mutex<Option<LedMatrixGeometry>>>;
 
-/// An LED matrix device's fixed geometry (design doc §10): the number of attached matrices,
-/// known entirely from configuration attributes and unaffected by anything the CPU does
-/// afterward. Handed to the debugger via [`InstantiationContext::led_matrix_geometry_sink`] so
-/// its panel can size its per-matrix canvases on mount, before any frame has been composited.
+/// An LED matrix device's fixed geometry (design doc §10): the number of attached matrices and
+/// their physical arrangement, known entirely from configuration attributes and unaffected by
+/// anything the CPU does afterward. Handed to the debugger via
+/// [`InstantiationContext::led_matrix_geometry_sink`] so its panel can size and lay out its
+/// per-matrix canvases on mount, before any frame has been composited -- mirroring the device's
+/// own bus-addressing arrangement rather than letting the panel pick an independent one (see
+/// `doc/led-matrix-external-protocol.md` §4, which threads the same `columns` value to the
+/// external companion binary).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LedMatrixGeometry {
     /// Number of attached matrices.
     pub matrices: u32,
+    /// Matrices per row of the arrangement grid (`matrices / columns` gives the row count).
+    pub columns: u32,
 }
 
 /// A display device's fixed pixel/cell geometry, known entirely from its configuration

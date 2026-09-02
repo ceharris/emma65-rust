@@ -43,13 +43,19 @@ to resynchronize.
 | Field           | Type      | Size (bytes) | Notes                                                |
 |-----------------|-----------|--------------|-------------------------------------------------------|
 | `magic`         | ASCII     | 4            | `"E65M"` — distinct from the trace format's `"E65T"` and the display protocol's `"E65D"` |
-| `version`       | `u8`      | 1            | `1`                                                   |
+| `version`       | `u8`      | 1            | `2`                                                   |
 | `matrix_count`  | `u8`      | 1            | number of matrices configured (spec §2), `1..=8`      |
+| `columns`       | `u8`      | 1            | the device's configured arrangement's column count (spec §2.2); the peripheral derives row count as `matrix_count / columns`, which always divides evenly |
 | `frame_rate_hz` | `u32` LE  | 4            | auto-refresh cadence; informational only — a peripheral is not required to sync its own redraw to it |
 
-Total header size: 10 bytes. Unlike `CharDisplay`'s header, there is no palette or per-matrix
+Total header size: 11 bytes. Unlike `CharDisplay`'s header, there is no palette or per-matrix
 dimension field: matrix dimensions are a fixed 32×32 constant (spec §2) that both sides already
 know, and the palette is never transferred at connection time (see §7).
+
+`columns` was added in version 2, replacing the peripheral's own `--arrangement` command-line
+flag: the peripheral's on-screen layout now always mirrors the device's actual bus-addressing
+arrangement (design doc §2.2) rather than an independently-chosen value that could disagree with
+it.
 
 ## 5. Messages (sent as they occur)
 

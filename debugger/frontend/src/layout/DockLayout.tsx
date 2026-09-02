@@ -730,23 +730,10 @@ function makeDockTabActions(
           .then(() => closeDockedPanel(containerApi, "led-matrix", ledMatrixPositionRef))
           .catch((err) => console.error("detach_led_matrix failed:", err));
       };
-      const arrangementAction = headerActions["led-matrix"];
       return (
-        <>
-          <button className="dock-tab-action" onClick={handleDetach} title="Detach LED Matrix to its own window">
-            <i className="codicon codicon-multiple-windows" />
-          </button>
-          {arrangementAction && (
-            <button
-              className="dock-tab-action"
-              onClick={arrangementAction.onClick}
-              disabled={arrangementAction.disabled}
-              title={arrangementAction.disabled ? (arrangementAction.disabledTitle ?? arrangementAction.title) : arrangementAction.title}
-            >
-              <i className="codicon codicon-menu" />
-            </button>
-          )}
-        </>
+        <button className="dock-tab-action" onClick={handleDetach} title="Detach LED Matrix to its own window">
+          <i className="codicon codicon-multiple-windows" />
+        </button>
       );
     }
     if (activePanel?.id === "run-controls" && activePanel.group.api.location.type !== "floating") {
