@@ -1,4 +1,4 @@
-name: Deploy cargo doc to GitHub Pages
+name: Deploy documentation to GitHub Pages
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'doc/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -24,7 +25,7 @@ env:
 
 jobs:
   build:
-    name: Build cargo doc
+    name: Build wiki and cargo doc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -35,16 +36,30 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build docs
+      - name: Install mdBook
+        uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: latest
+
+      - name: Build wiki
+        run: mdbook build doc
+
+      - name: Build cargo doc
         run: cargo doc -p emma65 --no-deps
 
-      - name: Add root redirect
+      - name: Add API redirect
         run: echo '<meta http-equiv="refresh" content="0; url=emma65/index.html">' > target/doc/index.html
+
+      - name: Assemble site
+        run: |
+          mkdir -p site
+          cp -r doc/book/. site/
+          cp -r target/doc site/api
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: target/doc
+          path: site
 
   deploy:
     name: Deploy to GitHub Pages

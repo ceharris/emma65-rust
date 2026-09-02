@@ -1,7 +1,4 @@
-# emma65
-
-[![CI](https://github.com/ceharris/emma65-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/ceharris/emma65-rust/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+# Introduction
 
 Emma65 is a software emulator for the 65C02-family of 8-bit microprocessors.
 It provides a complete execution environment suitable for running and
@@ -25,17 +22,3 @@ emulator core:
 
 Together they form a foundation for building retro-computing tools,
 educational simulators, and hardware-in-the-loop test rigs.
-
-## Documentation
-
-The full documentation — installation, the debugger, the emulator core,
-I/O devices, running the emulator and its peripherals, and a guide for
-contributors adding new device types — is published as a wiki at
-https://ceharris.github.io/emma65-rust/. Its source lives in this
-repository under `doc/`, built with [mdBook](https://rust-lang.github.io/mdBook/):
-
-```bash
-cargo install mdbook
-mdbook build doc      # renders to doc/book/
-mdbook serve doc      # or serve it locally with live reload
-```
