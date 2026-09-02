@@ -20,6 +20,8 @@ pub const HEADER_LEN: usize = 4 + 1 + 4 + 4 + 4 + 2 + FONT_BYTES;
 pub struct Header {
     pub columns: u32,
     pub rows: u32,
+    // Decoded for protocol completeness; not currently consumed by the renderer.
+    #[allow(dead_code)]
     pub frame_rate_hz: u32,
     pub palette_len: u16,
     pub font: Font,
