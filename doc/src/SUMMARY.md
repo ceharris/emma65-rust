@@ -20,3 +20,4 @@
   - [Character Display External Protocol](appendix-display-protocol.md)
   - [LED Matrix External Protocol](appendix-led-matrix-protocol.md)
 - [Trace File Format](appendix-trace-format.md)
+- [API Documentation](api-documentation.md)
