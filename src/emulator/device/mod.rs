@@ -14,9 +14,11 @@ pub mod vireo;
 pub mod protocol;
 pub mod led_matrix;
 pub mod display;
+pub mod lcd_display;
 
 pub use self::console::Console;
 pub use self::finch::Finch;
+pub use self::lcd_display::LcdDisplay;
 pub use self::lfsr::Lfsr16;
 pub use self::mc6840::Mc6840;
 pub use self::mc6850::Mc6850;
