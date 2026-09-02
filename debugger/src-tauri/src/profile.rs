@@ -284,8 +284,8 @@ pub async fn open_profile(app: AppHandle) -> Result<(), String> {
 /// directory already recorded in `ProfileDirState`. File > Reload Profile /
 /// Ctrl+Shift+R (issue #547), letting a separate IDE's edits to the 6502
 /// program/labels be picked up without restarting the debugger. Enabled only
-/// while the CPU is stopped (see `set_reload_profile_menu_enabled` in
-/// `menu.rs`).
+/// while the CPU is stopped, same as `create_profile` and `open_profile`
+/// above (see `set_profile_menu_enabled` in `menu.rs`).
 #[tauri::command]
 pub async fn reload_profile(app: AppHandle) -> Result<(), String> {
     let dir = app.state::<ProfileDirState>().0.lock().unwrap().clone();
