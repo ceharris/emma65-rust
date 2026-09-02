@@ -13,9 +13,14 @@
 //! | Data        | `1`    | R/W    | R/W: DDRAM/CGRAM at the current address (spec §4.4) |
 //!
 //! This work unit implements register access, instruction decode, busy timing, and DDRAM/CGRAM
-//! storage -- everything observable through direct `read`/`write`/`peek` calls. Compositing,
-//! CGROM, and any transport/frame-sink plumbing for the debugger panel are later work units (this
-//! plan's Work Units 2, 3, 4, 5); until then this device has no visible rendering at all.
+//! storage -- everything observable through direct `read`/`write`/`peek` calls. [`cgrom`] and
+//! [`compositing`] add the CGROM table and the pure pixel-compositing function (this plan's Work
+//! Unit 2); any transport/frame-sink plumbing wiring compositing into this device, and the config
+//! module/registry entry that supplies real `Geometry` values, are later work units (3, 4, 5) --
+//! until then this device still has no visible rendering reachable from a running emulator.
+
+pub mod cgrom;
+pub mod compositing;
 
 use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
 
@@ -42,8 +47,10 @@ impl Geometry {
     /// geometry's segments reach into the second half (a raw address of `0x40` or more -- spec
     /// §7.1's addressing-style column), which is what this device's real-hardware-accurate DDRAM
     /// addressing (`fold_ddram_address` below) and `line_shift`'s sizing/modulus (spec §7.4) both
-    /// key off.
-    fn is_dual_line(&self) -> bool {
+    /// key off. `pub(crate)` since [`compositing::composite`] needs the same line-bucketing logic
+    /// to apply `line_shift` correctly and is handed only a `&Geometry`, not this device's own
+    /// precomputed `dual_line` field.
+    pub(crate) fn is_dual_line(&self) -> bool {
         self.segments.iter().any(|row| row.iter().any(|&(start, _)| start >= 0x40))
     }
 }
