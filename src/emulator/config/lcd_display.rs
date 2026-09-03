@@ -15,11 +15,68 @@ use std::sync::{Arc, Mutex};
 const DEVICE_TYPE: &str = "display/lcd";
 
 const DEFAULT_GEOMETRY: &str = "16x2";
+
+/// Which state -- pixel or background -- shows the backlight color vs. a dark/off tone, mirroring
+/// a real LCD element's polarizer orientation (issue #583).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Polarity {
+    /// Dark pixels over a backlight-colored background -- the common case for character LCDs.
+    Positive,
+    /// Backlight-colored pixels over a dark/off background.
+    Negative,
+}
+
+impl Polarity {
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "positive" => Some(Polarity::Positive),
+            "negative" => Some(Polarity::Negative),
+            _ => None,
+        }
+    }
+}
+
 // The classic yellow-green-backlight/black-polarizer combination most common LCD modules ship
 // with (issue #579), superseding spec §3's originally-documented blue/white default -- background
 // is CSS "yellowgreen" (#9ACD32).
-const DEFAULT_BACKGROUND: Rgb24 = Rgb24::new(0x9A, 0xCD, 0x32);
-const DEFAULT_FOREGROUND: Rgb24 = Rgb24::new(0x00, 0x00, 0x00);
+const DEFAULT_POLARITY: &str = "positive";
+const DEFAULT_BACKLIGHT: &str = "yellow";
+
+/// `(polarity, backlight)` -> `(background, foreground)` presets modeling commonly available
+/// real-world HD44780 module color schemes (issue #583). Positive polarity always renders dark
+/// pixels over the backlight color; negative polarity renders the backlight color as the pixel
+/// itself, over a dark "opaque near-black" background -- `0x0A0A0A` matches the bezel color the
+/// SDL peripheral already draws (issue #579), so a negative-polarity display reads as visually
+/// continuous with its bezel. Only 8 of the 10 possible `(polarity, backlight)` combinations
+/// correspond to hardware that's actually commonly available; the rest are intentionally left
+/// unmapped and rejected at configuration time rather than guessed at.
+const COLOR_PRESETS: &[(Polarity, &str, Rgb24, Rgb24)] = &[
+    (Polarity::Positive, "yellow", Rgb24::new(0x9A, 0xCD, 0x32), Rgb24::new(0x00, 0x00, 0x00)),
+    (Polarity::Positive, "white", Rgb24::new(0xFF, 0xFF, 0xFF), Rgb24::new(0x00, 0x00, 0x00)),
+    (Polarity::Positive, "amber", Rgb24::new(0xFF, 0xB0, 0x00), Rgb24::new(0x00, 0x00, 0x00)),
+    (Polarity::Positive, "blue", Rgb24::new(0x87, 0xCE, 0xEB), Rgb24::new(0x00, 0x00, 0x00)),
+    // Sampled from a real negative-blue HD44780 module's backlit background (issue #583 review
+    // feedback) -- the classic saturated royal blue these modules ship with, not a generic navy
+    // -- then darkened slightly from the raw sample: unlike the other negative presets' near-
+    // black background, this one starts bright enough that the renderer's fixed 15% "off dot"
+    // blend toward `foreground` (`OFF_DOT_BLEND` in `LcdDisplayPanel.tsx`/`lcd-display/main.rs`,
+    // issue #569) was making inactive dots noticeably lighter than the sampled photo -- too "hot"
+    // (review feedback) for a state meant to read as barely-there.
+    (Polarity::Negative, "blue", Rgb24::new(0x00, 0x19, 0x66), Rgb24::new(0xFF, 0xFF, 0xFF)),
+    (Polarity::Negative, "white", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0xFF, 0xFF)),
+    (Polarity::Negative, "amber", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0xB0, 0x00)),
+    (Polarity::Negative, "red", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0x24, 0x00)),
+];
+
+fn color_preset(polarity: Polarity, backlight: &str) -> Option<(Rgb24, Rgb24)> {
+    COLOR_PRESETS.iter()
+        .find(|(p, b, _, _)| *p == polarity && *b == backlight)
+        .map(|(_, _, background, foreground)| (*background, *foreground))
+}
+
+fn supported_backlights_for(polarity: Polarity) -> Vec<&'static str> {
+    COLOR_PRESETS.iter().filter(|(p, _, _, _)| *p == polarity).map(|(_, b, _, _)| *b).collect()
+}
 
 /// The 9 supported geometries (spec §7.1), looked up by the config's `geometry` string. This is
 /// the single source of truth for every geometry's row/segment layout -- `geometry_for` is the
@@ -82,7 +139,14 @@ struct LcdDisplayAttributes {
     geometry: Option<String>,
     /// Optional override for the built-in character generator ROM (spec §3, §8.1).
     cgrom: Option<ExpandedPathBuf>,
-    /// Cosmetic-only rendering colors (spec §3, §8.3); hex RGB24, e.g. `"0000AA"`.
+    /// Cosmetic-only display polarity (issue #583): `"positive"` (default) or `"negative"`,
+    /// selecting which of `background`/`foreground` a chosen `backlight` color fills.
+    polarity: Option<String>,
+    /// Cosmetic-only backlight color preset (issue #583): one of `"yellow"`, `"white"`,
+    /// `"amber"`, `"blue"`, `"red"`, restricted to the combinations valid for `polarity`.
+    backlight: Option<String>,
+    /// Cosmetic-only rendering colors (spec §3, §8.3); hex RGB24, e.g. `"0000AA"`. Each, if
+    /// given, overrides the corresponding channel of the `polarity`/`backlight` preset.
     background: Option<String>,
     foreground: Option<String>,
     /// Wire-protocol transport for a standalone external peripheral (`plan/lcd-display-external-
@@ -121,15 +185,25 @@ impl DeviceModule for LcdDisplayModule {
             None => CgRom::default(),
         };
 
+        let polarity_name = config.polarity.as_deref().unwrap_or(DEFAULT_POLARITY);
+        let polarity = Polarity::parse(polarity_name).ok_or_else(|| DeviceModuleError::Config(format!(
+            "display/lcd: polarity must be one of [\"positive\", \"negative\"], got {polarity_name:?}")))?;
+
+        let backlight_name = config.backlight.as_deref().unwrap_or(DEFAULT_BACKLIGHT);
+        let (preset_background, preset_foreground) = color_preset(polarity, backlight_name)
+            .ok_or_else(|| DeviceModuleError::Config(format!(
+                "display/lcd: backlight must be one of {:?} for {polarity_name} polarity, got {backlight_name:?}",
+                supported_backlights_for(polarity))))?;
+
         let background = match &config.background {
             Some(text) => parse_color(text).ok_or_else(|| DeviceModuleError::Config(format!(
                 "display/lcd: background must be 6 hex digits (RRGGBB), optionally '#'-prefixed, got {text:?}")))?,
-            None => DEFAULT_BACKGROUND,
+            None => preset_background,
         };
         let foreground = match &config.foreground {
             Some(text) => parse_color(text).ok_or_else(|| DeviceModuleError::Config(format!(
                 "display/lcd: foreground must be 6 hex digits (RRGGBB), optionally '#'-prefixed, got {text:?}")))?,
-            None => DEFAULT_FOREGROUND,
+            None => preset_foreground,
         };
 
         let transport_spec = config.transport
@@ -219,6 +293,17 @@ mod tests {
         InstantiationContext::default()
     }
 
+    /// A context whose `lcd_display_geometry_sink` is wired up, so a test can read back the
+    /// device's computed `background`/`foreground` (design doc §7) after `instantiate`.
+    fn context_with_geometry_sink() -> (InstantiationContext, Arc<Mutex<Option<LcdDisplayGeometry>>>) {
+        let sink = Arc::new(Mutex::new(None));
+        let ctx = InstantiationContext {
+            lcd_display_geometry_sink: Some(sink.clone()),
+            ..Default::default()
+        };
+        (ctx, sink)
+    }
+
     #[tokio::test]
     async fn instantiate_without_attributes_uses_default_geometry_and_colors() {
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
@@ -301,6 +386,95 @@ mod tests {
             BusConfig::new(), 0xD000, &attributes, &context(), id_allocator).await;
 
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn instantiate_without_attributes_uses_default_polarity_and_backlight_colors() {
+        let (ctx, sink) = context_with_geometry_sink();
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &HashMap::new(), &ctx, id_allocator).await.unwrap();
+
+        let geometry = sink.lock().unwrap().unwrap();
+        assert_eq!(geometry.background, Rgb24::new(0x9A, 0xCD, 0x32));
+        assert_eq!(geometry.foreground, Rgb24::new(0x00, 0x00, 0x00));
+    }
+
+    #[tokio::test]
+    async fn instantiate_with_each_color_preset_succeeds_and_yields_expected_colors() {
+        for (polarity, backlight, background, foreground) in COLOR_PRESETS {
+            let mut attributes = HashMap::new();
+            attributes.insert("polarity".to_string(), Value::from(match polarity {
+                Polarity::Positive => "positive",
+                Polarity::Negative => "negative",
+            }));
+            attributes.insert("backlight".to_string(), Value::from(*backlight));
+            let (ctx, sink) = context_with_geometry_sink();
+            let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+            let result = LcdDisplayModule.instantiate(
+                BusConfig::new(), 0xD000, &attributes, &ctx, id_allocator).await;
+
+            assert!(result.is_ok(), "polarity {polarity:?} backlight {backlight:?} should be accepted");
+            let geometry = sink.lock().unwrap().unwrap();
+            assert_eq!(geometry.background, *background, "background for {polarity:?}/{backlight:?}");
+            assert_eq!(geometry.foreground, *foreground, "foreground for {polarity:?}/{backlight:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn instantiate_with_unsupported_polarity_fails() {
+        let mut attributes = HashMap::new();
+        attributes.insert("polarity".to_string(), Value::from("sideways"));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let result = LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &attributes, &context(), id_allocator).await;
+
+        match result {
+            Err(DeviceModuleError::Config(message)) => assert!(message.contains("polarity")),
+            Err(other) => panic!("expected DeviceModuleError::Config, got a different error variant: {other}"),
+            Ok(_) => panic!("expected DeviceModuleError::Config, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn instantiate_with_backlight_not_valid_for_polarity_fails() {
+        // "red" is only defined for negative polarity (issue #583) -- positive+red should be
+        // rejected rather than silently falling back to some other color.
+        let mut attributes = HashMap::new();
+        attributes.insert("polarity".to_string(), Value::from("positive"));
+        attributes.insert("backlight".to_string(), Value::from("red"));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let result = LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &attributes, &context(), id_allocator).await;
+
+        match result {
+            Err(DeviceModuleError::Config(message)) => assert!(message.contains("backlight")),
+            Err(other) => panic!("expected DeviceModuleError::Config, got a different error variant: {other}"),
+            Ok(_) => panic!("expected DeviceModuleError::Config, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn instantiate_with_explicit_colors_overrides_preset() {
+        let mut attributes = HashMap::new();
+        attributes.insert("polarity".to_string(), Value::from("negative"));
+        attributes.insert("backlight".to_string(), Value::from("red"));
+        attributes.insert("foreground".to_string(), Value::from("#00FF00"));
+        let (ctx, sink) = context_with_geometry_sink();
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &attributes, &ctx, id_allocator).await.unwrap();
+
+        let geometry = sink.lock().unwrap().unwrap();
+        // background still comes from the negative/red preset...
+        assert_eq!(geometry.background, Rgb24::new(0x0A, 0x0A, 0x0A));
+        // ...but the explicit foreground override wins over the preset's foreground.
+        assert_eq!(geometry.foreground, Rgb24::new(0x00, 0xFF, 0x00));
     }
 
     #[tokio::test]

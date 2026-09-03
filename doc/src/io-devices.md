@@ -207,9 +207,31 @@ transport = "pipe:/path/to/emma65-lcd-display"
 `geometry` (optional, default `16x2`) selects one of the nine supported
 real-world module layouts: `8x1`, `8x2`, `16x1`, `16x2`, `16x4`, `20x2`,
 `20x4`, `40x1`, `40x2`. `cgrom` (optional) overrides the built-in character
-generator ROM with a file of the same format. `background`/`foreground`
-(optional, hex RGB24) are cosmetic-only rendering colors — not part of the
-HD44780's own behavior, and not bus-addressable.
+generator ROM with a file of the same format.
+
+`polarity` (optional, default `positive`) and `backlight` (optional, default
+`yellow`) together select one of 8 color-scheme presets modeling
+commonly available real LCD modules, rather than requiring hand-picked RGB24
+values: `positive` polarity renders dark pixels over a backlight-colored
+background; `negative` polarity renders backlight-colored pixels over a dark
+"opaque near-black" background. Not every `backlight` value is valid for
+every `polarity` — only the combinations below are:
+
+| `polarity`  | `backlight` |
+|-------------|-------------|
+| `positive`  | `yellow`    |
+| `positive`  | `white`     |
+| `positive`  | `amber`     |
+| `positive`  | `blue`      |
+| `negative`  | `blue`      |
+| `negative`  | `white`     |
+| `negative`  | `amber`     |
+| `negative`  | `red`       |
+
+`background`/`foreground` (optional, hex RGB24) remain available for fully
+custom colors — each, if given, overrides the corresponding channel of the
+`polarity`/`backlight` preset. None of these are part of the HD44780's own
+behavior, and none are bus-addressable.
 
 ## Character Display (`display`)
 
