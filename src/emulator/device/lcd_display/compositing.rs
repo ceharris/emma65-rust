@@ -262,11 +262,10 @@ mod tests {
         let pixels = composite(&ddram, &blank_cgram(), &SINGLE_ROW, &[0, 0], no_cursor(), true, false, &CgRom::default(), BG, FG);
         let width_px = SINGLE_ROW.columns as usize * CELL_WIDTH;
 
-        // Row 1 of 'A' is [0, 4, 10, ...]: row 0 blank, row 1 has only the middle (col 2) pixel
-        // set.
-        assert_eq!(pixel_at(&pixels, width_px, 2, 1), [FG.r, FG.g, FG.b, 0xFF]);
-        // Row 0 is blank -- top-left pixel stays background.
-        assert_eq!(pixel_at(&pixels, width_px, 0, 0), [BG.r, BG.g, BG.b, 0xFF]);
+        // Row 0 of 'A' is [4, 10, ...]: only the middle (col 2) pixel set.
+        assert_eq!(pixel_at(&pixels, width_px, 2, 0), [FG.r, FG.g, FG.b, 0xFF]);
+        // Row 7 is the reserved cursor row, blank here -- stays background.
+        assert_eq!(pixel_at(&pixels, width_px, 0, 7), [BG.r, BG.g, BG.b, 0xFF]);
     }
 
     #[test]
@@ -276,7 +275,7 @@ mod tests {
         let pixels = composite(&ddram, &blank_cgram(), &SINGLE_ROW, &[0, 0], no_cursor(), true, false, &CgRom::default(), BG, FG);
         let width_px = SINGLE_ROW.columns as usize * CELL_WIDTH;
 
-        assert_eq!(pixel_at(&pixels, width_px, CELL_WIDTH + 2, 1), [FG.r, FG.g, FG.b, 0xFF]);
+        assert_eq!(pixel_at(&pixels, width_px, CELL_WIDTH + 2, 0), [FG.r, FG.g, FG.b, 0xFF]);
     }
 
     #[test]
@@ -287,7 +286,7 @@ mod tests {
         let width_px = DUAL_ROW.columns as usize * CELL_WIDTH;
         let second_display_row = 1;
 
-        assert_eq!(pixel_at(&pixels, width_px, 2, second_display_row * 8 + 1), [FG.r, FG.g, FG.b, 0xFF]);
+        assert_eq!(pixel_at(&pixels, width_px, 2, second_display_row * 8), [FG.r, FG.g, FG.b, 0xFF]);
     }
 
     // Mirrors the real `40x2` geometry (spec §7.1): wide dual-line segments whose column offsets
@@ -307,7 +306,7 @@ mod tests {
         let second_display_row = 1;
 
         assert_eq!(
-            pixel_at(&pixels, width_px, last_col * CELL_WIDTH + 2, second_display_row * 8 + 1),
+            pixel_at(&pixels, width_px, last_col * CELL_WIDTH + 2, second_display_row * 8),
             [FG.r, FG.g, FG.b, 0xFF]
         );
     }
@@ -329,9 +328,9 @@ mod tests {
         let pixels = composite(&ddram, &blank_cgram(), &PAIRED_ROW_GEOMETRY, &[0, 0], no_cursor(), true, false, &CgRom::default(), BG, FG);
         let width_px = PAIRED_ROW_GEOMETRY.columns as usize * CELL_WIDTH;
 
-        // 'A' row 1 of the glyph has only the middle column set (see ascii_glyph_composites_expected_pixels).
-        assert_eq!(pixel_at(&pixels, width_px, 2, 2 * 8 + 1), [FG.r, FG.g, FG.b, 0xFF], "row 3 (index 2)");
-        assert_eq!(pixel_at(&pixels, width_px, 2, 3 * 8 + 1), [FG.r, FG.g, FG.b, 0xFF], "row 4 (index 3)");
+        // 'A' row 0 of the glyph has only the middle column set (see ascii_glyph_composites_expected_pixels).
+        assert_eq!(pixel_at(&pixels, width_px, 2, 2 * 8), [FG.r, FG.g, FG.b, 0xFF], "row 3 (index 2)");
+        assert_eq!(pixel_at(&pixels, width_px, 2, 3 * 8), [FG.r, FG.g, FG.b, 0xFF], "row 4 (index 3)");
     }
 
     #[test]
@@ -342,7 +341,7 @@ mod tests {
         let pixels = composite(&ddram, &blank_cgram(), &SINGLE_ROW, &[1, 0], no_cursor(), true, false, &CgRom::default(), BG, FG);
         let width_px = SINGLE_ROW.columns as usize * CELL_WIDTH;
 
-        assert_eq!(pixel_at(&pixels, width_px, 2, 1), [FG.r, FG.g, FG.b, 0xFF]);
+        assert_eq!(pixel_at(&pixels, width_px, 2, 0), [FG.r, FG.g, FG.b, 0xFF]);
     }
 
     #[test]
