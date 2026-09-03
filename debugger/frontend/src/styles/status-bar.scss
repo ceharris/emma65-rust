@@ -57,9 +57,14 @@ button.status-bar-cell {
 
 // Reset is destructive (drops CPU/device state), so it gets a danger
 // background at rest rather than the subtle borderless look of the other
-// status-bar buttons, to make it harder to miss/misclick.
+// status-bar buttons, to make it harder to miss/misclick. Its background
+// (--color-reset-bg) stays the same dark purple in both themes, so its label
+// uses a fixed light foreground (--color-reset-fg) rather than --color-fg,
+// which flips to a dark color in the Light theme and becomes unreadable
+// against it (issue #586).
 button.status-bar-reset {
   background-color: var(--color-reset-bg);
+  color: var(--color-reset-fg);
 
   &:hover {
     background-color: var(--color-danger-strong);
