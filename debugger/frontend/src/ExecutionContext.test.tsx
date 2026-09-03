@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ExecutionProvider, useExecutionContext } from "./ExecutionContext";
 import type { RegisterSnapshot } from "./RegisterPanel";
+import { expectHookThrows } from "./test/expectHookThrows";
 import { emitMockEvent, invoke, resetTauriMocks } from "./test/tauriMock";
 
 function snapshot(overrides: Partial<RegisterSnapshot> = {}): RegisterSnapshot {
@@ -18,7 +19,7 @@ beforeEach(() => {
 
 describe("useExecutionContext", () => {
   it("throws when used outside an ExecutionProvider", () => {
-    expect(() => renderHook(() => useExecutionContext())).toThrow(
+    expect(expectHookThrows(() => useExecutionContext())).toThrow(
       /must be used within an ExecutionProvider/,
     );
   });

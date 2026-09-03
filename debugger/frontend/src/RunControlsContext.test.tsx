@@ -10,6 +10,7 @@ import {
   sliderToInterval,
   useRunControlsContext,
 } from "./RunControlsContext";
+import { expectHookThrows } from "./test/expectHookThrows";
 import { emitMockEvent, invoke, resetTauriMocks } from "./test/tauriMock";
 
 function snapshot(overrides: Partial<RegisterSnapshot> = {}): RegisterSnapshot {
@@ -64,7 +65,7 @@ describe("sliderToInterval / intervalToSlider", () => {
 
 describe("useRunControlsContext", () => {
   it("throws when used outside a RunControlsProvider", () => {
-    expect(() => renderHook(() => useRunControlsContext())).toThrow(
+    expect(expectHookThrows(() => useRunControlsContext())).toThrow(
       /must be used within a RunControlsProvider/,
     );
   });
