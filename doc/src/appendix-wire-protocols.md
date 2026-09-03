@@ -18,13 +18,17 @@ Two families of protocol, serving different needs:
   peripheral receives a full state dump; every peripheral thereafter sees
   every state change, whether it originated on the device (a program writing
   a register) or from another connected peripheral.
-- **External rendering protocols** — [CharDisplay](appendix-display-protocol.md)
-  and [LedMatrix](appendix-led-matrix-protocol.md) stream composited frame
-  data to the bundled `emma65-display` and `emma65-led-matrix` SDL2
-  peripheral binaries (see [Running the Display Peripheral](running-the-display-peripheral.md)
-  and [Running the LED Matrix Peripheral](running-the-led-matrix-peripheral.md)).
+- **External rendering protocols** — [CharDisplay](appendix-display-protocol.md),
+  [LedMatrix](appendix-led-matrix-protocol.md), and
+  [LcdDisplay](appendix-lcd-display-protocol.md) stream composited frame
+  data to the bundled `emma65-display`, `emma65-led-matrix`, and
+  `emma65-lcd-display` SDL2 peripheral binaries (see
+  [Running the Display Peripheral](running-the-display-peripheral.md),
+  [Running the LED Matrix Peripheral](running-the-led-matrix-peripheral.md),
+  and [Running the LCD Display Peripheral](running-the-lcd-display-peripheral.md)).
   These only matter when running the plain `emma65` CLI standalone — the
-  debugger renders both devices in-process and never speaks either protocol.
+  debugger renders all three devices in-process and never speaks any of
+  these protocols.
 
 | Protocol | Device (config `type`) | Direction | Encoding | Transport requirement |
 |----------|-------------------------|-----------|----------|------------------------|
@@ -32,10 +36,11 @@ Two families of protocol, serving different needs:
 | [PTM Peer Protocol](appendix-ptm-protocol.md) | `Mc6840` (`ptm/6840`) | bidirectional | ASCII or Binary, selected by `protocol=` | multipoint (`tcp:`/`unix:`) |
 | [Character Display External Protocol](appendix-display-protocol.md) | `CharDisplay` (`display`) | outbound frames + inbound keystrokes | Binary only | atomic `send_bytes` (`pipe:` only) |
 | [LED Matrix External Protocol](appendix-led-matrix-protocol.md) | `LedMatrix` (`display/matrix`) | outbound only | Binary only | atomic `send_bytes` (`pipe:` only) |
+| [LCD Display External Protocol](appendix-lcd-display-protocol.md) | `LcdDisplay` (`display/lcd`) | outbound only | Binary only | atomic `send_bytes` (`pipe:` only) |
 
-The two rendering protocols additionally require an atomic
+The three rendering protocols additionally require an atomic
 [`Transport::send_bytes`](io-devices.md#transport-options) — either the
-whole outbound message is delivered or none of it is — because both are
+whole outbound message is delivered or none of it is — because all three are
 framed with no length prefixes or delimiters; a partial write would desync
 the stream with no way to resynchronize. In practice this rules out every
 transport but `pipe:`, and the config module for each device rejects any
