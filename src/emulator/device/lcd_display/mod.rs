@@ -22,6 +22,8 @@
 pub mod cgrom;
 pub mod compositing;
 
+use self::cgrom::CgRom;
+use self::compositing::Rgb24;
 use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
 
 /// The `NOMINAL_CLOCK_HZ` fallback used when the CPU runs unthrottled (`ClockSpeed::unlimited()`)
@@ -139,6 +141,9 @@ pub struct LcdDisplay {
     address_range: AddressRange,
     geometry: &'static Geometry,
     dual_line: bool,
+    cgrom: CgRom,
+    background: Rgb24,
+    foreground: Rgb24,
 
     instruction_nibble: NibbleState,
     data_nibble: NibbleState,
@@ -176,11 +181,21 @@ impl LcdDisplay {
     ///
     /// `clock_hz` is the CPU's configured clock speed in Hz, or `None` if the CPU runs
     /// unthrottled (`ClockSpeed::unlimited()`); see [`NOMINAL_CLOCK_HZ`].
+    ///
+    /// `cgrom`, `background`, and `foreground` are fixed at configuration time (spec §3) and
+    /// stored here for a later work unit's compositing/frame-push wiring to consume -- this work
+    /// unit has no frame sink to push composited output to yet, but the config module already
+    /// resolves and validates all three, so the device holds them from construction rather than
+    /// needing a second breaking change to this signature once compositing is wired in.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &'static str,
         address_range: AddressRange,
         geometry: &'static Geometry,
         clock_hz: Option<u64>,
+        cgrom: CgRom,
+        background: Rgb24,
+        foreground: Rgb24,
     ) -> Self {
         debug_assert_eq!(address_range.len(), 2, "LcdDisplay's bus footprint is always 2 bytes (spec §4.1)");
         Self {
@@ -188,6 +203,9 @@ impl LcdDisplay {
             address_range,
             geometry,
             dual_line: geometry.is_dual_line(),
+            cgrom,
+            background,
+            foreground,
             instruction_nibble: NibbleState::Idle,
             data_nibble: NibbleState::Idle,
             interface_width_8bit: true,
@@ -210,6 +228,21 @@ impl LcdDisplay {
     /// The physical character grid fixed at configuration time (spec §3).
     pub fn geometry(&self) -> &'static Geometry {
         self.geometry
+    }
+
+    /// The character generator ROM table fixed at configuration time (spec §3, §8.1).
+    pub fn cgrom(&self) -> &CgRom {
+        &self.cgrom
+    }
+
+    /// The cosmetic-only background color fixed at configuration time (spec §3, §8.3).
+    pub fn background(&self) -> Rgb24 {
+        self.background
+    }
+
+    /// The cosmetic-only foreground color fixed at configuration time (spec §3, §8.3).
+    pub fn foreground(&self) -> Rgb24 {
+        self.foreground
     }
 
     /// Installs a log sender for diagnostic messages (e.g. `reset()`, busy-discarded accesses).
@@ -485,11 +518,13 @@ mod tests {
     }
 
     fn device() -> LcdDisplay {
-        LcdDisplay::new(DEVICE_NAME, address_range(), &DUAL_LINE_GEOMETRY, Some(1_000_000))
+        LcdDisplay::new(DEVICE_NAME, address_range(), &DUAL_LINE_GEOMETRY, Some(1_000_000),
+            CgRom::default(), Rgb24::new(0, 0, 0), Rgb24::new(255, 255, 255))
     }
 
     fn single_line_device() -> LcdDisplay {
-        LcdDisplay::new(DEVICE_NAME, address_range(), &SINGLE_LINE_GEOMETRY, Some(1_000_000))
+        LcdDisplay::new(DEVICE_NAME, address_range(), &SINGLE_LINE_GEOMETRY, Some(1_000_000),
+            CgRom::default(), Rgb24::new(0, 0, 0), Rgb24::new(255, 255, 255))
     }
 
     fn instruction_addr() -> u16 {

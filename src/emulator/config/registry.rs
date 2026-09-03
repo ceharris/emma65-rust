@@ -1,6 +1,7 @@
 use super::{ConsoleModule, DeviceModule, DeviceModuleError, FinchModule, LfsrModule, Mc6840Module, Mc6850Module, PhoebeModule, PicFinchModule, R6551Module, RamModule, RomModule, Via6522Module, VireoModule};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::config::display::CharDisplayModule;
+use crate::emulator::config::lcd_display::LcdDisplayModule;
 use crate::emulator::config::led_matrix::LedMatrixModule;
 use crate::emulator::device::display::DisplayFrame;
 use crate::emulator::device::led_matrix::LedMatrixFrame;
@@ -183,6 +184,7 @@ impl DeviceRegistry {
         r.register(FinchModule);
         r.register(LedMatrixModule);
         r.register(CharDisplayModule);
+        r.register(LcdDisplayModule);
         r.register(LfsrModule);
         r.register(R6551Module);
         r.register(Mc6840Module);
