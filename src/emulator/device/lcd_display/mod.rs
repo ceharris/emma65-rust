@@ -12,23 +12,44 @@
 //! | Instruction | `0`    | R/W    | W: issue instruction (spec §4.2). R: busy + address counter (spec §4.3) |
 //! | Data        | `1`    | R/W    | R/W: DDRAM/CGRAM at the current address (spec §4.4) |
 //!
-//! This work unit implements register access, instruction decode, busy timing, and DDRAM/CGRAM
-//! storage -- everything observable through direct `read`/`write`/`peek` calls. [`cgrom`] and
-//! [`compositing`] add the CGROM table and the pure pixel-compositing function (this plan's Work
-//! Unit 2); any transport/frame-sink plumbing wiring compositing into this device, and the config
-//! module/registry entry that supplies real `Geometry` values, are later work units (3, 4, 5) --
-//! until then this device still has no visible rendering reachable from a running emulator.
+//! Register access, instruction decode, busy timing, and DDRAM/CGRAM storage are all observable
+//! through direct `read`/`write`/`peek` calls (Work Unit 1). [`cgrom`] and [`compositing`] add
+//! the CGROM table and the pure pixel-compositing function (Work Unit 2); the config module
+//! (`emulator::config::lcd_display`) resolves a real `Geometry`/`CgRom`/colors (Work Unit 3); and
+//! [`LcdDisplay::attach_frame_sink`] wires a debugger-owned push channel that every render-
+//! affecting register write composites into and sends an [`LcdDisplayFrame`] through (Work Unit
+//! 4, design doc §7) -- frontend rendering itself is Work Unit 5.
 
 pub mod cgrom;
 pub mod compositing;
 
 use self::cgrom::CgRom;
-use self::compositing::Rgb24;
+use self::compositing::{CursorState, Rgb24};
 use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
+use tokio::sync::mpsc;
 
 /// The `NOMINAL_CLOCK_HZ` fallback used when the CPU runs unthrottled (`ClockSpeed::unlimited()`)
 /// -- reused directly from `display` rather than duplicated (design doc §4).
 use super::display::NOMINAL_CLOCK_HZ;
+
+/// A composited frame ready for display: an RGBA byte buffer (`columns * 5` by `rows * (8 or 10)`
+/// pixels, depending on the active font -- see [`compositing::composite`]) plus the cell
+/// dimensions it was composited from -- self-describing since a delivery client has no other way
+/// to learn the device's configured grid size until a frame actually arrives.
+///
+/// Pushed to a device's frame sink on every register write that can change what's rendered
+/// (design doc §7) -- unlike [`super::display::DisplayFrame`]'s vsync cadence or
+/// [`super::led_matrix::LedMatrixFrame`]'s per-swap push, this device has no periodic redraw
+/// concept at all (spec §2.1's timing is about busy/instruction latency, not a periodic vsync).
+#[derive(Clone)]
+pub struct LcdDisplayFrame {
+    /// RGBA bytes, row-major, top row first, 4 bytes per pixel.
+    pub pixels: Vec<u8>,
+    /// Grid width in cells this frame was composited from.
+    pub columns: u8,
+    /// Grid height in cells this frame was composited from.
+    pub rows: u8,
+}
 
 /// A supported physical character grid: visible rows, each composed of one or more DDRAM
 /// segments (`(start, count)`, raw HD44780 address and visible width -- spec §7.1). `columns` is
@@ -172,6 +193,11 @@ pub struct LcdDisplay {
     clock_hz: u64,
     busy_cycles_remaining: u64,
 
+    /// Push channel for composited frames (design doc §7), set post-construction via
+    /// [`Self::attach_frame_sink`] -- `None` when run outside the debugger (plain `emma65` CLI),
+    /// in which case no register write ever composites anything.
+    frame_sink: Option<mpsc::Sender<LcdDisplayFrame>>,
+
     log_sender: LogSender,
 }
 
@@ -183,10 +209,8 @@ impl LcdDisplay {
     /// unthrottled (`ClockSpeed::unlimited()`); see [`NOMINAL_CLOCK_HZ`].
     ///
     /// `cgrom`, `background`, and `foreground` are fixed at configuration time (spec §3) and
-    /// stored here for a later work unit's compositing/frame-push wiring to consume -- this work
-    /// unit has no frame sink to push composited output to yet, but the config module already
-    /// resolves and validates all three, so the device holds them from construction rather than
-    /// needing a second breaking change to this signature once compositing is wired in.
+    /// consumed by [`compositing::composite`] once a frame sink is attached (design doc §7) via
+    /// [`Self::attach_frame_sink`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &'static str,
@@ -221,6 +245,7 @@ impl LcdDisplay {
             line_shift: [0; 2],
             clock_hz: clock_hz.unwrap_or(NOMINAL_CLOCK_HZ),
             busy_cycles_remaining: 0,
+            frame_sink: None,
             log_sender: LogSender::default(),
         }
     }
@@ -248,6 +273,52 @@ impl LcdDisplay {
     /// Installs a log sender for diagnostic messages (e.g. `reset()`, busy-discarded accesses).
     pub fn set_log_sender(&mut self, sender: LogSender) {
         self.log_sender = sender;
+    }
+
+    /// Attaches a push channel for composited frames (design doc §7). Once set, every register
+    /// write that changes what's rendered composites the current state and sends the result with
+    /// [`mpsc::Sender::try_send`] -- never blocking; if the consumer isn't keeping up, the frame
+    /// is silently dropped rather than stalling CPU execution, the same never-blocks contract
+    /// `CharDisplay::attach_frame_sink`/`LedMatrix::attach_frame_sink` uphold.
+    pub fn attach_frame_sink(&mut self, sink: mpsc::Sender<LcdDisplayFrame>) {
+        self.frame_sink = Some(sink);
+    }
+
+    /// Translates the address counter's current position into a cursor state for
+    /// [`compositing::composite`] (design doc §8, spec §8.3): `None` when the address counter
+    /// targets CGRAM, or a DDRAM address that `line_shift` has scrolled outside every segment's
+    /// visible window; otherwise the visible `(row, column)` cell it currently occupies.
+    /// `visible`/`blinking` are read directly from `cursor_on`/`cursor_blink` -- unlike a real
+    /// panel's time-based blink cadence, this device has no periodic tick to alternate on (design
+    /// doc §6, §7), so `cursor_blink` just selects a static solid-block-vs-underline style.
+    fn compositing_cursor(&self) -> CursorState {
+        let position = match self.ac {
+            AddressCounterTarget::Ddram(addr) => compositing::ddram_cursor_position(addr, self.geometry, &self.line_shift),
+            AddressCounterTarget::Cgram(_) => None,
+        };
+        CursorState { position, visible: self.cursor_on, blinking: self.cursor_blink }
+    }
+
+    /// Composites the current display state and pushes it to the frame sink, if attached (design
+    /// doc §7). Called after every register write that actually took effect -- an executed
+    /// instruction or a completed data write, never a busy-discarded one, and never a read (spec
+    /// §8.3 only lists writes as render-affecting).
+    fn push_frame(&mut self) {
+        let Some(sink) = &self.frame_sink else { return };
+        let cursor = self.compositing_cursor();
+        let pixels = compositing::composite(
+            &self.ddram,
+            &self.cgram,
+            self.geometry,
+            &self.line_shift,
+            cursor,
+            self.display_on,
+            self.font_5x10,
+            &self.cgrom,
+            self.background,
+            self.foreground,
+        );
+        let _ = sink.try_send(LcdDisplayFrame { pixels, columns: self.geometry.columns, rows: self.geometry.rows });
     }
 
     fn busy(&self) -> bool {
@@ -384,6 +455,7 @@ impl LcdDisplay {
                 return;
             }
             self.execute_instruction(byte);
+            self.push_frame();
         }
     }
 
@@ -400,6 +472,7 @@ impl LcdDisplay {
                 return;
             }
             self.write_data(byte);
+            self.push_frame();
         }
     }
 
@@ -498,6 +571,13 @@ impl IoDevice for LcdDisplay {
 
     fn identity_address(&self) -> u16 {
         self.address_range.start
+    }
+
+    /// Drops the frame sink, closing the channel from this end -- the channel equivalent of the
+    /// terminal bridge seeing EOF on its pipe, ending the debugger's LCD display bridge task's
+    /// `recv()` loop. Mirrors `CharDisplay::shutdown`/`LedMatrix::shutdown`.
+    fn shutdown(&mut self) {
+        self.frame_sink = None;
     }
 }
 
@@ -891,5 +971,68 @@ mod tests {
         let received = rx.recv().unwrap();
         assert_eq!(received.category, LogCategory::Device);
         assert_eq!(received.message, format!("{DEVICE_NAME}@0x{BASE_ADDRESS:04x} reset"));
+    }
+
+    #[test]
+    fn a_completed_data_write_pushes_a_composited_frame_to_an_attached_sink() {
+        let mut device = device(); // DUAL_LINE_GEOMETRY: 16x2
+        let (tx, mut rx) = mpsc::channel(4);
+        device.attach_frame_sink(tx);
+
+        device.write(data_addr(), 0x41);
+
+        let frame = rx.try_recv().expect("expected a composited frame after a completed data write");
+        assert_eq!(frame.columns, 16);
+        assert_eq!(frame.rows, 2);
+        assert_eq!(frame.pixels.len(), 16 * 5 * 2 * 8 * 4);
+    }
+
+    #[test]
+    fn a_completed_instruction_pushes_a_composited_frame_to_an_attached_sink() {
+        let mut device = device();
+        let (tx, mut rx) = mpsc::channel(4);
+        device.attach_frame_sink(tx);
+
+        device.write(instruction_addr(), 0x08 | 0x04); // Display On/Off Control, D=1
+        assert!(rx.try_recv().is_ok(), "expected a composited frame after a completed instruction");
+    }
+
+    #[test]
+    fn a_busy_discarded_write_does_not_push_a_frame() {
+        let mut device = device();
+        let (tx, mut rx) = mpsc::channel(4);
+        device.attach_frame_sink(tx);
+
+        device.write(instruction_addr(), 0x01); // Clear Display (long busy)
+        rx.try_recv().expect("expected a frame from the Clear Display instruction itself");
+
+        device.write(data_addr(), 0xFF); // discarded while busy
+        assert!(rx.try_recv().is_err(), "a busy-discarded write must not push a frame");
+    }
+
+    #[test]
+    fn a_data_read_does_not_push_a_frame() {
+        let mut device = device();
+        device.write(data_addr(), 0x41);
+        tick_past_busy(&mut device);
+        device.write(instruction_addr(), 0x80); // Set DDRAM Address 0
+        tick_past_busy(&mut device);
+
+        let (tx, mut rx) = mpsc::channel(4);
+        device.attach_frame_sink(tx);
+        device.read(data_addr());
+        assert!(rx.try_recv().is_err(), "a read must never push a frame (spec §8.3 lists only writes)");
+    }
+
+    #[test]
+    fn shutdown_drops_the_frame_sink_closing_the_channel() {
+        let mut device = device();
+        let (tx, mut rx) = mpsc::channel(4);
+        device.attach_frame_sink(tx);
+
+        device.shutdown();
+
+        device.write(data_addr(), 0x41);
+        assert!(rx.try_recv().is_err(), "channel should be closed once the sink is dropped");
     }
 }

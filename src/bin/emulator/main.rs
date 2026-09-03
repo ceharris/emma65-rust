@@ -75,6 +75,8 @@ async fn main() -> ExitCode {
         display_geometry_sink: None,
         led_matrix_frame_sink: None,
         led_matrix_geometry_sink: None,
+        lcd_display_frame_sink: None,
+        lcd_display_geometry_sink: None,
     };
     let session = match config.emulator.build_with_context(&registry, context).await {
         Ok(s) => s,

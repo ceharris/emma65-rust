@@ -132,6 +132,11 @@ pub struct UiConfig {
     /// device plan, Work Unit 4.
     #[serde(default)]
     pub led_matrix_window_geometry: Option<WindowGeometry>,
+    /// Same as `terminal_window_geometry`, but for the detached-LCD-Display window
+    /// (`lcd_display::LCD_DISPLAY_DETACHED_WINDOW_LABEL`) — see the memory-mapped LCD display
+    /// device plan, Work Unit 4.
+    #[serde(default)]
+    pub lcd_display_window_geometry: Option<WindowGeometry>,
     /// Structured terminal preferences (text/cursor/compatibility) — see
     /// issue #467. Replaces the formerly flat `terminal_font_family`/
     /// `terminal_font_size`/`terminal_scrollback` fields; a `ui.toml`

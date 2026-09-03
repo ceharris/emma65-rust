@@ -4,6 +4,7 @@ use crate::emulator::config::display::CharDisplayModule;
 use crate::emulator::config::lcd_display::LcdDisplayModule;
 use crate::emulator::config::led_matrix::LedMatrixModule;
 use crate::emulator::device::display::DisplayFrame;
+use crate::emulator::device::lcd_display::LcdDisplayFrame;
 use crate::emulator::device::led_matrix::LedMatrixFrame;
 use crate::emulator::transport::{ChannelRelay, Transport, TransportError, TransportReporter};
 use crate::emulator::{BusConfig, DeviceEvent, ErrorSender, LogSender};
@@ -43,6 +44,15 @@ pub type LedMatrixFrameSlot = Arc<Mutex<Option<mpsc::Sender<LedMatrixFrame>>>>;
 /// during instantiation, mirroring [`DisplayGeometrySlot`]'s shape.
 pub type LedMatrixGeometrySlot = Arc<Mutex<Option<LedMatrixGeometry>>>;
 
+/// A shareable slot an LCD display device module fills with the sending half of its composited-
+/// frame push channel during instantiation, mirroring [`DisplayFrameSlot`]'s shape (memory-mapped
+/// LCD display device plan, design doc §7).
+pub type LcdDisplayFrameSlot = Arc<Mutex<Option<mpsc::Sender<LcdDisplayFrame>>>>;
+
+/// A shareable slot an LCD display device module fills with its fixed character-grid geometry
+/// during instantiation, mirroring [`DisplayGeometrySlot`]'s shape.
+pub type LcdDisplayGeometrySlot = Arc<Mutex<Option<LcdDisplayGeometry>>>;
+
 /// An LED matrix device's fixed geometry (design doc §10): the number of attached matrices and
 /// their physical arrangement, known entirely from configuration attributes and unaffected by
 /// anything the CPU does afterward. Handed to the debugger via
@@ -75,6 +85,21 @@ pub struct DisplayGeometry {
     pub pixel_height: u32,
     /// Configured vsync cadence in Hz (design doc §6).
     pub frame_rate_hz: u32,
+}
+
+/// An LCD display device's fixed character-grid geometry, known entirely from its configured
+/// `geometry=` attribute and unaffected by anything the CPU does afterward (memory-mapped LCD
+/// display device plan, design doc §7). Handed to the debugger via
+/// [`InstantiationContext::lcd_display_geometry_sink`] so its panel can size its canvas on mount,
+/// before any frame has been composited. Unlike [`DisplayGeometry`], this carries no pixel
+/// dimensions: cell pixel size depends on the active font (`Function Set`'s `F` bit, spec §8.2),
+/// which isn't known until a frame actually arrives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LcdDisplayGeometry {
+    /// Grid width in cells.
+    pub columns: u8,
+    /// Grid height in cells.
+    pub rows: u8,
 }
 
 /// A context of application attributes that may be used by device modules during instantiation.
@@ -118,6 +143,14 @@ pub struct InstantiationContext {
     /// A pre-created slot for an LED matrix device to report its fixed matrix-count geometry
     /// (design doc §10), read by the debugger's `get_led_matrix_geometry` command.
     pub led_matrix_geometry_sink: Option<LedMatrixGeometrySlot>,
+    /// A pre-created slot for an LCD display device to hand back the sending half of its
+    /// composited-frame push channel (memory-mapped LCD display device plan, design doc §7).
+    /// `None` when no host wants to receive frames (e.g. the plain `emma65` CLI) -- an LCD
+    /// display device configured in that case simply composites nothing.
+    pub lcd_display_frame_sink: Option<LcdDisplayFrameSlot>,
+    /// A pre-created slot for an LCD display device to report its fixed character-grid geometry
+    /// (design doc §7), read by the debugger's `get_lcd_display_geometry` command.
+    pub lcd_display_geometry_sink: Option<LcdDisplayGeometrySlot>,
 }
 
 impl InstantiationContext {
@@ -276,7 +309,7 @@ mod tests {
     #[test]
     fn transport_reporter_is_bound_and_reports_through_error_sender() {
         let (sender, mut receiver) = crate::emulator::device_event_channel();
-        let context = InstantiationContext { clock_hz: None, error_sender: Some(sender), console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: Some(sender), console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
 
         let reporter = context.transport_reporter("test-device");
         reporter.report_connected(None);
@@ -289,7 +322,7 @@ mod tests {
 
     #[test]
     fn transport_reporter_is_a_silent_no_op_when_no_error_sender_is_configured() {
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
 
         let reporter = context.transport_reporter("test-device");
         // Must not panic with no error sender configured.
@@ -300,7 +333,7 @@ mod tests {
     async fn instantiate_unknown_device_type() {
         let registry = DeviceRegistry::default();
         let bus_config = BusConfig::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let attributes: HashMap<String, Value> = HashMap::new();
         let err = registry.instantiate("foobar", bus_config, 0x55aa, &attributes, &context, id_allocator)
@@ -312,7 +345,7 @@ mod tests {
     async fn instantiate_routes_to_correct_module() {
         let mut registry = DeviceRegistry::default();
         let attributes: HashMap<String, Value> = HashMap::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         registry.register(MockModule::from_name("alpha"));
         registry.register(MockModule::from_name("beta"));
@@ -330,7 +363,7 @@ mod tests {
         let attributes: HashMap<String, Value> = HashMap::new();
         registry.register(MockModule::from_name_and_tag("alpha", "alpha1"));
         registry.register(MockModule::from_name_and_tag("alpha", "alpha2"));
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context, id_allocator)
             .await.err().unwrap();
@@ -340,7 +373,7 @@ mod tests {
     #[tokio::test]
     async fn with_builtins_has_ram_module() {
         let registry = DeviceRegistry::with_builtins();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None };
+        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let mut attributes: HashMap<String, Value> = HashMap::new();
         attributes.insert("size".to_string(), Value::from(65536));

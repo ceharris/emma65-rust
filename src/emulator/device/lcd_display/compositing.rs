@@ -18,10 +18,10 @@ const CELL_HEIGHT_5X8: usize = 8;
 /// Pixel height of a glyph cell in 5×10 mode (`F`=1, spec §8.2).
 const CELL_HEIGHT_5X10: usize = 10;
 
-/// The address-counter-derived cursor state for one composite call, computed by the caller (a
-/// later work unit's `LcdDisplay::compositing_cursor()`) from the current address counter and
-/// `Geometry`'s segment table (spec §8.3): `None` when the address counter targets CGRAM, or a
-/// DDRAM address outside every segment's currently visible window.
+/// The address-counter-derived cursor state for one composite call, computed by the caller
+/// (`LcdDisplay::compositing_cursor()`, via [`ddram_cursor_position`]) from the current address
+/// counter and `Geometry`'s segment table (spec §8.3): `None` when the address counter targets
+/// CGRAM, or a DDRAM address outside every segment's currently visible window.
 ///
 /// `visible` and `blinking` together select what (if anything) is drawn at `position` for *this*
 /// call: `visible = false` draws nothing (cursor disabled, or -- when blinking -- this call
@@ -81,6 +81,27 @@ fn shifted_address(dual_line: bool, start: u8, column: u8, line_shift: &[u8; 2])
         let position = start as u16 + column as u16;
         ((position + line_shift[0] as u16) % 80) as u8
     }
+}
+
+/// Locates the visible `(row, column)` cell currently displaying physical DDRAM address
+/// `ddram_addr`, or `None` if `line_shift` has scrolled it outside every segment's visible window
+/// (spec §8.3) -- used by `LcdDisplay::compositing_cursor` to translate the address counter's raw
+/// DDRAM address into a cursor position without duplicating this module's own segment/shift-aware
+/// addressing (`composite`'s own forward walk, run in reverse).
+pub(crate) fn ddram_cursor_position(ddram_addr: u8, geometry: &Geometry, line_shift: &[u8; 2]) -> Option<(u8, u8)> {
+    let dual_line = geometry.is_dual_line();
+    for (row_index, row_segments) in geometry.segments.iter().enumerate() {
+        let mut col = 0u8;
+        for &(start, count) in row_segments.iter() {
+            for offset in 0..count {
+                if shifted_address(dual_line, start, offset, line_shift) == ddram_addr {
+                    return Some((row_index as u8, col));
+                }
+                col += 1;
+            }
+        }
+    }
+    None
 }
 
 /// Draws one glyph's rows into `pixels` at the cell whose top-left pixel is
@@ -398,5 +419,31 @@ mod tests {
         let pixels = composite(&ddram, &blank_cgram(), &SINGLE_ROW, &[0, 0], cursor, true, false, &CgRom::default(), BG, FG);
 
         assert!(all_pixels_are(&pixels, BG));
+    }
+
+    #[test]
+    fn ddram_cursor_position_locates_cell_within_single_row() {
+        assert_eq!(ddram_cursor_position(1, &SINGLE_ROW, &[0, 0]), Some((0, 1)));
+    }
+
+    #[test]
+    fn ddram_cursor_position_locates_cell_within_dual_row() {
+        // DUAL_ROW's second row's segment starts at raw address 0x40, but `ddram_cursor_position`
+        // (like `ddram`/`ac` themselves) works in *physical* folded indices (0..80), where the
+        // second line always starts at 40 -- see `LcdDisplay::fold_ddram_address`.
+        assert_eq!(ddram_cursor_position(40, &DUAL_ROW, &[0, 0]), Some((1, 0)));
+    }
+
+    #[test]
+    fn ddram_cursor_position_follows_line_shift() {
+        // Shifting line 0 by one moves what physical address 0 displays at from column 0 to
+        // column... actually the shift moves the *segment's* effective start, so address 1 (not
+        // 0) is now what appears at visible column 0.
+        assert_eq!(ddram_cursor_position(1, &SINGLE_ROW, &[1, 0]), Some((0, 0)));
+    }
+
+    #[test]
+    fn ddram_cursor_position_returns_none_when_address_is_off_screen() {
+        assert_eq!(ddram_cursor_position(5, &SINGLE_ROW, &[0, 0]), None);
     }
 }

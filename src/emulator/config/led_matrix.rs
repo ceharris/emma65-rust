@@ -188,6 +188,8 @@ mod tests {
             display_geometry_sink: None,
             led_matrix_frame_sink: None,
             led_matrix_geometry_sink: None,
+            lcd_display_frame_sink: None,
+            lcd_display_geometry_sink: None,
         }
     }
 
