@@ -1143,6 +1143,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emma65-lcd-display"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "emma65",
+ "sdl2",
+]
+
+[[package]]
 name = "emma65-led-matrix"
 version = "0.1.0"
 dependencies = [
