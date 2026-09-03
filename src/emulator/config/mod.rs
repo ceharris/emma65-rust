@@ -20,6 +20,7 @@ mod write_policy;
 mod vireo;
 mod led_matrix;
 mod display;
+mod lcd_display;
 mod palette;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
@@ -32,6 +33,7 @@ pub use console::ConsoleModule;
 pub use finch::FinchModule;
 pub use led_matrix::LedMatrixModule;
 pub use display::CharDisplayModule;
+pub use lcd_display::LcdDisplayModule;
 pub use lfsr::LfsrModule;
 pub use r6551::R6551Module;
 pub use mc6840::Mc6840Module;

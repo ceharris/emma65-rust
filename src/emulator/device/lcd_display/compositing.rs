@@ -72,16 +72,15 @@ fn glyph_rows(byte: u8, cgram: &[u8; 64], cgrom: &CgRom, font_5x10: bool) -> Vec
 /// dual-line geometries shift each 40-byte line independently while single-line geometries treat
 /// the whole 80-byte store as one shiftable line.
 fn shifted_address(dual_line: bool, start: u8, column: u8, line_shift: &[u8; 2]) -> u8 {
-    let (line, line_base, modulus): (usize, u16, u16) = if dual_line && start >= 0x40 {
-        (1, 0x40, 40)
-    } else if dual_line {
-        (0, 0x00, 40)
+    if dual_line {
+        let line = ((start >> 6) & 1) as usize;
+        let position_in_line = (start & 0x3F) as u16 + column as u16;
+        let shifted = (position_in_line + line_shift[line] as u16) % 40;
+        (line as u8) * 40 + shifted as u8
     } else {
-        (0, 0x00, 80)
-    };
-    let position_in_line = (start as u16 - line_base) + column as u16;
-    let shifted = (position_in_line + line_shift[line] as u16) % modulus;
-    (line_base + shifted) as u8
+        let position = start as u16 + column as u16;
+        ((position + line_shift[0] as u16) % 80) as u8
+    }
 }
 
 /// Draws one glyph's rows into `pixels` at the cell whose top-left pixel is
@@ -262,12 +261,56 @@ mod tests {
     #[test]
     fn dual_line_second_row_reads_from_second_ddram_line() {
         let mut ddram = empty_ddram();
-        ddram[0x40] = 0x41; // 'A' at the start of the second physical line
+        ddram[40] = 0x41; // 'A' at the start of the second physical line (raw address 0x40 folds to 40)
         let pixels = composite(&ddram, &blank_cgram(), &DUAL_ROW, &[0, 0], no_cursor(), true, false, &CgRom::default(), BG, FG);
         let width_px = DUAL_ROW.columns as usize * CELL_WIDTH;
         let second_display_row = 1;
 
         assert_eq!(pixel_at(&pixels, width_px, 2, second_display_row * 8 + 1), [FG.r, FG.g, FG.b, 0xFF]);
+    }
+
+    // Mirrors the real `40x2` geometry (spec §7.1): wide dual-line segments whose column offsets
+    // push well past the raw `0x40` second-segment start, exercising the fold from raw HD44780
+    // address to physical `ddram` index (regression for the `shifted_address` addressing bug
+    // found while reasoning about Work Unit 3's real geometry table).
+    const WIDE_DUAL_ROW: Geometry =
+        Geometry { rows: 2, columns: 40, segments: &[&[(0x00, 40)], &[(0x40, 40)]] };
+
+    #[test]
+    fn wide_dual_line_last_column_stays_in_bounds_and_reads_correct_cell() {
+        let mut ddram = empty_ddram();
+        ddram[79] = 0x41; // 'A' at the last physical byte of the second line
+        let pixels = composite(&ddram, &blank_cgram(), &WIDE_DUAL_ROW, &[0, 0], no_cursor(), true, false, &CgRom::default(), BG, FG);
+        let width_px = WIDE_DUAL_ROW.columns as usize * CELL_WIDTH;
+        let last_col = WIDE_DUAL_ROW.columns as usize - 1;
+        let second_display_row = 1;
+
+        assert_eq!(
+            pixel_at(&pixels, width_px, last_col * CELL_WIDTH + 2, second_display_row * 8 + 1),
+            [FG.r, FG.g, FG.b, 0xFF]
+        );
+    }
+
+    // Mirrors the real `20x4` geometry (spec §7.1): rows 3 and 4 start mid-line (raw `0x14`,
+    // `0x54`) rather than at a line boundary, exercising the fold for non-boundary segment
+    // starts.
+    const PAIRED_ROW_GEOMETRY: Geometry = Geometry {
+        rows: 4,
+        columns: 20,
+        segments: &[&[(0x00, 20)], &[(0x40, 20)], &[(0x14, 20)], &[(0x54, 20)]],
+    };
+
+    #[test]
+    fn paired_row_geometry_folds_mid_line_segment_starts_correctly() {
+        let mut ddram = empty_ddram();
+        ddram[20] = 0x41; // row 3's segment starts at raw 0x14, which folds to physical line 0, index 20
+        ddram[60] = 0x41; // row 4's segment starts at raw 0x54, which folds to physical line 1, index 60
+        let pixels = composite(&ddram, &blank_cgram(), &PAIRED_ROW_GEOMETRY, &[0, 0], no_cursor(), true, false, &CgRom::default(), BG, FG);
+        let width_px = PAIRED_ROW_GEOMETRY.columns as usize * CELL_WIDTH;
+
+        // 'A' row 1 of the glyph has only the middle column set (see ascii_glyph_composites_expected_pixels).
+        assert_eq!(pixel_at(&pixels, width_px, 2, 2 * 8 + 1), [FG.r, FG.g, FG.b, 0xFF], "row 3 (index 2)");
+        assert_eq!(pixel_at(&pixels, width_px, 2, 3 * 8 + 1), [FG.r, FG.g, FG.b, 0xFF], "row 4 (index 3)");
     }
 
     #[test]

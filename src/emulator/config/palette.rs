@@ -61,7 +61,11 @@ impl fmt::Display for PaletteError {
 
 impl std::error::Error for PaletteError {}
 
-fn parse_color(text: &str) -> Option<Rgb24> {
+/// Parses a single `RRGGBB` (optionally `#`-prefixed) color, independent of the multi-entry
+/// palette-file format [`parse`] handles -- reused directly by any device attribute that takes
+/// one cosmetic hex color rather than a whole palette (e.g. `display/lcd`'s `background=`/
+/// `foreground=`).
+pub fn parse_color(text: &str) -> Option<Rgb24> {
     let hex = text.strip_prefix('#').unwrap_or(text);
     if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
