@@ -16,6 +16,7 @@ describe("APP_KEY_BINDINGS matches predicates", () => {
     { name: "Terminal (Ctrl+Shift+T)", index: 0, code: "KeyT" },
     { name: "Display (Ctrl+Shift+D)", index: 1, code: "KeyD" },
     { name: "LED Matrix (Ctrl+Shift+M)", index: 2, code: "KeyM" },
+    { name: "LCD Display (Ctrl+Shift+I)", index: 3, code: "KeyI" },
   ];
 
   for (const { name, index, code } of cases) {
@@ -61,5 +62,17 @@ describe("useAppKeyBindings", () => {
     window.dispatchEvent(keydown({ ctrlKey: true, shiftKey: true, code: "KeyT" }));
 
     expect(invoke).toHaveBeenCalledWith("attach_terminal");
+  });
+
+  it("reattaches via invoke when Ctrl+Shift+I fires in the detached-LCD-Display window", () => {
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      label: "lcd-display-detached",
+    } as ReturnType<typeof getCurrentWindow>);
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    renderHook(() => useAppKeyBindings());
+
+    window.dispatchEvent(keydown({ ctrlKey: true, shiftKey: true, code: "KeyI" }));
+
+    expect(invoke).toHaveBeenCalledWith("attach_lcd_display");
   });
 });

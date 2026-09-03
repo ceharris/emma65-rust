@@ -38,6 +38,7 @@ interface DockLayoutData {
   terminal_detached: boolean;
   display_detached: boolean;
   led_matrix_detached: boolean;
+  lcd_display_detached: boolean;
   panel_positions: Partial<Record<MainPanelId, PanelPosition>> | null;
 }
 
@@ -110,11 +111,12 @@ const RUN_CONTROLS_FLOAT_BOUNDS: FloatingGroupOptions = { x: 460, y: 40, width: 
  * a later reattach (`positionForReattach` below) can restore it there. Shared
  * by a dock tab's own Detach button and the Window-menu/native-close-driven
  * detach path (`terminal-detach-requested`/`display-detach-requested`/
- * `led-matrix-detach-requested`), since both ultimately just close the same
- * panel. Generic over `id` — Terminal (issue #385), Display (memory-mapped
- * display device plan, Work Unit 5), and LED Matrix (memory-mapped LED matrix
- * device plan, Work Unit 5) are the only three detachable panels, so this one
- * function backs all three.
+ * `led-matrix-detach-requested`/`lcd-display-detach-requested`), since both
+ * ultimately just close the same panel. Generic over `id` — Terminal (issue
+ * #385), Display (memory-mapped display device plan, Work Unit 5), LED Matrix
+ * (memory-mapped LED matrix device plan, Work Unit 5), and LCD Display
+ * (memory-mapped LCD display device plan, Work Unit 5) are the only four
+ * detachable panels, so this one function backs all four.
  */
 function closeDockedPanel(
   api: DockviewReadyEvent["api"] | null,
@@ -160,6 +162,7 @@ const DEFAULT_PANEL_POSITION: Partial<Record<MainPanelId, { referencePanel: Main
   registers: { referencePanel: "disassembly", direction: "right" },
   display: { referencePanel: "memory" },
   "led-matrix": { referencePanel: "memory" },
+  "lcd-display": { referencePanel: "memory" },
   watchpoints: { referencePanel: "memory", direction: "below" },
   symbols: { referencePanel: "trace" },
   stack: { referencePanel: "registers", direction: "below" },
@@ -321,27 +324,29 @@ const BOTTOM_GROUP_DEFAULT_HEIGHT = 146;
  * leaves Memory as the foreground tab, ahead of both Terminal and Display in
  * the tab bar.
  *
- * `terminalDetached`/`displayDetached`/`ledMatrixDetached` skip adding the
- * "terminal"/"display"/"led-matrix" panel respectively — reachable even on a
- * brand-new profile with no saved dockview arrangement yet, since all three
- * detached flags (like the rest of `layout.json`, per #342) aren't
- * profile-scoped: any of the three can already be detached from a previous
- * profile when this profile builds its very first default layout. Display
- * (memory-mapped display device plan, Work Unit 5) and LED Matrix
- * (memory-mapped LED matrix device plan, Work Unit 5) both tab into the same
- * group as Memory/Terminal, with Memory always added last so it — added last
- * — stays the foreground tab, same "addPanel makes a newly added panel
- * active" reasoning as Memory/Terminal's own ordering: whichever of
- * Terminal/Display/LED Matrix isn't detached comes first as that group's
- * sized anchor, the rest of that trio (if present) tab onto it in order, and
- * Memory tabs on last — or becomes the anchor itself, at the narrower width,
- * if all three are detached.
+ * `terminalDetached`/`displayDetached`/`ledMatrixDetached`/`lcdDisplayDetached`
+ * skip adding the "terminal"/"display"/"led-matrix"/"lcd-display" panel
+ * respectively — reachable even on a brand-new profile with no saved dockview
+ * arrangement yet, since all four detached flags (like the rest of
+ * `layout.json`, per #342) aren't profile-scoped: any of the four can already
+ * be detached from a previous profile when this profile builds its very first
+ * default layout. Display (memory-mapped display device plan, Work Unit 5),
+ * LED Matrix (memory-mapped LED matrix device plan, Work Unit 5), and LCD
+ * Display (memory-mapped LCD display device plan, Work Unit 5) all tab into
+ * the same group as Memory/Terminal, with Memory always added last so it —
+ * added last — stays the foreground tab, same "addPanel makes a newly added
+ * panel active" reasoning as Memory/Terminal's own ordering: whichever of
+ * Terminal/Display/LED Matrix/LCD Display isn't detached comes first as that
+ * group's sized anchor, the rest of that group (if present) tab onto it in
+ * order, and Memory tabs on last — or becomes the anchor itself, at the
+ * narrower width, if all four are detached.
  */
 function addDefaultLayout(
   api: DockviewReadyEvent["api"],
   terminalDetached: boolean,
   displayDetached: boolean,
   ledMatrixDetached: boolean,
+  lcdDisplayDetached: boolean,
 ) {
   const add = (
     id: MainPanelId,
@@ -352,6 +357,7 @@ function addDefaultLayout(
     { id: "terminal", detached: terminalDetached },
     { id: "display", detached: displayDetached },
     { id: "led-matrix", detached: ledMatrixDetached },
+    { id: "lcd-display", detached: lcdDisplayDetached },
   ];
   const present = groupMembers.filter((m) => !m.detached);
   if (present.length > 0) {
@@ -431,13 +437,14 @@ function persistLayout(api: DockviewReadyEvent["api"], lastPositions: Partial<Re
 }
 
 /**
- * Adds Trace, Log, Terminal, Display, and LED Matrix if a just-restored
- * layout is missing any of them — i.e. it was persisted before #383/#384
- * introduced Trace/Log, before #421 moved Terminal's default home to
- * Memory's tab group, before the memory-mapped display device plan's Work
- * Unit 5 introduced Display, or before the memory-mapped LED matrix device
- * plan's Work Unit 5 introduced LED Matrix. Returns whether anything was
- * added, so the caller knows whether to re-persist.
+ * Adds Trace, Log, Terminal, Display, LED Matrix, and LCD Display if a
+ * just-restored layout is missing any of them — i.e. it was persisted before
+ * #383/#384 introduced Trace/Log, before #421 moved Terminal's default home
+ * to Memory's tab group, before the memory-mapped display device plan's Work
+ * Unit 5 introduced Display, before the memory-mapped LED matrix device
+ * plan's Work Unit 5 introduced LED Matrix, or before the memory-mapped LCD
+ * display device plan's Work Unit 5 introduced LCD Display. Returns whether
+ * anything was added, so the caller knows whether to re-persist.
  *
  * `api.fromJSON` doesn't error just because the saved JSON has fewer panels
  * than `panelComponents` now registers — it happily restores a valid subset
@@ -446,22 +453,25 @@ function persistLayout(api: DockviewReadyEvent["api"], lastPositions: Partial<Re
  * is the only other place that adds them. Any future addition needs the
  * same kind of reconciliation here.
  *
- * `terminalDetached`/`displayDetached`/`ledMatrixDetached` skip adding
- * "terminal"/"display"/"led-matrix" even when absent — a missing panel is
- * only a stale-layout bug when it isn't currently detached; when it is,
- * `restoreLayout` is the one place that knows to leave it out.
+ * `terminalDetached`/`displayDetached`/`ledMatrixDetached`/`lcdDisplayDetached`
+ * skip adding "terminal"/"display"/"led-matrix"/"lcd-display" even when
+ * absent — a missing panel is only a stale-layout bug when it isn't currently
+ * detached; when it is, `restoreLayout` is the one place that knows to leave
+ * it out.
  */
 function addMissingBottomPanels(
   api: DockviewReadyEvent["api"],
   terminalDetached: boolean,
   displayDetached: boolean,
   ledMatrixDetached: boolean,
+  lcdDisplayDetached: boolean,
 ): boolean {
   const hasTrace = api.getPanel("trace") !== undefined;
   const hasLog = api.getPanel("log") !== undefined;
   const hasTerminal = api.getPanel("terminal") !== undefined;
   const hasDisplay = api.getPanel("display") !== undefined;
   const hasLedMatrix = api.getPanel("led-matrix") !== undefined;
+  const hasLcdDisplay = api.getPanel("lcd-display") !== undefined;
   if (!hasTrace) {
     api.addPanel({
       id: "trace",
@@ -505,12 +515,21 @@ function addMissingBottomPanels(
       position: DEFAULT_PANEL_POSITION["led-matrix"],
     });
   }
+  if (!hasLcdDisplay && !lcdDisplayDetached) {
+    api.addPanel({
+      id: "lcd-display",
+      component: "lcd-display",
+      title: PANEL_TITLES["lcd-display"],
+      position: DEFAULT_PANEL_POSITION["lcd-display"],
+    });
+  }
   return (
     !hasTrace ||
     !hasLog ||
     (!hasTerminal && !terminalDetached) ||
     (!hasDisplay && !displayDetached) ||
-    (!hasLedMatrix && !ledMatrixDetached)
+    (!hasLedMatrix && !ledMatrixDetached) ||
+    (!hasLcdDisplay && !lcdDisplayDetached)
   );
 }
 
@@ -550,11 +569,13 @@ function addMissingRunControlsPanel(api: DockviewReadyEvent["api"], lastPosition
  * but predates a since-added panel gets that panel patched in and
  * re-persisted too (see `addMissingBottomPanels`).
  *
- * The terminal-detached/display-detached/led-matrix-detached flags returned
- * alongside the dockview arrangement are authoritative over whatever the
- * arrangement itself happens to contain — `detach_terminal`/`reattach_terminal`
- * (`terminal.rs`), `detach_display`/`reattach_display` (`display.rs`), and
- * `detach_led_matrix`/`reattach_led_matrix` (`led_matrix.rs`) each persist
+ * The terminal-detached/display-detached/led-matrix-detached/lcd-display-detached
+ * flags returned alongside the dockview arrangement are authoritative over
+ * whatever the arrangement itself happens to contain —
+ * `detach_terminal`/`reattach_terminal` (`terminal.rs`),
+ * `detach_display`/`reattach_display` (`display.rs`),
+ * `detach_led_matrix`/`reattach_led_matrix` (`led_matrix.rs`), and
+ * `detach_lcd_display`/`reattach_lcd_display` (`lcd_display.rs`) each persist
  * their flag and the arrangement as two separate writes, so a crash between
  * them can leave a restored arrangement with a stale panel despite the flag
  * saying detached (or vice versa isn't possible: `addMissingBottomPanels`
@@ -576,11 +597,13 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
   let terminalDetached = false;
   let displayDetached = false;
   let ledMatrixDetached = false;
+  let lcdDisplayDetached = false;
   try {
     const saved = await invoke<DockLayoutData>("get_dock_layout");
     terminalDetached = saved.terminal_detached;
     displayDetached = saved.display_detached;
     ledMatrixDetached = saved.led_matrix_detached;
+    lcdDisplayDetached = saved.lcd_display_detached;
     if (saved.panel_positions) {
       lastPositionsRef.current = saved.panel_positions;
     }
@@ -592,7 +615,7 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
     console.error("Failed to restore persisted dock layout, falling back to default:", err);
   }
   if (!restored) {
-    addDefaultLayout(api, terminalDetached, displayDetached, ledMatrixDetached);
+    addDefaultLayout(api, terminalDetached, displayDetached, ledMatrixDetached, lcdDisplayDetached);
     persistLayout(api, lastPositionsRef.current);
     return;
   }
@@ -605,7 +628,10 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
   if (ledMatrixDetached) {
     api.getPanel("led-matrix")?.api.close();
   }
-  const addedBottomPanels = addMissingBottomPanels(api, terminalDetached, displayDetached, ledMatrixDetached);
+  if (lcdDisplayDetached) {
+    api.getPanel("lcd-display")?.api.close();
+  }
+  const addedBottomPanels = addMissingBottomPanels(api, terminalDetached, displayDetached, ledMatrixDetached, lcdDisplayDetached);
   const addedRunControls = addMissingRunControlsPanel(api, lastPositionsRef.current);
   if (addedBottomPanels || addedRunControls) {
     persistLayout(api, lastPositionsRef.current);
@@ -642,6 +668,11 @@ async function restoreLayout(api: DockviewReadyEvent["api"], lastPositionsRef: R
  * LED Matrix's Detach button (memory-mapped LED matrix device plan, Work
  * Unit 5) mirrors Display's exactly in turn, closing over
  * `ledMatrixPositionRef` and calling `detach_led_matrix` — also no
+ * size-preset icon, for the same reason.
+ *
+ * LCD Display's Detach button (memory-mapped LCD display device plan, Work
+ * Unit 5) mirrors LED Matrix's exactly in turn, closing over
+ * `lcdDisplayPositionRef` and calling `detach_lcd_display` — also no
  * size-preset icon, for the same reason.
  *
  * Run Controls' Float button (issue #404) is a plain dockview-only
@@ -684,6 +715,7 @@ function makeDockTabActions(
   terminalPositionRef: React.MutableRefObject<DockedPanelPosition | null>,
   displayPositionRef: React.MutableRefObject<DockedPanelPosition | null>,
   ledMatrixPositionRef: React.MutableRefObject<DockedPanelPosition | null>,
+  lcdDisplayPositionRef: React.MutableRefObject<DockedPanelPosition | null>,
 ) {
   return function DockTabActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
     const headerActions = usePanelHeaderActions();
@@ -732,6 +764,18 @@ function makeDockTabActions(
       };
       return (
         <button className="dock-tab-action" onClick={handleDetach} title="Detach LED Matrix to its own window">
+          <i className="codicon codicon-multiple-windows" />
+        </button>
+      );
+    }
+    if (activePanel?.id === "lcd-display") {
+      const handleDetach = () => {
+        invoke("detach_lcd_display")
+          .then(() => closeDockedPanel(containerApi, "lcd-display", lcdDisplayPositionRef))
+          .catch((err) => console.error("detach_lcd_display failed:", err));
+      };
+      return (
+        <button className="dock-tab-action" onClick={handleDetach} title="Detach LCD Display to its own window">
           <i className="codicon codicon-multiple-windows" />
         </button>
       );
@@ -795,9 +839,10 @@ export default function DockLayout() {
   const terminalPositionRef = useRef<DockedPanelPosition | null>(null);
   const displayPositionRef = useRef<DockedPanelPosition | null>(null);
   const ledMatrixPositionRef = useRef<DockedPanelPosition | null>(null);
+  const lcdDisplayPositionRef = useRef<DockedPanelPosition | null>(null);
   const lastPanelPositionRef = useRef<Partial<Record<MainPanelId, PanelPosition>>>({});
   const DockTabActions = useMemo(
-    () => makeDockTabActions(terminalPositionRef, displayPositionRef, ledMatrixPositionRef),
+    () => makeDockTabActions(terminalPositionRef, displayPositionRef, ledMatrixPositionRef, lcdDisplayPositionRef),
     [],
   );
 
@@ -873,11 +918,12 @@ export default function DockLayout() {
   // every panel's current position/size and rebuilds the same default
   // arrangement `restoreLayout` falls back to on first run, then re-persists
   // it — the actual `layout.json` overwrite that makes the reset stick.
-  // `terminalDetached`/`displayDetached`/`ledMatrixDetached` are always false
-  // here — `restore_dock_layout` reattaches Terminal, Display, and/or LED
-  // Matrix first (emitting their own
-  // `terminal-reattached`/`display-reattached`/`led-matrix-reattached`) if
-  // any was detached, since the default layout always docks all three.
+  // `terminalDetached`/`displayDetached`/`ledMatrixDetached`/`lcdDisplayDetached`
+  // are always false here — `restore_dock_layout` reattaches Terminal,
+  // Display, LED Matrix, and/or LCD Display first (emitting their own
+  // `terminal-reattached`/`display-reattached`/`led-matrix-reattached`/
+  // `lcd-display-reattached`) if any was detached, since the default layout
+  // always docks all four.
   useEffect(() => {
     const unlistenPromise = listen("dock-layout-reset", () => {
       const api = apiRef.current;
@@ -887,18 +933,19 @@ export default function DockLayout() {
       terminalPositionRef.current = null;
       displayPositionRef.current = null;
       ledMatrixPositionRef.current = null;
-      addDefaultLayout(api, false, false, false);
+      lcdDisplayPositionRef.current = null;
+      addDefaultLayout(api, false, false, false, false);
       persistLayout(api, lastPanelPositionRef.current);
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
-  // Rust-driven detach/reattach (the Window > Terminal/Display/LED Matrix
-  // menu items, and each detached window's native close button) has no JS
-  // handler of its own already in place to add/remove the dock panel — the dock tab's own
-  // Detach button (`DockTabActions` above) does that inline since it's
-  // already running in this component, but the menu/close paths instead emit
-  // these events for the same effect.
+  // Rust-driven detach/reattach (the Window > Terminal/Display/LED Matrix/LCD
+  // Display menu items, and each detached window's native close button) has
+  // no JS handler of its own already in place to add/remove the dock panel —
+  // the dock tab's own Detach button (`DockTabActions` above) does that
+  // inline since it's already running in this component, but the menu/close
+  // paths instead emit these events for the same effect.
   useEffect(() => {
     const unlistenPromise = listen("terminal-detach-requested", () => {
       closeDockedPanel(apiRef.current, "terminal", terminalPositionRef);
@@ -916,6 +963,13 @@ export default function DockLayout() {
   useEffect(() => {
     const unlistenPromise = listen("led-matrix-detach-requested", () => {
       closeDockedPanel(apiRef.current, "led-matrix", ledMatrixPositionRef);
+    });
+    return () => { unlistenPromise.then((f) => f()); };
+  }, []);
+
+  useEffect(() => {
+    const unlistenPromise = listen("lcd-display-detach-requested", () => {
+      closeDockedPanel(apiRef.current, "lcd-display", lcdDisplayPositionRef);
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);
@@ -960,6 +1014,21 @@ export default function DockLayout() {
       if (!api || api.getPanel("led-matrix")) return;
       const position = positionForReattach(api, ledMatrixPositionRef.current, DEFAULT_PANEL_POSITION["led-matrix"]!);
       api.addPanel({ id: "led-matrix", component: "led-matrix", title: PANEL_TITLES["led-matrix"], position });
+    });
+    return () => { unlistenPromise.then((f) => f()); };
+  }, []);
+
+  // Same as the LED Matrix reattach effect above, for LCD Display
+  // (memory-mapped LCD display device plan, Work Unit 5) — falls back to its
+  // default position tabbed with Memory/Terminal/Display/LED Matrix
+  // (`DEFAULT_PANEL_POSITION["lcd-display"]`) when there's no resolvable
+  // remembered position.
+  useEffect(() => {
+    const unlistenPromise = listen("lcd-display-reattached", () => {
+      const api = apiRef.current;
+      if (!api || api.getPanel("lcd-display")) return;
+      const position = positionForReattach(api, lcdDisplayPositionRef.current, DEFAULT_PANEL_POSITION["lcd-display"]!);
+      api.addPanel({ id: "lcd-display", component: "lcd-display", title: PANEL_TITLES["lcd-display"], position });
     });
     return () => { unlistenPromise.then((f) => f()); };
   }, []);

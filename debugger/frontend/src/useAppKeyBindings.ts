@@ -15,6 +15,9 @@ const DISPLAY_DETACHED_WINDOW_LABEL = "display-detached";
 /** Label of the detached-LED-Matrix window, per `LED_MATRIX_DETACHED_WINDOW_LABEL` in `debugger/src-tauri/src/led_matrix.rs`. */
 const LED_MATRIX_DETACHED_WINDOW_LABEL = "led-matrix-detached";
 
+/** Label of the detached-LCD-Display window, per `LCD_DISPLAY_DETACHED_WINDOW_LABEL` in `debugger/src-tauri/src/lcd_display.rs`. */
+const LCD_DISPLAY_DETACHED_WINDOW_LABEL = "lcd-display-detached";
+
 export interface AppKeyBinding {
   matches: (e: KeyboardEvent) => boolean;
   /** Runs the binding's action. Called with `preventDefault()` already applied to the event. */
@@ -43,7 +46,7 @@ export interface AppKeyBinding {
  * cross-window emit, since it has no direct access to the main window's
  * dockview instance (separate webview, separate JS runtime).
  */
-function revealPanel(panelId: "terminal" | "display" | "led-matrix") {
+function revealPanel(panelId: "terminal" | "display" | "led-matrix" | "lcd-display") {
   emitTo(MAIN_WINDOW_LABEL, "reveal-panel", panelId).catch((err) =>
     console.error(`emitTo reveal-panel(${panelId}) failed:`, err),
   );
@@ -117,6 +120,24 @@ export const APP_KEY_BINDINGS: AppKeyBinding[] = [
         invoke("attach_led_matrix").catch((err) => console.error("attach_led_matrix failed:", err));
       } else {
         revealPanel("led-matrix");
+      }
+    },
+    hasMainWindowAccelerator: true,
+  },
+  {
+    matches: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyI",
+    // Same shape as Ctrl+Shift+T/D/M above, for the detached-LCD-Display window (memory-mapped
+    // LCD display device plan, Work Unit 5) -- it has no app menu either
+    // (`lcd_display.rs`'s `install_detached_window` calls `remove_menu()` the same way the other
+    // three do), so it needs this binding as its only path back to docked. `attach_lcd_display` is
+    // the same reattach path the window's native close button and the Window > "Attach LCD
+    // Display" menu item use. `menu.rs` already declares Ctrl+Shift+I as this action's native
+    // accelerator (`TOGGLE_LCD_DISPLAY_ID`).
+    run: () => {
+      if (getCurrentWindow().label === LCD_DISPLAY_DETACHED_WINDOW_LABEL) {
+        invoke("attach_lcd_display").catch((err) => console.error("attach_lcd_display failed:", err));
+      } else {
+        revealPanel("lcd-display");
       }
     },
     hasMainWindowAccelerator: true,

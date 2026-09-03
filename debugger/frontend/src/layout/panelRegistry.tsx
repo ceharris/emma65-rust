@@ -3,6 +3,7 @@ import AssemblerPanel from "../AssemblerPanel";
 import BreakpointPanel from "../BreakpointPanel";
 import DisassemblyPanel from "../DisassemblyPanel";
 import DisplayPanel from "../DisplayPanel";
+import LcdDisplayPanel from "../LcdDisplayPanel";
 import LedMatrixPanel from "../LedMatrixPanel";
 import LogPanel from "../LogPanel";
 import MemoryPanel from "../MemoryPanel";
@@ -21,6 +22,7 @@ export type MainPanelId =
   | "memory"
   | "display"
   | "led-matrix"
+  | "lcd-display"
   | "stack"
   | "symbols"
   | "watchpoints"
@@ -38,6 +40,7 @@ export const PANEL_TITLES: Record<MainPanelId, string> = {
   memory: "Memory",
   display: "Display",
   "led-matrix": "LED Matrix",
+  "lcd-display": "LCD Display",
   stack: "Stack",
   symbols: "Symbols",
   watchpoints: "Watchpoints",
@@ -60,6 +63,9 @@ export const panelComponents: Record<MainPanelId, React.FC<IDockviewPanelProps>>
   // No dockPanelApi to thread through: LED Matrix has no keyboard/focus behavior for a dock-tab
   // activation to drive (design §12), unlike Display and Terminal.
   "led-matrix": () => <LedMatrixPanel />,
+  // No dockPanelApi to thread through either, for the same reason as LED Matrix: LCD Display has
+  // no keyboard/focus behavior for a dock-tab activation to drive.
+  "lcd-display": () => <LcdDisplayPanel />,
   stack: () => <StackPanel />,
   symbols: () => <SymbolsPanel />,
   watchpoints: () => <WatchpointPanel />,
