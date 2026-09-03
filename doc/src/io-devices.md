@@ -161,6 +161,56 @@ wired, and having both invited them to silently disagree. A `1xN` (single
 column) arrangement reproduces the original one-matrix-per-1024-contiguous-
 bytes layout.
 
+## Character LCD Display (`display/lcd`)
+
+A memory-mapped character LCD module emulating a Hitachi HD44780-compatible
+controller/driver, faithfully reproducing its real two-register bus
+interface rather than mapping display memory directly:
+
+- A 2-byte register pair (instruction/status and data), regardless of
+  configured geometry — exactly like a real HD44780, all display state
+  (DDRAM, CGRAM, address counter) is reached only indirectly through these
+  two registers
+- Command execution takes simulated time, reported via a busy flag on the
+  instruction register, matching real HD44780 timing so programs written
+  against real hardware assumptions behave the same way here
+- Supports both the 8-bit and "software enabled" 4-bit interface widths,
+  selected at runtime via `Function Set`, including the classic 5×8/5×10
+  font height switch
+- Geometry (rows × columns) is fixed at configuration time from a set of
+  real-world HD44780 module layouts, quirks (like 16x1's split-segment
+  addressing) included
+- Not IRQ-capable — the HD44780 interface has no interrupt output
+
+See `plan/memory-mapped-lcd-display-device-spec.md` in the repository for
+the full register-level specification. Like `display` and `display/matrix`,
+`display/lcd` has no in-process console-style rendering when running the
+plain `emma65` CLI:
+
+- **The debugger** — the LCD Display panel renders composited frames
+  in-process, no configuration needed.
+- **Standalone `emma65`** — configure a `pipe:` transport pointing at the
+  bundled `emma65-lcd-display` SDL2 peripheral binary (see
+  [Running the LCD Display Peripheral](running-the-lcd-display-peripheral.md)
+  below). A frame streams on every register write that could change what's
+  rendered, over the
+  [LCD Display External Protocol](appendix-lcd-display-protocol.md).
+
+```toml
+[[devices]]
+type = "display/lcd"
+address = 0xD000
+geometry = "16x2"
+transport = "pipe:/path/to/emma65-lcd-display"
+```
+
+`geometry` (optional, default `16x2`) selects one of the nine supported
+real-world module layouts: `8x1`, `8x2`, `16x1`, `16x2`, `16x4`, `20x2`,
+`20x4`, `40x1`, `40x2`. `cgrom` (optional) overrides the built-in character
+generator ROM with a file of the same format. `background`/`foreground`
+(optional, hex RGB24) are cosmetic-only rendering colors — not part of the
+HD44780's own behavior, and not bus-addressable.
+
 ## Character Display (`display`)
 
 A memory-mapped character/color-cell text display, with a configurable grid

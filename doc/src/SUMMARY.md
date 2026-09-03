@@ -10,6 +10,7 @@
 - [Running the Tracer](running-the-tracer.md)
 - [Running the Display Peripheral](running-the-display-peripheral.md)
 - [Running the LED Matrix Peripheral](running-the-led-matrix-peripheral.md)
+- [Running the LCD Display Peripheral](running-the-lcd-display-peripheral.md)
 - [For Contributors](for-contributors.md)
 
 # Appendix
@@ -19,5 +20,6 @@
   - [PTM Peer Protocol](appendix-ptm-protocol.md)
   - [Character Display External Protocol](appendix-display-protocol.md)
   - [LED Matrix External Protocol](appendix-led-matrix-protocol.md)
+  - [LCD Display External Protocol](appendix-lcd-display-protocol.md)
 - [Trace File Format](appendix-trace-format.md)
 - [API Documentation](api-documentation.md)

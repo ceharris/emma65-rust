@@ -7,13 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 cargo build              # build the emma65 and emma65-tracer binaries + library
 cargo build --workspace  # also build the debugger crate (emma65-debugger), the display crate
-                          # (emma65-display), and the led-matrix crate (emma65-led-matrix)
+                          # (emma65-display), the led-matrix crate (emma65-led-matrix), and the
+                          # lcd-display crate (emma65-lcd-display)
 cargo build -p emma65-display     # build just the SDL2 display peripheral (needs libsdl2-dev)
 cargo build -p emma65-led-matrix  # build just the SDL2 LED matrix peripheral (needs libsdl2-dev)
+cargo build -p emma65-lcd-display # build just the SDL2 LCD display peripheral (needs libsdl2-dev)
 cargo test                # run the library/binary test suite
-cargo test --workspace    # also run the debugger, display, and led-matrix crates' tests
+cargo test --workspace    # also run the debugger, display, led-matrix, and lcd-display crates' tests
 cargo test <name>         # run a single test by name (partial match)
-cargo clippy              # lint (covers the debugger, display, and led-matrix crates too — all are workspace members)
+cargo clippy              # lint (covers the debugger, display, led-matrix, and lcd-display crates too — all are workspace members)
 ```
 
 The debugger's frontend (`debugger/frontend/`) is a separate React/TypeScript/Vite project.
@@ -22,7 +24,7 @@ Tauri invokes `npm run build` there automatically as part of `cargo tauri build`
 
 ## Architecture
 
-`emma65` is a Cargo workspace (Rust 2024 edition) with four members:
+`emma65` is a Cargo workspace (Rust 2024 edition) with five members:
 
 - **`.`** (crate `emma65`) — the emulator library plus two binaries: `emma65` (the emulator)
   and `emma65-tracer` (decodes binary trace files)
@@ -36,6 +38,10 @@ Tauri invokes `npm run build` there automatically as part of `cargo tauri build`
   `display/matrix` device's per-matrix composited output for the plain `emma65` CLI (the
   debugger renders it in-process instead); spawned by the emulator as a child process over a
   `pipe:` transport, per `plan/led-matrix-external-protocol.md`
+- **`lcd-display`** (crate `emma65-lcd-display`) — an SDL2 peripheral binary that renders the
+  `display/lcd` device's composited dot-matrix output for the plain `emma65` CLI (the debugger
+  renders it in-process instead); spawned by the emulator as a child process over a `pipe:`
+  transport, per `plan/lcd-display-external-protocol.md`
 
 The `emma65` library exposes two top-level public modules:
 
@@ -227,6 +233,7 @@ parameters and can be stored freely.
 
 ### Peripheral crates
 
-The `debugger`, `display`, and `led-matrix` crates each have their own CLAUDE.md
-(`debugger/src-tauri/CLAUDE.md`, `display/CLAUDE.md`, `led-matrix/CLAUDE.md`) with
-crate-specific detail, loaded automatically when working under those directories.
+The `debugger`, `display`, `led-matrix`, and `lcd-display` crates each have their own CLAUDE.md
+(`debugger/src-tauri/CLAUDE.md`, `display/CLAUDE.md`, `led-matrix/CLAUDE.md`,
+`lcd-display/CLAUDE.md`) with crate-specific detail, loaded automatically when working under
+those directories.
