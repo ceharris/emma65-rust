@@ -1,10 +1,10 @@
 use super::palette::parse_color;
-use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, LcdDisplayGeometry};
+use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, LcdDisplayGeometry, TransportSpec, TransportSpecFormat};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::lcd_display::cgrom::CgRom;
 use crate::emulator::device::lcd_display::compositing::Rgb24;
 use crate::emulator::device::lcd_display::{Geometry, LcdDisplay};
-use crate::emulator::{AddressRange, BusConfig};
+use crate::emulator::{AddressRange, BusConfig, IoDevice};
 use figment::providers::Serialized;
 use figment::value::{Dict, Value};
 use serde::Deserialize;
@@ -55,6 +55,14 @@ fn supported_geometry_names() -> Vec<&'static str> {
     GEOMETRIES.iter().map(|(n, _)| *n).collect()
 }
 
+// Hand-computed rather than imported: `compositing`'s `CELL_WIDTH`/`CELL_HEIGHT_5X10` stay
+// private (mirroring `config::led_matrix`'s identical note). These describe the *worst case*
+// frame -- the 5x10 font, reachable at any time via `Function Set`'s `F` bit even though 5x8 is
+// the reset default (spec §8.2) -- used only to size the external transport's ring (below), not
+// to compute any actual frame.
+const MAX_CELL_WIDTH_PX: usize = 5;
+const MAX_CELL_HEIGHT_PX: usize = 10;
+
 /// Memory-mapped HD44780-compatible character LCD display device module (`display/lcd`).
 ///
 /// Not IRQ-capable (the HD44780 interface has no interrupt output at all -- spec §2), so device
@@ -76,6 +84,10 @@ struct LcdDisplayAttributes {
     /// Cosmetic-only rendering colors (spec §3, §8.3); hex RGB24, e.g. `"0000AA"`.
     background: Option<String>,
     foreground: Option<String>,
+    /// Wire-protocol transport for a standalone external peripheral (`plan/lcd-display-external-
+    /// protocol.md`); absent for the debugger, which receives frames in-process via
+    /// `lcd_display_frame_sink` instead.
+    transport: Option<TransportSpecFormat>,
 }
 
 impl DeviceModule for LcdDisplayModule {
@@ -119,6 +131,24 @@ impl DeviceModule for LcdDisplayModule {
             None => DEFAULT_FOREGROUND,
         };
 
+        let transport_spec = config.transport
+            .map(TransportSpec::try_from)
+            .transpose()
+            .map_err(DeviceModuleError::Config)?;
+        // The external protocol's per-message sends (`plan/lcd-display-external-protocol.md`)
+        // rely on `Transport::send_bytes`'s all-or-nothing contract, which only `PipeTransport`
+        // provides (see `config::display`'s and `config::led_matrix`'s identical restriction) --
+        // reject any other kind rather than silently desyncing the stream on the first dropped
+        // message.
+        if let Some(spec) = &transport_spec
+            && !matches!(spec, TransportSpec::Pipe { .. })
+        {
+            return Err(DeviceModuleError::Config(
+                "display/lcd requires a pipe transport; \
+                 tcp/unix/pty transports don't support the atomic bulk-send this protocol needs"
+                    .to_string()));
+        }
+
         let device_id = id_allocator.lock().unwrap().next_available();
         // Bus size is always 2 bytes (spec §4.1) -- the only device whose mapped size doesn't
         // scale with any config attribute.
@@ -149,6 +179,25 @@ impl DeviceModule for LcdDisplayModule {
             && let Some(sender) = slot.lock().unwrap().take()
         {
             device.attach_frame_sink(sender);
+        }
+
+        if let Some(transport_spec) = transport_spec {
+            // Size the pipe's ring to hold the single largest frame message the device can ever
+            // push (worst case: the 5x10 font at this geometry's row/column count) -- there's no
+            // multi-message burst risk here like `LedMatrix`'s swap-all-matrices case, since this
+            // device pushes at most one frame per completed register write.
+            let capacity = 4
+                + geometry.columns as usize * MAX_CELL_WIDTH_PX
+                * geometry.rows as usize * MAX_CELL_HEIGHT_PX * 4;
+
+            let (transport, _relay) = transport_spec
+                .to_transport_with_reporter_and_capacity(
+                    context.transport_reporter(device.identity()),
+                    context.pipe_exit_reporter(device.identity()),
+                    Some(capacity))
+                .await
+                .map_err(DeviceModuleError::Transport)?;
+            device.attach_external_transport(transport);
         }
 
         bus_config.device(address_range, device_id, Box::new(device))
@@ -290,5 +339,74 @@ mod tests {
             BusConfig::new(), 0xD000, &HashMap::new(), &context(), id_allocator.clone()).await.unwrap();
 
         assert!(id_allocator.lock().unwrap().for_irq(0).is_ok());
+    }
+
+    #[tokio::test]
+    async fn instantiate_without_transport_attribute_succeeds() {
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+        let result = LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &HashMap::new(), &context(), id_allocator).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rejects_non_pipe_transport_spec() {
+        let mut attributes = HashMap::new();
+        attributes.insert("transport".to_string(), Value::from("unix:/tmp/emma65_test_lcd_display.sock"));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let result = LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &attributes, &context(), id_allocator).await;
+
+        match result {
+            Err(DeviceModuleError::Config(message)) => assert!(message.contains("pipe transport")),
+            Err(other) => panic!("expected DeviceModuleError::Config, got a different error variant: {other}"),
+            Ok(_) => panic!("expected DeviceModuleError::Config, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn attaches_pipe_transport_and_sends_header_immediately() {
+        let mut attributes = HashMap::new();
+        attributes.insert("transport".to_string(), Value::from("pipe:/usr/bin/cat"));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let result = LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &attributes, &context(), id_allocator).await;
+
+        // End-to-end smoke test with a real spawned child: confirms the computed ring capacity
+        // is accepted by `PipeTransport::spawn_with_capacity` and `attach_external_transport`'s
+        // immediate header send doesn't panic against a live pipe.
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn transport_capacity_holds_the_largest_possible_frame_message() {
+        // Regression-shaped test mirroring `config::led_matrix`'s capacity test: the ring must be
+        // able to hold a single frame message at the largest supported geometry (`40x2`, tied
+        // with `20x4` for the most total dot cells) rendered with the 5x10 font -- the worst case
+        // this device can ever push, even though 5x8 is the reset default (spec §8.2). Unlike
+        // `LedMatrix`, there's no multi-message burst to worry about, since this device sends at
+        // most one frame per completed register write.
+        let geometry = geometry_for("40x2").unwrap();
+        let width_px = geometry.columns as usize * MAX_CELL_WIDTH_PX;
+        let height_px = geometry.rows as usize * MAX_CELL_HEIGHT_PX;
+        let capacity = 4 + width_px * height_px * 4;
+
+        let (sender, _receiver) = crate::emulator::device_event_channel();
+        let reporter = crate::emulator::TransportReporter::pending(Some(sender));
+
+        let spec = TransportSpec::Pipe { command: vec!["/usr/bin/cat".to_string()] };
+        let (mut transport, _relay) = spec
+            .to_transport_with_reporter_and_capacity(reporter, |_| {}, Some(capacity))
+            .await
+            .unwrap();
+
+        let frame = vec![0xAAu8; 4 + width_px * height_px * 4];
+        assert!(
+            transport.send_bytes(&frame),
+            "largest-geometry, largest-font frame message was dropped -- ring capacity too small"
+        );
     }
 }
