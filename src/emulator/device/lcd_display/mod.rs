@@ -22,9 +22,11 @@
 
 pub mod cgrom;
 pub mod compositing;
+mod protocol;
 
 use self::cgrom::CgRom;
 use self::compositing::{CursorState, Rgb24};
+use crate::emulator::transport::Transport;
 use crate::emulator::{AddressRange, IoDevice, LogCategory, LogLevel, LogSender, log_msg};
 use tokio::sync::mpsc;
 
@@ -198,6 +200,15 @@ pub struct LcdDisplay {
     /// in which case no register write ever composites anything.
     frame_sink: Option<mpsc::Sender<LcdDisplayFrame>>,
 
+    /// Outbound-only transport to an external peripheral process (`plan/lcd-display-external-
+    /// protocol.md`), set post-construction via [`Self::attach_external_transport`] -- `None` when
+    /// run without one configured (the debugger, or a plain `emma65` CLI with no `transport=`
+    /// attribute), in which case [`Self::push_frame`] never sends anything over it. Unlike
+    /// [`super::display::CharDisplay`]'s `external_transport`, this device has no inbound
+    /// direction to pair with a relay -- like [`super::led_matrix::LedMatrix`], it has no input
+    /// capability at all.
+    external_transport: Option<Box<dyn Transport>>,
+
     log_sender: LogSender,
 }
 
@@ -246,6 +257,7 @@ impl LcdDisplay {
             clock_hz: clock_hz.unwrap_or(NOMINAL_CLOCK_HZ),
             busy_cycles_remaining: 0,
             frame_sink: None,
+            external_transport: None,
             log_sender: LogSender::default(),
         }
     }
@@ -284,6 +296,16 @@ impl LcdDisplay {
         self.frame_sink = Some(sink);
     }
 
+    /// Attaches an outbound-only transport to an external peripheral process
+    /// (`plan/lcd-display-external-protocol.md`), immediately sending the one-time header over
+    /// `transport`; thereafter [`Self::push_frame`] also sends a frame message over it whenever it
+    /// sends one to the frame sink (if attached).
+    pub fn attach_external_transport(&mut self, mut transport: Box<dyn Transport>) {
+        let header = protocol::encode_header(self.geometry.columns, self.geometry.rows, self.background, self.foreground);
+        transport.send_bytes(&header);
+        self.external_transport = Some(transport);
+    }
+
     /// Translates the address counter's current position into a cursor state for
     /// [`compositing::composite`] (design doc §8, spec §8.3): `None` when the address counter
     /// targets CGRAM, or a DDRAM address that `line_shift` has scrolled outside every segment's
@@ -304,7 +326,9 @@ impl LcdDisplay {
     /// instruction or a completed data write, never a busy-discarded one, and never a read (spec
     /// §8.3 only lists writes as render-affecting).
     fn push_frame(&mut self) {
-        let Some(sink) = &self.frame_sink else { return };
+        if self.frame_sink.is_none() && self.external_transport.is_none() {
+            return;
+        }
         let cursor = self.compositing_cursor();
         let pixels = compositing::composite(
             &self.ddram,
@@ -318,7 +342,19 @@ impl LcdDisplay {
             self.background,
             self.foreground,
         );
-        let _ = sink.try_send(LcdDisplayFrame { pixels, columns: self.geometry.columns, rows: self.geometry.rows });
+        if let Some(transport) = self.external_transport.as_mut() {
+            // `width_px` is fixed by `geometry`; `height_px` is derived from the buffer's own
+            // length (rather than duplicating `compositing`'s private cell-height constants here)
+            // since it depends on `font_5x10`, which can change at runtime (spec §8.2) -- the same
+            // technique `LcdDisplayPanel.tsx`'s `decodeFrame` uses on the receiving end.
+            let width_px = self.geometry.columns as u16 * 5;
+            let height_px = (pixels.len() / 4 / width_px as usize) as u16;
+            let message = protocol::encode_frame(width_px, height_px, &pixels);
+            transport.send_bytes(&message);
+        }
+        if let Some(sink) = &self.frame_sink {
+            let _ = sink.try_send(LcdDisplayFrame { pixels, columns: self.geometry.columns, rows: self.geometry.rows });
+        }
     }
 
     fn busy(&self) -> bool {
@@ -575,9 +611,13 @@ impl IoDevice for LcdDisplay {
 
     /// Drops the frame sink, closing the channel from this end -- the channel equivalent of the
     /// terminal bridge seeing EOF on its pipe, ending the debugger's LCD display bridge task's
-    /// `recv()` loop. Mirrors `CharDisplay::shutdown`/`LedMatrix::shutdown`.
+    /// `recv()` loop -- and shuts down the external transport, if attached. Mirrors
+    /// `CharDisplay::shutdown`/`LedMatrix::shutdown`.
     fn shutdown(&mut self) {
         self.frame_sink = None;
+        if let Some(transport) = self.external_transport.as_mut() {
+            transport.shutdown();
+        }
     }
 }
 
@@ -1034,5 +1074,104 @@ mod tests {
 
         device.write(data_addr(), 0x41);
         assert!(rx.try_recv().is_err(), "channel should be closed once the sink is dropped");
+    }
+
+    // -- External transport (`plan/lcd-display-external-protocol.md`) --
+
+    use crate::emulator::transport::InternalPipeTransport;
+
+    /// `remote` is the peripheral's end of the pipe: everything the device sends over the
+    /// external transport lands here, byte by byte, and can be collected with [`collect_bytes`].
+    /// Like `LedMatrix`'s equivalent helper, no relay is needed -- this device's transport is
+    /// outbound-only, so `pair_direct()`'s bare, unrelayed ends suffice.
+    fn device_with_external_transport() -> (LcdDisplay, InternalPipeTransport) {
+        let (local, remote) = InternalPipeTransport::pair_direct().unwrap();
+        let mut device = device(); // DUAL_LINE_GEOMETRY: 16x2
+        device.attach_external_transport(Box::new(local));
+        (device, remote)
+    }
+
+    fn collect_bytes(remote: &mut InternalPipeTransport) -> Vec<u8> {
+        let mut buf = Vec::new();
+        while let Some(b) = remote.try_recv() {
+            buf.push(b);
+        }
+        buf
+    }
+
+    #[test]
+    fn attach_external_transport_sends_header_immediately() {
+        let (_device, mut remote) = device_with_external_transport();
+        let bytes = collect_bytes(&mut remote);
+
+        assert_eq!(&bytes[0..4], b"E65L");
+        assert_eq!(bytes[4], 1); // version
+        assert_eq!(bytes[5], 16); // columns
+        assert_eq!(bytes[6], 2); // rows
+        assert_eq!(&bytes[7..10], &[0, 0, 0]); // background, from device()
+        assert_eq!(&bytes[10..13], &[255, 255, 255]); // foreground, from device()
+        assert_eq!(bytes.len(), 13);
+    }
+
+    #[test]
+    fn a_completed_data_write_sends_a_frame_message_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport();
+        collect_bytes(&mut remote); // drain the header
+
+        device.write(data_addr(), 0x41);
+
+        let bytes = collect_bytes(&mut remote);
+        let width_px = 16u16 * 5;
+        let height_px = 2u16 * 8; // 5x8 font by default
+        assert_eq!(&bytes[0..2], &width_px.to_le_bytes());
+        assert_eq!(&bytes[2..4], &height_px.to_le_bytes());
+        assert_eq!(bytes.len(), 4 + width_px as usize * height_px as usize * 4);
+    }
+
+    #[test]
+    fn switching_to_5x10_font_changes_the_next_frame_message_height() {
+        let (mut device, mut remote) = device_with_external_transport();
+        collect_bytes(&mut remote); // drain the header
+
+        device.write(instruction_addr(), 0x20 | 0x10 | 0x04); // Function Set, DL=1 (8-bit), F=1
+        tick_past_busy(&mut device);
+
+        let bytes = collect_bytes(&mut remote);
+        let width_px = 16u16 * 5;
+        let height_px = 2u16 * 10;
+        assert_eq!(&bytes[0..2], &width_px.to_le_bytes());
+        assert_eq!(&bytes[2..4], &height_px.to_le_bytes());
+        assert_eq!(bytes.len(), 4 + width_px as usize * height_px as usize * 4);
+    }
+
+    #[test]
+    fn a_busy_discarded_write_sends_no_frame_message_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport();
+        collect_bytes(&mut remote); // drain the header
+
+        device.write(instruction_addr(), 0x01); // Clear Display (long busy)
+        collect_bytes(&mut remote); // drain the frame from the Clear Display instruction itself
+
+        device.write(data_addr(), 0xFF); // discarded while busy
+        assert!(collect_bytes(&mut remote).is_empty(), "a busy-discarded write must not send a frame message");
+    }
+
+    #[test]
+    fn a_data_read_sends_no_frame_message_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport();
+        collect_bytes(&mut remote); // drain the header
+        device.read(data_addr());
+        assert!(collect_bytes(&mut remote).is_empty(), "a read must never send a frame message (spec §8.3 lists only writes)");
+    }
+
+    #[test]
+    fn shutdown_stops_further_sends_over_external_transport() {
+        let (mut device, mut remote) = device_with_external_transport();
+        collect_bytes(&mut remote); // drain the header
+
+        device.shutdown();
+        device.write(data_addr(), 0x41);
+
+        assert!(collect_bytes(&mut remote).is_empty());
     }
 }
