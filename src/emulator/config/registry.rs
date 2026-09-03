@@ -94,12 +94,22 @@ pub struct DisplayGeometry {
 /// before any frame has been composited. Unlike [`DisplayGeometry`], this carries no pixel
 /// dimensions: cell pixel size depends on the active font (`Function Set`'s `F` bit, spec §8.2),
 /// which isn't known until a frame actually arrives.
+///
+/// `background`/`foreground` are carried here rather than re-derived from a frame's own pixel
+/// data because, like `columns`/`rows`, they're fixed at configuration time (spec §3) and a panel
+/// needs them before any frame has arrived -- e.g. to render a dot-matrix "off" state that's
+/// still faintly visible against the backlight (issue #569), which a blank frame alone can't
+/// supply a foreground color for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LcdDisplayGeometry {
     /// Grid width in cells.
     pub columns: u8,
     /// Grid height in cells.
     pub rows: u8,
+    /// The configured background color (spec §3, §8.3).
+    pub background: crate::emulator::device::display::compositing::Rgb24,
+    /// The configured foreground color (spec §3, §8.3).
+    pub foreground: crate::emulator::device::display::compositing::Rgb24,
 }
 
 /// A context of application attributes that may be used by device modules during instantiation.

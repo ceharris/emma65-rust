@@ -142,7 +142,8 @@ impl DeviceModule for LcdDisplayModule {
         // `display_geometry_sink` are: present only when a host (the debugger) wants to receive
         // this device's output, absent (a no-op here) for the plain `emma65` CLI.
         if let Some(slot) = &context.lcd_display_geometry_sink {
-            *slot.lock().unwrap() = Some(LcdDisplayGeometry { columns: geometry.columns, rows: geometry.rows });
+            *slot.lock().unwrap() =
+                Some(LcdDisplayGeometry { columns: geometry.columns, rows: geometry.rows, background, foreground });
         }
         if let Some(slot) = &context.lcd_display_frame_sink
             && let Some(sender) = slot.lock().unwrap().take()
