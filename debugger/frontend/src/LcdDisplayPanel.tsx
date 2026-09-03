@@ -56,6 +56,18 @@ const CELL_GAP_PITCHES = 1;
  * (issue #569) -- rather than rendering "off" as flat, invisible background. */
 const OFF_DOT_BLEND = 0.15;
 
+/** Width of the black plastic bezel drawn around the viewing window, in whole dot pitches
+ * (issue #579: "[v]irtually all common LCD display components in the market have a black bezel
+ * area around the display itself"). Deliberately just the bezel -- unlike `LedMatrixPanel.tsx`'s
+ * `PCB_BACKGROUND_COLOR`, no surrounding circuit board is drawn (issue #579's reference photo
+ * shows exposed PCB at the board's edges, which this simulation doesn't represent). */
+const BEZEL_PITCHES = 3;
+
+/** Near-black bezel color -- matches `LedMatrixPanel.tsx`'s `PCB_BACKGROUND_COLOR` tone for a
+ * consistent "plastic/PCB black" across peripheral panels, even though this is a different part
+ * (a bezel, not a substrate). */
+const BEZEL_COLOR = "#0a0a0a";
+
 /** Decodes a base64 string into raw bytes -- see `DisplayPanel.tsx` for why this beats
  * `JSON.parse`-ing a plain number array per frame. */
 function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
@@ -111,17 +123,21 @@ function drawDot(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: nu
 }
 
 /** Renders one decoded frame into `canvas` as a dot-matrix grid at the given on-screen `pitch`
- * (dot center-to-center spacing, in CSS pixels), against `geometry`'s configured colors. Called
- * both when a fresh frame arrives and when `pitch` changes (a resize), so a resize can redraw
- * already-known pixel data immediately rather than waiting on the next frame. */
+ * (dot center-to-center spacing, in CSS pixels), against `geometry`'s configured colors, framed
+ * by a `BEZEL_PITCHES`-wide black bezel (issue #579). Called both when a fresh frame arrives and
+ * when `pitch` changes (a resize), so a resize can redraw already-known pixel data immediately
+ * rather than waiting on the next frame. */
 function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisplayGeometry, pitch: number) {
   const ctx = canvas.getContext("2d");
   if (!ctx || frame.widthDots === 0 || frame.cellHeightDots === 0) return;
 
   const totalDotsWide = geometry.columns * DOTS_PER_CELL_WIDTH + (geometry.columns - 1) * CELL_GAP_PITCHES;
   const totalDotsHigh = geometry.rows * frame.cellHeightDots + (geometry.rows - 1) * CELL_GAP_PITCHES;
-  const widthPx = totalDotsWide * pitch;
-  const heightPx = totalDotsHigh * pitch;
+  const bezelPx = BEZEL_PITCHES * pitch;
+  const viewportWidthPx = totalDotsWide * pitch;
+  const viewportHeightPx = totalDotsHigh * pitch;
+  const widthPx = viewportWidthPx + 2 * bezelPx;
+  const heightPx = viewportHeightPx + 2 * bezelPx;
 
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(widthPx * dpr);
@@ -130,16 +146,19 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
   canvas.style.height = `${heightPx}px`;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+  ctx.fillStyle = BEZEL_COLOR;
+  ctx.fillRect(0, 0, widthPx, heightPx);
+
   const backgroundColor = `rgb(${geometry.background.join(", ")})`;
   const offColor = blendColor(geometry.background, geometry.foreground, OFF_DOT_BLEND);
   ctx.fillStyle = backgroundColor;
-  ctx.fillRect(0, 0, widthPx, heightPx);
+  ctx.fillRect(bezelPx, bezelPx, viewportWidthPx, viewportHeightPx);
 
   const dotSize = pitch * DOT_FILL_RATIO;
   for (let row = 0; row < geometry.rows; row++) {
     for (let dotRow = 0; dotRow < frame.cellHeightDots; dotRow++) {
       const rawY = row * frame.cellHeightDots + dotRow;
-      const cy = (row * (frame.cellHeightDots + CELL_GAP_PITCHES) + dotRow + 0.5) * pitch;
+      const cy = bezelPx + (row * (frame.cellHeightDots + CELL_GAP_PITCHES) + dotRow + 0.5) * pitch;
       for (let col = 0; col < geometry.columns; col++) {
         for (let dotCol = 0; dotCol < DOTS_PER_CELL_WIDTH; dotCol++) {
           const rawX = col * DOTS_PER_CELL_WIDTH + dotCol;
@@ -149,7 +168,7 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
           const b = frame.pixels[offset + 2];
           const isBackground = r === geometry.background[0] && g === geometry.background[1] && b === geometry.background[2];
           const color = isBackground ? offColor : `rgb(${r}, ${g}, ${b})`;
-          const cx = (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dotCol + 0.5) * pitch;
+          const cx = bezelPx + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dotCol + 0.5) * pitch;
           drawDot(ctx, cx, cy, dotSize, color);
         }
       }
@@ -159,16 +178,18 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
 
 /**
  * The dock panel hosting the memory-mapped LCD display device's composited output (memory-mapped
- * LCD display device plan, Work Unit 5 -- design §10; dot-matrix cosmetics per issue #569).
+ * LCD display device plan, Work Unit 5 -- design §10; dot-matrix cosmetics per issue #569; black
+ * bezel and yellow-green/black default colors per issue #579).
  * Compositing (DDRAM/CGRAM + CGROM + palette -> RGBA) happens entirely in the Rust backend
  * (`emulator::device::lcd_display::compositing`, `lcd_display.rs`'s bridge task), which emits a
  * flat 1-pixel-per-dot buffer; this component is responsible for the cosmetic dot-matrix
  * rendering on top of it (rounded dots, inter-dot and inter-cell gaps, a dimly-visible "off"
- * state) the same way `LedMatrixPanel.tsx` draws its raw per-LED buffer as round LEDs on a PCB --
- * neither cosmetic layer lives in the shared library, since each renderer (this panel today, a
- * future SDL2 companion mirroring `led-matrix`'s) draws with its own native primitives at its own
- * resolution rather than blitting a backend-rasterized bitmap. Unlike `DisplayPanel`, there's no
- * keyboard input to forward -- an LCD display has no input capability, like `LedMatrixPanel`.
+ * state, a bezel) the same way `LedMatrixPanel.tsx` draws its raw per-LED buffer as round LEDs on
+ * a PCB -- neither cosmetic layer lives in the shared library, since each renderer (this panel and
+ * the SDL2 companion, `emma65-lcd-display`, mirroring `led-matrix`'s) draws with its own native
+ * primitives at its own resolution rather than blitting a backend-rasterized bitmap. Unlike
+ * `DisplayPanel`, there's no keyboard input to forward -- an LCD display has no input capability,
+ * like `LedMatrixPanel`.
  *
  * Mounted in both the docked panel and the detached-LCD-Display window
  * (`lcd-display-detached.tsx`), same reuse shape as `DisplayPanel`/`display-detached.tsx`: no
@@ -247,8 +268,8 @@ export default function LcdDisplayPanel() {
     if (!container || !geometry) return;
     const recomputePitch = () => {
       const cellHeightDots = frameRef.current?.cellHeightDots || 8;
-      const totalDotsWide = geometry.columns * DOTS_PER_CELL_WIDTH + (geometry.columns - 1) * CELL_GAP_PITCHES;
-      const totalDotsHigh = geometry.rows * cellHeightDots + (geometry.rows - 1) * CELL_GAP_PITCHES;
+      const totalDotsWide = geometry.columns * DOTS_PER_CELL_WIDTH + (geometry.columns - 1) * CELL_GAP_PITCHES + 2 * BEZEL_PITCHES;
+      const totalDotsHigh = geometry.rows * cellHeightDots + (geometry.rows - 1) * CELL_GAP_PITCHES + 2 * BEZEL_PITCHES;
       const fit = Math.min(container.clientWidth / totalDotsWide, container.clientHeight / totalDotsHigh);
       setPitch(Math.max(MIN_PITCH_PX, fit));
     };
