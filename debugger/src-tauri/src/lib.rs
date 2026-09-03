@@ -727,15 +727,15 @@ pub fn run() {
                     let _ = app.emit_to(MAIN_WINDOW_LABEL, "lcd-display-detach-requested", ());
                 }
             } else if let Some(panel_id) = event.id().as_ref().strip_prefix(menu::VIEW_PANEL_ID_PREFIX) {
-                // Terminal, Display, and LED Matrix are all special-cased: while any is detached
-                // to its own window, that window (not a dock panel) is the thing to reveal —
-                // asking the dock to add a panel that duplicates it would fight the
+                // Terminal, Display, LED Matrix, and LCD Display are all special-cased: while any
+                // is detached to its own window, that window (not a dock panel) is the thing to
+                // reveal — asking the dock to add a panel that duplicates it would fight the
                 // single-source-of-truth detach/reattach design in
-                // `terminal.rs`/`display.rs`/`led_matrix.rs`. Every other panel id, and these
-                // three while docked, goes through the generic dockview-driven `reveal-panel`
-                // handler in `DockLayout.tsx`, which adds the panel back (using its last dock
-                // position, or its default position) if it isn't present, or just activates its
-                // tab if it is.
+                // `terminal.rs`/`display.rs`/`led_matrix.rs`/`lcd_display.rs`. Every other panel
+                // id, and these four while docked, goes through the generic dockview-driven
+                // `reveal-panel` handler in `DockLayout.tsx`, which adds the panel back (using its
+                // last dock position, or its default position) if it isn't present, or just
+                // activates its tab if it is.
                 let detached_window_label = {
                     let layout_state = app.state::<layout::LayoutState>();
                     let detached = layout_state.0.lock().unwrap();
@@ -744,6 +744,8 @@ pub fn run() {
                         "display" if detached.display_detached => Some(display::DISPLAY_DETACHED_WINDOW_LABEL),
                         "led-matrix" if detached.led_matrix_detached =>
                             Some(led_matrix::LED_MATRIX_DETACHED_WINDOW_LABEL),
+                        "lcd-display" if detached.lcd_display_detached =>
+                            Some(lcd_display::LCD_DISPLAY_DETACHED_WINDOW_LABEL),
                         _ => None,
                     }
                 };
