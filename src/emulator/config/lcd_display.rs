@@ -15,10 +15,11 @@ use std::sync::{Arc, Mutex};
 const DEVICE_TYPE: &str = "display/lcd";
 
 const DEFAULT_GEOMETRY: &str = "16x2";
-// Spec §3's documented default: blue background, white foreground -- the classic HD44780
-// backlight/polarizer combination.
-const DEFAULT_BACKGROUND: Rgb24 = Rgb24::new(0x00, 0x00, 0xAA);
-const DEFAULT_FOREGROUND: Rgb24 = Rgb24::new(0xFF, 0xFF, 0xFF);
+// The classic yellow-green-backlight/black-polarizer combination most common LCD modules ship
+// with (issue #579), superseding spec §3's originally-documented blue/white default -- background
+// is CSS "yellowgreen" (#9ACD32).
+const DEFAULT_BACKGROUND: Rgb24 = Rgb24::new(0x9A, 0xCD, 0x32);
+const DEFAULT_FOREGROUND: Rgb24 = Rgb24::new(0x00, 0x00, 0x00);
 
 /// The 9 supported geometries (spec §7.1), looked up by the config's `geometry` string. This is
 /// the single source of truth for every geometry's row/segment layout -- `geometry_for` is the

@@ -29,6 +29,7 @@ use emma65::emulator::device::lcd_display::compositing::Rgb24;
 use sdl2::event::Event;
 use sdl2::gfx::primitives::DrawRenderer;
 use sdl2::pixels::Color;
+use sdl2::rect::Rect;
 
 use protocol::Header;
 
@@ -54,6 +55,15 @@ const DOT_CORNER_RATIO: f64 = 0.3;
 /// How far an "off" dot is blended from `background` toward `foreground` — matches
 /// `LcdDisplayPanel.tsx`'s `OFF_DOT_BLEND`.
 const OFF_DOT_BLEND: f64 = 0.15;
+
+/// Width of the black plastic bezel drawn around the viewing window, in whole dot pitches —
+/// matches `LcdDisplayPanel.tsx`'s `BEZEL_PITCHES` (issue #579). Deliberately just the bezel, no
+/// surrounding PCB — see that constant's doc comment.
+const BEZEL_PITCHES: u32 = 3;
+
+/// Near-black bezel color — matches `LcdDisplayPanel.tsx`'s `BEZEL_COLOR` and
+/// `led-matrix/src/main.rs`'s `PCB_BACKGROUND_COLOR` tone.
+const BEZEL_COLOR: Color = Color::RGB(0x0a, 0x0a, 0x0a);
 
 /// Converts an SDL2 [`Color`] into the `u32` SDL2_gfx's `*Color` entry points actually expect.
 /// See `led-matrix/src/main.rs`'s `gfx_color` (identical fix, same underlying bug — verified
@@ -160,18 +170,20 @@ fn spawn_frame_reader() -> mpsc::Receiver<Frame> {
     rx
 }
 
-/// Derives the on-screen pixel size of the full grid (glyph cells plus inter-cell gaps) for a
-/// given `cell_height_dots`, at `pitch` pixels per dot — mirrors `LcdDisplayPanel.tsx`'s
-/// `drawFrame` sizing math.
+/// Derives the on-screen pixel size of the full grid (glyph cells plus inter-cell gaps, framed by
+/// the bezel) for a given `cell_height_dots`, at `pitch` pixels per dot — mirrors
+/// `LcdDisplayPanel.tsx`'s `drawFrame` sizing math.
 fn window_size(header: &Header, cell_height_dots: u32, pitch: u32) -> (u32, u32) {
     let total_dots_wide = header.columns as u32 * DOTS_PER_CELL_WIDTH + (header.columns as u32 - 1) * CELL_GAP_PITCHES;
     let total_dots_high = header.rows as u32 * cell_height_dots + (header.rows as u32 - 1) * CELL_GAP_PITCHES;
-    (total_dots_wide * pitch, total_dots_high * pitch)
+    let bezel_px = 2 * BEZEL_PITCHES * pitch;
+    (total_dots_wide * pitch + bezel_px, total_dots_high * pitch + bezel_px)
 }
 
 /// Renders the current `frame` (or a blank `background` grid before the first one arrives, per
-/// spec §7) as a dot-matrix grid at `pitch` pixels per dot, against `header`'s configured colors
-/// — mirrors `LcdDisplayPanel.tsx`'s `drawFrame`/`drawDot`.
+/// spec §7) as a dot-matrix grid at `pitch` pixels per dot, framed by a `BEZEL_PITCHES`-wide black
+/// bezel (issue #579), against `header`'s configured colors — mirrors `LcdDisplayPanel.tsx`'s
+/// `drawFrame`/`drawDot`.
 fn render<T: sdl2::render::RenderTarget>(
     canvas: &mut sdl2::render::Canvas<T>,
     header: &Header,
@@ -180,11 +192,17 @@ fn render<T: sdl2::render::RenderTarget>(
 ) -> Result<(), String> {
     let background = Color::RGB(header.background.r, header.background.g, header.background.b);
     let off_color = gfx_color(blend_color(header.background, header.foreground, OFF_DOT_BLEND));
+    let bezel_px = BEZEL_PITCHES * pitch;
 
-    canvas.set_draw_color(background);
+    canvas.set_draw_color(BEZEL_COLOR);
     canvas.clear();
 
+    let total_dots_wide = header.columns as u32 * DOTS_PER_CELL_WIDTH + (header.columns as u32 - 1) * CELL_GAP_PITCHES;
+
     let Some(frame) = frame else {
+        let total_dots_high = header.rows as u32 * DEFAULT_CELL_HEIGHT_DOTS + (header.rows as u32 - 1) * CELL_GAP_PITCHES;
+        canvas.set_draw_color(background);
+        canvas.fill_rect(Rect::new(bezel_px as i32, bezel_px as i32, total_dots_wide * pitch, total_dots_high * pitch))?;
         canvas.present();
         return Ok(());
     };
@@ -195,6 +213,10 @@ fn render<T: sdl2::render::RenderTarget>(
         return Ok(());
     }
 
+    let total_dots_high = header.rows as u32 * cell_height_dots + (header.rows as u32 - 1) * CELL_GAP_PITCHES;
+    canvas.set_draw_color(background);
+    canvas.fill_rect(Rect::new(bezel_px as i32, bezel_px as i32, total_dots_wide * pitch, total_dots_high * pitch))?;
+
     let dot_size = pitch as f64 * DOT_FILL_RATIO;
     let radius = (dot_size * DOT_CORNER_RATIO).round().max(0.0) as i16;
     let half = (dot_size / 2.0).round() as i16;
@@ -202,7 +224,7 @@ fn render<T: sdl2::render::RenderTarget>(
     for row in 0..header.rows as u32 {
         for dot_row in 0..cell_height_dots {
             let raw_y = row * cell_height_dots + dot_row;
-            let cy = ((row * (cell_height_dots + CELL_GAP_PITCHES) + dot_row) * pitch + pitch / 2) as i16;
+            let cy = (bezel_px + (row * (cell_height_dots + CELL_GAP_PITCHES) + dot_row) * pitch + pitch / 2) as i16;
             for col in 0..header.columns as u32 {
                 for dot_col in 0..DOTS_PER_CELL_WIDTH {
                     let raw_x = col * DOTS_PER_CELL_WIDTH + dot_col;
@@ -210,7 +232,7 @@ fn render<T: sdl2::render::RenderTarget>(
                     let (r, g, b) = (frame.pixels[offset], frame.pixels[offset + 1], frame.pixels[offset + 2]);
                     let is_background = r == header.background.r && g == header.background.g && b == header.background.b;
                     let color = if is_background { off_color } else { gfx_color(Color::RGB(r, g, b)) };
-                    let cx = ((col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dot_col) * pitch + pitch / 2) as i16;
+                    let cx = (bezel_px + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dot_col) * pitch + pitch / 2) as i16;
                     canvas.rounded_box(cx - half, cy - half, cx + half, cy + half, radius, color)?;
                 }
             }
@@ -315,13 +337,14 @@ mod tests {
     }
 
     #[test]
-    fn window_size_accounts_for_cell_gaps() {
+    fn window_size_accounts_for_cell_gaps_and_bezel() {
         let header = sample_header();
         let (width, height) = window_size(&header, 8, 10);
 
-        // 2 columns * 5 dots + 1 gap = 11 dots wide; 1 row * 8 dots + 0 gaps = 8 dots high.
-        assert_eq!(width, 11 * 10);
-        assert_eq!(height, 8 * 10);
+        // 2 columns * 5 dots + 1 gap = 11 dots wide; 1 row * 8 dots + 0 gaps = 8 dots high; plus a
+        // BEZEL_PITCHES-wide bezel on every side.
+        assert_eq!(width, 11 * 10 + 2 * BEZEL_PITCHES * 10);
+        assert_eq!(height, 8 * 10 + 2 * BEZEL_PITCHES * 10);
     }
 
     #[test]
@@ -335,14 +358,19 @@ mod tests {
     }
 
     #[test]
-    fn render_before_first_frame_fills_background_only() {
+    fn render_before_first_frame_fills_bezel_and_background() {
         let header = sample_header();
         let surface = Surface::new(64, 64, PixelFormatEnum::RGBA32).unwrap();
         let mut canvas = surface.into_canvas().unwrap();
 
         render(&mut canvas, &header, None, 10).unwrap();
 
-        assert_eq!(pixel_at(&canvas, 5, 5), (0, 0, 0, 255));
+        // A pixel within the bezel margin (BEZEL_PITCHES * pitch == 30px wide) reads as the bezel
+        // color; `sample_header`'s background is a distinct near-black (0, 0, 0), unlike the
+        // bezel's (0x0a, 0x0a, 0x0a), so the two are still distinguishable.
+        assert_eq!(pixel_at(&canvas, 5, 5), (0x0a, 0x0a, 0x0a, 255));
+        // A pixel inside the viewport (past the 30px bezel margin) reads as the background color.
+        assert_eq!(pixel_at(&canvas, 35, 35), (0, 0, 0, 255));
     }
 
     #[test]
@@ -362,8 +390,9 @@ mod tests {
 
         render(&mut canvas, &header, Some(&frame), pitch).unwrap();
 
-        let cy = pitch + pitch / 2;
-        let cx = 2 * pitch + pitch / 2;
+        let bezel_px = BEZEL_PITCHES * pitch;
+        let cy = bezel_px + pitch + pitch / 2;
+        let cx = bezel_px + 2 * pitch + pitch / 2;
         assert_eq!(pixel_at(&canvas, cx, cy), (255, 255, 255, 255));
     }
 }
