@@ -255,10 +255,10 @@ body {
 }
 
 .lcd-display-canvas {
-  max-width: 100%;
-  max-height: 100%;
-  // Crisp upscaling for the composited glyph grid, same rationale as `.display-canvas`.
-  image-rendering: pixelated;
+  // Drawn at native resolution via devicePixelRatio, dots rendered as rounded rects rather than
+  // upscaled pixels (see `drawFrame` in `LcdDisplayPanel.tsx`) -- same rationale as
+  // `.led-matrix-canvas`, not `.display-canvas`'s pixelated blit.
+  display: block;
 }
 
 // --- assembler editor ---

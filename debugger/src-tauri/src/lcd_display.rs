@@ -33,15 +33,26 @@ pub struct LcdDisplayTargetWindow(pub Mutex<String>);
 /// field (this crate defines its own `#[derive(Serialize)]` payload types for Tauri commands
 /// rather than deriving `Serialize` on library types directly, matching
 /// `display::DisplayGeometryPayload`/`led_matrix::LedMatrixGeometryPayload`).
+///
+/// `background`/`foreground` ride along as plain `[u8; 3]` RGB triples rather than a `Rgb24`
+/// newtype so the frontend gets a bare `[r, g, b]` array to index into (`toCssColor` in
+/// `LcdDisplayPanel.tsx`) with no intermediate object shape to unwrap.
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct LcdDisplayGeometryPayload {
     pub columns: u8,
     pub rows: u8,
+    pub background: [u8; 3],
+    pub foreground: [u8; 3],
 }
 
 impl From<LcdDisplayGeometry> for LcdDisplayGeometryPayload {
     fn from(geometry: LcdDisplayGeometry) -> Self {
-        Self { columns: geometry.columns, rows: geometry.rows }
+        Self {
+            columns: geometry.columns,
+            rows: geometry.rows,
+            background: [geometry.background.r, geometry.background.g, geometry.background.b],
+            foreground: [geometry.foreground.r, geometry.foreground.g, geometry.foreground.b],
+        }
     }
 }
 
