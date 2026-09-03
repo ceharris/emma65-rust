@@ -245,6 +245,7 @@ export default function RegisterPanel() {
         <input
           className={`reg-edit-input${editInvalid ? " invalid" : ""}`}
           autoFocus
+          onFocus={(e) => e.target.select()}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={(e) => {
