@@ -56,8 +56,13 @@ const COLOR_PRESETS: &[(Polarity, &str, Rgb24, Rgb24)] = &[
     (Polarity::Positive, "amber", Rgb24::new(0xFF, 0xB0, 0x00), Rgb24::new(0x00, 0x00, 0x00)),
     (Polarity::Positive, "blue", Rgb24::new(0x87, 0xCE, 0xEB), Rgb24::new(0x00, 0x00, 0x00)),
     // Sampled from a real negative-blue HD44780 module's backlit background (issue #583 review
-    // feedback) -- the classic saturated royal blue these modules ship with, not a generic navy.
-    (Polarity::Negative, "blue", Rgb24::new(0x00, 0x20, 0x7F), Rgb24::new(0xFF, 0xFF, 0xFF)),
+    // feedback) -- the classic saturated royal blue these modules ship with, not a generic navy
+    // -- then darkened slightly from the raw sample: unlike the other negative presets' near-
+    // black background, this one starts bright enough that the renderer's fixed 15% "off dot"
+    // blend toward `foreground` (`OFF_DOT_BLEND` in `LcdDisplayPanel.tsx`/`lcd-display/main.rs`,
+    // issue #569) was making inactive dots noticeably lighter than the sampled photo -- too "hot"
+    // (review feedback) for a state meant to read as barely-there.
+    (Polarity::Negative, "blue", Rgb24::new(0x00, 0x19, 0x66), Rgb24::new(0xFF, 0xFF, 0xFF)),
     (Polarity::Negative, "white", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0xFF, 0xFF)),
     (Polarity::Negative, "amber", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0xB0, 0x00)),
     (Polarity::Negative, "red", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0x24, 0x00)),
