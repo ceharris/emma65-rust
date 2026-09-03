@@ -117,15 +117,7 @@ impl Config {
         let context = InstantiationContext {
             clock_hz: self.clock_speed_hz,
             error_sender: Some(error_sender),
-            console_transport: None,
-            keyboard_transport: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            led_matrix_frame_sink: None,
-            led_matrix_geometry_sink: None,
-            lcd_display_frame_sink: None,
-            lcd_display_geometry_sink: None,
+            ..Default::default()
         };
         self.build_devices(registry, context, error_receiver).await
     }

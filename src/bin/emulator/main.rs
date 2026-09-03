@@ -67,16 +67,9 @@ async fn main() -> ExitCode {
 
     let context = InstantiationContext {
         clock_hz: config.emulator.clock_speed_hz,
-        error_sender: None,
         console_transport: Some(Arc::clone(&console_transport_slot)),
-        keyboard_transport: None,
         log_sender: Some(log_sender.clone()),
-        display_frame_sink: None,
-        display_geometry_sink: None,
-        led_matrix_frame_sink: None,
-        led_matrix_geometry_sink: None,
-        lcd_display_frame_sink: None,
-        lcd_display_geometry_sink: None,
+        ..Default::default()
     };
     let session = match config.emulator.build_with_context(&registry, context).await {
         Ok(s) => s,
