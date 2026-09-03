@@ -113,19 +113,7 @@ mod tests {
     #[tokio::test]
     async fn instantiate_with_injected_transport() {
         let (slot, _reporter, mut remote) = injected_slot();
-        let context = InstantiationContext {
-            clock_hz: None,
-            error_sender: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            led_matrix_frame_sink: None,
-            led_matrix_geometry_sink: None,
-            lcd_display_frame_sink: None,
-            lcd_display_geometry_sink: None,
-            console_transport: Some(slot),
-            keyboard_transport: None,
-        };
+        let context = InstantiationContext { console_transport: Some(slot), ..Default::default() };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let bus_config = ConsoleModule.instantiate(
             BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
@@ -139,19 +127,7 @@ mod tests {
     #[tokio::test]
     async fn injected_transport_is_consumed() {
         let (slot, _reporter, _remote) = injected_slot();
-        let context = InstantiationContext {
-            clock_hz: None,
-            error_sender: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            led_matrix_frame_sink: None,
-            led_matrix_geometry_sink: None,
-            lcd_display_frame_sink: None,
-            lcd_display_geometry_sink: None,
-            console_transport: Some(Arc::clone(&slot)),
-            keyboard_transport: None,
-        };
+        let context = InstantiationContext { console_transport: Some(Arc::clone(&slot)), ..Default::default() };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let _bus_config = ConsoleModule.instantiate(
             BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();
@@ -170,19 +146,7 @@ mod tests {
             "transport".to_string(),
             Value::from("pipe:/usr/bin/cat"),
         );
-        let context = InstantiationContext {
-            clock_hz: None,
-            error_sender: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            led_matrix_frame_sink: None,
-            led_matrix_geometry_sink: None,
-            lcd_display_frame_sink: None,
-            lcd_display_geometry_sink: None,
-            console_transport: Some(Arc::clone(&slot)),
-            keyboard_transport: None,
-        };
+        let context = InstantiationContext { console_transport: Some(Arc::clone(&slot)), ..Default::default() };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let _result = ConsoleModule.instantiate(
             BusConfig::new(), 0xFFF8, &attributes, &context, id_allocator).await;
@@ -196,19 +160,10 @@ mod tests {
         let reporter = TransportReporter::pending(Some(error_sender));
         let ((local, relay), _remote) = InternalPipeTransport::pair(reporter.clone()).unwrap();
         let context = InstantiationContext {
-            clock_hz: None,
-            error_sender: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            led_matrix_frame_sink: None,
-            led_matrix_geometry_sink: None,
-            lcd_display_frame_sink: None,
-            lcd_display_geometry_sink: None,
             console_transport: Some(Arc::new(Mutex::new(Some((
                 Box::new(local) as Box<dyn Transport>, relay, reporter.clone(),
             ))))),
-            keyboard_transport: None,
+            ..Default::default()
         };
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let _bus_config = ConsoleModule.instantiate(
@@ -227,19 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn instantiate_without_injected_transport_and_no_spec() {
-        let context = InstantiationContext {
-            clock_hz: None,
-            error_sender: None,
-            log_sender: None,
-            display_frame_sink: None,
-            display_geometry_sink: None,
-            led_matrix_frame_sink: None,
-            led_matrix_geometry_sink: None,
-            lcd_display_frame_sink: None,
-            lcd_display_geometry_sink: None,
-            console_transport: None,
-            keyboard_transport: None,
-        };
+        let context = InstantiationContext::default();
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let bus_config = ConsoleModule.instantiate(
             BusConfig::new(), 0xFFF8, &HashMap::new(), &context, id_allocator).await.unwrap();

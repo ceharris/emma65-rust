@@ -103,7 +103,7 @@ pub struct LcdDisplayGeometry {
 }
 
 /// A context of application attributes that may be used by device modules during instantiation.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct InstantiationContext {
     /// Configured clock speed of the CPU (None signifies no throttling).
     pub clock_hz: Option<u64>,
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn transport_reporter_is_bound_and_reports_through_error_sender() {
         let (sender, mut receiver) = crate::emulator::device_event_channel();
-        let context = InstantiationContext { clock_hz: None, error_sender: Some(sender), console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
+        let context = InstantiationContext { error_sender: Some(sender), ..Default::default() };
 
         let reporter = context.transport_reporter("test-device");
         reporter.report_connected(None);
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn transport_reporter_is_a_silent_no_op_when_no_error_sender_is_configured() {
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
+        let context = InstantiationContext::default();
 
         let reporter = context.transport_reporter("test-device");
         // Must not panic with no error sender configured.
@@ -333,7 +333,7 @@ mod tests {
     async fn instantiate_unknown_device_type() {
         let registry = DeviceRegistry::default();
         let bus_config = BusConfig::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
+        let context = InstantiationContext::default();
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let attributes: HashMap<String, Value> = HashMap::new();
         let err = registry.instantiate("foobar", bus_config, 0x55aa, &attributes, &context, id_allocator)
@@ -345,7 +345,7 @@ mod tests {
     async fn instantiate_routes_to_correct_module() {
         let mut registry = DeviceRegistry::default();
         let attributes: HashMap<String, Value> = HashMap::new();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
+        let context = InstantiationContext::default();
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         registry.register(MockModule::from_name("alpha"));
         registry.register(MockModule::from_name("beta"));
@@ -363,7 +363,7 @@ mod tests {
         let attributes: HashMap<String, Value> = HashMap::new();
         registry.register(MockModule::from_name_and_tag("alpha", "alpha1"));
         registry.register(MockModule::from_name_and_tag("alpha", "alpha2"));
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
+        let context = InstantiationContext::default();
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let err_a = registry.instantiate("alpha", BusConfig::new(), 0x55aa, &attributes, &context, id_allocator)
             .await.err().unwrap();
@@ -373,7 +373,7 @@ mod tests {
     #[tokio::test]
     async fn with_builtins_has_ram_module() {
         let registry = DeviceRegistry::with_builtins();
-        let context = InstantiationContext { clock_hz: None, error_sender: None, console_transport: None, keyboard_transport: None, log_sender: None, display_frame_sink: None, display_geometry_sink: None, led_matrix_frame_sink: None, led_matrix_geometry_sink: None, lcd_display_frame_sink: None, lcd_display_geometry_sink: None };
+        let context = InstantiationContext::default();
         let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
         let mut attributes: HashMap<String, Value> = HashMap::new();
         attributes.insert("size".to_string(), Value::from(65536));
