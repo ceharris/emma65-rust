@@ -55,7 +55,9 @@ const COLOR_PRESETS: &[(Polarity, &str, Rgb24, Rgb24)] = &[
     (Polarity::Positive, "white", Rgb24::new(0xFF, 0xFF, 0xFF), Rgb24::new(0x00, 0x00, 0x00)),
     (Polarity::Positive, "amber", Rgb24::new(0xFF, 0xB0, 0x00), Rgb24::new(0x00, 0x00, 0x00)),
     (Polarity::Positive, "blue", Rgb24::new(0x87, 0xCE, 0xEB), Rgb24::new(0x00, 0x00, 0x00)),
-    (Polarity::Negative, "blue", Rgb24::new(0x14, 0x21, 0x3D), Rgb24::new(0xFF, 0xFF, 0xFF)),
+    // Sampled from a real negative-blue HD44780 module's backlit background (issue #583 review
+    // feedback) -- the classic saturated royal blue these modules ship with, not a generic navy.
+    (Polarity::Negative, "blue", Rgb24::new(0x00, 0x20, 0x7F), Rgb24::new(0xFF, 0xFF, 0xFF)),
     (Polarity::Negative, "white", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0xFF, 0xFF)),
     (Polarity::Negative, "amber", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0xB0, 0x00)),
     (Polarity::Negative, "red", Rgb24::new(0x0A, 0x0A, 0x0A), Rgb24::new(0xFF, 0x24, 0x00)),
