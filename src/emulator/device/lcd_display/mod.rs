@@ -361,13 +361,19 @@ impl LcdDisplay {
             let width_px = self.geometry.columns as u16 * 5;
             let height_px = (pixels.len() / 4 / width_px as usize) as u16;
             let message = protocol::encode_frame(width_px, height_px, &pixels);
-            // If the ring is still full of an earlier, not-yet-drained frame, this send fails
+            // If the ring is still full of an earlier, not-yet-drained frame, sending would fail
             // outright (never partially -- see `PipeTransport::send_bytes`'s atomicity guarantee).
-            // Rather than losing this frame for good, stash it as `pending_frame` for `tick` to
-            // keep retrying; a still-pending older frame is implicitly replaced here, since only
-            // the latest composited state is ever worth delivering (see `pending_frame`'s doc
-            // comment, issue #581).
-            self.pending_frame = if transport.send_bytes(&message) { None } else { Some(message) };
+            // Checking capacity first, rather than attempting the send and reacting to failure,
+            // means a still-congested channel is never reported as a dropped-bytes event (issue
+            // #587) -- it's stashed as `pending_frame` for `tick` to keep retrying instead, and a
+            // still-pending older frame is implicitly replaced here, since only the latest
+            // composited state is ever worth delivering (see `pending_frame`'s doc comment, issue
+            // #581).
+            self.pending_frame = if transport.has_outbound_capacity(message.len()) && transport.send_bytes(&message) {
+                None
+            } else {
+                Some(message)
+            };
         }
         if let Some(sink) = &self.frame_sink {
             let _ = sink.try_send(LcdDisplayFrame { pixels, columns: self.geometry.columns, rows: self.geometry.rows });
@@ -598,9 +604,13 @@ impl IoDevice for LcdDisplay {
     fn tick(&mut self, cycles: u32) {
         self.busy_cycles_remaining = self.busy_cycles_remaining.saturating_sub(cycles as u64);
         // Retry a frame `push_frame` couldn't deliver last time (issue #581) -- see
-        // `pending_frame`'s doc comment for why this can't just be left dropped.
+        // `pending_frame`'s doc comment for why this can't just be left dropped. Checked via
+        // `has_outbound_capacity` first, same as `push_frame`, so a channel that's still busy
+        // isn't re-reported as a fresh dropped-bytes event on every single tick it stays that way
+        // (issue #587).
         if let Some(message) = &self.pending_frame
             && let Some(transport) = self.external_transport.as_mut()
+            && transport.has_outbound_capacity(message.len())
             && transport.send_bytes(message)
         {
             self.pending_frame = None;
@@ -1211,6 +1221,11 @@ mod tests {
     struct ControllableTransportHandle {
         accepting: std::sync::Arc<std::sync::atomic::AtomicBool>,
         sent: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+        /// Counts every `send_bytes` call attempted against this double, regardless of whether
+        /// `accepting` made it succeed or fail -- lets a test distinguish "no attempt was made"
+        /// (because `has_outbound_capacity` said not to bother, issue #587) from "an attempt was
+        /// made and failed" (because `accepting` was false at the time).
+        send_attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl ControllableTransportHandle {
@@ -1220,6 +1235,10 @@ mod tests {
 
         fn sent(&self) -> Vec<Vec<u8>> {
             self.sent.lock().unwrap().clone()
+        }
+
+        fn send_attempts(&self) -> usize {
+            self.send_attempts.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -1231,6 +1250,7 @@ mod tests {
         fn new() -> (Self, ControllableTransportHandle) {
             let handle = ControllableTransportHandle {
                 accepting: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                send_attempts: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 sent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             };
             (Self { handle: handle.clone() }, handle)
@@ -1243,12 +1263,17 @@ mod tests {
         }
 
         fn send_bytes(&mut self, bytes: &[u8]) -> bool {
+            self.handle.send_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.handle.accepting.load(std::sync::atomic::Ordering::SeqCst) {
                 self.handle.sent.lock().unwrap().push(bytes.to_vec());
                 true
             } else {
                 false
             }
+        }
+
+        fn has_outbound_capacity(&self, _len: usize) -> bool {
+            self.handle.accepting.load(std::sync::atomic::Ordering::SeqCst)
         }
 
         fn is_connected(&self) -> bool {
@@ -1276,6 +1301,40 @@ mod tests {
         tick_past_busy(&mut device);
         assert!(device.pending_frame.is_none(), "a retry that succeeds must clear the pending frame");
         assert_eq!(handle.sent().len(), 1);
+    }
+
+    #[test]
+    fn a_retry_against_a_still_congested_channel_never_attempts_the_send() {
+        // Regression test for issue #587: previously, `tick` retried a still-pending frame by
+        // calling `send_bytes` unconditionally, so every tick the channel stayed congested
+        // re-triggered `PipeTransport`'s outbound-drop counting for the *same* undelivered frame
+        // -- turning one transient backpressure episode into a "bytes dropped" count in the
+        // millions, despite the frame always eventually getting through intact. Checking
+        // `has_outbound_capacity` first means a known-still-full channel is never even attempted,
+        // so no drop is ever reported for it.
+        let mut device = device();
+        let (transport, handle) = ControllableTransport::new();
+        handle.set_accepting(false);
+        device.attach_external_transport(Box::new(transport));
+        handle.send_attempts.store(0, std::sync::atomic::Ordering::SeqCst); // discount the header send
+
+        device.write(data_addr(), 0x41);
+        assert!(device.pending_frame.is_some());
+        assert_eq!(handle.send_attempts(), 0, "a known-congested channel must not even be attempted");
+
+        for _ in 0..1000 {
+            tick_past_busy(&mut device);
+        }
+        assert_eq!(
+            handle.send_attempts(), 0,
+            "retrying against a still-congested channel must never attempt the send, no matter how many ticks pass"
+        );
+        assert!(device.pending_frame.is_some());
+
+        handle.set_accepting(true);
+        tick_past_busy(&mut device);
+        assert_eq!(handle.send_attempts(), 1, "capacity becoming available must trigger exactly one attempt");
+        assert!(device.pending_frame.is_none());
     }
 
     #[test]

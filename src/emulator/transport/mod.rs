@@ -574,6 +574,22 @@ pub trait Transport: Send {
         true
     }
 
+    /// Returns whether a `send_bytes` call for a buffer of `len` bytes would
+    /// currently succeed, without attempting to send anything or reporting a drop on
+    /// failure. Default `true`, matching `send_bytes`'s own default "always succeeds"
+    /// contract. A transport that overrides `send_bytes` with atomic bulk-or-nothing
+    /// semantics (currently only [`PipeTransport`](super::PipeTransport)) should
+    /// override this too, so a caller that retries an already-known-oversized buffer
+    /// on every tick (e.g. `LcdDisplay`'s `pending_frame`, issue #581) can check first
+    /// and skip the call entirely, rather than re-triggering `TransportReporter`'s
+    /// outbound-drop counting on every tick the buffer doesn't yet fit -- inflating a
+    /// single transient backpressure episode into a "bytes dropped" count with no
+    /// relationship to how much data (none) was actually lost (issue #587).
+    fn has_outbound_capacity(&self, len: usize) -> bool {
+        let _ = len;
+        true
+    }
+
     fn is_connected(&self) -> bool;
 
     fn shutdown(&mut self);

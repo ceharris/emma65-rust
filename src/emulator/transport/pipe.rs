@@ -181,6 +181,17 @@ impl Transport for PipeTransport {
         }
     }
 
+    /// `Producer::slots()` never overestimates free space (it's refreshed from the
+    /// consumer's atomic position on every call), and this transport has exactly one
+    /// producer -- this `send_bytes`/`send` caller -- so free space can only grow
+    /// between this check and a subsequent `send_bytes` call, never shrink. A caller
+    /// that checks here first is therefore guaranteed the follow-up `send_bytes` call
+    /// will succeed, without ever having to attempt (and have reported as dropped) a
+    /// send it already knows won't fit.
+    fn has_outbound_capacity(&self, len: usize) -> bool {
+        self.connected.load(Ordering::Acquire) && self.outbound.slots() >= len
+    }
+
     fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Acquire)
     }
@@ -503,6 +514,50 @@ mod tests {
         let mut got = Vec::new();
         relay.drain_into(|b| got.push(b));
         assert!(got.is_empty(), "expected no bytes to arrive, got {got:?}");
+
+        close(transport, relay);
+    }
+
+    #[tokio::test]
+    async fn has_outbound_capacity_reflects_ring_free_space_without_reporting_a_drop() {
+        let (sender, mut receiver) = device_event_channel();
+        let reporter = TransportReporter::pending(Some(sender));
+        reporter.bind("test-device-101");
+        let (transport, relay) = PipeTransport::spawn_with_capacity(
+            &["cat".to_string()],
+            reporter.clone(),
+            |_| {},
+            4,
+        ).await.unwrap();
+        assert!(matches!(receiver.try_recv(), Ok(DeviceEvent::TransportConnected { .. })));
+
+        assert!(transport.has_outbound_capacity(4), "a buffer that exactly fits the ring must report capacity");
+        assert!(!transport.has_outbound_capacity(5), "a buffer larger than the ring can never fit");
+
+        // Checking capacity must never itself count as (or report) a drop, unlike an actual
+        // failed `send_bytes` call (issue #587) -- there is nothing here for `report_counts` to
+        // find.
+        reporter.report_counts();
+        assert!(receiver.try_recv().is_err());
+
+        close(transport, relay);
+    }
+
+    #[tokio::test]
+    async fn has_outbound_capacity_is_false_once_disconnected() {
+        let (mut transport, relay) = PipeTransport::spawn(
+            &["cat".to_string()],
+            TransportReporter::pending(None),
+            |_| {},
+        ).await.unwrap();
+
+        transport.shutdown();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        assert!(
+            !transport.has_outbound_capacity(1),
+            "a disconnected transport can never accept a send, regardless of ring free space"
+        );
 
         close(transport, relay);
     }
