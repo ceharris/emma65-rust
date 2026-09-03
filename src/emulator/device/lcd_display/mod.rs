@@ -209,6 +209,16 @@ pub struct LcdDisplay {
     /// capability at all.
     external_transport: Option<Box<dyn Transport>>,
 
+    /// A frame message [`Self::push_frame`] couldn't hand off to `external_transport` immediately
+    /// (its ring was still full of an earlier, not-yet-drained message) -- retried on every
+    /// [`Self::tick`] until it succeeds, always holding the *latest* composited state rather than
+    /// a backlog (a later `push_frame` overwrites it outright, discarding the stale one). Without
+    /// this, a companion peripheral that briefly falls behind the write rate (issue #581) can miss
+    /// a frame permanently: unlike `CharDisplay`/`LedMatrix`, this device has no periodic vsync
+    /// tick to naturally re-send the current state on, so a dropped frame with no writes following
+    /// it would otherwise leave the peripheral showing stale content forever.
+    pending_frame: Option<Vec<u8>>,
+
     log_sender: LogSender,
 }
 
@@ -258,6 +268,7 @@ impl LcdDisplay {
             busy_cycles_remaining: 0,
             frame_sink: None,
             external_transport: None,
+            pending_frame: None,
             log_sender: LogSender::default(),
         }
     }
@@ -350,7 +361,13 @@ impl LcdDisplay {
             let width_px = self.geometry.columns as u16 * 5;
             let height_px = (pixels.len() / 4 / width_px as usize) as u16;
             let message = protocol::encode_frame(width_px, height_px, &pixels);
-            transport.send_bytes(&message);
+            // If the ring is still full of an earlier, not-yet-drained frame, this send fails
+            // outright (never partially -- see `PipeTransport::send_bytes`'s atomicity guarantee).
+            // Rather than losing this frame for good, stash it as `pending_frame` for `tick` to
+            // keep retrying; a still-pending older frame is implicitly replaced here, since only
+            // the latest composited state is ever worth delivering (see `pending_frame`'s doc
+            // comment, issue #581).
+            self.pending_frame = if transport.send_bytes(&message) { None } else { Some(message) };
         }
         if let Some(sink) = &self.frame_sink {
             let _ = sink.try_send(LcdDisplayFrame { pixels, columns: self.geometry.columns, rows: self.geometry.rows });
@@ -580,6 +597,14 @@ impl IoDevice for LcdDisplay {
 
     fn tick(&mut self, cycles: u32) {
         self.busy_cycles_remaining = self.busy_cycles_remaining.saturating_sub(cycles as u64);
+        // Retry a frame `push_frame` couldn't deliver last time (issue #581) -- see
+        // `pending_frame`'s doc comment for why this can't just be left dropped.
+        if let Some(message) = &self.pending_frame
+            && let Some(transport) = self.external_transport.as_mut()
+            && transport.send_bytes(message)
+        {
+            self.pending_frame = None;
+        }
     }
 
     fn reset(&mut self) {
@@ -615,6 +640,7 @@ impl IoDevice for LcdDisplay {
     /// `CharDisplay::shutdown`/`LedMatrix::shutdown`.
     fn shutdown(&mut self) {
         self.frame_sink = None;
+        self.pending_frame = None;
         if let Some(transport) = self.external_transport.as_mut() {
             transport.shutdown();
         }
@@ -1173,5 +1199,108 @@ mod tests {
         device.write(data_addr(), 0x41);
 
         assert!(collect_bytes(&mut remote).is_empty());
+    }
+
+    /// A [`Transport`] double whose `send_bytes` can be switched between always-succeeding and
+    /// always-failing (as `PipeTransport`'s does when its ring is full), via a cloned handle kept
+    /// by the test, so `pending_frame`'s retry behavior (issue #581) can be exercised
+    /// deterministically -- `InternalPipeTransport` can't stand in for this, since its
+    /// `send_bytes` (the `Transport` trait's default byte-by-byte loop) always returns `true`
+    /// regardless of whether the underlying OS pipe accepted the write.
+    #[derive(Clone)]
+    struct ControllableTransportHandle {
+        accepting: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        sent: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl ControllableTransportHandle {
+        fn set_accepting(&self, accepting: bool) {
+            self.accepting.store(accepting, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn sent(&self) -> Vec<Vec<u8>> {
+            self.sent.lock().unwrap().clone()
+        }
+    }
+
+    struct ControllableTransport {
+        handle: ControllableTransportHandle,
+    }
+
+    impl ControllableTransport {
+        fn new() -> (Self, ControllableTransportHandle) {
+            let handle = ControllableTransportHandle {
+                accepting: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                sent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            };
+            (Self { handle: handle.clone() }, handle)
+        }
+    }
+
+    impl Transport for ControllableTransport {
+        fn send(&mut self, byte: u8) {
+            self.send_bytes(&[byte]);
+        }
+
+        fn send_bytes(&mut self, bytes: &[u8]) -> bool {
+            if self.handle.accepting.load(std::sync::atomic::Ordering::SeqCst) {
+                self.handle.sent.lock().unwrap().push(bytes.to_vec());
+                true
+            } else {
+                false
+            }
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn shutdown(&mut self) {}
+    }
+
+    #[test]
+    fn a_frame_that_cannot_be_sent_immediately_is_retried_on_tick_until_it_succeeds() {
+        let mut device = device();
+        let (transport, handle) = ControllableTransport::new();
+        handle.set_accepting(false);
+        device.attach_external_transport(Box::new(transport)); // header itself is dropped here
+
+        device.write(data_addr(), 0x41);
+        assert!(device.pending_frame.is_some(), "a failed send must be stashed for retry");
+
+        tick_past_busy(&mut device); // still failing: must remain pending, not be lost
+        assert!(device.pending_frame.is_some());
+        assert!(handle.sent().is_empty());
+
+        handle.set_accepting(true);
+        tick_past_busy(&mut device);
+        assert!(device.pending_frame.is_none(), "a retry that succeeds must clear the pending frame");
+        assert_eq!(handle.sent().len(), 1);
+    }
+
+    #[test]
+    fn a_second_write_before_the_first_frame_is_delivered_replaces_the_pending_frame() {
+        let mut device = device();
+        let (transport, handle) = ControllableTransport::new();
+        handle.set_accepting(false); // header itself is dropped here, so `sent` below counts frames only
+        device.attach_external_transport(Box::new(transport));
+
+        device.write(instruction_addr(), 0x0C); // Display On, cursor off, blink off
+        tick_past_busy(&mut device); // display is off at reset, so composited frames are all-blank until this
+
+        device.write(data_addr(), 0x41);
+        let first_pending = device.pending_frame.clone();
+        tick_past_busy(&mut device); // clears busy without changing DDRAM content
+
+        device.write(data_addr(), 0x42); // different DDRAM content -> a different composited frame
+        let second_pending = device.pending_frame.clone();
+
+        assert_ne!(first_pending, second_pending, "the newer frame must replace the older one, not queue behind it");
+
+        handle.set_accepting(true);
+        tick_past_busy(&mut device);
+        let sent = handle.sent();
+        assert_eq!(sent.len(), 1, "only the latest frame should ever reach the transport, never a backlog");
+        assert_eq!(Some(sent[0].clone()), second_pending);
     }
 }

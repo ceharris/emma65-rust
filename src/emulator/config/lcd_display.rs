@@ -184,9 +184,13 @@ impl DeviceModule for LcdDisplayModule {
 
         if let Some(transport_spec) = transport_spec {
             // Size the pipe's ring to hold the single largest frame message the device can ever
-            // push (worst case: the 5x10 font at this geometry's row/column count) -- there's no
-            // multi-message burst risk here like `LedMatrix`'s swap-all-matrices case, since this
-            // device pushes at most one frame per completed register write.
+            // push (worst case: the 5x10 font at this geometry's row/column count). Unlike
+            // `LedMatrix`'s swap-all-matrices case, there's no *multi-message* burst within one
+            // call to worry about -- this device pushes at most one frame per completed register
+            // write -- but consecutive writes can still outrun the ring's drain (issue #581) if
+            // the peripheral falls behind; `LcdDisplay::tick` retries a frame that doesn't fit
+            // here rather than losing it, so this capacity only needs to fit one frame, not a
+            // backlog.
             let capacity = 4
                 + geometry.columns as usize * MAX_CELL_WIDTH_PX
                 * geometry.rows as usize * MAX_CELL_HEIGHT_PX * 4;

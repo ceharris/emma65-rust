@@ -46,6 +46,18 @@ is only safe because of the transport atomicity requirement above: a
 transport that could deliver a partial frame would desync the stream
 permanently, with no way to resynchronize.
 
+A frame the transport can't accept immediately (its outbound ring still full
+of an earlier, not-yet-drained message — issue #581) is not lost: the device
+keeps it and retries on every subsequent CPU cycle until it goes through. A
+later write that composites a newer frame before the retry succeeds replaces
+the pending one outright rather than queuing behind it, since only the
+current state is ever worth delivering. This guarantees the peripheral
+eventually catches up to whatever the device last rendered, even after a
+burst of writes outruns the peripheral's read/render rate — unlike
+`CharDisplay`'s or `LedMatrix`'s periodic cadence, which corrects itself on
+the next tick regardless, a permanently dropped frame here would otherwise
+leave the peripheral showing stale content indefinitely.
+
 ## Header (sent once, on attach)
 
 | Field        | Type    | Size (bytes) | Notes                                                     |
