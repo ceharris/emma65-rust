@@ -24,7 +24,7 @@ mod lcd_display;
 mod palette;
 
 pub use emulator::{Config, BuildError, CpuVariantSpec};
-pub use registry::{DeviceRegistry, DisplayFrameSlot, DisplayGeometry, DisplayGeometrySlot, InstantiationContext, LedMatrixFrameSlot, LedMatrixGeometry, LedMatrixGeometrySlot, TransportSlot};
+pub use registry::{DeviceRegistry, DisplayFrameSlot, DisplayGeometry, DisplayGeometrySlot, InstantiationContext, LcdDisplayFrameSlot, LcdDisplayGeometry, LcdDisplayGeometrySlot, LedMatrixFrameSlot, LedMatrixGeometry, LedMatrixGeometrySlot, TransportSlot};
 pub use transport::{TransportSpec, TransportSpecFormat};
 pub use device::{DeviceSpec, DeviceModule, DeviceModuleError};
 pub use memory::{RamModule, RomModule};

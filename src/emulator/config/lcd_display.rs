@@ -1,5 +1,5 @@
 use super::palette::parse_color;
-use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext};
+use super::{DeviceModule, DeviceModuleError, ExpandedPathBuf, InstantiationContext, LcdDisplayGeometry};
 use crate::emulator::bus::DeviceIdAllocator;
 use crate::emulator::device::lcd_display::cgrom::CgRom;
 use crate::emulator::device::lcd_display::compositing::Rgb24;
@@ -60,10 +60,10 @@ fn supported_geometry_names() -> Vec<&'static str> {
 /// Not IRQ-capable (the HD44780 interface has no interrupt output at all -- spec §2), so device
 /// IDs come from [`DeviceIdAllocator::next_available`] rather than [`DeviceIdAllocator::for_irq`].
 ///
-/// This work unit wires configuration and registry lookup only: the device becomes configurable
-/// and instantiable with a real `Geometry`/`CgRom`/colors, but has nothing to push composited
-/// frames to outside its own tests -- `InstantiationContext` gains no LCD-specific frame/geometry
-/// slots until a later work unit adds the debugger's own compositing/push wiring.
+/// Also consumes `context.lcd_display_frame_sink`/`lcd_display_geometry_sink` (design doc §7),
+/// the same way [`super::display::CharDisplayModule`] consumes its own `display_frame_sink`/
+/// `display_geometry_sink`: present only when a host (the debugger) wants to receive this
+/// device's output, a no-op here for the plain `emma65` CLI.
 #[derive(Clone)]
 pub struct LcdDisplayModule;
 
@@ -138,6 +138,18 @@ impl DeviceModule for LcdDisplayModule {
             device.set_log_sender(sender.clone());
         }
 
+        // Both slots (design doc §7) are consumed the same way `display_frame_sink`/
+        // `display_geometry_sink` are: present only when a host (the debugger) wants to receive
+        // this device's output, absent (a no-op here) for the plain `emma65` CLI.
+        if let Some(slot) = &context.lcd_display_geometry_sink {
+            *slot.lock().unwrap() = Some(LcdDisplayGeometry { columns: geometry.columns, rows: geometry.rows });
+        }
+        if let Some(slot) = &context.lcd_display_frame_sink
+            && let Some(sender) = slot.lock().unwrap().take()
+        {
+            device.attach_frame_sink(sender);
+        }
+
         bus_config.device(address_range, device_id, Box::new(device))
             .map_err(DeviceModuleError::BusConfig)
     }
@@ -159,6 +171,8 @@ mod tests {
             display_geometry_sink: None,
             led_matrix_frame_sink: None,
             led_matrix_geometry_sink: None,
+            lcd_display_frame_sink: None,
+            lcd_display_geometry_sink: None,
         }
     }
 

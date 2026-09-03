@@ -121,6 +121,8 @@ mod tests {
             display_geometry_sink: None,
             led_matrix_frame_sink: None,
             led_matrix_geometry_sink: None,
+            lcd_display_frame_sink: None,
+            lcd_display_geometry_sink: None,
             console_transport: Some(slot),
             keyboard_transport: None,
         };
@@ -145,6 +147,8 @@ mod tests {
             display_geometry_sink: None,
             led_matrix_frame_sink: None,
             led_matrix_geometry_sink: None,
+            lcd_display_frame_sink: None,
+            lcd_display_geometry_sink: None,
             console_transport: Some(Arc::clone(&slot)),
             keyboard_transport: None,
         };
@@ -174,6 +178,8 @@ mod tests {
             display_geometry_sink: None,
             led_matrix_frame_sink: None,
             led_matrix_geometry_sink: None,
+            lcd_display_frame_sink: None,
+            lcd_display_geometry_sink: None,
             console_transport: Some(Arc::clone(&slot)),
             keyboard_transport: None,
         };
@@ -197,6 +203,8 @@ mod tests {
             display_geometry_sink: None,
             led_matrix_frame_sink: None,
             led_matrix_geometry_sink: None,
+            lcd_display_frame_sink: None,
+            lcd_display_geometry_sink: None,
             console_transport: Some(Arc::new(Mutex::new(Some((
                 Box::new(local) as Box<dyn Transport>, relay, reporter.clone(),
             ))))),
@@ -227,6 +235,8 @@ mod tests {
             display_geometry_sink: None,
             led_matrix_frame_sink: None,
             led_matrix_geometry_sink: None,
+            lcd_display_frame_sink: None,
+            lcd_display_geometry_sink: None,
             console_transport: None,
             keyboard_transport: None,
         };

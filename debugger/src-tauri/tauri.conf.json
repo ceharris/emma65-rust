@@ -47,6 +47,16 @@
         "resizable": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "label": "lcd-display-detached",
+        "title": "Emma65 LCD Display",
+        "url": "lcd-display-detached.html",
+        "width": 480,
+        "height": 240,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {

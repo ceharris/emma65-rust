@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use emma65::disassembler::Disassembler;
 use emma65::emulator::bus::MAX_IRQ_SOURCES;
-use emma65::emulator::{Config, Cpu, DeviceRegistry, DisplayFrame, DisplayFrameSlot, DisplayGeometrySlot, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, LedMatrixFrame, LedMatrixFrameSlot, LedMatrixGeometrySlot, LogSender, Transport, TransportReporter, TransportSlot};
+use emma65::emulator::{Config, Cpu, DeviceRegistry, DisplayFrame, DisplayFrameSlot, DisplayGeometrySlot, EmulatorSession, InstantiationContext, InternalPipeTransport, IrqSource, LcdDisplayFrame, LcdDisplayFrameSlot, LcdDisplayGeometrySlot, LedMatrixFrame, LedMatrixFrameSlot, LedMatrixGeometrySlot, LogSender, Transport, TransportReporter, TransportSlot};
 
 /// Label of the main debugger window, as assigned by the (unlabeled) first
 /// entry in `tauri.conf.json`'s `app.windows` list.
@@ -74,6 +74,11 @@ mod display;
 /// window lifecycle (mirroring `display`'s architecture, minus the keyboard bridge — LED
 /// matrices have no input capability).
 mod led_matrix;
+
+/// LCD display panel: composited-frame push channel bridge and dockable/detachable window
+/// lifecycle (mirroring `led_matrix`'s architecture, minus the per-matrix indexing — an LCD
+/// display has only one frame, not one per matrix).
+mod lcd_display;
 
 /// Trace panel: live-recorded execution trace and windowed reads.
 mod trace;
@@ -139,8 +144,13 @@ pub struct SessionStatusState(pub Mutex<Option<SessionStatus>>);
 /// for a possible `display/matrix` device to consume via
 /// `InstantiationContext::led_matrix_frame_sink`/`led_matrix_geometry_sink`, the same way as the
 /// display channel/slot above.
+///
+/// Also creates a fresh composited-frame channel and geometry slot (memory-mapped LCD display
+/// device plan, design doc §7) for a possible `display/lcd` device to consume via
+/// `InstantiationContext::lcd_display_frame_sink`/`lcd_display_geometry_sink`, the same way as
+/// the display channel/slot above.
 #[allow(clippy::type_complexity)]
-async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, InternalPipeTransport, IrqSource, mpsc::Receiver<DisplayFrame>, Option<display::DisplayGeometryPayload>, mpsc::Receiver<LedMatrixFrame>, Option<led_matrix::LedMatrixGeometryPayload>), String> {
+async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(EmulatorSession, InternalPipeTransport, InternalPipeTransport, IrqSource, mpsc::Receiver<DisplayFrame>, Option<display::DisplayGeometryPayload>, mpsc::Receiver<LedMatrixFrame>, Option<led_matrix::LedMatrixGeometryPayload>, mpsc::Receiver<LcdDisplayFrame>, Option<lcd_display::LcdDisplayGeometryPayload>), String> {
     let config_path = profile_dir.join("emulator.toml");
 
     let config: Config = Figment::new()
@@ -194,6 +204,18 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
     let led_matrix_frame_slot: LedMatrixFrameSlot = Arc::new(Mutex::new(Some(led_matrix_frame_tx)));
     let led_matrix_geometry_slot: LedMatrixGeometrySlot = Arc::new(Mutex::new(None));
 
+    // Bounded to 4, not 2 like `display_frame_tx` above: unlike `CharDisplay`'s per-vsync
+    // recomposite, a single instruction/data write here only ever changes a few glyph cells, so
+    // several register writes can legitimately land back to back within one CPU burst (e.g. a
+    // 4-bit-mode nibble pair, or a short string print loop) before this task's next `recv()`
+    // poll -- a small amount of slack avoids dropping the *first* of a closely-spaced burst
+    // purely on scheduling luck, while still staying small enough that a genuinely unconsumed
+    // backlog starts shedding frames promptly (`LcdDisplay::push_frame`'s `try_send` never
+    // blocks `tick()` either way).
+    let (lcd_display_frame_tx, lcd_display_frame_rx) = mpsc::channel::<LcdDisplayFrame>(4);
+    let lcd_display_frame_slot: LcdDisplayFrameSlot = Arc::new(Mutex::new(Some(lcd_display_frame_tx)));
+    let lcd_display_geometry_slot: LcdDisplayGeometrySlot = Arc::new(Mutex::new(None));
+
     // `log_sender` (built by the caller, see this function's doc comment) is shared by every
     // device, the CPU, and the event-logging loop spawned in `load_or_reload_session` below, so
     // every clone shares the same underlying cycle-count `Arc` (see `LogSender::set_cycles`)
@@ -209,6 +231,8 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
         display_geometry_sink: Some(display_geometry_slot.clone()),
         led_matrix_frame_sink: Some(led_matrix_frame_slot),
         led_matrix_geometry_sink: Some(led_matrix_geometry_slot.clone()),
+        lcd_display_frame_sink: Some(lcd_display_frame_slot),
+        lcd_display_geometry_sink: Some(lcd_display_geometry_slot.clone()),
     };
 
     let registry = DeviceRegistry::with_builtins();
@@ -223,7 +247,20 @@ async fn load_session(profile_dir: &Path, log_sender: LogSender) -> Result<(Emul
     let display_geometry = display_geometry_slot.lock().unwrap().take().map(display::DisplayGeometryPayload::from);
     let led_matrix_geometry =
         led_matrix_geometry_slot.lock().unwrap().take().map(led_matrix::LedMatrixGeometryPayload::from);
-    Ok((session, remote, kbd_remote, ui_irq_source, display_frame_rx, display_geometry, led_matrix_frame_rx, led_matrix_geometry))
+    let lcd_display_geometry =
+        lcd_display_geometry_slot.lock().unwrap().take().map(lcd_display::LcdDisplayGeometryPayload::from);
+    Ok((
+        session,
+        remote,
+        kbd_remote,
+        ui_irq_source,
+        display_frame_rx,
+        display_geometry,
+        led_matrix_frame_rx,
+        led_matrix_geometry,
+        lcd_display_frame_rx,
+        lcd_display_geometry,
+    ))
 }
 
 /// Stops any free-running CPU (Run, Step Over, or Step Return) and waits for
@@ -279,6 +316,8 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
     *app.state::<display::KeyboardTx>().0.lock().unwrap() = None;
     *app.state::<led_matrix::LedMatrixGeometryState>().0.lock().unwrap() = None;
     app.state::<led_matrix::LedMatrixFrameCache>().0.lock().unwrap().clear();
+    *app.state::<lcd_display::LcdDisplayGeometryState>().0.lock().unwrap() = None;
+    *app.state::<lcd_display::LcdDisplayFrameCache>().0.lock().unwrap() = None;
 
     *app.state::<profile::ProfileDirState>().0.lock().unwrap() = profile_dir.to_path_buf();
 
@@ -298,7 +337,18 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
         });
 
     match load_session(profile_dir, log_sender.clone()).await {
-        Ok((session, remote, kbd_remote, ui_irq_source, display_frame_rx, display_geometry, led_matrix_frame_rx, led_matrix_geometry)) => {
+        Ok((
+            session,
+            remote,
+            kbd_remote,
+            ui_irq_source,
+            display_frame_rx,
+            display_geometry,
+            led_matrix_frame_rx,
+            led_matrix_geometry,
+            lcd_display_frame_rx,
+            lcd_display_geometry,
+        )) => {
             let (remote_rx, remote_tx) = remote.into_split();
             *app.state::<terminal::TerminalTx>().0.lock().unwrap() = Some(remote_tx);
 
@@ -320,6 +370,12 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
             let led_matrix_bridge_handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 led_matrix::run_led_matrix_bridge(led_matrix_frame_rx, led_matrix_bridge_handle).await;
+            });
+
+            *app.state::<lcd_display::LcdDisplayGeometryState>().0.lock().unwrap() = lcd_display_geometry;
+            let lcd_display_bridge_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                lcd_display::run_lcd_display_bridge(lcd_display_frame_rx, lcd_display_bridge_handle).await;
             });
 
             // Structured device/transport events now flow into the Log window via the
@@ -480,6 +536,13 @@ fn persist_window_geometries(app: &AppHandle) {
     {
         eprintln!("Failed to save LED matrix window geometry: {e}");
     }
+    if let Some(lcd_display_window) = app.get_webview_window(lcd_display::LCD_DISPLAY_DETACHED_WINDOW_LABEL)
+        && lcd_display_window.is_visible().unwrap_or(false)
+        && let Err(e) = preferences::save_window_geometry(
+            &lcd_display_window, &state, |c, g| c.lcd_display_window_geometry = Some(g))
+    {
+        eprintln!("Failed to save LCD display window geometry: {e}");
+    }
 }
 
 /// Exits the application cleanly. Invoked directly by Ctrl+Q (handled
@@ -539,6 +602,7 @@ pub fn run() {
     let terminal_was_detached = dock_layout.terminal_detached;
     let display_was_detached = dock_layout.display_detached;
     let led_matrix_was_detached = dock_layout.led_matrix_detached;
+    let lcd_display_was_detached = dock_layout.lcd_display_detached;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -564,6 +628,9 @@ pub fn run() {
         .manage(led_matrix::LedMatrixTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
         .manage(led_matrix::LedMatrixGeometryState::default())
         .manage(led_matrix::LedMatrixFrameCache::default())
+        .manage(lcd_display::LcdDisplayTargetWindow(Mutex::new(MAIN_WINDOW_LABEL.to_string())))
+        .manage(lcd_display::LcdDisplayGeometryState::default())
+        .manage(lcd_display::LcdDisplayFrameCache::default())
         .manage(CpuState(Mutex::new(None)))
         .manage(cpu_bus::UiIrqSourceState(Mutex::new(None)))
         .manage(disassembly::DisassemblerState(Mutex::new(None)))
@@ -649,6 +716,15 @@ pub fn run() {
                     eprintln!("Failed to detach LED matrix: {e}");
                 } else {
                     let _ = app.emit_to(MAIN_WINDOW_LABEL, "led-matrix-detach-requested", ());
+                }
+            } else if event.id() == menu::TOGGLE_LCD_DISPLAY_ID {
+                let detached = app.state::<layout::LayoutState>().0.lock().unwrap().lcd_display_detached;
+                if detached {
+                    lcd_display::reattach_lcd_display(app);
+                } else if let Err(e) = lcd_display::begin_lcd_display_detach(app) {
+                    eprintln!("Failed to detach LCD display: {e}");
+                } else {
+                    let _ = app.emit_to(MAIN_WINDOW_LABEL, "lcd-display-detach-requested", ());
                 }
             } else if let Some(panel_id) = event.id().as_ref().strip_prefix(menu::VIEW_PANEL_ID_PREFIX) {
                 // Terminal, Display, and LED Matrix are all special-cased: while any is detached
@@ -750,6 +826,10 @@ pub fn run() {
             led_matrix::attach_led_matrix,
             led_matrix::get_led_matrix_geometry,
             led_matrix::get_led_matrix_frames,
+            lcd_display::detach_lcd_display,
+            lcd_display::attach_lcd_display,
+            lcd_display::get_lcd_display_geometry,
+            lcd_display::get_lcd_display_frame,
             trace::record_trace,
             trace::stop_trace,
             trace::get_trace_window,
@@ -874,6 +954,8 @@ pub fn run() {
             display::restore_detached_window_if_needed(app.handle(), display_was_detached);
             led_matrix::install_detached_window(app.handle());
             led_matrix::restore_detached_window_if_needed(app.handle(), led_matrix_was_detached);
+            lcd_display::install_detached_window(app.handle());
+            lcd_display::restore_detached_window_if_needed(app.handle(), lcd_display_was_detached);
 
             // Exit explicitly rather than relying on Tauri's default "exit when all
             // windows are closed" behavior, so the close control honors the exit
