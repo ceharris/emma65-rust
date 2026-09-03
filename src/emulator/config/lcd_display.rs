@@ -40,7 +40,7 @@ impl Polarity {
 // with (issue #579), superseding spec §3's originally-documented blue/white default -- background
 // is CSS "yellowgreen" (#9ACD32).
 const DEFAULT_POLARITY: &str = "positive";
-const DEFAULT_BACKLIGHT: &str = "yellow-green";
+const DEFAULT_BACKLIGHT: &str = "yellow";
 
 /// `(polarity, backlight)` -> `(background, foreground)` presets modeling commonly available
 /// real-world HD44780 module color schemes (issue #583). Positive polarity always renders dark
@@ -51,7 +51,7 @@ const DEFAULT_BACKLIGHT: &str = "yellow-green";
 /// correspond to hardware that's actually commonly available; the rest are intentionally left
 /// unmapped and rejected at configuration time rather than guessed at.
 const COLOR_PRESETS: &[(Polarity, &str, Rgb24, Rgb24)] = &[
-    (Polarity::Positive, "yellow-green", Rgb24::new(0x9A, 0xCD, 0x32), Rgb24::new(0x00, 0x00, 0x00)),
+    (Polarity::Positive, "yellow", Rgb24::new(0x9A, 0xCD, 0x32), Rgb24::new(0x00, 0x00, 0x00)),
     (Polarity::Positive, "white", Rgb24::new(0xFF, 0xFF, 0xFF), Rgb24::new(0x00, 0x00, 0x00)),
     (Polarity::Positive, "amber", Rgb24::new(0xFF, 0xB0, 0x00), Rgb24::new(0x00, 0x00, 0x00)),
     (Polarity::Positive, "blue", Rgb24::new(0x87, 0xCE, 0xEB), Rgb24::new(0x00, 0x00, 0x00)),
@@ -135,7 +135,7 @@ struct LcdDisplayAttributes {
     /// Cosmetic-only display polarity (issue #583): `"positive"` (default) or `"negative"`,
     /// selecting which of `background`/`foreground` a chosen `backlight` color fills.
     polarity: Option<String>,
-    /// Cosmetic-only backlight color preset (issue #583): one of `"yellow-green"`, `"white"`,
+    /// Cosmetic-only backlight color preset (issue #583): one of `"yellow"`, `"white"`,
     /// `"amber"`, `"blue"`, `"red"`, restricted to the combinations valid for `polarity`.
     backlight: Option<String>,
     /// Cosmetic-only rendering colors (spec §3, §8.3); hex RGB24, e.g. `"0000AA"`. Each, if

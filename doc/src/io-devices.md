@@ -210,23 +210,23 @@ real-world module layouts: `8x1`, `8x2`, `16x1`, `16x2`, `16x4`, `20x2`,
 generator ROM with a file of the same format.
 
 `polarity` (optional, default `positive`) and `backlight` (optional, default
-`yellow-green`) together select one of 8 color-scheme presets modeling
+`yellow`) together select one of 8 color-scheme presets modeling
 commonly available real LCD modules, rather than requiring hand-picked RGB24
 values: `positive` polarity renders dark pixels over a backlight-colored
 background; `negative` polarity renders backlight-colored pixels over a dark
 "opaque near-black" background. Not every `backlight` value is valid for
 every `polarity` — only the combinations below are:
 
-| `polarity`  | `backlight`    |
-|-------------|----------------|
-| `positive`  | `yellow-green` |
-| `positive`  | `white`        |
-| `positive`  | `amber`        |
-| `positive`  | `blue`         |
-| `negative`  | `blue`         |
-| `negative`  | `white`        |
-| `negative`  | `amber`        |
-| `negative`  | `red`          |
+| `polarity`  | `backlight` |
+|-------------|-------------|
+| `positive`  | `yellow`    |
+| `positive`  | `white`     |
+| `positive`  | `amber`     |
+| `positive`  | `blue`      |
+| `negative`  | `blue`      |
+| `negative`  | `white`     |
+| `negative`  | `amber`     |
+| `negative`  | `red`       |
 
 `background`/`foreground` (optional, hex RGB24) remain available for fully
 custom colors — each, if given, overrides the corresponding channel of the
