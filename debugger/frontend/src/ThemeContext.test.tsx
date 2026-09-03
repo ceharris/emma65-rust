@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectHookThrows } from "./test/expectHookThrows";
 import { emitMockEvent, invoke, resetTauriMocks } from "./test/tauriMock";
 import { resolveTheme, ThemeMode, ThemeProvider, useTheme } from "./ThemeContext";
 
@@ -44,7 +45,7 @@ describe("resolveTheme", () => {
 
 describe("useTheme", () => {
   it("throws when used outside a ThemeProvider", () => {
-    expect(() => renderHook(() => useTheme())).toThrow(/must be used within a ThemeProvider/);
+    expect(expectHookThrows(() => useTheme())).toThrow(/must be used within a ThemeProvider/);
   });
 });
 
