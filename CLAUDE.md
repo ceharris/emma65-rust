@@ -89,27 +89,6 @@ peripheral over a transport, useful for manually exercising `Via6522`'s shift-re
 
 Multi-source configuration (TOML < `EMMA65_*` env vars < CLI args) via `figment` + `clap`.
 
-Key types re-exported from `emulator`:
-
-```rust
-Config              // emulator config: cpu_variant_spec, clock_speed_hz, devices
-BuildError          // errors from Config::build()
-CpuVariantSpec      // "65C02" | "WDC65C02"
-DeviceSpec          // parsed device entry: type@address,key=val,...
-DeviceModule        // trait for pluggable device modules
-DeviceModuleError   // BusConfig | Transport | Config | Load | Io
-DeviceRegistry      // maps module names to InstantiateFn closures
-InstantiationContext // clock_hz, error_sender, console_transport passed to DeviceModule::instantiate()
-RamModule / RomModule
-TransportSpec       // Tcp { port, address } | Unix { path } | Pty { path }
-TransportSpecFormat // serde-untagged: Shorthand(String) | Structured(TransportSpec)
-ExpandedPathBuf     // PathBuf that expands ~/ at construction; used for path attrs
-```
-
-Built-in device modules (registered by `DeviceRegistry::with_builtins()`), by config `type` string:
-`ram`, `rom`, `console`, `mem/finch`, `display/matrix`, `display`, `lfsr`, `acia/6551`,
-`ptm/6840`, `acia/6850`, `mem/phoebe`, `via/6522`, `mem/vireo`.
-
 `Config::build(&registry)` iterates `devices`, dispatches each to its `DeviceModule`,
 builds the `BusConfig`, constructs `Cpu`, and returns `EmulatorSession`.
 
@@ -175,8 +154,7 @@ fn peek(&self, offset: u16) -> u8;   // side-effect-free (watchpoints, disassemb
 // optional: tick(), irq_active(), take_nmi(), take_reset(), name()
 ```
 
-Built-in devices: `Console`, `R6551`, `Mc6850`, `Via6522`, `Mc6840`, `Finch`, `Phoebe`, `Vireo`,
-`LedMatrix`, `CharDisplay`, `Lfsr16`. Devices that need byte-stream I/O hold a `TransportRelay` connected to
+Devices that need byte-stream I/O hold a `TransportRelay` connected to
 an `Option<Box<dyn Transport>>`; the VIA and MC6840 additionally support a structured
 peer-communication protocol (ASCII or binary framing) implemented in `device::protocol`
 (`device::protocol::via`, `device::protocol::ptm`) for exchanging port/pin state with real or
@@ -213,16 +191,6 @@ A self-contained pipeline for evaluating watchpoint expressions against live mac
 source &str → Scanner → Vec<Token> → Parser → Expr tree → Compiler → Vec<OpCode> → Evaluator → Operand (u32)
 ```
 
-Public API (re-exported from `emma65::watch`):
-
-```rust
-pub use self::context::WatchContext;
-pub use self::error::{Error, WatchError};
-pub use self::expr::Operand;
-pub use self::parser::Mapper;
-pub use self::session::{WatchCompiler, WatchEvaluator, Watchpoint};
-```
-
 `WatchCompiler::new(map_register, map_flag, map_symbol)` — owns a `Parser`.
 `compiler.compile(source, evaluator)` → `Watchpoint` (stores `Vec<OpCode>`).
 `WatchEvaluator::new()` — owns watchpoints, `Variables`, and variable runtime storage.
@@ -257,73 +225,8 @@ parameters and can be stored freely.
 
 ---
 
-### `debugger` crate (`debugger/src-tauri/`)
+### Peripheral crates
 
-A Tauri 2 desktop app (`emma65-debugger`) that loads config from
-`~/.emma/debugger/profiles/default/emulator.toml`, builds an `EmulatorSession` with an
-injected `InternalPipeTransport` wired to its terminal window, and exposes the emulator to a
-React/TypeScript frontend (`debugger/frontend/`) via `#[tauri::command]`s. UI preferences
-(theme, exit-confirmation skip) are not profile-scoped and live in
-`~/.emma/debugger/config/ui.toml` instead. One module per UI panel:
-
-- **`registers`** — register snapshot/edit
-- **`cpu_bus`** — reset, IRQ assert/release, NMI trigger, cached bus-signal snapshot
-- **`disassembly`** — run/stop/step-into/step-over/step-return, breakpoint CRUD, disassembly listing
-- **`memory`** — paged reads/writes/fills/file loads
-- **`stack`** — stack pointer and stack page snapshot
-- **`terminal`** — console byte-stream bridge and window visibility (toggleable window)
-- **`trace`** — live-recorded execution trace, windowed reads
-- **`watchpoints`** — loads/compiles `watchpoints.emw`, evaluates on demand, add/remove/edit/toggle with persistence
-- **`theme`** — light/dark theme preference; also owns `UiConfig`/`ui.toml` persistence used by
-  the exit-confirmation "Don't ask again" preference (set from `lib.rs`'s `confirm_exit`)
-- **`menu`** — native File/Edit/Window/Help menu bar and Window-menu checkbox sync
-- **`recent`** — recently-used profile list (`~/.emma/debugger/config/recent.toml`), recorded on every
-  profile activation and shown in the File > Open Recent submenu
-- **`profile`** — `--profile` CLI flag, profile directory resolution, `ensure_profile_dir` (seeds a
-  new `default` profile from the bundled `emulator::config::default` template; seeds any other new
-  profile by copying files from `default`), New/Open Profile commands, window-title sync
-
-Devices requiring a byte-stream peer (VIA, MC6840, ACIAs) still use their configured
-`Transport` independent of the debugger UI; only the console is special-cased to route
-through the debugger's own terminal window.
-
----
-
-### `display` crate (`display/`)
-
-An SDL2 desktop app (`emma65-display`) that renders a `display` device's composited
-output for the plain `emma65` CLI standalone (no Tauri debugger); see
-`plan/char-display-external-protocol.md` for the wire format it consumes. `emma65` spawns it as
-a child process via a `display` device's `transport = "pipe:..."` attribute — its own
-stdin is the pipe, so it is never run standalone against a live `emma65` process any other way.
-`src/protocol.rs` is a decode-only mirror of `emma65::emulator::device::display::protocol`
-(private to the `emma65` crate); `src/main.rs` reads the one-time header, then loops reading
-fixed-size frames on a background thread (so SDL window-close events keep pumping even if
-frames stall), compositing each with the `emma65` crate's own
-`emulator::device::display::compositing::composite` (already `pub`, reused directly — no
-rendering logic is duplicated) and blitting it via `SDL_UpdateTexture`/`SDL_RenderCopy`/
-`SDL_RenderPresent`. Building it requires SDL2 development headers (`libsdl2-dev` on
-Debian/Ubuntu); it is not built by plain `cargo build` — use `cargo build -p emma65-display`
-or `cargo build --workspace`.
-
----
-
-### `led-matrix` crate (`led-matrix/`)
-
-An SDL2 desktop app (`emma65-led-matrix`) that renders a `display/matrix` device's per-matrix
-composited output for the plain `emma65` CLI standalone (no Tauri debugger); see
-`plan/led-matrix-external-protocol.md` for the wire format it consumes. `emma65` spawns it as a
-child process via a `display/matrix` device's `transport = "pipe:..."` attribute — its own
-stdin is the pipe, so it is never run standalone against a live `emma65` process any other way.
-`src/protocol.rs` is a decode-only mirror of `emma65::emulator::device::led_matrix`'s (private)
-encode side — same split as `display/src/protocol.rs` mirrors `display::protocol`, but with
-tagged, variable-arrival messages (a block message per matrix swap, a palette message per
-`CMD_PALETTE_WRITE`) rather than one fixed-size frame per vsync, since `LedMatrix` swaps happen
-per matrix rather than in lockstep. `src/main.rs` reads the one-time header, then loops decoding
-the tagged message stream on a background thread; each matrix's most recently received raw pixel
-indices are retained and recomposited against the current palette on every redraw via the
-`emma65` crate's own `emulator::device::led_matrix::compositing::composite_matrix` (already
-`pub`, reused directly), drawn as filled circles on a PCB-colored background via SDL2_gfx's
-`DrawRenderer`, flush per `--arrangement COLSxROWS`. Building it requires SDL2 development
-headers (`libsdl2-dev` on Debian/Ubuntu); it is not built by plain `cargo build` — use
-`cargo build -p emma65-led-matrix` or `cargo build --workspace`.
+The `debugger`, `display`, and `led-matrix` crates each have their own CLAUDE.md
+(`debugger/src-tauri/CLAUDE.md`, `display/CLAUDE.md`, `led-matrix/CLAUDE.md`) with
+crate-specific detail, loaded automatically when working under those directories.
