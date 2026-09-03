@@ -21,7 +21,10 @@ pub const CGROM_BYTES: usize = GLYPH_COUNT * ROWS_PER_GLYPH;
 /// HD44780U datasheet's character font table -- the same kind of real-hardware-derived,
 /// permissively licensed source `display::font`'s default font uses. `0x00..=0x1F` and
 /// `0x80..=0x9F` are forced blank here (rather than keeping that source's extra glyphs in those
-/// slots) to match spec §8.1's documented gaps in the standard ROM table exactly.
+/// slots) to match spec §8.1's documented gaps in the standard ROM table exactly. Every glyph is
+/// also shifted up by one row relative to `char-lcd.js`'s own arrays, whose row 0 is the blank
+/// row: the HD44780U datasheet (Table 5) documents row 7 (the 8th line) as the reserved cursor
+/// row instead, so each glyph here drops that source's row 0 and appends a blank row 7.
 const DEFAULT_CGROM_BYTES: &[u8; CGROM_BYTES] = include_bytes!("default_cgrom_a02.bin");
 
 /// An error indicating that raw CGROM data was not exactly [`CGROM_BYTES`] long.
@@ -106,11 +109,11 @@ mod tests {
 
     #[test]
     fn default_table_renders_a_as_a_recognizable_letter_a() {
-        // 0x41 ('A'): apex at the top-center column, widening into two vertical strokes --
-        // spot-checked against the sourced A02 table rather than merely asserting non-blank, so
-        // a transposed or shifted table would fail this test.
+        // 0x41 ('A'): apex at the top-center column, widening into two vertical strokes, blank
+        // cursor row at the bottom -- spot-checked against the sourced A02 table rather than
+        // merely asserting non-blank, so a transposed or shifted table would fail this test.
         let table = CgRom::default();
-        assert_eq!(table.glyph(0x41), &[0, 4, 10, 17, 17, 31, 17, 17]);
+        assert_eq!(table.glyph(0x41), &[4, 10, 17, 17, 31, 17, 17, 0]);
     }
 
     #[test]
