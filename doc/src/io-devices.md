@@ -206,8 +206,10 @@ transport = "pipe:/path/to/emma65-lcd-display"
 
 `geometry` (optional, default `16x2`) selects one of the nine supported
 real-world module layouts: `8x1`, `8x2`, `16x1`, `16x2`, `16x4`, `20x2`,
-`20x4`, `40x1`, `40x2`. `cgrom` (optional) overrides the built-in character
-generator ROM with a file of the same format.
+`20x4`, `40x1`, `40x2`. `cgrom` (optional) selects the bundled character
+generator ROM by name -- `a00` (the default, and the ROM code most HD44780
+clones ship with) or `a02` (the European-font variant), case-insensitive --
+or overrides it with a file of the same format.
 
 `polarity` (optional, default `positive`) and `backlight` (optional, default
 `yellow`) together select one of 8 color-scheme presets modeling

@@ -137,7 +137,8 @@ pub struct LcdDisplayModule;
 struct LcdDisplayAttributes {
     /// One of the 9 supported values (design doc §2); default `16x2` (spec §3).
     geometry: Option<String>,
-    /// Optional override for the built-in character generator ROM (spec §3, §8.1).
+    /// Selects the bundled character generator ROM by name (`"a00"`, the default, or `"a02"`,
+    /// case-insensitive) or overrides it with a file of the same format (spec §3, §8.1).
     cgrom: Option<ExpandedPathBuf>,
     /// Cosmetic-only display polarity (issue #583): `"positive"` (default) or `"negative"`,
     /// selecting which of `background`/`foreground` a chosen `backlight` color fills.
@@ -178,10 +179,14 @@ impl DeviceModule for LcdDisplayModule {
             supported_geometry_names())))?;
 
         let cgrom = match &config.cgrom {
-            Some(path) => {
-                let data = tokio::fs::read(path).await.map_err(DeviceModuleError::Io)?;
-                CgRom::from_bytes(&data).map_err(|e| DeviceModuleError::Config(e.to_string()))?
-            }
+            Some(path) => match path.to_str().map(str::to_ascii_lowercase).as_deref() {
+                Some("a00") => CgRom::a00(),
+                Some("a02") => CgRom::a02(),
+                _ => {
+                    let data = tokio::fs::read(path).await.map_err(DeviceModuleError::Io)?;
+                    CgRom::from_bytes(&data).map_err(|e| DeviceModuleError::Config(e.to_string()))?
+                }
+            },
             None => CgRom::default(),
         };
 
@@ -508,6 +513,32 @@ mod tests {
             BusConfig::new(), 0xD000, &attributes, &context(), id_allocator).await;
 
         let _ = tokio::fs::remove_file(&path).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn instantiate_with_cgrom_a00_shorthand_succeeds() {
+        // Without the "a00"/"a02" shorthand branch, this would be treated as a relative file
+        // path (which doesn't exist) and fail with an Io error.
+        let mut attributes = HashMap::new();
+        attributes.insert("cgrom".to_string(), Value::from("a00"));
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let result = LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &attributes, &context(), id_allocator).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn instantiate_with_cgrom_a02_shorthand_succeeds() {
+        let mut attributes = HashMap::new();
+        attributes.insert("cgrom".to_string(), Value::from("A02")); // case-insensitive
+        let id_allocator = Arc::new(Mutex::new(DeviceIdAllocator::new()));
+
+        let result = LcdDisplayModule.instantiate(
+            BusConfig::new(), 0xD000, &attributes, &context(), id_allocator).await;
+
         assert!(result.is_ok());
     }
 
