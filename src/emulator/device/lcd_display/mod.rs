@@ -219,6 +219,15 @@ pub struct LcdDisplay {
     /// it would otherwise leave the peripheral showing stale content forever.
     pending_frame: Option<Vec<u8>>,
 
+    /// A frame [`Self::push_frame`] couldn't hand off to `frame_sink` immediately (`try_send`
+    /// failed because the debugger's LCD Display bridge task hasn't drained the channel yet) --
+    /// retried on every [`Self::tick`] until it succeeds, mirroring `pending_frame` above for the
+    /// same reason (issue #598, following #581's precedent for `external_transport`): this device
+    /// has no periodic vsync tick to naturally re-send the current state on, so a `try_send`
+    /// failure left unretried would leave the debugger's LCD Display panel showing stale,
+    /// incomplete content indefinitely.
+    pending_sink_frame: Option<LcdDisplayFrame>,
+
     log_sender: LogSender,
 }
 
@@ -269,6 +278,7 @@ impl LcdDisplay {
             frame_sink: None,
             external_transport: None,
             pending_frame: None,
+            pending_sink_frame: None,
             log_sender: LogSender::default(),
         }
     }
@@ -300,9 +310,11 @@ impl LcdDisplay {
 
     /// Attaches a push channel for composited frames (design doc §7). Once set, every register
     /// write that changes what's rendered composites the current state and sends the result with
-    /// [`mpsc::Sender::try_send`] -- never blocking; if the consumer isn't keeping up, the frame
-    /// is silently dropped rather than stalling CPU execution, the same never-blocks contract
-    /// `CharDisplay::attach_frame_sink`/`LedMatrix::attach_frame_sink` uphold.
+    /// [`mpsc::Sender::try_send`] -- never blocking, the same never-blocks contract
+    /// `CharDisplay::attach_frame_sink`/`LedMatrix::attach_frame_sink` uphold. Unlike those two,
+    /// a `try_send` failure here is not left to be silently dropped: it's stashed as
+    /// `pending_sink_frame` for [`Self::tick`] to keep retrying (issue #598), the same treatment
+    /// `pending_frame` already gives `external_transport` (issue #581).
     pub fn attach_frame_sink(&mut self, sink: mpsc::Sender<LcdDisplayFrame>) {
         self.frame_sink = Some(sink);
     }
@@ -376,7 +388,15 @@ impl LcdDisplay {
             };
         }
         if let Some(sink) = &self.frame_sink {
-            let _ = sink.try_send(LcdDisplayFrame { pixels, columns: self.geometry.columns, rows: self.geometry.rows });
+            let frame = LcdDisplayFrame { pixels, columns: self.geometry.columns, rows: self.geometry.rows };
+            // As with `external_transport` above, a still-pending older frame is implicitly
+            // replaced here, since only the latest composited state is ever worth delivering
+            // (issue #598, mirroring `pending_frame`'s issue #581 treatment).
+            self.pending_sink_frame = match sink.try_send(frame) {
+                Ok(()) => None,
+                Err(mpsc::error::TrySendError::Full(frame)) => Some(frame),
+                Err(mpsc::error::TrySendError::Closed(_)) => None,
+            };
         }
     }
 
@@ -615,6 +635,17 @@ impl IoDevice for LcdDisplay {
         {
             self.pending_frame = None;
         }
+        // Retry a frame `push_frame` couldn't hand off to `frame_sink` last time (issue #598),
+        // same rationale as the `pending_frame`/`external_transport` retry above.
+        if let Some(frame) = self.pending_sink_frame.take()
+            && let Some(sink) = &self.frame_sink
+        {
+            self.pending_sink_frame = match sink.try_send(frame) {
+                Ok(()) => None,
+                Err(mpsc::error::TrySendError::Full(frame)) => Some(frame),
+                Err(mpsc::error::TrySendError::Closed(_)) => None,
+            };
+        }
     }
 
     fn reset(&mut self) {
@@ -651,6 +682,7 @@ impl IoDevice for LcdDisplay {
     fn shutdown(&mut self) {
         self.frame_sink = None;
         self.pending_frame = None;
+        self.pending_sink_frame = None;
         if let Some(transport) = self.external_transport.as_mut() {
             transport.shutdown();
         }
@@ -1110,6 +1142,57 @@ mod tests {
 
         device.write(data_addr(), 0x41);
         assert!(rx.try_recv().is_err(), "channel should be closed once the sink is dropped");
+    }
+
+    #[test]
+    fn a_frame_that_cannot_be_sent_immediately_to_the_frame_sink_is_retried_on_tick_until_it_succeeds() {
+        // Regression test for issue #598: previously, `push_frame` handed a frame to `frame_sink`
+        // with a bare `try_send` and discarded the result, so a channel the debugger's LCD Display
+        // bridge task hadn't drained yet silently and permanently lost that frame -- unlike
+        // `pending_frame`'s existing retry treatment of `external_transport` (issue #581), nothing
+        // ever tried again.
+        let mut device = device();
+        let (tx, mut rx) = mpsc::channel(1);
+        device.attach_frame_sink(tx);
+
+        device.write(data_addr(), 0x41); // fills the channel's one slot
+        tick_past_busy(&mut device);
+
+        device.write(data_addr(), 0x42); // channel is still full: must be stashed, not dropped
+        assert!(device.pending_sink_frame.is_some(), "a failed try_send must be stashed for retry");
+
+        tick_past_busy(&mut device); // channel is still full: must remain pending, not be lost
+        assert!(device.pending_sink_frame.is_some());
+
+        rx.try_recv().unwrap(); // drain the first frame, freeing capacity for the retry
+        tick_past_busy(&mut device);
+        assert!(device.pending_sink_frame.is_none(), "a retry that succeeds must clear the pending frame");
+        assert!(rx.try_recv().is_ok(), "the retried frame must have reached the sink");
+    }
+
+    #[test]
+    fn a_second_write_before_the_first_sink_frame_is_delivered_replaces_the_pending_sink_frame() {
+        let mut device = device();
+        let (tx, mut rx) = mpsc::channel(1);
+        device.attach_frame_sink(tx);
+
+        device.write(instruction_addr(), 0x0C); // Display On, cursor off, blink off
+        tick_past_busy(&mut device); // fills the channel's one slot with the resulting (blank) frame
+
+        device.write(data_addr(), 0x41); // channel still full (never drained): stashed as pending
+        let first_pending = device.pending_sink_frame.as_ref().expect("expected a stashed pending frame").pixels.clone();
+        tick_past_busy(&mut device); // clears busy without changing DDRAM content; retry still fails
+
+        device.write(data_addr(), 0x42); // different DDRAM content -> a different composited frame
+        let second_pending = device.pending_sink_frame.as_ref().unwrap().pixels.clone();
+
+        assert_ne!(first_pending, second_pending, "the newer frame must replace the older one, not queue behind it");
+
+        rx.try_recv().unwrap(); // drain the original queued frame, freeing capacity for the retry
+        tick_past_busy(&mut device);
+        assert!(device.pending_sink_frame.is_none());
+        let delivered = rx.try_recv().expect("the retried frame must have reached the sink");
+        assert_eq!(delivered.pixels, second_pending, "only the latest frame should ever reach the sink, never a backlog");
     }
 
     // -- External transport (`plan/lcd-display-external-protocol.md`) --
