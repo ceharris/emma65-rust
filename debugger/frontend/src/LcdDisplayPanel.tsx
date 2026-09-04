@@ -31,19 +31,18 @@ interface LcdDisplayFramePayload {
 const DOTS_PER_CELL_WIDTH = 5;
 
 /** Floor the on-screen dot pitch (center-to-center spacing) never drops below, mirroring
- * `LedMatrixPanel.tsx`'s `MIN_PITCH_PX` -- dots are drawn as vector rounded rects, not upscaled
- * pixels, so this doesn't need to be an integer; it just keeps the grid legible rather than a
- * smear when the dock cell or detached window is very small. */
+ * `LedMatrixPanel.tsx`'s `MIN_PITCH_PX` -- dots are drawn as vector squares, not upscaled pixels,
+ * so this doesn't need to be an integer; it just keeps the grid legible rather than a smear when
+ * the dock cell or detached window is very small. */
 const MIN_PITCH_PX = 6;
 
-/** Fraction of `pitch` a dot's rounded-rect actually covers; the remainder is the gap between
- * adjacent dots within a cell (issue #569: "there's typically a very small gap between
- * pixels"). */
+/** Fraction of `pitch` a dot actually covers; the remainder is the gap between adjacent dots
+ * within a cell (issue #569: "there's typically a very small gap between pixels"). Dots are plain
+ * squares, not rounded rects (issue #593 follow-up): rounding every dot's corners independently of
+ * its neighbors made adjacent same-color dots in a glyph stroke merge into a pinched "hourglass"
+ * shape at the seam instead of a clean rectangle, which read as some dots looking
+ * smaller/raggeder than others. */
 const DOT_FILL_RATIO = 0.75;
-
-/** Dot corner radius as a fraction of the dot's own (post-`DOT_FILL_RATIO`) side length (issue
- * #569: "pixels should have slightly rounded corners"). */
-const DOT_CORNER_RATIO = 0.3;
 
 /** Extra gap between adjacent character cells, in whole dot pitches, so neighboring glyphs don't
  * read as joined (issue #569: "a gap of about one pixel width between each character cell").
@@ -110,23 +109,29 @@ function blendColor(from: [number, number, number], to: [number, number, number]
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-/** Draws one dot as a rounded rect centered at `(cx, cy)` with the given full side length
- * (before `DOT_FILL_RATIO` is applied by the caller). Isolated from `drawFrame`'s grid-walking
- * loop the same way `LedMatrixPanel.tsx`'s `drawLed` is. */
+/** Draws one dot as a plain square centered at `(cx, cy)` with the given full side length (before
+ * `DOT_FILL_RATIO` is applied by the caller). Isolated from `drawFrame`'s grid-walking loop the
+ * same way `LedMatrixPanel.tsx`'s `drawLed` is. */
 function drawDot(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, color: string) {
   const half = size / 2;
-  const radius = size * DOT_CORNER_RATIO;
-  ctx.beginPath();
-  ctx.roundRect(cx - half, cy - half, size, size, radius);
   ctx.fillStyle = color;
-  ctx.fill();
+  ctx.fillRect(cx - half, cy - half, size, size);
 }
 
 /** Renders one decoded frame into `canvas` as a dot-matrix grid at the given on-screen `pitch`
  * (dot center-to-center spacing, in CSS pixels), against `geometry`'s configured colors, framed
  * by a `BEZEL_PITCHES`-wide black bezel (issue #579). Called both when a fresh frame arrives and
  * when `pitch` changes (a resize), so a resize can redraw already-known pixel data immediately
- * rather than waiting on the next frame. */
+ * rather than waiting on the next frame.
+ *
+ * Dots are positioned and sized in *device* pixels, rounded to whole pixels, rather than at the
+ * raw (generally fractional) CSS-pixel pitch (issue #593): since `pitch` is a continuous value
+ * chosen to fill the container, drawing anti-aliased dots at its exact fractional position would
+ * put each dot's edges at a different sub-pixel phase than its neighbors, so each dot's
+ * anti-aliasing picks up a different amount of edge coverage -- visible as uneven dot brightness,
+ * worse the fewer pixels each dot spans. Rounding every dot to the same integer device-pixel grid
+ * makes each one a plain translation of the same shape, so their AA coverage -- and thus apparent
+ * brightness -- is identical. */
 function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisplayGeometry, pitch: number) {
   const ctx = canvas.getContext("2d");
   if (!ctx || frame.widthDots === 0 || frame.cellHeightDots === 0) return;
@@ -144,21 +149,28 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
   canvas.height = Math.round(heightPx * dpr);
   canvas.style.width = `${widthPx}px`;
   canvas.style.height = `${heightPx}px`;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Draw directly in device pixels (no dpr transform) so dot geometry below can be rounded to
+  // whole device pixels rather than whole CSS pixels.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  const pitchDevice = pitch * dpr;
+  const bezelPxDevice = bezelPx * dpr;
+  const viewportWidthPxDevice = viewportWidthPx * dpr;
+  const viewportHeightPxDevice = viewportHeightPx * dpr;
 
   ctx.fillStyle = BEZEL_COLOR;
-  ctx.fillRect(0, 0, widthPx, heightPx);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   const backgroundColor = `rgb(${geometry.background.join(", ")})`;
   const offColor = blendColor(geometry.background, geometry.foreground, OFF_DOT_BLEND);
   ctx.fillStyle = backgroundColor;
-  ctx.fillRect(bezelPx, bezelPx, viewportWidthPx, viewportHeightPx);
+  ctx.fillRect(bezelPxDevice, bezelPxDevice, viewportWidthPxDevice, viewportHeightPxDevice);
 
-  const dotSize = pitch * DOT_FILL_RATIO;
+  const dotSize = Math.max(1, Math.round(pitchDevice * DOT_FILL_RATIO));
   for (let row = 0; row < geometry.rows; row++) {
     for (let dotRow = 0; dotRow < frame.cellHeightDots; dotRow++) {
       const rawY = row * frame.cellHeightDots + dotRow;
-      const cy = bezelPx + (row * (frame.cellHeightDots + CELL_GAP_PITCHES) + dotRow + 0.5) * pitch;
+      const cy = Math.round(bezelPxDevice + (row * (frame.cellHeightDots + CELL_GAP_PITCHES) + dotRow + 0.5) * pitchDevice);
       for (let col = 0; col < geometry.columns; col++) {
         for (let dotCol = 0; dotCol < DOTS_PER_CELL_WIDTH; dotCol++) {
           const rawX = col * DOTS_PER_CELL_WIDTH + dotCol;
@@ -168,7 +180,7 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
           const b = frame.pixels[offset + 2];
           const isBackground = r === geometry.background[0] && g === geometry.background[1] && b === geometry.background[2];
           const color = isBackground ? offColor : `rgb(${r}, ${g}, ${b})`;
-          const cx = bezelPx + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dotCol + 0.5) * pitch;
+          const cx = Math.round(bezelPxDevice + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dotCol + 0.5) * pitchDevice);
           drawDot(ctx, cx, cy, dotSize, color);
         }
       }

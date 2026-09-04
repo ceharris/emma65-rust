@@ -8,7 +8,7 @@
 //! (§5) into raw RGBA pixels. Unlike `emma65-led-matrix`/`emma65-display`, no compositing logic
 //! runs here at all — `LcdDisplay`'s frame sink already produces a fully composited flat buffer
 //! (background/foreground baked in, no palette concept) — but the *cosmetic* dot-matrix rendering
-//! (rounded dots, inter-dot/inter-cell gaps, a dimly-blended "off" state) is deliberately not
+//! (square dots, inter-dot/inter-cell gaps, a dimly-blended "off" state) is deliberately not
 //! shared with `LcdDisplayPanel.tsx` (see that file's doc comment and spec §6), so this binary
 //! ports that same cosmetic treatment to SDL2 with its own native primitives, the same split
 //! `emma65-led-matrix` uses for its round-LED rendering. Unlike `CharDisplay`'s peripheral, there
@@ -27,7 +27,6 @@ use std::time::Duration;
 use clap::Parser;
 use emma65::emulator::device::lcd_display::compositing::Rgb24;
 use sdl2::event::Event;
-use sdl2::gfx::primitives::DrawRenderer;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 
@@ -44,13 +43,12 @@ const DEFAULT_CELL_HEIGHT_DOTS: u32 = 8;
 /// `LcdDisplayPanel.tsx`'s `CELL_GAP_PITCHES` (issue #569).
 const CELL_GAP_PITCHES: u32 = 1;
 
-/// Fraction of the on-screen dot pitch a dot's rounded-rect actually covers — matches
-/// `LcdDisplayPanel.tsx`'s `DOT_FILL_RATIO`.
+/// Fraction of the on-screen dot pitch a dot actually covers — matches `LcdDisplayPanel.tsx`'s
+/// `DOT_FILL_RATIO`. Dots are plain squares, not rounded rects (issue #593 follow-up): rounding
+/// every dot's corners independently of its neighbors made adjacent same-color dots in a glyph
+/// stroke merge into a pinched "hourglass" shape at the seam instead of a clean rectangle, which
+/// read as some dots looking smaller/raggeder than others.
 const DOT_FILL_RATIO: f64 = 0.75;
-
-/// Dot corner radius as a fraction of the dot's own (post-`DOT_FILL_RATIO`) side length — matches
-/// `LcdDisplayPanel.tsx`'s `DOT_CORNER_RATIO`.
-const DOT_CORNER_RATIO: f64 = 0.3;
 
 /// How far an "off" dot is blended from `background` toward `foreground` — matches
 /// `LcdDisplayPanel.tsx`'s `OFF_DOT_BLEND`.
@@ -64,15 +62,6 @@ const BEZEL_PITCHES: u32 = 3;
 /// Near-black bezel color — matches `LcdDisplayPanel.tsx`'s `BEZEL_COLOR` and
 /// `led-matrix/src/main.rs`'s `PCB_BACKGROUND_COLOR` tone.
 const BEZEL_COLOR: Color = Color::RGB(0x0a, 0x0a, 0x0a);
-
-/// Converts an SDL2 [`Color`] into the `u32` SDL2_gfx's `*Color` entry points actually expect.
-/// See `led-matrix/src/main.rs`'s `gfx_color` (identical fix, same underlying bug — verified
-/// against [[feedback_sdl2_gfx_color_byte_order]]): `sdl2::gfx`'s blanket `ToColor for Color`
-/// packs big-endian, but the C entry points reinterpret the `u32` as native-order bytes, reversing
-/// every channel on a little-endian host.
-fn gfx_color(color: Color) -> u32 {
-    u32::from_ne_bytes([color.r, color.g, color.b, color.a])
-}
 
 /// Linearly blends `from` toward `to` by `t` (0..1), per channel, rounded to the nearest integer
 /// — mirrors `LcdDisplayPanel.tsx`'s `blendColor`.
@@ -191,7 +180,7 @@ fn render<T: sdl2::render::RenderTarget>(
     pitch: u32,
 ) -> Result<(), String> {
     let background = Color::RGB(header.background.r, header.background.g, header.background.b);
-    let off_color = gfx_color(blend_color(header.background, header.foreground, OFF_DOT_BLEND));
+    let off_color = blend_color(header.background, header.foreground, OFF_DOT_BLEND);
     let bezel_px = BEZEL_PITCHES * pitch;
 
     canvas.set_draw_color(BEZEL_COLOR);
@@ -217,23 +206,23 @@ fn render<T: sdl2::render::RenderTarget>(
     canvas.set_draw_color(background);
     canvas.fill_rect(Rect::new(bezel_px as i32, bezel_px as i32, total_dots_wide * pitch, total_dots_high * pitch))?;
 
-    let dot_size = pitch as f64 * DOT_FILL_RATIO;
-    let radius = (dot_size * DOT_CORNER_RATIO).round().max(0.0) as i16;
-    let half = (dot_size / 2.0).round() as i16;
+    let dot_size = (pitch as f64 * DOT_FILL_RATIO).round().max(1.0) as u32;
+    let half = (dot_size / 2) as i32;
 
     for row in 0..header.rows as u32 {
         for dot_row in 0..cell_height_dots {
             let raw_y = row * cell_height_dots + dot_row;
-            let cy = (bezel_px + (row * (cell_height_dots + CELL_GAP_PITCHES) + dot_row) * pitch + pitch / 2) as i16;
+            let cy = (bezel_px + (row * (cell_height_dots + CELL_GAP_PITCHES) + dot_row) * pitch + pitch / 2) as i32;
             for col in 0..header.columns as u32 {
                 for dot_col in 0..DOTS_PER_CELL_WIDTH {
                     let raw_x = col * DOTS_PER_CELL_WIDTH + dot_col;
                     let offset = ((raw_y * frame.width_px + raw_x) * 4) as usize;
                     let (r, g, b) = (frame.pixels[offset], frame.pixels[offset + 1], frame.pixels[offset + 2]);
                     let is_background = r == header.background.r && g == header.background.g && b == header.background.b;
-                    let color = if is_background { off_color } else { gfx_color(Color::RGB(r, g, b)) };
-                    let cx = (bezel_px + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dot_col) * pitch + pitch / 2) as i16;
-                    canvas.rounded_box(cx - half, cy - half, cx + half, cy + half, radius, color)?;
+                    let color = if is_background { off_color } else { Color::RGB(r, g, b) };
+                    let cx = (bezel_px + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dot_col) * pitch + pitch / 2) as i32;
+                    canvas.set_draw_color(color);
+                    canvas.fill_rect(Rect::new(cx - half, cy - half, dot_size, dot_size))?;
                 }
             }
         }
@@ -322,18 +311,6 @@ mod tests {
         let bytes = surface.without_lock().expect("surface must not be locked");
         let offset = y as usize * pitch + x as usize * 4;
         (bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3])
-    }
-
-    #[test]
-    fn gfx_color_draws_the_actual_requested_color() {
-        let surface = Surface::new(4, 4, PixelFormatEnum::RGBA32).unwrap();
-        let mut canvas = surface.into_canvas().unwrap();
-        canvas.set_draw_color(Color::RGBA(10, 10, 10, 255));
-        canvas.clear();
-
-        canvas.rounded_box(0, 0, 3, 3, 0, gfx_color(Color::RGB(0, 255, 0))).unwrap();
-
-        assert_eq!(pixel_at(&canvas, 2, 2), (0, 255, 0, 255));
     }
 
     #[test]
