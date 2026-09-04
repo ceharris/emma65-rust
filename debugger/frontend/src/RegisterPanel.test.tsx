@@ -98,6 +98,19 @@ describe("RegisterPanel", () => {
     expect(invoke).toHaveBeenCalledWith("set_register", { field: "a", value: 0xff });
   });
 
+  it("double-clicking a register value auto-selects the input text", async () => {
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "get_registers" ? snapshot() : undefined));
+    renderPanel();
+    const aRow = (await screen.findByText("A")).closest("tr")!;
+
+    await user.dblClick(within(aRow).getByText("42"));
+    const input = within(aRow).getByRole("textbox") as HTMLInputElement;
+
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
   it("Escape cancels an in-progress edit without committing", async () => {
     const user = userEvent.setup();
     vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "get_registers" ? snapshot() : undefined));
