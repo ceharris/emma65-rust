@@ -22,7 +22,7 @@ mod protocol;
 use std::io::{self, Read};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use emma65::emulator::device::lcd_display::compositing::Rgb24;
@@ -68,6 +68,13 @@ const BEZEL_COLOR: Color = Color::RGB(0x0a, 0x0a, 0x0a);
 /// Floor the on-screen dot pitch never drops below when a resize is fitted — matches
 /// `LcdDisplayPanel.tsx`'s `MIN_PITCH_PX` (issue #593).
 const MIN_PITCH: u32 = 6;
+
+/// How long the window must go without a resize event before its size is snapped to an exact
+/// pitch-multiple ("settled"). Snapping on every single event while the user is still dragging
+/// (which can deliver one event per pixel) fights the mouse, since each snap forcibly moves the
+/// window out from under the cursor; waiting for a pause makes the drag itself feel unconstrained
+/// while still ending at a clean size (issue #593 follow-up).
+const RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(200);
 
 /// Converts an SDL2 [`Color`] into the `u32` SDL2_gfx's `*Color` entry points actually expect.
 /// See `led-matrix/src/main.rs`'s `gfx_color` (identical fix, same underlying bug — verified
@@ -297,6 +304,7 @@ fn main() {
     let mut current_frame: Option<Frame> = None;
     let mut logical_size = (pixel_width, pixel_height);
     let mut pitch = args.pitch;
+    let mut resize_settle_deadline: Option<Instant> = None;
 
     'running: loop {
         let mut window_resized = false;
@@ -323,15 +331,28 @@ fn main() {
             .unwrap_or(DEFAULT_CELL_HEIGHT_DOTS);
 
         if window_resized {
+            // Keep the renderer's logical size matched to the *live* window size on every event,
+            // even mid-drag, so SDL2 never has to scale a mismatched frame to fit (issue #593) --
+            // but don't force the window itself to a clean size yet (below); that waits for the
+            // drag to settle.
             let (window_width, window_height) = canvas.window().size();
             pitch = fit_pitch(&header, cell_height_dots, window_width, window_height);
+            if (window_width, window_height) != logical_size {
+                canvas.set_logical_size(window_width, window_height).expect("failed to set logical render size");
+                logical_size = (window_width, window_height);
+            }
+            resize_settle_deadline = Some(Instant::now() + RESIZE_SETTLE_DELAY);
         }
 
-        let wanted_size = window_size(&header, cell_height_dots, pitch);
-        if wanted_size != logical_size {
-            canvas.window_mut().set_size(wanted_size.0, wanted_size.1).expect("failed to resize SDL2 window");
-            canvas.set_logical_size(wanted_size.0, wanted_size.1).expect("failed to set logical render size");
-            logical_size = wanted_size;
+        let resize_settled = resize_settle_deadline.is_none_or(|deadline| Instant::now() >= deadline);
+        if resize_settled {
+            resize_settle_deadline = None;
+            let wanted_size = window_size(&header, cell_height_dots, pitch);
+            if wanted_size != logical_size {
+                canvas.window_mut().set_size(wanted_size.0, wanted_size.1).expect("failed to resize SDL2 window");
+                canvas.set_logical_size(wanted_size.0, wanted_size.1).expect("failed to set logical render size");
+                logical_size = wanted_size;
+            }
         }
 
         render(&mut canvas, &header, current_frame.as_ref(), pitch).expect("render failed");
