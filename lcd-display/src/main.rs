@@ -64,6 +64,10 @@ const BEZEL_PITCHES: u32 = 3;
 /// `led-matrix/src/main.rs`'s `PCB_BACKGROUND_COLOR` tone.
 const BEZEL_COLOR: Color = Color::RGB(0x0a, 0x0a, 0x0a);
 
+/// Gap between the dot-matrix grid and the bezel's interior edge, in whole dot pitches, uniform
+/// on all four sides — matches `LcdDisplayPanel.tsx`'s `EDGE_GAP_PITCHES` (issue #600).
+const EDGE_GAP_PITCHES: u32 = 1;
+
 /// Linearly blends `from` toward `to` by `t` (0..1), per channel, rounded to the nearest integer
 /// — mirrors `LcdDisplayPanel.tsx`'s `blendColor`.
 fn blend_color(from: Rgb24, to: Rgb24, t: f64) -> Color {
@@ -167,7 +171,8 @@ fn window_size(header: &Header, cell_height_dots: u32, pitch: u32) -> (u32, u32)
     let total_dots_wide = header.columns as u32 * DOTS_PER_CELL_WIDTH + (header.columns as u32 - 1) * CELL_GAP_PITCHES;
     let total_dots_high = header.rows as u32 * cell_height_dots + (header.rows as u32 - 1) * CELL_GAP_PITCHES;
     let bezel_px = 2 * BEZEL_PITCHES * pitch;
-    (total_dots_wide * pitch + bezel_px, total_dots_high * pitch + bezel_px)
+    let edge_gap_px = 2 * EDGE_GAP_PITCHES * pitch;
+    (total_dots_wide * pitch + edge_gap_px + bezel_px, total_dots_high * pitch + edge_gap_px + bezel_px)
 }
 
 /// Renders the current `frame` (or a blank `background` grid before the first one arrives, per
@@ -183,6 +188,8 @@ fn render<T: sdl2::render::RenderTarget>(
     let background = Color::RGB(header.background.r, header.background.g, header.background.b);
     let off_color = blend_color(header.background, header.foreground, OFF_DOT_BLEND);
     let bezel_px = BEZEL_PITCHES * pitch;
+    let edge_gap_px = EDGE_GAP_PITCHES * pitch;
+    let grid_origin_px = bezel_px + edge_gap_px;
 
     canvas.set_draw_color(BEZEL_COLOR);
     canvas.clear();
@@ -192,7 +199,12 @@ fn render<T: sdl2::render::RenderTarget>(
     let Some(frame) = frame else {
         let total_dots_high = header.rows as u32 * DEFAULT_CELL_HEIGHT_DOTS + (header.rows as u32 - 1) * CELL_GAP_PITCHES;
         canvas.set_draw_color(background);
-        canvas.fill_rect(Rect::new(bezel_px as i32, bezel_px as i32, total_dots_wide * pitch, total_dots_high * pitch))?;
+        canvas.fill_rect(Rect::new(
+            bezel_px as i32,
+            bezel_px as i32,
+            total_dots_wide * pitch + 2 * edge_gap_px,
+            total_dots_high * pitch + 2 * edge_gap_px,
+        ))?;
         canvas.present();
         return Ok(());
     };
@@ -205,7 +217,12 @@ fn render<T: sdl2::render::RenderTarget>(
 
     let total_dots_high = header.rows as u32 * cell_height_dots + (header.rows as u32 - 1) * CELL_GAP_PITCHES;
     canvas.set_draw_color(background);
-    canvas.fill_rect(Rect::new(bezel_px as i32, bezel_px as i32, total_dots_wide * pitch, total_dots_high * pitch))?;
+    canvas.fill_rect(Rect::new(
+        bezel_px as i32,
+        bezel_px as i32,
+        total_dots_wide * pitch + 2 * edge_gap_px,
+        total_dots_high * pitch + 2 * edge_gap_px,
+    ))?;
 
     let dot_size = (pitch as f64 * DOT_FILL_RATIO).round().max(1.0) as u32;
     let half = (dot_size / 2) as i32;
@@ -213,7 +230,7 @@ fn render<T: sdl2::render::RenderTarget>(
     for row in 0..header.rows as u32 {
         for dot_row in 0..cell_height_dots {
             let raw_y = row * cell_height_dots + dot_row;
-            let cy = (bezel_px + (row * (cell_height_dots + CELL_GAP_PITCHES) + dot_row) * pitch + pitch / 2) as i32;
+            let cy = (grid_origin_px + (row * (cell_height_dots + CELL_GAP_PITCHES) + dot_row) * pitch + pitch / 2) as i32;
             for col in 0..header.columns as u32 {
                 for dot_col in 0..DOTS_PER_CELL_WIDTH {
                     let raw_x = col * DOTS_PER_CELL_WIDTH + dot_col;
@@ -221,7 +238,7 @@ fn render<T: sdl2::render::RenderTarget>(
                     let (r, g, b) = (frame.pixels[offset], frame.pixels[offset + 1], frame.pixels[offset + 2]);
                     let is_background = r == header.background.r && g == header.background.g && b == header.background.b;
                     let color = if is_background { off_color } else { Color::RGB(r, g, b) };
-                    let cx = (bezel_px + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dot_col) * pitch + pitch / 2) as i32;
+                    let cx = (grid_origin_px + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dot_col) * pitch + pitch / 2) as i32;
                     canvas.set_draw_color(color);
                     canvas.fill_rect(Rect::new(cx - half, cy - half, dot_size, dot_size))?;
                 }
@@ -319,10 +336,10 @@ mod tests {
         let header = sample_header();
         let (width, height) = window_size(&header, 8, 10);
 
-        // 2 columns * 5 dots + 1 gap = 11 dots wide; 1 row * 8 dots + 0 gaps = 8 dots high; plus a
-        // BEZEL_PITCHES-wide bezel on every side.
-        assert_eq!(width, 11 * 10 + 2 * BEZEL_PITCHES * 10);
-        assert_eq!(height, 8 * 10 + 2 * BEZEL_PITCHES * 10);
+        // 2 columns * 5 dots + 1 gap = 11 dots wide; 1 row * 8 dots + 0 gaps = 8 dots high; plus an
+        // EDGE_GAP_PITCHES-wide margin and a BEZEL_PITCHES-wide bezel on every side.
+        assert_eq!(width, 11 * 10 + 2 * EDGE_GAP_PITCHES * 10 + 2 * BEZEL_PITCHES * 10);
+        assert_eq!(height, 8 * 10 + 2 * EDGE_GAP_PITCHES * 10 + 2 * BEZEL_PITCHES * 10);
     }
 
     #[test]
@@ -368,9 +385,9 @@ mod tests {
 
         render(&mut canvas, &header, Some(&frame), pitch).unwrap();
 
-        let bezel_px = BEZEL_PITCHES * pitch;
-        let cy = bezel_px + pitch + pitch / 2;
-        let cx = bezel_px + 2 * pitch + pitch / 2;
+        let grid_origin_px = BEZEL_PITCHES * pitch + EDGE_GAP_PITCHES * pitch;
+        let cy = grid_origin_px + pitch + pitch / 2;
+        let cx = grid_origin_px + 2 * pitch + pitch / 2;
         assert_eq!(pixel_at(&canvas, cx, cy), (255, 255, 255, 255));
     }
 }
