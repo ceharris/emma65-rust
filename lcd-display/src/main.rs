@@ -51,8 +51,9 @@ const CELL_GAP_PITCHES: u32 = 1;
 const DOT_FILL_RATIO: f64 = 0.75;
 
 /// How far an "off" dot is blended from `background` toward `foreground` — matches
-/// `LcdDisplayPanel.tsx`'s `OFF_DOT_BLEND`.
-const OFF_DOT_BLEND: f64 = 0.15;
+/// `LcdDisplayPanel.tsx`'s `OFF_DOT_BLEND`. Halved from an original 0.15 (issue #595): review
+/// across all 8 polarity/backlight presets found unlit dots still read as too bright at 0.15.
+const OFF_DOT_BLEND: f64 = 0.075;
 
 /// Width of the black plastic bezel drawn around the viewing window, in whole dot pitches —
 /// matches `LcdDisplayPanel.tsx`'s `BEZEL_PITCHES` (issue #579). Deliberately just the bezel, no

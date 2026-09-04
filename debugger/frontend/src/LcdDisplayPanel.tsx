@@ -52,8 +52,10 @@ const CELL_GAP_PITCHES = 1;
 
 /** How far an "off" dot is blended from `background` toward `foreground`, simulating the
  * always-somewhat-visible contrast between a real module's backlight and its unlit segments
- * (issue #569) -- rather than rendering "off" as flat, invisible background. */
-const OFF_DOT_BLEND = 0.15;
+ * (issue #569) -- rather than rendering "off" as flat, invisible background. Halved from an
+ * original 0.15 (issue #595): review across all 8 polarity/backlight presets found unlit dots
+ * still read as too bright at 0.15. */
+const OFF_DOT_BLEND = 0.075;
 
 /** Width of the black plastic bezel drawn around the viewing window, in whole dot pitches
  * (issue #579: "[v]irtually all common LCD display components in the market have a black bezel
