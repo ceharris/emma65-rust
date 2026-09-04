@@ -22,11 +22,11 @@ mod protocol;
 use std::io::{self, Read};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use clap::Parser;
 use emma65::emulator::device::lcd_display::compositing::Rgb24;
-use sdl2::event::{Event, WindowEvent};
+use sdl2::event::Event;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 
@@ -63,17 +63,6 @@ const BEZEL_PITCHES: u32 = 3;
 /// `led-matrix/src/main.rs`'s `PCB_BACKGROUND_COLOR` tone.
 const BEZEL_COLOR: Color = Color::RGB(0x0a, 0x0a, 0x0a);
 
-/// Floor the on-screen dot pitch never drops below when a resize is fitted — matches
-/// `LcdDisplayPanel.tsx`'s `MIN_PITCH_PX` (issue #593).
-const MIN_PITCH: u32 = 6;
-
-/// How long the window must go without a resize event before its size is snapped to an exact
-/// pitch-multiple ("settled"). Snapping on every single event while the user is still dragging
-/// (which can deliver one event per pixel) fights the mouse, since each snap forcibly moves the
-/// window out from under the cursor; waiting for a pause makes the drag itself feel unconstrained
-/// while still ending at a clean size (issue #593 follow-up).
-const RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(200);
-
 /// Linearly blends `from` toward `to` by `t` (0..1), per channel, rounded to the nearest integer
 /// — mirrors `LcdDisplayPanel.tsx`'s `blendColor`.
 fn blend_color(from: Rgb24, to: Rgb24, t: f64) -> Color {
@@ -84,11 +73,8 @@ fn blend_color(from: Rgb24, to: Rgb24, t: f64) -> Color {
 #[derive(Parser)]
 #[command(about = "SDL2 external peripheral for emma65's memory-mapped LCD display")]
 struct Args {
-    /// Initial on-screen dot center-to-center spacing, in pixels. Resizing the window afterward
-    /// recomputes the largest whole-pixel pitch that fits the new size (never below
-    /// `MIN_PITCH`) and redraws directly at that resolution — SDL2's own logical-size scaling is
-    /// deliberately never used to fit a resize, since stretching a fixed-resolution frame to an
-    /// arbitrary window size makes dot brightness visibly uneven (issue #593).
+    /// Initial on-screen dot center-to-center spacing, in pixels. The window remains resizable
+    /// afterward; SDL2 letterboxes/scales its fixed logical size to fit.
     #[arg(long, default_value_t = 12)]
     pitch: u32,
 }
@@ -181,21 +167,6 @@ fn window_size(header: &Header, cell_height_dots: u32, pitch: u32) -> (u32, u32)
     let total_dots_high = header.rows as u32 * cell_height_dots + (header.rows as u32 - 1) * CELL_GAP_PITCHES;
     let bezel_px = 2 * BEZEL_PITCHES * pitch;
     (total_dots_wide * pitch + bezel_px, total_dots_high * pitch + bezel_px)
-}
-
-/// Largest whole-pixel dot pitch (never below `MIN_PITCH`) whose `window_size` fits within
-/// `available_width` x `available_height` — mirrors `LcdDisplayPanel.tsx`'s `recomputePitch`,
-/// floored to a whole pixel since (unlike the canvas panel) rendering here is always 1:1 with the
-/// window's real pixels, with no further scaling step to blur over a fractional pitch (issue
-/// #593). Called on every window resize so the actual rendered resolution always matches the
-/// window exactly, instead of relying on SDL2 to scale a fixed resolution to fit.
-fn fit_pitch(header: &Header, cell_height_dots: u32, available_width: u32, available_height: u32) -> u32 {
-    let total_dots_wide = header.columns as u32 * DOTS_PER_CELL_WIDTH + (header.columns as u32 - 1) * CELL_GAP_PITCHES;
-    let total_dots_high = header.rows as u32 * cell_height_dots + (header.rows as u32 - 1) * CELL_GAP_PITCHES;
-    let total_units_wide = total_dots_wide + 2 * BEZEL_PITCHES;
-    let total_units_high = total_dots_high + 2 * BEZEL_PITCHES;
-    let fit = (available_width / total_units_wide).min(available_height / total_units_high);
-    fit.max(MIN_PITCH)
 }
 
 /// Renders the current `frame` (or a blank `background` grid before the first one arrives, per
@@ -292,18 +263,11 @@ fn main() {
 
     let mut current_frame: Option<Frame> = None;
     let mut logical_size = (pixel_width, pixel_height);
-    let mut pitch = args.pitch;
-    let mut resize_settle_deadline: Option<Instant> = None;
 
     'running: loop {
-        let mut window_resized = false;
         for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. } => break 'running,
-                Event::Window { win_event: WindowEvent::Resized(..) | WindowEvent::SizeChanged(..), .. } => {
-                    window_resized = true;
-                }
-                _ => {}
+            if let Event::Quit { .. } = event {
+                break 'running;
             }
         }
 
@@ -318,33 +282,14 @@ fn main() {
             .filter(|_| header.rows != 0)
             .map(|frame| frame.height_px / header.rows as u32)
             .unwrap_or(DEFAULT_CELL_HEIGHT_DOTS);
-
-        if window_resized {
-            // Keep the renderer's logical size matched to the *live* window size on every event,
-            // even mid-drag, so SDL2 never has to scale a mismatched frame to fit (issue #593) --
-            // but don't force the window itself to a clean size yet (below); that waits for the
-            // drag to settle.
-            let (window_width, window_height) = canvas.window().size();
-            pitch = fit_pitch(&header, cell_height_dots, window_width, window_height);
-            if (window_width, window_height) != logical_size {
-                canvas.set_logical_size(window_width, window_height).expect("failed to set logical render size");
-                logical_size = (window_width, window_height);
-            }
-            resize_settle_deadline = Some(Instant::now() + RESIZE_SETTLE_DELAY);
+        let wanted_size = window_size(&header, cell_height_dots, args.pitch);
+        if wanted_size != logical_size {
+            canvas.window_mut().set_size(wanted_size.0, wanted_size.1).expect("failed to resize SDL2 window");
+            canvas.set_logical_size(wanted_size.0, wanted_size.1).expect("failed to set logical render size");
+            logical_size = wanted_size;
         }
 
-        let resize_settled = resize_settle_deadline.is_none_or(|deadline| Instant::now() >= deadline);
-        if resize_settled {
-            resize_settle_deadline = None;
-            let wanted_size = window_size(&header, cell_height_dots, pitch);
-            if wanted_size != logical_size {
-                canvas.window_mut().set_size(wanted_size.0, wanted_size.1).expect("failed to resize SDL2 window");
-                canvas.set_logical_size(wanted_size.0, wanted_size.1).expect("failed to set logical render size");
-                logical_size = wanted_size;
-            }
-        }
-
-        render(&mut canvas, &header, current_frame.as_ref(), pitch).expect("render failed");
+        render(&mut canvas, &header, current_frame.as_ref(), args.pitch).expect("render failed");
     }
 }
 
@@ -377,30 +322,6 @@ mod tests {
         // BEZEL_PITCHES-wide bezel on every side.
         assert_eq!(width, 11 * 10 + 2 * BEZEL_PITCHES * 10);
         assert_eq!(height, 8 * 10 + 2 * BEZEL_PITCHES * 10);
-    }
-
-    #[test]
-    fn fit_pitch_chooses_the_largest_pitch_that_fits_both_dimensions() {
-        let header = sample_header();
-        // window_size(header, 8, 10) == (11*10 + 60, 8*10 + 60) == (170, 140); shrink each
-        // dimension by a few pixels so pitch 10 no longer fits either one.
-        assert_eq!(fit_pitch(&header, 8, 169, 200), 9);
-        assert_eq!(fit_pitch(&header, 8, 200, 139), 9);
-    }
-
-    #[test]
-    fn fit_pitch_is_stable_across_its_own_window_size() {
-        let header = sample_header();
-        for pitch in [MIN_PITCH, 10, 12, 37] {
-            let (width, height) = window_size(&header, 8, pitch);
-            assert_eq!(fit_pitch(&header, 8, width, height), pitch);
-        }
-    }
-
-    #[test]
-    fn fit_pitch_never_drops_below_the_floor() {
-        let header = sample_header();
-        assert_eq!(fit_pitch(&header, 8, 1, 1), MIN_PITCH);
     }
 
     #[test]

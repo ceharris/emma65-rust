@@ -20,12 +20,11 @@ corners independently of its neighbors made adjacent same-color dots in a glyph 
 a pinched "hourglass" shape at the seam rather than a clean rectangle (issue #593 follow-up), so
 this crate no longer depends on SDL2_gfx (dropped the `gfx` feature from its `sdl2` dependency;
 `emma65-led-matrix` still needs it for its round LEDs, see that crate's `CLAUDE.md`). The window
-resizes both when a frame's dimensions change (a font switch) and when the user drags the window
-itself — `fit_pitch` recomputes the largest whole-pixel dot pitch that fits the live window size on
-every resize event, and the actual "snap to a clean pitch-multiple size" is debounced until resize
-activity pauses so it doesn't fight the mouse mid-drag (issue #593); the render target's logical
-size always matches the real window 1:1, so SDL2 never has to scale a mismatched frame to fit.
-Before the first frame arrives it shows a blank `background` grid at an assumed 5x8 font (spec §7
-— there is no cached-last-frame replay over this protocol). Building it requires SDL2 development
-headers (`libsdl2-dev` on Debian/Ubuntu); it is not built by plain `cargo build` — use
+resizes when a frame's dimensions change (a font switch); before the first frame arrives it shows a
+blank `background` grid at an assumed 5x8 font (spec §7 — there is no cached-last-frame replay over
+this protocol). The window remains user-resizable afterward, with SDL2 letterboxing/scaling its
+fixed logical size to fit — an earlier attempt to instead refit the dot pitch live on every window
+resize event was reverted (issue #593) after it caused the window to never appear and the process
+to hang past termination on a real desktop. Building it requires SDL2 development headers
+(`libsdl2-dev` on Debian/Ubuntu); it is not built by plain `cargo build` — use
 `cargo build -p emma65-lcd-display` or `cargo build --workspace`.
