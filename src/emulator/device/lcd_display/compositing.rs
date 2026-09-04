@@ -262,7 +262,7 @@ mod tests {
         let pixels = composite(&ddram, &blank_cgram(), &SINGLE_ROW, &[0, 0], no_cursor(), true, false, &CgRom::default(), BG, FG);
         let width_px = SINGLE_ROW.columns as usize * CELL_WIDTH;
 
-        // Row 0 of 'A' is [4, 10, ...]: only the middle (col 2) pixel set.
+        // Row 0 of 'A' is lit at col 2 in the default (A00) CGROM.
         assert_eq!(pixel_at(&pixels, width_px, 2, 0), [FG.r, FG.g, FG.b, 0xFF]);
         // Row 7 is the reserved cursor row, blank here -- stays background.
         assert_eq!(pixel_at(&pixels, width_px, 0, 7), [BG.r, BG.g, BG.b, 0xFF]);
