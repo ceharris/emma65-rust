@@ -69,6 +69,13 @@ const BEZEL_PITCHES = 3;
  * (a bezel, not a substrate). */
 const BEZEL_COLOR = "#0a0a0a";
 
+/** Gap between the dot-matrix grid and the bezel's interior edge, in whole dot pitches, uniform
+ * on all four sides (issue #600: real LCD modules leave a margin of panel background between the
+ * viewing area and the bezel, rather than running the dot grid flush against it). The revealed
+ * area is background-colored since it's simply an enlargement of the background rect drawn behind
+ * the dot grid, not a separate fill. */
+const EDGE_GAP_PITCHES = 1;
+
 /** Decodes a base64 string into raw bytes -- see `DisplayPanel.tsx` for why this beats
  * `JSON.parse`-ing a plain number array per frame. */
 function decodeBase64(base64: string): Uint8ClampedArray<ArrayBuffer> {
@@ -141,8 +148,9 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
   const totalDotsWide = geometry.columns * DOTS_PER_CELL_WIDTH + (geometry.columns - 1) * CELL_GAP_PITCHES;
   const totalDotsHigh = geometry.rows * frame.cellHeightDots + (geometry.rows - 1) * CELL_GAP_PITCHES;
   const bezelPx = BEZEL_PITCHES * pitch;
-  const viewportWidthPx = totalDotsWide * pitch;
-  const viewportHeightPx = totalDotsHigh * pitch;
+  const edgeGapPx = EDGE_GAP_PITCHES * pitch;
+  const viewportWidthPx = totalDotsWide * pitch + 2 * edgeGapPx;
+  const viewportHeightPx = totalDotsHigh * pitch + 2 * edgeGapPx;
   const widthPx = viewportWidthPx + 2 * bezelPx;
   const heightPx = viewportHeightPx + 2 * bezelPx;
 
@@ -157,6 +165,7 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
 
   const pitchDevice = pitch * dpr;
   const bezelPxDevice = bezelPx * dpr;
+  const edgeGapPxDevice = edgeGapPx * dpr;
   const viewportWidthPxDevice = viewportWidthPx * dpr;
   const viewportHeightPxDevice = viewportHeightPx * dpr;
 
@@ -169,10 +178,11 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
   ctx.fillRect(bezelPxDevice, bezelPxDevice, viewportWidthPxDevice, viewportHeightPxDevice);
 
   const dotSize = Math.max(1, Math.round(pitchDevice * DOT_FILL_RATIO));
+  const gridOriginDevice = bezelPxDevice + edgeGapPxDevice;
   for (let row = 0; row < geometry.rows; row++) {
     for (let dotRow = 0; dotRow < frame.cellHeightDots; dotRow++) {
       const rawY = row * frame.cellHeightDots + dotRow;
-      const cy = Math.round(bezelPxDevice + (row * (frame.cellHeightDots + CELL_GAP_PITCHES) + dotRow + 0.5) * pitchDevice);
+      const cy = Math.round(gridOriginDevice + (row * (frame.cellHeightDots + CELL_GAP_PITCHES) + dotRow + 0.5) * pitchDevice);
       for (let col = 0; col < geometry.columns; col++) {
         for (let dotCol = 0; dotCol < DOTS_PER_CELL_WIDTH; dotCol++) {
           const rawX = col * DOTS_PER_CELL_WIDTH + dotCol;
@@ -182,7 +192,7 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
           const b = frame.pixels[offset + 2];
           const isBackground = r === geometry.background[0] && g === geometry.background[1] && b === geometry.background[2];
           const color = isBackground ? offColor : `rgb(${r}, ${g}, ${b})`;
-          const cx = Math.round(bezelPxDevice + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dotCol + 0.5) * pitchDevice);
+          const cx = Math.round(gridOriginDevice + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dotCol + 0.5) * pitchDevice);
           drawDot(ctx, cx, cy, dotSize, color);
         }
       }
@@ -282,8 +292,10 @@ export default function LcdDisplayPanel() {
     if (!container || !geometry) return;
     const recomputePitch = () => {
       const cellHeightDots = frameRef.current?.cellHeightDots || 8;
-      const totalDotsWide = geometry.columns * DOTS_PER_CELL_WIDTH + (geometry.columns - 1) * CELL_GAP_PITCHES + 2 * BEZEL_PITCHES;
-      const totalDotsHigh = geometry.rows * cellHeightDots + (geometry.rows - 1) * CELL_GAP_PITCHES + 2 * BEZEL_PITCHES;
+      const totalDotsWide =
+        geometry.columns * DOTS_PER_CELL_WIDTH + (geometry.columns - 1) * CELL_GAP_PITCHES + 2 * BEZEL_PITCHES + 2 * EDGE_GAP_PITCHES;
+      const totalDotsHigh =
+        geometry.rows * cellHeightDots + (geometry.rows - 1) * CELL_GAP_PITCHES + 2 * BEZEL_PITCHES + 2 * EDGE_GAP_PITCHES;
       const fit = Math.min(container.clientWidth / totalDotsWide, container.clientHeight / totalDotsHigh);
       setPitch(Math.max(MIN_PITCH_PX, fit));
     };
