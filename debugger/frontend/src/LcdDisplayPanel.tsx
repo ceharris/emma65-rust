@@ -31,19 +31,18 @@ interface LcdDisplayFramePayload {
 const DOTS_PER_CELL_WIDTH = 5;
 
 /** Floor the on-screen dot pitch (center-to-center spacing) never drops below, mirroring
- * `LedMatrixPanel.tsx`'s `MIN_PITCH_PX` -- dots are drawn as vector rounded rects, not upscaled
- * pixels, so this doesn't need to be an integer; it just keeps the grid legible rather than a
- * smear when the dock cell or detached window is very small. */
+ * `LedMatrixPanel.tsx`'s `MIN_PITCH_PX` -- dots are drawn as vector squares, not upscaled pixels,
+ * so this doesn't need to be an integer; it just keeps the grid legible rather than a smear when
+ * the dock cell or detached window is very small. */
 const MIN_PITCH_PX = 6;
 
-/** Fraction of `pitch` a dot's rounded-rect actually covers; the remainder is the gap between
- * adjacent dots within a cell (issue #569: "there's typically a very small gap between
- * pixels"). */
+/** Fraction of `pitch` a dot actually covers; the remainder is the gap between adjacent dots
+ * within a cell (issue #569: "there's typically a very small gap between pixels"). Dots are plain
+ * squares, not rounded rects (issue #593 follow-up): rounding every dot's corners independently of
+ * its neighbors made adjacent same-color dots in a glyph stroke merge into a pinched "hourglass"
+ * shape at the seam instead of a clean rectangle, which read as some dots looking
+ * smaller/raggeder than others. */
 const DOT_FILL_RATIO = 0.75;
-
-/** Dot corner radius as a fraction of the dot's own (post-`DOT_FILL_RATIO`) side length (issue
- * #569: "pixels should have slightly rounded corners"). */
-const DOT_CORNER_RATIO = 0.3;
 
 /** Extra gap between adjacent character cells, in whole dot pitches, so neighboring glyphs don't
  * read as joined (issue #569: "a gap of about one pixel width between each character cell").
@@ -110,16 +109,13 @@ function blendColor(from: [number, number, number], to: [number, number, number]
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-/** Draws one dot as a rounded rect centered at `(cx, cy)` with the given full side length
- * (before `DOT_FILL_RATIO` is applied by the caller). Isolated from `drawFrame`'s grid-walking
- * loop the same way `LedMatrixPanel.tsx`'s `drawLed` is. */
+/** Draws one dot as a plain square centered at `(cx, cy)` with the given full side length (before
+ * `DOT_FILL_RATIO` is applied by the caller). Isolated from `drawFrame`'s grid-walking loop the
+ * same way `LedMatrixPanel.tsx`'s `drawLed` is. */
 function drawDot(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, color: string) {
   const half = size / 2;
-  const radius = size * DOT_CORNER_RATIO;
-  ctx.beginPath();
-  ctx.roundRect(cx - half, cy - half, size, size, radius);
   ctx.fillStyle = color;
-  ctx.fill();
+  ctx.fillRect(cx - half, cy - half, size, size);
 }
 
 /** Renders one decoded frame into `canvas` as a dot-matrix grid at the given on-screen `pitch`
