@@ -21,15 +21,16 @@ pub const CGROM_BYTES: usize = GLYPH_COUNT * ROWS_PER_GLYPH;
 /// assembled from the published HD44780U datasheet's character font table, the same kind of
 /// real-hardware-derived, permissively licensed source `display::font`'s default font and
 /// [`A02_CGROM_BYTES`] use. Unlike that source's `_eu` (A02) arrays, `_jp`'s rows are already
-/// top-aligned with no leading blank row, so each glyph here is copied through unshifted (rows
-/// 0-6 direct, padding a short array with blanks) with row 7 forced blank to match the HD44780U
-/// datasheet's reserved-cursor-row convention -- confirmed by cross-checking glyphs shared with
-/// `_eu` (e.g. `-`, `g`) landing on identical rows under each source's own convention. Eight
-/// extended glyphs (Greek/descender chars at `0xE2,0xE4,0xE6,0xE7,0xEA,0xF0,0xF1,0xF9`) carry a
-/// 9th/10th source row meant only for 5x10-font mode; those rows are dropped here since this
-/// table -- like `A02_CGROM_BYTES` -- always stores the 5x8 shape (see `ROWS_PER_GLYPH`).
-/// `0x00..=0x1F` and `0x80..=0x9F` are blank in the source already, matching spec §8.1's
-/// documented gaps in the standard ROM table.
+/// top-aligned with no leading blank row, so each glyph here is copied through unshifted: rows
+/// 0-7 direct from the source array (padding a short array with blanks), confirmed by
+/// cross-checking glyphs shared with `_eu` (e.g. `-`, `g`) landing on identical rows under each
+/// source's own convention. Unlike [`A02_CGROM_BYTES`], row 7 is *not* forced blank here: eight
+/// descender glyphs (`beta, mu, ro, g, j, p, q, y` at `0xE2,E4,E6,E7,EA,F0,F1,F9`) plus the solid
+/// block at `0xFF` genuinely use it on real hardware (verified against the datasheet's printed
+/// character table), so only each of those arrays' 9th/10th elements -- meant for 5x10-font mode
+/// only -- are dropped, since this table -- like `A02_CGROM_BYTES` -- always stores the 5x8 shape
+/// (see `ROWS_PER_GLYPH`). `0x00..=0x1F` and `0x80..=0x9F` are blank in the source already,
+/// matching spec §8.1's documented gaps in the standard ROM table.
 const A00_CGROM_BYTES: &[u8; CGROM_BYTES] = include_bytes!("default_cgrom_a00.bin");
 
 /// Raw bytes of the bundled "A02" (European standard font) table: the Hitachi HD44780 ROM code
@@ -160,6 +161,23 @@ mod tests {
         // difference from A02, which keeps a literal backslash there.
         let table = CgRom::a00();
         assert_eq!(table.glyph(0x5C), &[17, 10, 31, 4, 31, 4, 4, 0]);
+    }
+
+    #[test]
+    fn a00_table_descender_glyphs_populate_the_cursor_row() {
+        // Unlike A02, A00 has 8 glyphs (plus the solid block) whose descender genuinely reaches
+        // row 7 on real hardware, verified against the datasheet's printed character table --
+        // row 7 must carry that pixel data rather than being forced blank like every other glyph.
+        let table = CgRom::a00();
+        assert_eq!(table.glyph(0xE2)[7], 0b10000, "beta"); // column 0
+        assert_eq!(table.glyph(0xE4)[7], 0b10000, "mu"); // column 0
+        assert_eq!(table.glyph(0xE6)[7], 0b10000, "ro"); // column 0
+        assert_eq!(table.glyph(0xE7)[7], 0b00001, "g"); // column 4
+        assert_eq!(table.glyph(0xEA)[7], 0b00010, "j"); // column 3
+        assert_eq!(table.glyph(0xF0)[7], 0b10000, "p"); // column 0
+        assert_eq!(table.glyph(0xF1)[7], 0b00001, "q"); // column 4
+        assert_eq!(table.glyph(0xF9)[7], 0b00001, "y"); // column 4
+        assert_eq!(table.glyph(0xFF)[7], 0b11111, "solid block"); // all columns
     }
 
     #[test]
