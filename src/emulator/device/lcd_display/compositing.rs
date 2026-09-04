@@ -40,12 +40,15 @@ pub struct CursorState {
 /// font's cell height (8 or 10 rows) -- spec §8.1/§8.2.
 ///
 /// `0x00..=0x0F` selects one of `cgram`'s custom characters (low 3 bits for `F`=0's 8 characters,
-/// low 2 bits for `F`=1's 4 characters); every other byte indexes `cgrom` directly. A 5×10 CGROM
-/// glyph is the same 8-row CGROM data padded with two blank rows at the bottom -- CGROM has no
-/// separate 5×10 table (design doc §5) -- while a 5×10 CGRAM glyph reads its own 10 rows straight
-/// out of that character's 16-byte group (spec §8.2); rows 10..16 of that group are real,
-/// writable CGRAM (nothing rejects those addresses) but are never rendered, matching real
-/// hardware's documented 16-byte-group-with-only-part-rendered layout.
+/// low 2 bits for `F`=1's 4 characters); every other byte indexes `cgrom` directly. `cgrom.glyph`
+/// already returns the datasheet's true shape for `byte` -- 8 rows, or 10 for its extended range
+/// (`cgrom::EXTENDED_RANGE_START..=0xFF`) -- so 5×8-font mode just takes that glyph's first 8 rows
+/// (dropping any real 9th/10th row an extended-range glyph has) and 5×10-font mode pads a
+/// standard-range (8-row) glyph with two blank rows, same as CGROM glyphs with no 5×10-only data
+/// of their own. A 5×10 CGRAM glyph instead reads its own 10 rows straight out of that
+/// character's 16-byte group (spec §8.2); rows 10..16 of that group are real, writable CGRAM
+/// (nothing rejects those addresses) but are never rendered, matching real hardware's documented
+/// 16-byte-group-with-only-part-rendered layout.
 fn glyph_rows(byte: u8, cgram: &[u8; 64], cgrom: &CgRom, font_5x10: bool) -> Vec<u8> {
     if byte <= 0x0F {
         if font_5x10 {
@@ -58,9 +61,13 @@ fn glyph_rows(byte: u8, cgram: &[u8; 64], cgrom: &CgRom, font_5x10: bool) -> Vec
     } else {
         let glyph = cgrom.glyph(byte);
         if font_5x10 {
-            glyph.iter().copied().chain([0, 0]).collect()
+            if glyph.len() == CELL_HEIGHT_5X10 {
+                glyph.to_vec()
+            } else {
+                glyph.iter().copied().chain([0, 0]).collect()
+            }
         } else {
-            glyph.to_vec()
+            glyph[..CELL_HEIGHT_5X8].to_vec()
         }
     }
 }
