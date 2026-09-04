@@ -126,7 +126,16 @@ function drawDot(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: nu
  * (dot center-to-center spacing, in CSS pixels), against `geometry`'s configured colors, framed
  * by a `BEZEL_PITCHES`-wide black bezel (issue #579). Called both when a fresh frame arrives and
  * when `pitch` changes (a resize), so a resize can redraw already-known pixel data immediately
- * rather than waiting on the next frame. */
+ * rather than waiting on the next frame.
+ *
+ * Dots are positioned and sized in *device* pixels, rounded to whole pixels, rather than at the
+ * raw (generally fractional) CSS-pixel pitch (issue #593): since `pitch` is a continuous value
+ * chosen to fill the container, drawing anti-aliased dots at its exact fractional position would
+ * put each dot's edges at a different sub-pixel phase than its neighbors, so each dot's
+ * anti-aliasing picks up a different amount of edge coverage -- visible as uneven dot brightness,
+ * worse the fewer pixels each dot spans. Rounding every dot to the same integer device-pixel grid
+ * makes each one a plain translation of the same shape, so their AA coverage -- and thus apparent
+ * brightness -- is identical. */
 function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisplayGeometry, pitch: number) {
   const ctx = canvas.getContext("2d");
   if (!ctx || frame.widthDots === 0 || frame.cellHeightDots === 0) return;
@@ -144,21 +153,28 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
   canvas.height = Math.round(heightPx * dpr);
   canvas.style.width = `${widthPx}px`;
   canvas.style.height = `${heightPx}px`;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Draw directly in device pixels (no dpr transform) so dot geometry below can be rounded to
+  // whole device pixels rather than whole CSS pixels.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  const pitchDevice = pitch * dpr;
+  const bezelPxDevice = bezelPx * dpr;
+  const viewportWidthPxDevice = viewportWidthPx * dpr;
+  const viewportHeightPxDevice = viewportHeightPx * dpr;
 
   ctx.fillStyle = BEZEL_COLOR;
-  ctx.fillRect(0, 0, widthPx, heightPx);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   const backgroundColor = `rgb(${geometry.background.join(", ")})`;
   const offColor = blendColor(geometry.background, geometry.foreground, OFF_DOT_BLEND);
   ctx.fillStyle = backgroundColor;
-  ctx.fillRect(bezelPx, bezelPx, viewportWidthPx, viewportHeightPx);
+  ctx.fillRect(bezelPxDevice, bezelPxDevice, viewportWidthPxDevice, viewportHeightPxDevice);
 
-  const dotSize = pitch * DOT_FILL_RATIO;
+  const dotSize = Math.max(1, Math.round(pitchDevice * DOT_FILL_RATIO));
   for (let row = 0; row < geometry.rows; row++) {
     for (let dotRow = 0; dotRow < frame.cellHeightDots; dotRow++) {
       const rawY = row * frame.cellHeightDots + dotRow;
-      const cy = bezelPx + (row * (frame.cellHeightDots + CELL_GAP_PITCHES) + dotRow + 0.5) * pitch;
+      const cy = Math.round(bezelPxDevice + (row * (frame.cellHeightDots + CELL_GAP_PITCHES) + dotRow + 0.5) * pitchDevice);
       for (let col = 0; col < geometry.columns; col++) {
         for (let dotCol = 0; dotCol < DOTS_PER_CELL_WIDTH; dotCol++) {
           const rawX = col * DOTS_PER_CELL_WIDTH + dotCol;
@@ -168,7 +184,7 @@ function drawFrame(canvas: HTMLCanvasElement, frame: LcdFrame, geometry: LcdDisp
           const b = frame.pixels[offset + 2];
           const isBackground = r === geometry.background[0] && g === geometry.background[1] && b === geometry.background[2];
           const color = isBackground ? offColor : `rgb(${r}, ${g}, ${b})`;
-          const cx = bezelPx + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dotCol + 0.5) * pitch;
+          const cx = Math.round(bezelPxDevice + (col * (DOTS_PER_CELL_WIDTH + CELL_GAP_PITCHES) + dotCol + 0.5) * pitchDevice);
           drawDot(ctx, cx, cy, dotSize, color);
         }
       }
