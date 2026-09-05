@@ -126,19 +126,25 @@ export default function DisplayPanel({ dockPanelApi }: DisplayPanelProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [geometry, setGeometry] = useState<DisplayGeometry | null>(null);
   // Read by the frame listener below without retriggering its effect on every geometry fetch —
-  // geometry is fixed for the device's lifetime (design §8), so it only ever transitions once,
-  // from null to a value, and the listener must already be registered to not miss a frame that
-  // arrives in the gap between mount and that fetch resolving.
+  // geometry is fixed for the device's lifetime (design §8), so within one profile load it only
+  // ever transitions once, from null to a value, and the listener must already be registered to
+  // not miss a frame that arrives in the gap between mount and that fetch resolving. A profile
+  // reload (issue #605) can still replace it with a different value on `session-loaded`.
   const geometryRef = useRef<DisplayGeometry | null>(null);
   const [scale, setScale] = useState(1);
 
   useEffect(() => {
-    invoke<DisplayGeometry | null>("get_display_geometry")
-      .then((g) => {
-        geometryRef.current = g;
-        setGeometry(g);
-      })
-      .catch((err) => console.error("get_display_geometry failed:", err));
+    const fetchGeometry = () => {
+      invoke<DisplayGeometry | null>("get_display_geometry")
+        .then((g) => {
+          geometryRef.current = g;
+          setGeometry(g);
+        })
+        .catch((err) => console.error("get_display_geometry failed:", err));
+    };
+    fetchGeometry();
+    const unlistenPromise = listen("session-loaded", fetchGeometry);
+    return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
   useEffect(() => {
