@@ -15,8 +15,11 @@ pub use crate::emulator::device::display::compositing::Rgb24;
 const CELL_WIDTH: usize = 5;
 /// Pixel height of a glyph cell in 5×8 mode (`F`=0, spec §8.2).
 const CELL_HEIGHT_5X8: usize = 8;
-/// Pixel height of a glyph cell in 5×10 mode (`F`=1, spec §8.2).
-const CELL_HEIGHT_5X10: usize = 10;
+/// Pixel height of a glyph cell in 5×10 mode (`F`=1, on a [`Geometry::supports_5x10`] geometry --
+/// spec §8.2). The datasheet's true 5×10 shape is 11 rows, not 10: CGRAM address bits 0-3 give a
+/// 16-row group per character, of which rows 0-10 render (row 10 is the cursor-OR row); only two
+/// real module geometries have the 11 physical common lines this needs (issue #603).
+const CELL_HEIGHT_5X10: usize = 11;
 
 /// The address-counter-derived cursor state for one composite call, computed by the caller
 /// (`LcdDisplay::compositing_cursor()`, via [`ddram_cursor_position`]) from the current address
@@ -37,18 +40,21 @@ pub struct CursorState {
 }
 
 /// Resolves a DDRAM byte to the row bytes actually drawn for it, already sized to the active
-/// font's cell height (8 or 10 rows) -- spec §8.1/§8.2.
+/// font's cell height (8 or 11 rows) -- spec §8.1/§8.2. `font_5x10` here is already gated on
+/// [`Geometry::supports_5x10`] by [`composite`]'s caller -- this function has no geometry
+/// awareness of its own.
 ///
 /// `0x00..=0x0F` selects one of `cgram`'s custom characters (low 3 bits for `F`=0's 8 characters,
 /// low 2 bits for `F`=1's 4 characters); every other byte indexes `cgrom` directly. `cgrom.glyph`
-/// already returns the datasheet's true shape for `byte` -- 8 rows, or 10 for its extended range
+/// returns the datasheet's true shape for `byte` -- 8 rows, or 10 for its extended range
 /// (`cgrom::EXTENDED_RANGE_START..=0xFF`) -- so 5×8-font mode just takes that glyph's first 8 rows
-/// (dropping any real 9th/10th row an extended-range glyph has) and 5×10-font mode pads a
-/// standard-range (8-row) glyph with two blank rows, same as CGROM glyphs with no 5×10-only data
-/// of their own. A 5×10 CGRAM glyph instead reads its own 10 rows straight out of that
-/// character's 16-byte group (spec §8.2); rows 10..16 of that group are real, writable CGRAM
-/// (nothing rejects those addresses) but are never rendered, matching real hardware's documented
-/// 16-byte-group-with-only-part-rendered layout.
+/// (dropping any real 9th/10th row an extended-range glyph has) and 5×10-font mode pads whatever
+/// rows `cgrom` provides with trailing zero rows out to 11: three for a standard-range (8-row)
+/// glyph, or one for an extended-range (10-row) glyph, since real CGROMs leave the 11th
+/// (cursor-only) row blank rather than storing data for it. A 5×10 CGRAM glyph instead reads its
+/// own 11 rows straight out of that character's 16-byte group (spec §8.2); rows 11..16 of that
+/// group are real, writable CGRAM (nothing rejects those addresses) but are never rendered,
+/// matching real hardware's documented 16-byte-group-with-only-part-rendered layout.
 fn glyph_rows(byte: u8, cgram: &[u8; 64], cgrom: &CgRom, font_5x10: bool) -> Vec<u8> {
     if byte <= 0x0F {
         if font_5x10 {
@@ -61,11 +67,8 @@ fn glyph_rows(byte: u8, cgram: &[u8; 64], cgrom: &CgRom, font_5x10: bool) -> Vec
     } else {
         let glyph = cgrom.glyph(byte);
         if font_5x10 {
-            if glyph.len() == CELL_HEIGHT_5X10 {
-                glyph.to_vec()
-            } else {
-                glyph.iter().copied().chain([0, 0]).collect()
-            }
+            let padding = CELL_HEIGHT_5X10 - glyph.len();
+            glyph.iter().copied().chain(std::iter::repeat_n(0, padding)).collect()
         } else {
             glyph[..CELL_HEIGHT_5X8].to_vec()
         }
@@ -148,8 +151,9 @@ fn set_pixel(pixels: &mut [u8], width_px: usize, x: usize, y: usize, color: Rgb2
     pixels[offset + 3] = 0xFF;
 }
 
-/// Composites one frame of `geometry.columns * 5` by `geometry.rows * (8 or 10)` RGBA pixels
-/// (spec §8.3), fully opaque throughout (the HD44780 has no separate background register, same
+/// Composites one frame of `geometry.columns * 5` by `geometry.rows * (8, or 11 when `font_5x10`
+/// and `geometry.supports_5x10` are both true)` RGBA pixels (spec §8.3), fully opaque throughout
+/// (the HD44780 has no separate background register, same
 /// rationale as `display::compositing::composite`).
 ///
 /// Walks each of `geometry`'s rows and each row's segments (spec §7.1), applying `line_shift`'s
@@ -171,6 +175,10 @@ pub fn composite(
     background: Rgb24,
     foreground: Rgb24,
 ) -> Vec<u8> {
+    // `font_5x10` reflects Function Set's raw F bit, stored regardless of geometry (real hardware
+    // register behavior) -- rendering only honors it on a geometry with the physical common lines
+    // a true 5×10 glyph needs (issue #603).
+    let font_5x10 = font_5x10 && geometry.supports_5x10;
     let cell_height = if font_5x10 { CELL_HEIGHT_5X10 } else { CELL_HEIGHT_5X8 };
     let columns = geometry.columns as usize;
     let rows = geometry.rows as usize;
@@ -219,8 +227,12 @@ mod tests {
     const BG: Rgb24 = Rgb24::new(0, 0, 0);
     const FG: Rgb24 = Rgb24::new(255, 255, 255);
 
-    const SINGLE_ROW: Geometry = Geometry { rows: 1, columns: 2, segments: &[&[(0x00, 2)]] };
-    const DUAL_ROW: Geometry = Geometry { rows: 2, columns: 2, segments: &[&[(0x00, 2)], &[(0x40, 2)]] };
+    // `supports_5x10: true` mirrors the real `8-character-5x10`/`16-character-5x10` geometries
+    // (issue #603); tests exercising `font_5x10 = false` are unaffected since `composite` only
+    // consults this field when `font_5x10` is also true.
+    const SINGLE_ROW: Geometry = Geometry { rows: 1, columns: 2, segments: &[&[(0x00, 2)]], supports_5x10: true };
+    const DUAL_ROW: Geometry =
+        Geometry { rows: 2, columns: 2, segments: &[&[(0x00, 2)], &[(0x40, 2)]], supports_5x10: false };
 
     fn empty_ddram() -> [u8; 80] {
         [0x20; 80]
@@ -301,7 +313,7 @@ mod tests {
     // address to physical `ddram` index (regression for the `shifted_address` addressing bug
     // found while reasoning about Work Unit 3's real geometry table).
     const WIDE_DUAL_ROW: Geometry =
-        Geometry { rows: 2, columns: 40, segments: &[&[(0x00, 40)], &[(0x40, 40)]] };
+        Geometry { rows: 2, columns: 40, segments: &[&[(0x00, 40)], &[(0x40, 40)]], supports_5x10: false };
 
     #[test]
     fn wide_dual_line_last_column_stays_in_bounds_and_reads_correct_cell() {
@@ -325,6 +337,7 @@ mod tests {
         rows: 4,
         columns: 20,
         segments: &[&[(0x00, 20)], &[(0x40, 20)], &[(0x14, 20)], &[(0x54, 20)]],
+        supports_5x10: false,
     };
 
     #[test]
@@ -372,6 +385,8 @@ mod tests {
 
     #[test]
     fn cgram_custom_character_5x10_uses_sixteen_byte_group() {
+        // The datasheet's true 5×10 shape renders 11 rows (0-10 of the 16-byte CGRAM group); row
+        // 10 is the cursor-OR row, still real writable CGRAM data here (issue #603).
         let ddram = {
             let mut d = empty_ddram();
             d[0] = 0x01; // custom character 1 (F=1: low 2 bits)
@@ -379,7 +394,7 @@ mod tests {
         };
         let mut cgram = blank_cgram();
         let character_group = 1;
-        let last_rendered_row = 9;
+        let last_rendered_row = 10;
         cgram[character_group * 16 + last_rendered_row] = 0b11111;
         let pixels = composite(&ddram, &cgram, &SINGLE_ROW, &[0, 0], no_cursor(), true, true, &CgRom::default(), BG, FG);
         let width_px = SINGLE_ROW.columns as usize * CELL_WIDTH;
@@ -387,6 +402,31 @@ mod tests {
         for col in 0..CELL_WIDTH {
             assert_eq!(pixel_at(&pixels, width_px, col, last_rendered_row), [FG.r, FG.g, FG.b, 0xFF]);
         }
+    }
+
+    #[test]
+    fn cgram_row_beyond_eleven_is_never_rendered_in_5x10_mode() {
+        let ddram = {
+            let mut d = empty_ddram();
+            d[0] = 0x01; // custom character 1 (F=1: low 2 bits)
+            d
+        };
+        let mut cgram = blank_cgram();
+        let character_group = 1;
+        cgram[character_group * 16 + 11] = 0b11111; // one row past the rendered 0..11 range
+        let pixels = composite(&ddram, &cgram, &SINGLE_ROW, &[0, 0], no_cursor(), true, true, &CgRom::default(), BG, FG);
+
+        assert!(all_pixels_are(&pixels, BG), "CGRAM rows 11..16 must never be rendered");
+    }
+
+    #[test]
+    fn font_5x10_is_a_no_op_on_a_geometry_that_does_not_support_it() {
+        let mut ddram = empty_ddram();
+        ddram[0] = 0x41; // 'A'
+        let pixels = composite(&ddram, &blank_cgram(), &DUAL_ROW, &[0, 0], no_cursor(), true, true, &CgRom::default(), BG, FG);
+
+        // DUAL_ROW is not 5x10-capable, so the frame must still be sized for 8-row cells.
+        assert_eq!(pixels.len(), DUAL_ROW.columns as usize * CELL_WIDTH * DUAL_ROW.rows as usize * CELL_HEIGHT_5X8 * 4);
     }
 
     #[test]

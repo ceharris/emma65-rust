@@ -34,8 +34,9 @@ use tokio::sync::mpsc;
 /// -- reused directly from `display` rather than duplicated (design doc §4).
 use super::display::NOMINAL_CLOCK_HZ;
 
-/// A composited frame ready for display: an RGBA byte buffer (`columns * 5` by `rows * (8 or 10)`
-/// pixels, depending on the active font -- see [`compositing::composite`]) plus the cell
+/// A composited frame ready for display: an RGBA byte buffer (`columns * 5` by `rows * (8, or 11
+/// on a 5×10-capable geometry with F=1 set)` pixels, depending on the active font -- see
+/// [`compositing::composite`]) plus the cell
 /// dimensions it was composited from -- self-describing since a delivery client has no other way
 /// to learn the device's configured grid size until a frame actually arrives.
 ///
@@ -64,13 +65,19 @@ pub struct Geometry {
     pub rows: u8,
     pub columns: u8,
     pub segments: &'static [&'static [(u8, u8)]],
+    /// True only for the two module geometries with the 11 physical common lines a true
+    /// datasheet 5×10 glyph needs (`8-character-5x10`, `16-character-5x10`); every other
+    /// geometry's common-line count tops out at what 5×8 needs, so `Function Set`'s `F=1` must be
+    /// a no-op for rendering purposes there (issue #603). Both true-5×10 geometries are
+    /// single-line only, so `N=1` is symmetrically a no-op on them.
+    pub supports_5x10: bool,
 }
 
 impl Geometry {
-    /// True for every supported geometry except the two single-80-byte-line ones (`8x1`,
-    /// `40x1`), whose only segments stay within the first 40-byte DDRAM half. Every other
-    /// geometry's segments reach into the second half (a raw address of `0x40` or more -- spec
-    /// §7.1's addressing-style column), which is what this device's real-hardware-accurate DDRAM
+    /// True for every supported geometry except the two single-80-byte-line ones
+    /// (`8-character-5x10`, `40x1`), whose only segments stay within the first 40-byte DDRAM
+    /// half. Every other geometry's segments reach into the second half (a raw address of `0x40`
+    /// or more -- spec §7.1's addressing-style column), which is what this device's real-hardware-accurate DDRAM
     /// addressing (`fold_ddram_address` below) and `line_shift`'s sizing/modulus (spec §7.4) both
     /// key off. `pub(crate)` since [`compositing::composite`] needs the same line-bucketing logic
     /// to apply `line_shift` correctly and is handed only a `&Geometry`, not this device's own
@@ -420,7 +427,8 @@ impl LcdDisplay {
     /// (rather than storing the raw 0..128 value, or reducing it modulo 80) is what keeps a wide
     /// geometry's second line -- e.g. `40x2`'s `(0x40, 40)` segment -- inside the physical array
     /// without colliding with line one, while still matching the exact addresses spec §7.1
-    /// documents. *Single*-line geometries (`8x1`, `40x1`) have no such split -- their whole
+    /// documents. *Single*-line geometries (`8-character-5x10`, `16-character-5x10`, `40x1`) have
+    /// no such split -- their whole
     /// 80-byte DDRAM is one contiguous line addressed 0x00..0x4F, so the raw value is used
     /// directly (reduced modulo 80 only as a safety clamp for out-of-range input).
     fn fold_ddram_address(&self, raw: u8) -> u8 {
@@ -478,7 +486,29 @@ impl LcdDisplay {
                 // Function Set: 001 DL N F -- (N is accepted but has no observable effect here,
                 // spec §7.3, and nothing reads it back, so it isn't stored).
                 self.interface_width_8bit = byte & 0x10 != 0;
+                // Stored as requested regardless of geometry, matching real hardware's register
+                // behavior -- but rendering only honors it on a geometry with the physical common
+                // lines a true 5×10 glyph needs (issue #603); see `Geometry::supports_5x10` and
+                // `compositing::composite`'s gating.
                 self.font_5x10 = byte & 0x04 != 0;
+                if self.font_5x10 && !self.geometry.supports_5x10 {
+                    log_msg!(
+                        self.log_sender,
+                        LogLevel::Warn,
+                        LogCategory::Device,
+                        "{} ignoring 5x10 font request (F=1): geometry has no true 5x10 mode",
+                        self.identity()
+                    );
+                }
+                if byte & 0x08 != 0 && self.geometry.supports_5x10 {
+                    log_msg!(
+                        self.log_sender,
+                        LogLevel::Warn,
+                        LogCategory::Device,
+                        "{} ignoring dual-line request (N=1): geometry is single-line only",
+                        self.identity()
+                    );
+                }
                 self.set_busy(SHORT_INSTRUCTION_US);
             }
             0x40..=0x7F => {
@@ -697,9 +727,13 @@ mod tests {
     const BASE_ADDRESS: u16 = 0xD000;
 
     const DUAL_LINE_GEOMETRY: Geometry =
-        Geometry { rows: 2, columns: 16, segments: &[&[(0x00, 16)], &[(0x40, 16)]] };
+        Geometry { rows: 2, columns: 16, segments: &[&[(0x00, 16)], &[(0x40, 16)]], supports_5x10: false };
     const SINGLE_LINE_GEOMETRY: Geometry =
-        Geometry { rows: 1, columns: 40, segments: &[&[(0x00, 40)]] };
+        Geometry { rows: 1, columns: 40, segments: &[&[(0x00, 40)]], supports_5x10: false };
+    /// Mirrors the real `8-character-5x10`/`16-character-5x10` geometries (issue #603): the only
+    /// two module layouts with the physical common-line count a true datasheet 5×10 glyph needs.
+    const TRUE_5X10_GEOMETRY: Geometry =
+        Geometry { rows: 1, columns: 8, segments: &[&[(0x00, 8)]], supports_5x10: true };
 
     fn address_range() -> AddressRange {
         AddressRange::new(BASE_ADDRESS, BASE_ADDRESS + 1)
@@ -712,6 +746,11 @@ mod tests {
 
     fn single_line_device() -> LcdDisplay {
         LcdDisplay::new(DEVICE_NAME, address_range(), &SINGLE_LINE_GEOMETRY, Some(1_000_000),
+            CgRom::default(), Rgb24::new(0, 0, 0), Rgb24::new(255, 255, 255))
+    }
+
+    fn true_5x10_device() -> LcdDisplay {
+        LcdDisplay::new(DEVICE_NAME, address_range(), &TRUE_5X10_GEOMETRY, Some(1_000_000),
             CgRom::default(), Rgb24::new(0, 0, 0), Rgb24::new(255, 255, 255))
     }
 
@@ -1039,6 +1078,34 @@ mod tests {
     }
 
     #[test]
+    fn function_set_f1_on_a_non_5x10_capable_geometry_warns() {
+        // device() uses DUAL_LINE_GEOMETRY (16x2), which -- like every real 2-row or 4-row module
+        // -- lacks the physical common-line count a true 5×10 glyph needs (issue #603).
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = device();
+        device.set_log_sender(sender);
+        device.write(instruction_addr(), 0x20 | 0x10 | 0x04); // Function Set, DL=1, F=1
+        tick_past_busy(&mut device);
+
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert!(received.message.contains("5x10"), "expected a 5x10-related warning, got: {}", received.message);
+    }
+
+    #[test]
+    fn function_set_n1_on_a_true_5x10_geometry_warns() {
+        let (sender, rx) = crate::emulator::logging::test_channel_sender(4);
+        let mut device = true_5x10_device();
+        device.set_log_sender(sender);
+        device.write(instruction_addr(), 0x20 | 0x10 | 0x08); // Function Set, DL=1, N=1
+        tick_past_busy(&mut device);
+
+        let received = rx.recv().unwrap();
+        assert_eq!(received.category, LogCategory::Device);
+        assert!(received.message.contains("dual-line"), "expected a dual-line-related warning, got: {}", received.message);
+    }
+
+    #[test]
     fn reset_returns_to_eight_bit_mode_and_clears_pending_nibble() {
         let mut device = device();
         device.write(instruction_addr(), 0x20); // Function Set, DL=0 (4-bit)
@@ -1248,8 +1315,27 @@ mod tests {
     }
 
     #[test]
-    fn switching_to_5x10_font_changes_the_next_frame_message_height() {
-        let (mut device, mut remote) = device_with_external_transport();
+    fn switching_to_5x10_font_changes_the_next_frame_message_height_on_a_true_5x10_geometry() {
+        let (local, remote_transport) = InternalPipeTransport::pair_direct().unwrap();
+        let mut device = true_5x10_device(); // 8-character-5x10: single-line, supports_5x10
+        device.attach_external_transport(Box::new(local));
+        let mut remote = remote_transport;
+        collect_bytes(&mut remote); // drain the header
+
+        device.write(instruction_addr(), 0x20 | 0x10 | 0x04); // Function Set, DL=1 (8-bit), F=1
+        tick_past_busy(&mut device);
+
+        let bytes = collect_bytes(&mut remote);
+        let width_px = 8u16 * 5;
+        let height_px = 11u16;
+        assert_eq!(&bytes[0..2], &width_px.to_le_bytes());
+        assert_eq!(&bytes[2..4], &height_px.to_le_bytes());
+        assert_eq!(bytes.len(), 4 + width_px as usize * height_px as usize * 4);
+    }
+
+    #[test]
+    fn switching_to_5x10_font_does_not_change_frame_height_on_a_non_5x10_capable_geometry() {
+        let (mut device, mut remote) = device_with_external_transport(); // DUAL_LINE_GEOMETRY: 16x2
         collect_bytes(&mut remote); // drain the header
 
         device.write(instruction_addr(), 0x20 | 0x10 | 0x04); // Function Set, DL=1 (8-bit), F=1
@@ -1257,7 +1343,7 @@ mod tests {
 
         let bytes = collect_bytes(&mut remote);
         let width_px = 16u16 * 5;
-        let height_px = 2u16 * 10;
+        let height_px = 2u16 * 8; // unchanged: F=1 is a no-op for rendering on this geometry
         assert_eq!(&bytes[0..2], &width_px.to_le_bytes());
         assert_eq!(&bytes[2..4], &height_px.to_le_bytes());
         assert_eq!(bytes.len(), 4 + width_px as usize * height_px as usize * 4);

@@ -78,30 +78,43 @@ fn supported_backlights_for(polarity: Polarity) -> Vec<&'static str> {
     COLOR_PRESETS.iter().filter(|(p, _, _, _)| *p == polarity).map(|(_, b, _, _)| *b).collect()
 }
 
-/// The 9 supported geometries (spec §7.1), looked up by the config's `geometry` string. This is
+/// The 10 supported geometries (spec §7.1), looked up by the config's `geometry` string. This is
 /// the single source of truth for every geometry's row/segment layout -- `geometry_for` is the
 /// only place a `geometry=` string turns into a `&'static Geometry`.
+///
+/// Only `8-character-5x10` and `16-character-5x10` set `supports_5x10: true` -- an HD44780 drives
+/// just 16 common outputs total, and a true, ungapped datasheet 5×10 glyph needs 11 of them per
+/// visible row; every other geometry here (including the merely-8-character-wide `16x1`, whose
+/// name refers to its pseudo-single-row *column* count, not its common-line count) tops out at
+/// what 5×8 needs, so `Function Set`'s `F=1` is a no-op on them (issue #603; see
+/// `~/Documents/Retro/HD44780/geometries.md`, a hardware-constraints writeup derived from the
+/// datasheet and real module surveys, for the full analysis).
 const GEOMETRIES: &[(&str, Geometry)] = &[
-    ("8x1", Geometry { rows: 1, columns: 8, segments: &[&[(0x00, 8)]] }),
-    ("40x1", Geometry { rows: 1, columns: 40, segments: &[&[(0x00, 40)]] }),
-    ("8x2", Geometry { rows: 2, columns: 8, segments: &[&[(0x00, 8)], &[(0x40, 8)]] }),
-    ("16x2", Geometry { rows: 2, columns: 16, segments: &[&[(0x00, 16)], &[(0x40, 16)]] }),
-    ("20x2", Geometry { rows: 2, columns: 20, segments: &[&[(0x00, 20)], &[(0x40, 20)]] }),
-    ("40x2", Geometry { rows: 2, columns: 40, segments: &[&[(0x00, 40)], &[(0x40, 40)]] }),
+    ("8-character-5x10", Geometry { rows: 1, columns: 8, segments: &[&[(0x00, 8)]], supports_5x10: true }),
+    ("16-character-5x10", Geometry { rows: 1, columns: 16, segments: &[&[(0x00, 16)]], supports_5x10: true }),
+    ("40x1", Geometry { rows: 1, columns: 40, segments: &[&[(0x00, 40)]], supports_5x10: false }),
+    ("8x2", Geometry { rows: 2, columns: 8, segments: &[&[(0x00, 8)], &[(0x40, 8)]], supports_5x10: false }),
+    ("16x2", Geometry { rows: 2, columns: 16, segments: &[&[(0x00, 16)], &[(0x40, 16)]], supports_5x10: false }),
+    ("20x2", Geometry { rows: 2, columns: 20, segments: &[&[(0x00, 20)], &[(0x40, 20)]], supports_5x10: false }),
+    ("40x2", Geometry { rows: 2, columns: 40, segments: &[&[(0x00, 40)], &[(0x40, 40)]], supports_5x10: false }),
     // A documented real-world quirk, not a simplification (spec §7.1): one visible row made of
-    // two 8-byte segments, one from each internal 40-byte DDRAM line.
-    ("16x1", Geometry { rows: 1, columns: 16, segments: &[&[(0x00, 8), (0x40, 8)]] }),
+    // two 8-byte segments, one from each internal 40-byte DDRAM line. Despite the "16" in its
+    // name referring to its 16-character width, this bare-chip module has no more common lines
+    // than any other 2-row layout, so it is not 5×10-capable.
+    ("16x1", Geometry { rows: 1, columns: 16, segments: &[&[(0x00, 8), (0x40, 8)]], supports_5x10: false }),
     // Four-row modules split each of the two internal 40-byte lines into two visible rows (spec
     // §7.1); rows 1 & 3 share one line, rows 2 & 4 share the other.
     ("16x4", Geometry {
         rows: 4,
         columns: 16,
         segments: &[&[(0x00, 16)], &[(0x40, 16)], &[(0x10, 16)], &[(0x50, 16)]],
+        supports_5x10: false,
     }),
     ("20x4", Geometry {
         rows: 4,
         columns: 20,
         segments: &[&[(0x00, 20)], &[(0x40, 20)], &[(0x14, 20)], &[(0x54, 20)]],
+        supports_5x10: false,
     }),
 ];
 
@@ -119,7 +132,7 @@ fn supported_geometry_names() -> Vec<&'static str> {
 // the reset default (spec §8.2) -- used only to size the external transport's ring (below), not
 // to compute any actual frame.
 const MAX_CELL_WIDTH_PX: usize = 5;
-const MAX_CELL_HEIGHT_PX: usize = 10;
+const MAX_CELL_HEIGHT_PX: usize = 11;
 
 /// Memory-mapped HD44780-compatible character LCD display device module (`display/lcd`).
 ///
@@ -135,7 +148,7 @@ pub struct LcdDisplayModule;
 
 #[derive(Deserialize)]
 struct LcdDisplayAttributes {
-    /// One of the 9 supported values (design doc §2); default `16x2` (spec §3).
+    /// One of the 10 supported values (design doc §2); default `16x2` (spec §3).
     geometry: Option<String>,
     /// Selects the bundled character generator ROM by name (`"a00"`, the default, or `"a02"`,
     /// case-insensitive) or overrides it with a file of the same format (spec §3, §8.1).
@@ -596,7 +609,11 @@ mod tests {
         // Regression-shaped test mirroring `config::led_matrix`'s capacity test: the ring must be
         // able to hold a single frame message at the largest supported geometry (`40x2`, tied
         // with `20x4` for the most total dot cells) rendered with the 5x10 font -- the worst case
-        // this device can ever push, even though 5x8 is the reset default (spec §8.2). Unlike
+        // this device can ever push, even though 5x8 is the reset default (spec §8.2), and even
+        // though `40x2` doesn't actually support F=1 (issue #603): the capacity computation
+        // conservatively uses `MAX_CELL_HEIGHT_PX` for every geometry regardless of
+        // `supports_5x10`, and `40x2`/`20x4`'s 640-cell grids still dwarf the two true-5x10
+        // geometries' (176 and 88 cells respectively), so they remain the worst case. Unlike
         // `LedMatrix`, there's no multi-message burst to worry about, since this device sends at
         // most one frame per completed register write.
         let geometry = geometry_for("40x2").unwrap();

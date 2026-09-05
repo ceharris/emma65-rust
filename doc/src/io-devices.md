@@ -204,9 +204,14 @@ geometry = "16x2"
 transport = "pipe:/path/to/emma65-lcd-display"
 ```
 
-`geometry` (optional, default `16x2`) selects one of the nine supported
-real-world module layouts: `8x1`, `8x2`, `16x1`, `16x2`, `16x4`, `20x2`,
-`20x4`, `40x1`, `40x2`. `cgrom` (optional) selects the bundled character
+`geometry` (optional, default `16x2`) selects one of the ten supported
+real-world module layouts: `8-character-5x10`, `16-character-5x10`, `8x2`,
+`16x1`, `16x2`, `16x4`, `20x2`, `20x4`, `40x1`, `40x2`. Only the first two
+have the 11 physical common lines a true datasheet 5×10 glyph needs -- an
+HD44780 drives 16 common outputs total, and every wider common module (even
+one, like `16x1`, whose name refers to a 16-*character* row) tops out at
+what 5×8 needs, so `Function Set`'s `F=1` is a no-op (logged as a warning)
+on every geometry but those two. `cgrom` (optional) selects the bundled character
 generator ROM by name -- `a00` (the default, and the ROM code most HD44780
 clones ship with) or `a02` (the European-font variant), case-insensitive --
 or overrides it with a file of the same format.
