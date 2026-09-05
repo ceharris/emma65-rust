@@ -165,9 +165,16 @@ export default function LedMatrixPanel() {
   const [pitch, setPitch] = useState(MIN_PITCH_PX);
 
   useEffect(() => {
-    invoke<LedMatrixGeometry | null>("get_led_matrix_geometry")
-      .then(setGeometry)
-      .catch((err) => console.error("get_led_matrix_geometry failed:", err));
+    const fetchGeometry = () => {
+      invoke<LedMatrixGeometry | null>("get_led_matrix_geometry")
+        .then(setGeometry)
+        .catch((err) => console.error("get_led_matrix_geometry failed:", err));
+    };
+    fetchGeometry();
+    // Reloading the active profile can change the device's arrangement (issue #605); re-fetch
+    // rather than assuming geometry is fixed for this panel's lifetime.
+    const unlistenPromise = listen("session-loaded", fetchGeometry);
+    return () => { unlistenPromise.then((f) => f()); };
   }, []);
 
   useEffect(() => {

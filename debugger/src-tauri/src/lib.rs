@@ -440,6 +440,14 @@ pub(crate) async fn load_or_reload_session(app: &AppHandle, profile_dir: &Path) 
             // it just re-fetches `get_symbols` on this broadcast.
             let _ = app.emit("symbols-changed", ());
 
+            // The three composited-device panels (Display, LED Matrix, LCD Display) are
+            // long-lived and each fetch their device's geometry exactly once, on mount, so a
+            // reload that lands on a profile with a different geometry (e.g. a changed LCD
+            // `geometry=` attribute) left them showing the stale dimensions/colors until closed
+            // and reopened (issue #605). They each re-fetch their own `get_*_geometry` on this
+            // broadcast instead.
+            let _ = app.emit("session-loaded", ());
+
             // Reset the rest of the per-panel state that assumes one
             // long-lived session, so nothing from the previous profile lingers.
             *app.state::<disassembly::SkipBreakpointPc>().0.lock().unwrap() = None;
